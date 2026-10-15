@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.112237">
+<meta name="app-version" content="2026-10-15.112620">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -346,6 +346,19 @@
              background: var(--paper); color: var(--ink); font: inherit; font-size: calc(14px * var(--fs, 1)); }
   .fu-note.saved { border-color: var(--green); }
   .fu-date { font-size: calc(13px * var(--fs, 1)); white-space: nowrap; }
+  .fu-group h2 { font-size: calc(19px * var(--fs, 1)); margin: 26px 0 2px; display: flex; gap: 8px; align-items: baseline; }
+  .fu-group h2 .count { font-size: calc(14px * var(--fs, 1)); color: var(--steel); font-weight: 600; }
+  .fu-help { margin: 0; font-size: calc(13.5px * var(--fs, 1)); }
+  .fu-item.to_me { border-left-color: var(--blue); }
+  .fu-item.sent { border-left-color: var(--steel); }
+  .fu-item.finished { border-left-color: var(--green); background: var(--green-wash); }
+  .fu-from, .fu-status { margin-top: 4px; font-size: calc(14px * var(--fs, 1)); }
+  .fu-status.done { color: var(--green); font-weight: 600; }
+  .fu-send { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+  .fu-send select { padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--ink); font: inherit; }
+  .fu-send .btn { padding: 6px 14px; }
+  .fu-send .msg { font-size: calc(13.5px * var(--fs, 1)); }
+  .fu-send .msg.err { color: var(--red); }
   .fu-empty { margin-top: 24px; padding: 28px; text-align: center; background: var(--panel); border: 2px dashed var(--line); border-radius: var(--radius-m); color: var(--steel); }
   .badge-n.fu-n { background: var(--amber); }
   @media (max-width: 860px) { .fu-item { grid-template-columns: 30px 1fr; } .fu-date { grid-column: 2; } }
@@ -1841,13 +1854,15 @@ async function runCalls() {
 /* ---------------- follow up: each person's own list ---------------- */
 let FU = { keys: new Set(), off: false };
 async function loadFollowKeys() {
-  const r = await db.from("follow_ups").select("customer_id, visit_id").is("done_at", null);
+  const r = await db.from("follow_ups").select("*").is("done_at", null);
   if (r.error) { FU.off = true; $("#fu-link").classList.add("hidden"); return; }   // setup file 21 not run yet
-  FU.keys = new Set(r.data.map(x => x.customer_id + ":" + (x.visit_id || 0)));
+  const mine = r.data.filter(x => x.app_user_id === ME.id);
+  FU.keys = new Set(mine.map(x => x.customer_id + ":" + (x.visit_id || 0)));
+  FU.count = mine.length + r.data.filter(x => x.app_user_id !== ME.id && !x.completed_at).length;
   showFollowCount();
 }
 function showFollowCount() {
-  const n = FU.keys.size;
+  const n = FU.count ?? FU.keys.size;
   $("#fu-link").innerHTML = n ? `Follow up <span class="badge-n fu-n" title="${n} on your follow up list">${n}</span>` : "Follow up";
 }
 async function toggleFollowUp(customerId, visitId, box) {
@@ -1857,49 +1872,72 @@ async function toggleFollowUp(customerId, visitId, box) {
   box.disabled = false;
   if (error) { box.checked = !on; alertLine(box, "Not saved: " + error.message); return; }
   on ? FU.keys.add(key) : FU.keys.delete(key);
-  showFollowCount();
+  loadFollowKeys();
 }
 function alertLine(near, text) {
   const m = document.createElement("div"); m.className = "staff-msg err"; m.textContent = text;
   (near.closest("td, label, li") || near).appendChild(m); setTimeout(() => m.remove(), 4000);
 }
 $("#fu-link").addEventListener("click", () => openFollowUps());
-async function openFollowUps() {
+let FU_PEOPLE = null;
+async function openFollowUps(flash) {
   setPage("followups", "followups");
-  $("#main").innerHTML = `<div class="loading">Loading your follow ups…</div>`;
-  const { data, error } = await db.rpc("my_follow_ups");
-  if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load your follow ups</h2>${esc(/function|schema/i.test(error.message) ? "Run RUN SETUP.bat to switch on Follow up." : error.message)}</div></div>`; return; }
-  FU.keys = new Set(data.map(x => x.customer_id + ":" + (x.visit_id || 0))); showFollowCount();
+  if (!document.querySelector(".followups")) $("#main").innerHTML = `<div class="loading">Loading your follow ups…</div>`;
+  const [res, ppl] = await Promise.all([db.rpc("my_follow_ups"), FU_PEOPLE ? { data: FU_PEOPLE } : db.rpc("follow_up_people")]);
+  const { data, error } = res;
+  if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load your follow ups</h2>${esc(/function|schema|column/i.test(error.message) ? "Run RUN SETUP.bat to switch on Follow up." : error.message)}</div></div>`; return; }
+  FU_PEOPLE = ppl.data || [];
+  loadFollowKeys();
   const when = d => new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
+  const groups = [["to_me", "Sent to you", "Others asked you to follow up on these. Untick when it's done and they'll see it's done."],
+                  ["mine", "Yours", "Untick when it's done. Use Send to pass one to someone else."],
+                  ["sent", "Sent to others", "You'll see when they finish. Untick to clear it from your list."]];
+  const item = r => {
+    const done = r.list === "sent" && r.completed_at;
+    return `<li class="fu-item ${r.list} ${done ? "finished" : ""}" data-id="${r.id}" data-list="${r.list}" data-cust="${r.customer_id}" data-visit="${r.visit_id || ""}">
+      <label class="fu-tick" title="${r.list === "to_me" ? "Untick when it's done" : "Untick to take it off your list"}"><input type="checkbox" checked aria-label="Still on my list"></label>
+      <div class="fu-main">
+        <button class="link fu-name" type="button" data-open="${r.customer_id}">${esc(r.customer_name)}</button>
+        <div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}${r.phone ? ` · <a href="tel:${esc(String(r.phone).replace(/\D/g, ""))}">${esc(phoneFmt(r.phone))}</a>` : ""}</div>
+        <div class="fu-what">${r.visit_id
+          ? `<span class="fu-tag call">Call</span> ${esc(longDate(r.scheduled_date))} · Job ${esc(r.job_number)}${r.job_type ? " · " + esc(r.job_type) : ""}${r.techs ? " · " + esc(r.techs) : ""}
+             <span class="vstat ${r.visit_status}">${esc(VISIT_STATUS[r.visit_status] || r.visit_status)}</span>`
+          : `<span class="fu-tag file">Customer file</span>`}</div>
+        ${r.list === "to_me" ? `<div class="fu-from">From <strong>${esc(r.from_name || "")}</strong>${r.assigned_at ? ", " + esc(when(r.assigned_at)) : ""}</div>` : ""}
+        ${r.list === "sent" ? (done
+          ? `<div class="fu-status done">✓ Done by <strong>${esc(r.completed_name || r.assigned_name)}</strong> on ${esc(when(r.completed_at))}</div>`
+          : `<div class="fu-status">With <strong>${esc(r.assigned_name || "")}</strong> since ${esc(when(r.assigned_at || r.created_at))}, not done yet</div>`) : ""}
+        <input class="fu-note" maxlength="2000" value="${esc(r.note || "")}" placeholder="${r.list === "to_me" ? "Add a note about what you did…" : "Add a reminder (what to follow up on)…"}" aria-label="Note">
+        ${r.list === "to_me" ? "" : `<div class="fu-send">
+          <select aria-label="Send to">${r.list === "sent" ? "" : `<option value="">Send to…</option>`}${FU_PEOPLE.map(p => `<option value="${p.app_user_id}" ${p.app_user_id === r.assigned_to ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
+          <button class="btn quiet-btn" type="button" data-send>${r.list === "sent" ? (done ? "Send again" : "Send to someone else") : "Send"}</button>
+          ${r.list === "sent" ? `<button class="link" type="button" data-take-back>Take it back</button>` : ""}
+          <span class="msg" role="status"></span></div>`}
+      </div>
+      <div class="fu-date quiet">Added ${esc(when(r.created_at))}</div></li>`;
+  };
+  const shown = groups.map(([k, title, help]) => { const rows = data.filter(r => r.list === k); return rows.length ? `<section class="fu-group">
+      <h2>${title} <span class="count">${rows.length}</span></h2><p class="quiet fu-help">${help}</p>
+      <ol class="fu-list">${rows.map(item).join("")}</ol></section>` : ""; }).join("");
   $("#main").innerHTML = `<article class="staff followups">
     <h1>Follow up</h1>
-    <p class="lead">Your own list. Tick <strong>Follow up</strong> on a customer file or a call and it stays here until you untick it. Only you see this list.</p>
-    ${data.length ? `<ol class="fu-list">${data.map(r => `<li class="fu-item" data-id="${r.id}" data-cust="${r.customer_id}" data-visit="${r.visit_id || ""}">
-        <label class="fu-tick" title="Untick when it's done"><input type="checkbox" checked aria-label="Still to follow up"></label>
-        <div class="fu-main">
-          <button class="link fu-name" type="button" data-open="${r.customer_id}">${esc(r.customer_name)}</button>
-          <div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}${r.phone ? ` · <a href="tel:${esc(String(r.phone).replace(/\D/g, ""))}">${esc(phoneFmt(r.phone))}</a>` : ""}</div>
-          <div class="fu-what">${r.visit_id
-            ? `<span class="fu-tag call">Call</span> ${esc(longDate(r.scheduled_date))} · Job ${esc(r.job_number)}${r.job_type ? " · " + esc(r.job_type) : ""}${r.techs ? " · " + esc(r.techs) : ""}
-               <span class="vstat ${r.visit_status}">${esc(VISIT_STATUS[r.visit_status] || r.visit_status)}</span>`
-            : `<span class="fu-tag file">Customer file</span>`}</div>
-          <input class="fu-note" maxlength="2000" value="${esc(r.note || "")}" placeholder="Add a reminder for yourself (what to follow up on)…" aria-label="Reminder">
-        </div>
-        <div class="fu-date quiet">Added ${esc(when(r.created_at))}</div></li>`).join("")}</ol>`
-      : `<div class="fu-empty">Nothing to follow up. Tick <strong>Follow up</strong> under a customer's name, or next to a call on the Calls page, to add it here.</div>`}
+    <p class="lead">Your own list. Tick <strong>Follow up</strong> on a customer file or a call and it stays here until you untick it. You can send one to someone else and keep track of it until they finish.</p>
+    ${flash ? `<div class="staff-msg ok" role="status">${esc(flash)}</div>` : ""}
+    ${shown || `<div class="fu-empty">Nothing to follow up. Tick <strong>Follow up</strong> under a customer's name, or next to a call on the Calls page, to add it here.</div>`}
   </article>`;
   document.querySelectorAll(".fu-item").forEach(li => {
-    const id = Number(li.dataset.id), cust = Number(li.dataset.cust), visit = li.dataset.visit ? Number(li.dataset.visit) : null;
+    const id = Number(li.dataset.id), cust = Number(li.dataset.cust), list = li.dataset.list;
     li.querySelector("[data-open]").addEventListener("click", () => openCustomer(cust));
     const cb = li.querySelector(".fu-tick input");
     cb.addEventListener("change", async () => {
       cb.disabled = true;
-      const { error } = cb.checked ? await db.rpc("reopen_follow_up", { p_id: id }) : await db.rpc("set_follow_up", { p_customer_id: cust, p_visit_id: visit, p_on: false });
+      const { error } = await db.rpc("complete_follow_up", { p_id: id, p_done: !cb.checked });
       cb.disabled = false;
       if (error) { cb.checked = !cb.checked; alertLine(cb, "Not saved: " + error.message); return; }
       li.classList.toggle("done", !cb.checked);
-      const key = cust + ":" + (visit || 0); cb.checked ? FU.keys.add(key) : FU.keys.delete(key); showFollowCount();
-      li.querySelector(".fu-date").textContent = cb.checked ? "Back on your list" : "Done. Tick again to undo";
+      li.querySelector(".fu-date").textContent = cb.checked ? "Back on your list"
+        : list === "to_me" ? `Done. ${data.find(r => r.id === id)?.from_name || "They"} will see it. Tick again to undo` : "Cleared. Tick again to undo";
+      loadFollowKeys();
     });
     const note = li.querySelector(".fu-note");
     note.addEventListener("change", async () => {
@@ -1908,6 +1946,20 @@ async function openFollowUps() {
       setTimeout(() => note.classList.remove("saved"), 1500);
     });
     note.addEventListener("keydown", e => { if (e.key === "Enter") note.blur(); });
+    const send = li.querySelector("[data-send]"), sel = li.querySelector(".fu-send select"), msg = li.querySelector(".fu-send .msg");
+    send?.addEventListener("click", async () => {
+      if (!sel.value) { msg.className = "msg err"; msg.textContent = "Pick who to send it to."; sel.focus(); return; }
+      send.disabled = true; msg.className = "msg"; msg.textContent = "Sending…";
+      const { error } = await db.rpc("send_follow_up", { p_id: id, p_to: Number(sel.value), p_note: note.value });
+      send.disabled = false;
+      if (error) { msg.className = "msg err"; msg.textContent = "Not sent: " + error.message; return; }
+      openFollowUps(`Sent to ${sel.options[sel.selectedIndex].text}. They got a chat message, and you'll see here when it's done.`);
+    });
+    li.querySelector("[data-take-back]")?.addEventListener("click", async () => {
+      const { error } = await db.rpc("send_follow_up", { p_id: id, p_to: null });
+      if (error) { msg.className = "msg err"; msg.textContent = error.message; return; }
+      openFollowUps("Taken back. It's on your own list again.");
+    });
   });
 }
 /* ---------------- history: see changes and put things back ---------------- */
