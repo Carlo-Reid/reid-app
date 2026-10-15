@@ -265,6 +265,12 @@
   .staff select, .staff input[type=text], .staff input[type=email] { padding: 7px 9px; border: 1px solid var(--line);
       border-radius: var(--radius-s); background: var(--panel); font: inherit; color: inherit; }
   .staff .all { font-size: 13px; color: var(--steel); }
+  .approve-banner { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between;
+                    background: var(--amber-wash); border: 1px solid var(--amber); border-radius: var(--radius-m); padding: 12px 16px; margin: 0 0 16px; }
+  .approve-banner span { display: flex; gap: 8px; }
+  .staff .waiting { font-size: 12.5px; color: var(--amber); font-weight: 600; white-space: nowrap; }
+  .badge-n { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: #fff;
+             font-size: 12px; font-weight: 700; line-height: 18px; text-align: center; }
   .staff .name-cell { white-space: nowrap; }
   .staff .name-cell input { width: 150px; }
   .staff-wrap { overflow-x: auto; }
@@ -417,6 +423,11 @@ async function checkIn() {
   if (error) { $("#online").classList.add("hidden"); return; }   // setup step 06 not run yet
   $("#online").classList.remove("hidden");
   $("#online-count").textContent = data.length;
+  if (ME.role === "owner") {
+    const p = await db.rpc("my_pending_approvals");
+    const n = p.error ? 0 : p.data || 0;
+    $("#staff-link").innerHTML = n ? `Staff <span class="badge-n" title="${n} waiting for your approval">${n}</span>` : "Staff";
+  }
   $("#online-list").innerHTML = data.map(u => `<li title="${esc(u.login_email)}"><span class="dot"></span>
     <span class="who">${esc(u.name || u.login_email.split("@")[0])}${u.is_me ? " (you)" : ""}</span>
     <span class="role">${esc(ROLE_NAMES[u.role] || u.role)}</span></li>`).join("");
@@ -782,9 +793,12 @@ async function openStaff() {
   let [users, perms] = await Promise.all([userQuery(true), db.from("permissions").select("*").order("sort_order")]);
   if (users.error) users = await userQuery(false);   // setup step 07 not run yet
   if (users.error || perms.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load staff</h2>${esc((users.error || perms.error).message)}</div></div>`; return; }
+  const pend = await db.rpc("pending_staff_removals");
+  STAFF_PENDING = pend.error ? [] : pend.data || [];
   renderStaff(users.data, perms.data);
 }
 
+let STAFF_PENDING = [];
 function renderStaff(users, perms, note) {
   const isOwner = ME.role === "owner";
   const roleOptions = (sel, lockHigh) => ROLES.filter(([v]) => isOwner || !["owner", "admin"].includes(v) || v === sel)
@@ -792,6 +806,11 @@ function renderStaff(users, perms, note) {
   $("#main").innerHTML = `<article class="staff">
     <h1>Staff and permissions</h1>
     <p class="lead">Tick what each person is allowed to do. Changes save as soon as you click. Owners can always do everything.</p>
+    ${STAFF_PENDING.filter(r => r.can_approve).map(r => { const u = users.find(x => x.id === r.app_user_id);
+      const who = u ? (u.employees ? `${u.employees.first_name} ${u.employees.last_name}`.trim() : u.login_email) : "a staff member";
+      return `<div class="approve-banner" role="alert"><div><strong>${esc(r.requested_by)}</strong> wants to remove <strong>${esc(who)}</strong>. It needs your approval.</div>
+        <span><button class="btn" type="button" data-approve="${r.request_id}">Approve removal</button>
+        <button class="btn quiet-btn" type="button" data-reject="${r.request_id}">Turn down</button></span></div>`; }).join("")}
     <div class="staff-wrap"><table>
       <thead><tr><th>Name</th><th>Login email</th><th>Role</th><th class="perm">Active</th>
         ${perms.map(p => `<th class="perm" title="${esc(p.description || "")}">${esc(p.name)}</th>`).join("")}<th class="perm">Remove</th></tr></thead>
@@ -807,7 +826,11 @@ function renderStaff(users, perms, note) {
           ${perms.map(p => u.role === "owner"
             ? `<td class="perm"><input type="checkbox" checked disabled title="Owners can always do everything" aria-label="${esc(p.name)} (owners always have this)"></td>`
             : `<td class="perm"><input type="checkbox" data-perm="${p.code}" aria-label="${esc(p.name)} for ${esc(u.login_email)}" ${granted.has(p.code) ? "checked" : ""} ${p.code === "staff.manage" && !isOwner ? "disabled" : ""}></td>`).join("")}
-          <td class="perm">${u.login_email.toLowerCase() === ME.email || highLocked ? "" : `<button class="link danger" type="button" data-remove>Remove</button>`}</td>
+          <td class="perm">${(() => { const r = STAFF_PENDING.find(x => x.app_user_id === u.id);
+            if (r) return `<span class="waiting">Waiting for ${r.can_approve ? "you" : "other owner"}</span><br>${r.can_approve
+              ? `<button class="link" type="button" data-approve="${r.request_id}">Approve</button> <button class="link danger" type="button" data-reject="${r.request_id}">Turn down</button>`
+              : r.i_asked ? `<button class="link" type="button" data-reject="${r.request_id}">Cancel</button>` : ""}`;
+            return u.login_email.toLowerCase() === ME.email || highLocked ? "" : `<button class="link danger" type="button" data-remove>Remove</button>`; })()}</td>
         </tr>`; }).join("")}</tbody>
     </table></div>
     <div class="staff-msg ${note?.err ? "err" : "ok"}" id="staff-msg" role="status">${note ? esc(note.text) : ""}</div>
@@ -848,9 +871,10 @@ function renderStaff(users, perms, note) {
       cell.innerHTML = `<span class="confirm">Remove?</span><br><button class="link danger" type="button" data-yes>Yes</button> <button class="link" type="button" data-no>No</button>`;
       cell.querySelector("[data-no]").addEventListener("click", () => openStaff());
       cell.querySelector("[data-yes]").addEventListener("click", async () => {
-        const { error } = await db.rpc("delete_staff_member", { p_app_user_id: id });
+        const { data, error } = await db.rpc("request_staff_removal", { p_app_user_id: id });
         if (error) { await openStaff(); say("Not removed: " + error.message, true); }
-        else reload(`Removed ${tr.dataset.email}. Their old notes keep their name. To block the login completely, also delete them in Supabase under Authentication, Users.`);
+        else if (data === "removed") reload(`Removed ${tr.dataset.email}. Their old notes keep their name. To block the login completely, also delete them in Supabase under Authentication, Users.`);
+        else reload(`Asked to remove ${tr.dataset.email}. Nothing happens until the other owner approves it on their Staff page.`);
       });
     });
     tr.querySelector("[data-field=active]").addEventListener("change", saveMember);
@@ -862,6 +886,21 @@ function renderStaff(users, perms, note) {
       else say(`${cb.checked ? "Granted" : "Removed"} ${perms.find(p => p.code === cb.dataset.perm).name.toLowerCase()} for ${tr.dataset.email}.`);
     }));
   });
+
+  document.querySelectorAll("[data-approve]").forEach(b => b.addEventListener("click", async () => {
+    b.disabled = true;
+    const { data, error } = await db.rpc("approve_staff_removal", { p_request_id: Number(b.dataset.approve) });
+    if (error) { await openStaff(); say("Not approved: " + error.message, true); return; }
+    await reload(data === "removed" ? "Approved. The staff member has been removed." : "Approved. Still waiting for another owner.");
+    checkIn();
+  }));
+  document.querySelectorAll("[data-reject]").forEach(b => b.addEventListener("click", async () => {
+    b.disabled = true;
+    const { data, error } = await db.rpc("cancel_staff_removal", { p_request_id: Number(b.dataset.reject) });
+    if (error) { await openStaff(); say("Not changed: " + error.message, true); return; }
+    await reload(data === "cancelled" ? "Request cancelled. Nobody was removed." : "Turned down. Nobody was removed.");
+    checkIn();
+  }));
 
   $("#add-staff").addEventListener("submit", async e => {
     e.preventDefault();
