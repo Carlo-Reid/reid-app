@@ -29,6 +29,12 @@ LOG_LINES = []
 QUIET = bool(os.environ.get("GITHUB_ACTIONS"))
 
 
+def fail(msg):
+    """Stop with a message. On GitHub it also shows as a red note on the run (never with customer details)."""
+    if QUIET: print("::error::" + msg.replace("\n", " "), flush=True)
+    sys.exit(msg)
+
+
 def log(msg):
     line = f"[{time.strftime('%H:%M:%S')}] {msg}"
     print(line, flush=True)
@@ -60,7 +66,7 @@ def find_file(name):
 def settings():
     st, db = {}, {}
     if QUIET and not (os.environ.get("ST_CLIENT_ID") and os.environ.get("DB_HOST")):
-        sys.exit("The GitHub secrets aren't all set. Add ST_TENANT_ID, ST_APP_KEY, ST_CLIENT_ID, ST_CLIENT_SECRET, "
+        fail("The GitHub secrets aren't all set. Add ST_TENANT_ID, ST_APP_KEY, ST_CLIENT_ID, ST_CLIENT_SECRET, "
                  "DB_HOST, DB_PORT, DB_NAME, DB_USER and DB_PASSWORD under Settings > Secrets and variables > Actions.")
     if os.environ.get("ST_CLIENT_ID"):
         st = {k: os.environ.get("ST_" + k, "") for k in ("TENANT_ID", "APP_KEY", "CLIENT_ID", "CLIENT_SECRET")}
@@ -416,17 +422,17 @@ def main():
     try:
         conn = connect(db_s)
     except Exception as e:
-        sys.exit("Couldn't connect to the database." + ("" if QUIET else f" ({e})") +
-                 " Check DB_HOST, DB_PORT, DB_USER and DB_PASSWORD (on GitHub use the Session pooler details from Supabase).")
+        fail("Couldn't connect to the database (" + str(e).strip().splitlines()[-1][:200] + "). "
+             "Check DB_HOST, DB_PORT, DB_USER and DB_PASSWORD (on GitHub use the Session pooler details from Supabase).")
     cur = conn.cursor()
     cur.execute("SET statement_timeout = 0")
     cur.execute("SELECT to_regclass('public.st_sync_state') IS NOT NULL")
     if not cur.fetchone()[0]:
-        sys.exit("Run app\\setup\\RUN SETUP.bat first (it adds setup file 24), then run this again.")
+        fail("Run app\\setup\\RUN SETUP.bat first (it adds setup file 24), then run this again.")
     # only one sync at a time
     cur.execute("SELECT pg_try_advisory_lock(80451)")
     if not cur.fetchone()[0]:
-        sys.exit("Another sync is running right now. Try again in a few minutes.")
+        fail("Another sync is running right now. Try again in a few minutes.")
     cur.execute("INSERT INTO st_sync_runs (source) VALUES (%s) RETURNING id", (args.source,))
     run_id = cur.fetchone()[0]; conn.commit()
 
@@ -508,7 +514,10 @@ def main():
         except Exception: conn.rollback()
         cur.execute("UPDATE st_sync_runs SET finished_at = now(), ok = false, error = %s WHERE id = %s", (str(e)[:2000], run_id))
         conn.commit()
-        log("Stopped. The reason is on the app's Settings page, under ServiceTitan sync." if QUIET else f"Stopped: {e}")
+        if QUIET:
+            safe = str(e) if isinstance(e, RuntimeError) and str(e).startswith(("ServiceTitan", "This is the first sync")) else type(e).__name__
+            fail(f"Stopped ({safe[:300]}). The full reason is on the app's Settings page, under ServiceTitan sync.")
+        log(f"Stopped: {e}")
         sys.exit(1)
     finally:
         try: cur.execute("SELECT pg_advisory_unlock(80451)"); conn.commit()
