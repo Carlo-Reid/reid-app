@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.094700">
+<meta name="app-version" content="2026-10-15.100703">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -602,13 +602,13 @@
   <aside id="side">
     <header>
       <div class="brand"><button class="home-link" id="home-link" title="Back to your last customer">Customers</button><span class="side-links"><button class="link hidden" id="calls-link">Calls</button><button class="link hidden" id="history-link">History</button><button class="link hidden" id="settings-link">Settings</button><button class="link hidden" id="staff-link">Staff</button><button class="link" id="signout">Sign out</button></span></div>
-      <input id="q" type="search" placeholder="Name, phone, address, invoice, serial…" autocomplete="off" aria-label="Search customers">
+      <input id="q" name="reid-find-any" type="search" placeholder="Name, phone, address, invoice, serial…" autocomplete="reid-find-any" data-lpignore="true" data-1p-ignore aria-label="Search customers">
       <div class="hint quiet">Search by anything: old ServiceTitan numbers work too.</div>
       <div class="fields-head">Or narrow it down <button class="link hidden" type="button" id="f-clear">Clear</button></div>
       <div class="fields">
-        <input id="f-name" type="search" placeholder="Name" autocomplete="off" aria-label="Search by name">
-        <input id="f-phone" type="search" placeholder="Phone" inputmode="tel" autocomplete="off" aria-label="Search by phone number">
-        <input id="f-addr" type="search" placeholder="Address, city or postal code" autocomplete="off" aria-label="Search by address">
+        <input id="f-name" name="reid-find-n" type="text" placeholder="Name" autocomplete="reid-find-n" data-lpignore="true" data-1p-ignore aria-label="Search by name">
+        <input id="f-phone" name="reid-find-p" type="text" placeholder="Phone" inputmode="tel" autocomplete="reid-find-p" data-lpignore="true" data-1p-ignore aria-label="Search by phone number">
+        <input id="f-addr" name="reid-find-a" type="text" placeholder="Address, city or postal code" autocomplete="reid-find-a" data-lpignore="true" data-1p-ignore aria-label="Search by address">
       </div>
     </header>
     <div id="results" role="list"></div>
@@ -922,21 +922,43 @@ $("#signout").addEventListener("click", async () => { clearInterval(onlineTimer)
 
 /* ---------------- search ---------------- */
 let searchTimer, searchSeq = 0;
-$("#q").addEventListener("input", () => {
-  // typing in the main box starts a fresh search: the narrow-down boxes are cleared
-  if ($("#q").value) ["#f-name", "#f-phone", "#f-addr"].forEach(s => $(s).value = "");
-  $("#f-clear").classList.add("hidden");
-  clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 220);
-});
-["#f-name", "#f-phone", "#f-addr"].forEach(sel => $(sel).addEventListener("input", () => {
+const FIELDS = ["#f-name", "#f-phone", "#f-addr"];
+const fieldsInUse = () => FIELDS.some(s => $(s).value.trim());
+// which narrow-down box a bit of text belongs in: a phone number, an address / postal code, or a name
+function fieldFor(t) {
+  t = t.trim();
+  if (/^[\d\s().+-]+$/.test(t) && t.replace(/\D/g, "").length >= 3) return "#f-phone";
+  if (/^\d+\s*[a-z]/i.test(t) || /^[a-z]\d[a-z]\s?\d?[a-z]?\d?$/i.test(t)) return "#f-addr";
+  return "#f-name";
+}
+// what is in the big box moves into the matching small box, so everything typed is kept and used together
+function moveMainIntoFields() {
+  const t = $("#q").value.trim(); if (!t) return;
+  const target = fieldFor(t);
+  $(target).value = $(target).value.trim() ? $(target).value.trim() + " " + t : t;
   $("#q").value = "";
-  clearTimeout(searchTimer); searchTimer = setTimeout(runFieldSearch, 250);
-}));
+}
+$("#q").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  // the small boxes are in use: what's typed here narrows them down too
+  searchTimer = setTimeout(fieldsInUse() ? runFieldSearch : runSearch, 220);
+});
+FIELDS.forEach(sel => {
+  $(sel).addEventListener("focus", () => { if ($("#q").value.trim()) { moveMainIntoFields(); runFieldSearch(); } });
+  $(sel).addEventListener("input", () => {
+    moveMainIntoFields();
+    clearTimeout(searchTimer); searchTimer = setTimeout(runFieldSearch, 250);
+  });
+});
 $("#f-clear").addEventListener("click", () => {
-  ["#f-name", "#f-phone", "#f-addr"].forEach(s => $(s).value = ""); $("#results").innerHTML = ""; $("#f-clear").classList.add("hidden"); $("#f-name").focus();
+  FIELDS.forEach(s => $(s).value = ""); $("#q").value = ""; $("#results").innerHTML = ""; $("#f-clear").classList.add("hidden"); $("#q").focus();
 });
 async function runFieldSearch() {
-  const name = $("#f-name").value.trim(), phone = $("#f-phone").value.trim(), addr = $("#f-addr").value.trim();
+  const v = { "#f-name": $("#f-name").value.trim(), "#f-phone": $("#f-phone").value.trim(), "#f-addr": $("#f-addr").value.trim() };
+  const extra = $("#q").value.trim();                       // typed in the big box while the small ones are in use
+  if (extra) { const k = fieldFor(extra); v[k] = (v[k] + " " + extra).trim(); }
+  const name = v["#f-name"], phone = v["#f-phone"], addr = v["#f-addr"];
+  if (!fieldsInUse() && extra) return runSearch();
   const seq = ++searchSeq, box = $("#results");
   const any = name.length >= 2 || phone.replace(/\D/g, "").length >= 3 || addr.length >= 2;
   $("#f-clear").classList.toggle("hidden", !(name || phone || addr));
