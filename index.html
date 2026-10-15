@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.220837">
+<meta name="app-version" content="2026-10-14.221232">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -443,7 +443,7 @@ async function showApp() {
   const perms = await db.rpc("my_permissions");
   ME.perms = new Set(perms.data || []);
   $("#staff-link").classList.toggle("hidden", !ME.perms.has("staff.manage"));
-  $("#settings-link").classList.toggle("hidden", !ME.perms.has("settings.manage"));
+  $("#settings-link").classList.toggle("hidden", !ME.role);
   await loadPinSlots();
   loadTheme();
   checkForUpdate();
@@ -453,7 +453,7 @@ async function showApp() {
   $("#q").focus();
   if (data) { startOnline(); startLiveNotes(); }
   if (location.hash === "#staff" && can("staff.manage")) return openStaff();
-  if (location.hash === "#settings" && can("settings.manage")) return openSettings();
+  if (location.hash === "#settings" && ME.role) return openSettings();
   const id = new URLSearchParams(location.hash.slice(1)).get("customer");
   if (id) openCustomer(Number(id));
 }
@@ -982,11 +982,15 @@ function applyTheme(id) {
 }
 try { const saved = JSON.parse(localStorage.getItem("reid.theme") || "null"); if (saved) { THEME_CUSTOM = saved.custom || {}; applyTheme(saved.id); } } catch {}
 async function loadTheme() {
-  const r = await db.from("app_preferences").select("key, value").in("key", ["theme", "theme_colors"]);
-  if (r.error || !r.data) return;
-  const get = k => r.data.find(x => x.key === k)?.value;
-  try { THEME_CUSTOM = JSON.parse(get("theme_colors") || "{}") || {}; } catch { THEME_CUSTOM = {}; }
-  applyTheme(get("theme") || "classic");
+  const r = await db.rpc("my_theme");
+  if (r.error) return;                                   // setup step 12 not run yet: keep what this computer remembers
+  const prefs = r.data || {};
+  THEME_CUSTOM = prefs.custom || {};
+  applyTheme(prefs.id || "classic");
+}
+async function saveMyTheme() {
+  const { error } = await db.rpc("save_my_theme", { p_prefs: { id: THEME, custom: THEME_CUSTOM } });
+  return error;
 }
 
 /* ---------------- "there is a new update" button ---------------- */
@@ -1014,10 +1018,10 @@ async function openSettings() {
 function renderSettings(slots, note) {
   $("#main").innerHTML = `<article class="staff settings">
     <h1>Settings</h1>
-    <p class="lead">Changes here apply to everyone.</p>
+    <p class="lead">${can("settings.manage") ? "Page colours are just for you. Pinned notes apply to everyone." : "Page colours are just for you. Nobody else's screen changes."}</p>
     <section class="block" style="margin-top:8px">
-      <h2>Page colours</h2>
-      <p class="quiet" style="max-width:720px;margin:0 0 14px">Pick a look for the whole system. It changes for everyone.</p>
+      <h2>Your page colours</h2>
+      <p class="quiet" style="max-width:720px;margin:0 0 14px">Pick a look, then click any colour square to fine-tune it. Your screen changes as you pick. It's saved with your login, so it follows you to any computer.</p>
       <div class="themes">${THEMES.map(t => { const c = themeColors(t.id), changed = THEME_CUSTOM[t.id] && Object.keys(THEME_CUSTOM[t.id]).length; return `
         <div class="theme-card ${t.id === THEME ? "on" : ""}">
           <div class="theme-sw">${THEME_KEYS.map(([k, label]) => `<label class="sw" title="${label}: click to change">
@@ -1032,7 +1036,7 @@ function renderSettings(slots, note) {
       <p class="quiet" style="font-size:13px;margin:8px 0 0">Click any colour square to change it by hand. Reset puts that theme back to how it came.</p>
       <div class="staff-msg" id="theme-msg" role="status"></div>
     </section>
-    <section class="block">
+    ${can("settings.manage") ? `<section class="block">
       <h2>Pinned notes</h2>
       <p class="quiet" style="max-width:720px;margin:0 0 14px">Each customer, address and job can have up to <strong>${slots.length}</strong> pinned ${slots.length === 1 ? "note" : "notes"}.
         The first pinned note gets colour 1, the second gets colour 2, and so on. Add a slot to allow one more pinned note.</p>
@@ -1053,10 +1057,10 @@ function renderSettings(slots, note) {
         <button class="link" type="button" id="slot-reset">Back to light red, amber, green</button>
       </div>
       <div class="staff-msg ${note?.err ? "err" : "ok"}" id="settings-msg" role="status">${note ? esc(note.text) : ""}</div>
-    </section>
+    </section>` : ""}
   </article>`;
   const saveCustom = async (msgOk) => {
-    const { error } = await db.rpc("save_app_preference", { p_key: "theme_colors", p_value: JSON.stringify(THEME_CUSTOM) });
+    const error = await saveMyTheme();
     const m = $("#theme-msg");
     if (error) { m.className = "staff-msg err"; m.textContent = "Not saved: " + error.message; return false; }
     m.className = "staff-msg ok"; m.textContent = msgOk; return true;
@@ -1066,12 +1070,12 @@ function renderSettings(slots, note) {
     inp.addEventListener("input", () => {           // live preview while dragging
       const id = inp.dataset.themeColor;
       THEME_CUSTOM[id] = Object.assign({}, THEME_CUSTOM[id], { [inp.dataset.k]: inp.value.toUpperCase() });
-      if (id === THEME) applyTheme(THEME);
+      applyTheme(id);                                 // switch to that look and show the change right away
     });
     inp.addEventListener("change", () => {          // save when the picker closes
       clearTimeout(colorTimer);
       colorTimer = setTimeout(async () => {
-        if (await saveCustom("Colour saved. Everyone else sees it the next time they refresh.")) {
+        if (await saveCustom("Saved. Only your screen changes.")) {
           const keep = $("#theme-msg").textContent; renderSettings(read()); $("#theme-msg").className = "staff-msg ok"; $("#theme-msg").textContent = keep;
         }
       }, 300);
@@ -1085,10 +1089,10 @@ function renderSettings(slots, note) {
   document.querySelectorAll("[data-theme-pick]").forEach(b => b.addEventListener("click", async () => {
     const before = THEME, id = b.dataset.themePick;
     applyTheme(id);
-    const { error } = await db.rpc("save_app_preference", { p_key: "theme", p_value: id });
+    const error = await saveMyTheme();
     if (error) { applyTheme(before); renderSettings(read()); $("#theme-msg").className = "staff-msg err"; $("#theme-msg").textContent = "Not saved: " + error.message; return; }
     renderSettings(read());
-    $("#theme-msg").className = "staff-msg ok"; $("#theme-msg").textContent = "Saved. Everyone else sees it the next time they refresh.";
+    $("#theme-msg").className = "staff-msg ok"; $("#theme-msg").textContent = "Saved. Only your screen changes.";
   }));
   const read = () => [...document.querySelectorAll(".slot-row")].map(r => ({ color: r.querySelector("[data-k=color]").value.toUpperCase(), name: r.querySelector("[data-k=name]").value.trim() }));
   document.querySelectorAll(".slot-row").forEach(r => {
@@ -1099,9 +1103,9 @@ function renderSettings(slots, note) {
     r.querySelector("[data-slot-del]").addEventListener("click", () => { const a = read(); a.splice(i, 1); renderSettings(a, { text: "Not saved yet." }); });
   });
   const PALETTE = ["#DCE8F7", "#EADCF5", "#FFF3B0", "#D9F2F2", "#F5DDE9", "#E4E4E4"];
-  $("#slot-add").addEventListener("click", () => { const a = read(); a.push({ color: PALETTE[(a.length - 3 + PALETTE.length) % PALETTE.length], name: "" }); renderSettings(a, { text: "Not saved yet." }); });
-  $("#slot-reset").addEventListener("click", () => renderSettings([{ color: "#F8D7D5", name: "Light red" }, { color: "#FBF0DD", name: "Amber" }, { color: "#DDF1E2", name: "Green" }], { text: "Not saved yet." }));
-  $("#slot-save").addEventListener("click", async () => {
+  $("#slot-add")?.addEventListener("click", () => { const a = read(); a.push({ color: PALETTE[(a.length - 3 + PALETTE.length) % PALETTE.length], name: "" }); renderSettings(a, { text: "Not saved yet." }); });
+  $("#slot-reset")?.addEventListener("click", () => renderSettings([{ color: "#F8D7D5", name: "Light red" }, { color: "#FBF0DD", name: "Amber" }, { color: "#DDF1E2", name: "Green" }], { text: "Not saved yet." }));
+  $("#slot-save")?.addEventListener("click", async () => {
     const { error } = await db.rpc("save_pin_slots", { p_slots: read() });
     if (error) { $("#settings-msg").className = "staff-msg err"; $("#settings-msg").textContent = "Not saved: " + error.message; return; }
     await loadPinSlots();
