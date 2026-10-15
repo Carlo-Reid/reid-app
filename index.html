@@ -223,6 +223,7 @@
   .btn.quiet-btn { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
   .confirm { color: var(--red); font-weight: 600; font-size: 13.5px; }
   .note.fresh { animation: none; }
+  .live-bar { background: var(--blue-wash); color: var(--ink); border-radius: var(--radius-s); padding: 7px 12px; font-size: 13.5px; margin: 0 0 8px; max-width: 820px; }
   @media (prefers-reduced-motion: no-preference) { .note.fresh { animation: flash 1.6s ease-out; } }
   @keyframes flash { from { background: var(--blue-wash); } to { background: transparent; } }
   .note { white-space: pre-wrap; padding: 10px 0; border-top: 1px solid var(--line); }
@@ -402,7 +403,7 @@ async function showApp() {
     $("#main").innerHTML = `<div class="empty"><div><h2>No access yet</h2>This login isn't set up as staff. Ask the owner to add your email to the staff list.</div></div>`;
   }
   $("#q").focus();
-  if (data) startOnline();
+  if (data) { startOnline(); startLiveNotes(); }
   if (location.hash === "#staff" && can("staff.manage")) return openStaff();
   if (location.hash === "#settings" && can("settings.manage")) return openSettings();
   const id = new URLSearchParams(location.hash.slice(1)).get("customer");
@@ -557,6 +558,63 @@ function noteSort(a, b) {
   if (a.pinned) { const d = (a.pin_order ?? 999) - (b.pin_order ?? 999); if (d) return d; }
   return (b.created_at || "").localeCompare(a.created_at || "");
 }
+/* ---------------- live notes: everyone sees changes right away ---------------- */
+let liveStarted = false, liveConnected = false, liveDebounce = null;
+function startLiveNotes() {
+  if (liveStarted) return; liveStarted = true;
+  try {
+    db.channel("notes-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "notes" }, payload => {
+        const r = payload.new && payload.new.entity_type ? payload.new : null;
+        if (r && !noteBelongsHere(r)) return;
+        scheduleNotesRefresh();
+      })
+      .subscribe(status => { liveConnected = status === "SUBSCRIBED"; });
+  } catch { liveConnected = false; }
+  // back-up check, used only when the live connection is down
+  setInterval(() => { if (!liveConnected) scheduleNotesRefresh(); }, CONFIG.pollMs || 20000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) scheduleNotesRefresh(); });
+}
+function noteBelongsHere(r) {
+  if (!current) return false;
+  if (r.entity_type === "customer") return r.entity_id === current.c.id;
+  if (r.entity_type === "location") return (current.c.locations || []).some(l => l.id === r.entity_id);
+  if (r.entity_type === "job") return current.jobIds.includes(r.entity_id);
+  return false;
+}
+function scheduleNotesRefresh() {
+  clearTimeout(liveDebounce);
+  liveDebounce = setTimeout(refreshNotesLive, 700);
+}
+const notesSig = list => list.map(n => `${n.id}:${n.pinned}:${n.pin_order ?? ""}:${n.body}`).join("|");
+async function refreshNotesLive() {
+  if (!current || document.hidden || !document.querySelector(".file .notes-list")) return;
+  const fileId = current.c.id;
+  const fresh = await fetchNotes(current.noteFilter, current.jobIds);
+  if (!current || current.c.id !== fileId) return;                       // they opened another customer meanwhile
+  if (notesSig(fresh) === notesSig(current.pendingNotes || current.notes)) return;
+  const known = new Set(current.notes.map(n => n.id));
+  fresh.forEach(n => { if (!known.has(n.id)) n.fresh = true; });
+  if (document.querySelector(".note-edit, .note-actions .confirm")) {     // someone is mid-edit: don't yank the screen
+    current.pendingNotes = fresh;
+    if (!document.querySelector(".live-bar")) document.querySelector(".note-tabs")?.insertAdjacentHTML("beforebegin",
+      `<div class="live-bar" role="status">Notes were changed by someone else. They'll show when you finish.</div>`);
+    return;
+  }
+  current.notes = fresh;
+  redrawKeepingPlace();
+  setTimeout(() => current && current.notes.forEach(n => delete n.fresh), 2000);
+}
+function redrawKeepingPlace() {
+  const main = $("#main"), top = main.scrollTop, list = document.querySelector(".notes-list"), listTop = list ? list.scrollTop : 0;
+  const text = $("#note-text")?.value, pin = $("#note-pin")?.checked, job = $("#note-job")?.value, focused = document.activeElement?.id;
+  renderFile();
+  main.scrollTop = top;
+  const list2 = document.querySelector(".notes-list"); if (list2) list2.scrollTop = listTop;
+  if ($("#note-text") && text != null) { $("#note-text").value = text; $("#note-pin").checked = !!pin; if (job && $("#note-job")) $("#note-job").value = job; }
+  if (focused && document.getElementById(focused)) document.getElementById(focused).focus({ preventScroll: true });
+}
+
 async function reloadNotes() {
   current.notes = await fetchNotes(current.noteFilter, current.jobIds);
   renderFile();
@@ -572,6 +630,7 @@ async function loadPinSlots() {
 const pinColor = rank => (PIN_SLOTS[Math.min(rank, PIN_SLOTS.length - 1)] || {}).color || "#FBF0DD";
 
 function renderFile() {
+  if (current.pendingNotes) { current.notes = current.pendingNotes; current.pendingNotes = null; }
   const { c, notes, plans, jobs, invoices, estimates, equipment, loc } = current;
   const owed = invoices.reduce((s, i) => s + (i.status !== "void" && i.balance_due > 0 ? Number(i.balance_due) : 0), 0);
   const flags = [];
