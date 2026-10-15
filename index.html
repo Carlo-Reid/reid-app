@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.135251">
+<meta name="app-version" content="2026-10-15.140716">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -399,6 +399,19 @@
   .ct-jobs { margin-top: 6px; display: grid; gap: 3px; font-size: calc(14px * var(--fs, 1)); }
   .ct-job { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
   .ct-job.done > span:nth-child(2) { text-decoration: line-through; color: var(--steel); }
+
+  /* estimate viewer */
+  .est-count { margin: 18px 0 -6px; font-weight: 700; color: #4A5966; text-transform: uppercase; letter-spacing: .06em; font-size: 12px; }
+  .est-opt { margin-top: 22px; padding-top: 14px; border-top: 2px solid #1C2630; break-inside: avoid; }
+  .est-opt.accepted { border-top-color: #2E7D4F; }
+  .est-opt-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 17px; }
+  .est-opt-n { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #4A5966; margin-right: 6px; }
+  .est-opt-total { font-weight: 800; font-size: 18px; }
+  .est-tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; vertical-align: middle; }
+  .est-tag.rec { background: #E3ECF8; color: #1F5FA8; } .est-tag.acc { background: #DDF1E2; color: #1F6B47; }
+  .est-desc { margin: 6px 0 2px; color: #4A5966; white-space: pre-wrap; font-size: 14px; }
+  .est-sub td:first-child { padding-left: 26px; color: #4A5966; }
+  .est-totals { margin: 8px 0 0 auto; }
   /* follow up */
   .fu-check { display: inline-flex; align-items: center; gap: 6px; float: right; margin: 2px 0 0 14px; padding: 3px 10px; border: 1px solid var(--line);
               border-radius: 999px; font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--steel); cursor: pointer; background: var(--paper); }
@@ -2834,7 +2847,83 @@ function equipmentHtml(list) {
     <div class="${list.length > 4 ? "scroll-box" : ""}" tabindex="${list.length > 4 ? 0 : -1}" aria-label="Equipment"><div class="equip">${items.join("")}</div></div>`;
 }
 
+
+/* ---------------- view an estimate (every option, with its lines) ---------------- */
+const EST_STATUS = { draft: "Draft", sent: "Sent", viewed: "Viewed", accepted: "Accepted", declined: "Declined", lost: "Lost", expired: "Expired", dismissed: "Dismissed", open: "Open", sold: "Sold" };
+async function openEstimate(id) {
+  const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open");
+  $("#inv-paper").innerHTML = `<div class="quiet" style="padding:40px">Opening estimate…</div>`;
+  const [est, co] = await Promise.all([
+    db.from("estimates").select("*, estimate_options!estimate_options_estimate_id_fkey(*, estimate_lines(*)), jobs!estimates_job_id_fkey(job_number, summary, job_types(name)), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id)), business_units(name), employees!estimates_sold_by_employee_id_fkey(first_name, last_name)").eq("id", id).single(),
+    COMPANY ? Promise.resolve({ data: COMPANY }) : db.from("company_settings").select("*").limit(1).maybeSingle()]);
+  let e = est;
+  if (e.error && /employees|relationship/i.test(e.error.message))   // older copy of the database: open it without the salesperson
+    e = await db.from("estimates").select("*, estimate_options!estimate_options_estimate_id_fkey(*, estimate_lines(*)), jobs!estimates_job_id_fkey(job_number, summary, job_types(name)), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id)), business_units(name)").eq("id", id).single();
+  if (e.error) { $("#inv-paper").innerHTML = `<div class="staff-msg err" style="padding:40px">Couldn't open this estimate: ${esc(e.error.message)}</div>`; return; }
+  COMPANY = co.data || COMPANY || { company_name: "Reid Heating & Cooling" };
+  const x = e.data, c = COMPANY, l = x.locations || {}, cust = x.customers || {};
+  const contact = (cust.customer_contacts || []).filter(k => !k.location_id).sort((a, b) => b.is_primary - a.is_primary);
+  const email = x.recipient_email || contact.find(k => k.kind === "email")?.value, phone = contact.find(k => k.kind !== "email")?.value;
+  const addr = [[l.street, l.unit && "Unit " + l.unit].filter(Boolean).join(", "), [l.city, l.province, l.postal_code].filter(Boolean).join(", ")].filter(Boolean);
+  const coAddr = [c.street, [c.city, c.province, c.postal_code].filter(Boolean).join(", ")].filter(Boolean);
+  const seller = x.employees ? `${x.employees.first_name || ""} ${x.employees.last_name || ""}`.trim() : "";
+  const opts = (x.estimate_options || []).sort((a, b) => a.sequence - b.sequence || a.id - b.id);
+  const HST = 0.13;
+  const optHtml = (o, n) => {
+    const lines = (o.estimate_lines || []).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0) || a.id - b.id);
+    const sub = lines.reduce((s, k) => s + Number(k.line_total || 0), 0);
+    const tax = lines.reduce((s, k) => s + (k.taxable ? Number(k.line_total || 0) * HST : 0), 0);
+    const accepted = x.accepted_option_id === o.id;
+    return `<section class="est-opt ${accepted ? "accepted" : ""}">
+      <div class="est-opt-head"><div><span class="est-opt-n">Option ${n + 1}</span> <strong>${esc(o.name || "")}</strong>
+        ${o.is_recommended ? '<span class="est-tag rec">Recommended</span>' : ""}${accepted ? `<span class="est-tag acc">✓ Accepted${x.accepted_at ? " " + fmtDate(x.accepted_at) : ""}</span>` : ""}</div>
+        <div class="num est-opt-total">${money(sub + tax)}</div></div>
+      ${o.description ? `<div class="est-desc">${esc(o.description)}</div>` : ""}
+      <table class="inv-lines"><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th></tr></thead><tbody>
+        ${lines.length ? lines.map(k => `<tr class="${k.parent_line_id ? "est-sub" : ""}"><td>${esc(k.description || "")}${k.supplied_by === "customer" ? ' <span class="inv-small">(customer supplies)</span>' : k.supplied_by === "partner" ? ' <span class="inv-small">(partner supplies)</span>' : ""}</td>
+          <td class="r num">${Number(k.quantity).toLocaleString("en-CA", { maximumFractionDigits: 2 })}</td>
+          <td class="r num">${money(k.unit_price)}</td><td class="r num">${money(k.line_total)}</td></tr>`).join("")
+        : `<tr><td colspan="4" class="quiet">No line items came over from ServiceTitan for this option.</td></tr>`}
+      </tbody></table>
+      <table class="inv-totals est-totals"><tr><td>Subtotal</td><td class="r num">${money(sub)}</td></tr>
+        <tr><td>HST (13%)</td><td class="r num">${money(tax)}</td></tr>
+        <tr class="inv-total"><td>Total</td><td class="r num">${money(sub + tax)}</td></tr></table></section>`;
+  };
+  $("#inv-paper").innerHTML = `
+    <div class="inv-top">
+      <div><div class="inv-co">${esc(c.company_name || "Reid Heating & Cooling")}</div>
+        <div class="inv-small">${coAddr.map(esc).join("<br>")}${c.phone ? "<br>" + esc(phoneFmt(c.phone)) : ""}${c.email ? "<br>" + esc(c.email) : ""}</div></div>
+      <div class="inv-title"><div>ESTIMATE</div><table class="inv-meta">
+        <tr><td>Estimate #</td><td>${esc(x.estimate_number)}</td></tr>
+        <tr><td>Date</td><td>${fmtDate(x.created_at)}</td></tr>
+        ${x.expires_on ? `<tr><td>Valid until</td><td>${fmtDate(x.expires_on)}</td></tr>` : ""}
+        ${x.jobs?.job_number ? `<tr><td>Job #</td><td>${esc(x.jobs.job_number)}</td></tr>` : ""}
+        <tr><td>Status</td><td>${esc(EST_STATUS[x.status] || x.status)}</td></tr>
+        ${seller ? `<tr><td>Prepared by</td><td>${esc(seller)}</td></tr>` : ""}
+      </table></div>
+    </div>
+    <div class="inv-parties">
+      <div><div class="inv-label">Prepared for</div><strong>${esc(cust.display_name || "")}</strong>${phone ? "<br>" + esc(phoneFmt(phone)) : ""}${email ? "<br>" + esc(email) : ""}</div>
+      <div><div class="inv-label">Service address</div>${addr.map(esc).join("<br>") || "—"}</div>
+      <div><div class="inv-label">Work</div>${esc(x.jobs?.job_types?.name || "")}${x.business_units?.name ? `<br><span class="inv-small">${esc(x.business_units.name)}</span>` : ""}</div>
+    </div>
+    ${x.status === "lost" || x.lost_reason ? `<div class="inv-void">Not sold${x.lost_reason ? ": " + esc(x.lost_reason) : ""}${x.lost_note ? ` (${esc(x.lost_note)})` : ""}</div>` : ""}
+    ${opts.length > 1 ? `<div class="est-count">${opts.length} options</div>` : ""}
+    ${opts.map(optHtml).join("") || `<div class="quiet" style="padding:20px 0">No options came over from ServiceTitan for this estimate.</div>`}
+    <div class="inv-thanks">Prices include parts and labour as listed. HST is worked out on taxable items. Thank you for considering ${esc(c.company_name || "Reid Heating & Cooling")}.</div>`;
+  $("#inv-copy").onclick = async () => {
+    const text = `${c.company_name || "Reid Heating & Cooling"} – Estimate ${x.estimate_number} (${fmtDate(x.created_at)})\n${cust.display_name || ""}\n${addr.join(", ")}\n\n`
+      + opts.map((o, n) => { const ls = (o.estimate_lines || []); const sub = ls.reduce((s, k) => s + Number(k.line_total || 0), 0);
+          return `Option ${n + 1}: ${o.name || ""}${x.accepted_option_id === o.id ? " (accepted)" : ""}\n` + ls.map(k => `  ${k.description}  x${Number(k.quantity)}  ${money(k.line_total)}`).join("\n") + `\n  Subtotal ${money(sub)}`; }).join("\n\n");
+    const ok = await copyText(text); $("#inv-copy").textContent = ok ? "Copied ✓" : "Couldn't copy"; setTimeout(() => $("#inv-copy").textContent = "Copy", 1600);
+  };
+}
 /* ---------------- view an invoice ---------------- */
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-estimate]"); if (!t || e.target.closest("#inv-view")) return;
+  e.stopPropagation(); openEstimate(Number(t.dataset.estimate));
+});
+document.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.matches?.("tr[data-estimate]")) openEstimate(Number(e.target.dataset.estimate)); });
 document.addEventListener("click", e => {
   const t = e.target.closest("[data-invoice]"); if (!t || e.target.closest("#inv-view")) return;
   e.stopPropagation(); openInvoice(Number(t.dataset.invoice));
@@ -3284,9 +3373,9 @@ function invoicesHtml(list) {
 
 function estimatesHtml(list) {
   return `<div class="scroll-box" tabindex="0" aria-label="Estimates"><table><thead><tr><th>Date</th><th>Estimate</th><th>Option</th><th class="r">Amount</th><th>Status</th></tr></thead><tbody>
-    ${list.map((e, n) => { const o = (e.estimate_options || [])[0] || {}; const amt = (o.estimate_lines || []).reduce((s, l) => s + Number(l.line_total || 0), 0);
-      return `<tr><td class="num">${fmtDate(e.created_at)}</td><td class="num">${esc(e.estimate_number)}</td>
-      <td>${esc(o.name || "")}</td><td class="r num">${money(amt)}</td><td>${badge(e.status)}</td></tr>`; }).join("")}
+    ${list.map((e, n) => { const opts = e.estimate_options || [], o = opts[0] || {}; const amt = (o.estimate_lines || []).reduce((s, l) => s + Number(l.line_total || 0), 0);
+      return `<tr class="inv-row" tabindex="0" data-estimate="${e.id}" title="Open estimate"><td class="num">${fmtDate(e.created_at)}</td><td class="num"><span class="inv-link">${esc(e.estimate_number)}</span></td>
+      <td>${esc(o.name || "")}${opts.length > 1 ? ` <span class="quiet">+ ${opts.length - 1} more ${opts.length === 2 ? "option" : "options"}</span>` : ""}</td><td class="r num">${money(amt)}</td><td>${badge(e.status)}</td></tr>`; }).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} estimates.</div>` : ""}`;
 }
 
