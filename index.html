@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.230109">
+<meta name="app-version" content="2026-10-14.230647">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -278,7 +278,10 @@
                  padding: 12px; border: 1px dashed var(--line); border-radius: var(--radius-s); }
   .nw-quick { display: flex; gap: 10px; padding-bottom: 8px; }
   .nw-check { margin: 6px 0 4px !important; }
-  .eq-warr [data-w-add-open] { margin-top: 6px; font-weight: 600; }
+  .eq-warr [data-w-add-open] { font-weight: 600; }
+  .w-actions { display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: center; margin-top: 6px; }
+  .w-actions .link { font-weight: 600; }
+  .req-done { color: var(--green); font-weight: 600; font-size: calc(13px * var(--fs, 1)); }
   .nw-link { font-size: calc(13px * var(--fs, 1)); margin-left: 6px; }
   .eq-form .row { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
   @media (max-width: 860px) { .eq-warr-row { grid-template-columns: 1fr 1fr; } }
@@ -1226,6 +1229,7 @@ function renderFile() {
     renderFile();
     const m = $("#note-msg"); if (m) { m.className = "msg ok"; m.textContent = "Note added."; }
   });
+  document.querySelectorAll(".eq [data-req-date]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); requestInstallDate(Number(b.dataset.reqDate), b); }));
   document.querySelectorAll("[data-no-warranty]").forEach(b => b.addEventListener("click", async e => {
     e.stopPropagation(); b.disabled = true;
     const { error } = await db.rpc("save_equipment", { p_id: Number(b.dataset.noWarranty), p: { no_warranty: true } });
@@ -1233,7 +1237,7 @@ function renderFile() {
     reloadEquipment();
   }));
   document.querySelectorAll(".eq.editable").forEach(el => {
-    el.addEventListener("click", e => { if (!e.target.closest("form") && !e.target.closest("[data-no-warranty]")) startEditEquipment(Number(el.dataset.eq)); });
+    el.addEventListener("click", e => { if (!e.target.closest("form") && !e.target.closest("[data-no-warranty], [data-req-date]")) startEditEquipment(Number(el.dataset.eq)); });
     el.addEventListener("keydown", e => { if (e.key === "Enter" && !e.target.closest("form")) startEditEquipment(Number(el.dataset.eq)); });
   });
   document.querySelectorAll("[data-compose]").forEach(a => a.addEventListener("click", e => {
@@ -1839,6 +1843,20 @@ function renderStaff(users, perms, note) {
   });
 }
 
+function reqDateLink(e) {
+  if (!(can("notes.add") || can("equipment.edit"))) return "";
+  if ((e.requested_info || []).includes("install date")) return ` <span class="req-done">✓ Install date requested</span>`;
+  return e.install_date ? "" : ` <button class="link nw-link" type="button" data-req-date="${e.id}">Request install date</button>`;
+}
+async function requestInstallDate(id, btn) {
+  if (btn) btn.disabled = true;
+  const { data, error } = await db.rpc("request_equipment_info", { p_equipment_id: id, p_what: "install date" });
+  if (error) { if (btn) { btn.disabled = false; btn.textContent = "Not sent: " + error.message; } return false; }
+  current.tech = {};
+  current.notes = await fetchNotes(current.noteFilter, current.jobIds);
+  await reloadEquipment();
+  return data;
+}
 function equipmentHtml(list) {
   const today = new Date().toISOString().slice(0, 10);
   const items = list.map(e => {
@@ -1860,7 +1878,7 @@ function equipmentHtml(list) {
     const line = (label, d) => d ? (d >= today ? `<span class="ok">${label} until ${monthYear(d)}</span>` : `<span class="gone">${label} ended ${monthYear(d)}</span>`) : "";
     const coverText = [line("Parts", partsEnd), line("Labour", labourEnd)].filter(Boolean).join(", ")
       || (e.no_warranty ? `<span class="gone">Out of warranty</span>`
-          : `<span class="gone">No warranty on file</span>${can("equipment.edit") ? ` <button class="link nw-link" type="button" data-no-warranty="${e.id}">Mark out of warranty</button>` : ""}`);
+          : `<span class="gone">No warranty on file</span>${can("equipment.edit") ? ` <button class="link nw-link" type="button" data-no-warranty="${e.id}">Mark out of warranty</button>` : ""}${reqDateLink(e)}`);
     const editable = can("equipment.edit");
     return `<div class="eq${editable ? " editable" : ""}${e.status !== "active" ? " gone-eq" : ""}" data-eq="${e.id}" ${editable ? `role="button" tabindex="0" title="Click to edit"` : ""}>
       <div><div class="what">${esc(e.equipment_types?.name || "Equipment")}${e.manufacturers?.name ? ", " + esc(e.manufacturers.name) : ""}${e.status !== "active" ? ` <span class="badge">${e.status === "removed" ? "Removed" : "Replaced"}${e.removed_on ? " " + fmtDate(e.removed_on) : ""}</span>` : ""}</div>
@@ -2060,7 +2078,9 @@ async function startEditEquipment(id) {
         <label>Registration #<input name="w_reg" value="${esc(w.registration_number || "")}"></label>
         <span class="w-remove"><button class="link danger" type="button" data-w-remove="${w.id}">Remove</button></span></div>`).join("")}
       ${cov.length ? "" : `<label class="check nw-check"><input type="checkbox" name="no_warranty" ${e.no_warranty ? "checked" : ""}> Out of warranty (this equipment has no warranty)</label>`}
-      <button class="link" type="button" data-w-add-open>+ Add a warranty</button>
+      <div class="w-actions"><button class="link" type="button" data-w-add-open>+ Add a warranty</button>
+        ${(e.requested_info || []).includes("install date") ? `<span class="req-done">✓ Install date requested for the next visit</span>`
+          : `<button class="link" type="button" data-form-req-date>Request install date at the next visit</button>`}</div>
       <div class="eq-warr-new hidden">
         <label>Covers<select name="nw_covers"><option value="both">Parts and labour</option><option value="parts">Parts only</option><option value="labour">Labour only</option></select></label>
         <label>Given by<select name="nw_source"><option value="manufacturer">Manufacturer</option><option value="company_workmanship">Us (workmanship)</option>
@@ -2080,6 +2100,12 @@ async function startEditEquipment(id) {
     ev.target.classList.add("hidden"); f.querySelector(".eq-warr-new").classList.remove("hidden");
     if (f.no_warranty) f.no_warranty.checked = false;
     f.nw_end.focus();
+  });
+  f.querySelector("[data-form-req-date]")?.addEventListener("click", async ev => {
+    ev.target.disabled = true; msg.className = "msg"; msg.textContent = "Requesting…";
+    const r = await requestInstallDate(id, null);
+    if (r === false) { ev.target.disabled = false; msg.className = "msg err"; msg.textContent = "Couldn't request it."; return; }
+    startEditEquipment(id);
   });
   f.nw_source.addEventListener("change", () => f.querySelector(".nw-provider").classList.toggle("hidden", f.nw_source.value !== "extended"));
   f.querySelectorAll("[data-years]").forEach(b => b.addEventListener("click", () => {
