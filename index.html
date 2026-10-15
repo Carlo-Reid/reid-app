@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.112858">
+<meta name="app-version" content="2026-10-15.113521">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -318,6 +318,23 @@
   /* a box with a lot in it fills most of the screen (room left for the name bar and the section heading) */
   .notes-list.full, .scroll-box.full { height: max(400px, calc(100vh - 230px)); }
   .file .notes-list, .file .scroll-box { overscroll-behavior: contain; }
+
+  /* passwords */
+  .forgot-link { margin-top: 14px; font-size: calc(14px * var(--fs, 1)); }
+  .forgot { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--paper); font-size: calc(14px * var(--fs, 1)); }
+  .forgot p { margin: 0 0 10px; }
+  .forgot-msg { margin-top: 8px; } .forgot-msg.ok { color: var(--green); } .forgot-msg.err { color: var(--red); }
+  .pw-form { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
+  .pw-form label { display: flex; flex-direction: column; gap: 3px; font-size: calc(13px * var(--fs, 1)); color: var(--steel); font-weight: 600; margin: 0; }
+  .pw-form label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--ink); padding-bottom: 9px; }
+  .pw-form input[type=password], .pw-form input[type=text] { padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--ink); font: inherit; width: 190px; }
+  .login-cell { margin-top: 3px; font-size: calc(12.5px * var(--fs, 1)); white-space: nowrap; }
+  .login-ok { color: var(--green); font-weight: 600; } .login-none { color: var(--amber); font-weight: 600; }
+  tr.pw-row td { background: var(--blue-wash); }
+  .pw-set { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 4px 0; }
+  .pw-set input { padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--ink); font: inherit; width: 220px; }
+  .pw-set .msg.err { color: var(--red); }
+  .add-staff label .link { font-size: calc(12.5px * var(--fs, 1)); margin-left: 6px; }
   /* follow up */
   .fu-check { display: inline-flex; align-items: center; gap: 6px; float: right; margin: 2px 0 0 14px; padding: 3px 10px; border: 1px solid var(--line);
               border-radius: 999px; font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--steel); cursor: pointer; background: var(--paper); }
@@ -664,7 +681,7 @@
   .staff .link.danger { color: var(--red); }
   .staff input[type=checkbox]:disabled:checked { accent-color: var(--steel); }
   .staff .inactive td { color: var(--steel); }
-  .add-staff { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 10px; align-items: end; margin-top: 18px;
+  .add-staff { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) auto; gap: 10px; align-items: end; margin-top: 18px;
                background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 16px; }
   .add-staff label { margin: 0 0 4px; font-size: calc(13.5px * var(--fs, 1)); }
   .add-staff input, .add-staff select { width: 100%; }
@@ -702,6 +719,12 @@
     <input id="password" type="password" autocomplete="current-password" required>
     <button class="btn full" type="submit">Sign in</button>
     <div class="error" id="signin-error" role="alert"></div>
+    <button class="link forgot-link" type="button" id="forgot-link">Forgot password?</button>
+    <div class="forgot hidden" id="forgot">
+      <p>Type your work email and press the button. An owner will see your request on the Staff page, set a new password and give it to you.</p>
+      <button class="btn quiet-btn" type="button" id="forgot-send">Ask for a new password</button>
+      <div class="forgot-msg" id="forgot-msg" role="status"></div>
+    </div>
   </form>
 </div>
 
@@ -835,6 +858,17 @@ $("#signin-form").addEventListener("submit", async e => {
   const { error } = await db.auth.signInWithPassword({ email: $("#email").value.trim(), password: $("#password").value });
   if (error) { $("#signin-error").textContent = "That email and password didn't match. Check them and try again."; return; }
   showApp();
+});
+
+$("#forgot-link").addEventListener("click", () => { $("#forgot").classList.toggle("hidden"); $("#email").focus(); });
+$("#forgot-send").addEventListener("click", async () => {
+  const email = $("#email").value.trim(), m = $("#forgot-msg");
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { m.className = "forgot-msg err"; m.textContent = "Type your work email in the Email box first."; $("#email").focus(); return; }
+  $("#forgot-send").disabled = true;
+  const { error } = await db.rpc("request_password_reset", { p_email: email });
+  $("#forgot-send").disabled = false;
+  m.className = "forgot-msg " + (error ? "err" : "ok");
+  m.textContent = error ? "Couldn't send the request. Call the office." : "Request sent. Carlo or George will set a new password and let you know.";
 });
 /* scroll boxes keep the scrolling to themselves: reaching the end of a box doesn't move the page on to the next section */
 
@@ -2012,11 +2046,42 @@ async function openSettings() {
   await loadPinSlots();
   renderSettings(PIN_SLOTS.map(x => ({ color: x.color.toUpperCase(), name: x.name || "" })));
 }
+function wireMyPassword() {
+  const f = $("#my-pw"), m = $("#pw-msg"); if (!f) return;
+  const say = (t, err) => { m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; };
+  f.show.addEventListener("change", () => ["current", "next", "again"].forEach(n => f[n].type = f.show.checked ? "text" : "password"));
+  f.addEventListener("submit", async e => {
+    e.preventDefault();
+    if (f.next.value.length < 8) return say("Make the new password at least 8 characters.", true);
+    if (f.next.value !== f.again.value) return say("The two new passwords don't match.", true);
+    if (f.next.value === f.current.value) return say("The new password is the same as the current one.", true);
+    if (CONFIG.testToken) return say("Passwords can't be changed in the test copy.", true);
+    const btn = f.querySelector("button[type=submit]"); btn.disabled = true; say("Saving…");
+    const check = await db.auth.signInWithPassword({ email: ME.email, password: f.current.value });
+    if (check.error) { btn.disabled = false; return say("Your current password isn't right.", true); }
+    const { error } = await db.auth.updateUser({ password: f.next.value });
+    btn.disabled = false;
+    if (error) return say("Not changed: " + error.message, true);
+    f.reset(); say("Your password is changed. Use the new one next time you sign in.");
+  });
+}
 function renderSettings(slots, note) {
+  setTimeout(wireMyPassword, 0);
   $("#main").innerHTML = `<article class="staff settings">
     <h1>Settings</h1>
     <p class="lead">${can("settings.manage") ? "Page colours are just for you. Pinned notes apply to everyone." : "Page colours are just for you. Nobody else's screen changes."}</p>
     <section class="block" style="margin-top:8px">
+      <h2>Your password</h2>
+      <form class="pw-form" id="my-pw" autocomplete="off">
+        <label>Current password<input type="password" name="current" autocomplete="current-password" required></label>
+        <label>New password<input type="password" name="next" autocomplete="new-password" minlength="8" required></label>
+        <label>New password again<input type="password" name="again" autocomplete="new-password" minlength="8" required></label>
+        <label class="check"><input type="checkbox" name="show"> Show</label>
+        <button class="btn" type="submit">Change my password</button>
+      </form>
+      <div class="staff-msg" id="pw-msg" role="status"></div>
+    </section>
+    <section class="block">
       <h2>Your text size</h2>
       <div class="font-pick" role="radiogroup" aria-label="Text size">${FONTS.map(([k, t, v]) =>
         `<button type="button" class="font-opt" role="radio" aria-checked="${k === FONT}" data-font="${k}"><span style="font-size:${Math.round(16 * v)}px">Aa</span>${t}</button>`).join("")}</div>
@@ -2139,12 +2204,19 @@ async function openStaff() {
   let [users, perms] = await Promise.all([userQuery(true), db.from("permissions").select("*").order("sort_order")]);
   if (users.error) users = await userQuery(false);   // setup step 07 not run yet
   if (users.error || perms.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load staff</h2>${esc((users.error || perms.error).message)}</div></div>`; return; }
-  const pend = await db.rpc("pending_staff_removals");
+  const [pend, resets, logins] = await Promise.all([db.rpc("pending_staff_removals"), db.rpc("pending_password_resets"),
+    db.functions.invoke("staff-login", { body: { action: "status", emails: users.data.map(u => u.login_email) } })]);
   STAFF_PENDING = pend.error ? [] : pend.data || [];
+  STAFF_RESETS = resets.error ? [] : resets.data || [];
+  STAFF_LOGINS = logins.error || !logins.data?.logins ? null : Object.fromEntries(logins.data.logins.map(l => [l.email, l]));
   renderStaff(users.data, perms.data);
 }
 
-let STAFF_PENDING = [];
+let STAFF_PENDING = [], STAFF_RESETS = [], STAFF_LOGINS = null;
+function makePassword() {   // easy to read out loud: no 0/O, 1/l/I
+  const a = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789", r = crypto.getRandomValues(new Uint32Array(10));
+  return Array.from(r, x => a[x % a.length]).join("");
+}
 function renderStaff(users, perms, note) {
   const isOwner = ME.role === "owner";
   const roleOptions = (sel, lockHigh) => ROLES.filter(([v]) => isOwner || !["owner", "admin"].includes(v) || v === sel)
@@ -2157,6 +2229,9 @@ function renderStaff(users, perms, note) {
       return `<div class="approve-banner" role="alert"><div><strong>${esc(r.requested_by)}</strong> wants to remove <strong>${esc(who)}</strong>. It needs your approval.</div>
         <span><button class="btn" type="button" data-approve="${r.request_id}">Approve removal</button>
         <button class="btn quiet-btn" type="button" data-reject="${r.request_id}">Turn down</button></span></div>`; }).join("")}
+    ${STAFF_RESETS.map(r => `<div class="approve-banner pw-banner" role="alert"><div><strong>${esc(r.name || r.email)}</strong> forgot their password and asked for a new one.</div>
+        <span><button class="btn" type="button" data-reset-for="${r.app_user_id}">Set a new password</button>
+        <button class="btn quiet-btn" type="button" data-reset-dismiss="${r.app_user_id}">Dismiss</button></span></div>`).join("")}
     <div class="staff-wrap"><table>
       <thead><tr><th>Name</th><th>Login email</th><th>Role</th><th class="perm">Active</th>
         ${perms.map(p => `<th class="perm" title="${esc(p.description || "")}">${esc(p.name)}</th>`).join("")}<th class="perm">Remove</th></tr></thead>
@@ -2166,7 +2241,10 @@ function renderStaff(users, perms, note) {
         const highLocked = !isOwner && ["owner", "admin"].includes(u.role);
         return `<tr class="${u.active ? "" : "inactive"}" data-user="${u.id}" data-email="${esc(u.login_email)}" data-first="${esc(u.employees?.first_name || "")}" data-last="${esc(u.employees?.last_name || "")}">
           <td class="name-cell"><input type="text" data-field="name" value="${esc(name)}" placeholder="First and last name" aria-label="Name for ${esc(u.login_email)}" ${highLocked ? "disabled" : ""}></td>
-          <td>${esc(u.login_email)}</td>
+          <td>${esc(u.login_email)}${(() => {
+            const L = STAFF_LOGINS && STAFF_LOGINS[String(u.login_email).toLowerCase()];
+            const status = STAFF_LOGINS == null ? "" : L ? `<span class="login-ok" title="${L.last_sign_in_at ? "Last signed in " + esc(new Date(L.last_sign_in_at).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })) : "Hasn't signed in yet"}">✓ Can sign in</span>` : `<span class="login-none">No login yet</span>`;
+            return `<div class="login-cell">${status}${highLocked ? "" : ` <button class="link" type="button" data-set-pw>${STAFF_LOGINS && !L ? "Create login" : "Set password"}</button>`}</div>`; })()}</td>
           <td><select data-field="role" aria-label="Role for ${esc(u.login_email)}" ${highLocked ? "disabled" : ""}>${roleOptions(u.role)}</select></td>
           <td class="perm"><input type="checkbox" data-field="active" aria-label="Active" ${u.active ? "checked" : ""} ${highLocked ? "disabled" : ""}></td>
           ${perms.map(p => u.role === "owner"
@@ -2186,12 +2264,14 @@ function renderStaff(users, perms, note) {
       <div><label for="st-last">Last name</label><input type="text" id="st-last" autocomplete="off"></div>
       <div><label for="st-email">Login email</label><input type="email" id="st-email" required autocomplete="off"></div>
       <div><label for="st-role">Role</label><select id="st-role">${roleOptions("office")}</select></div>
+      <div><label for="st-pw">Password <button class="link" type="button" id="st-pw-make">Make one up</button></label><input type="text" id="st-pw" autocomplete="off" placeholder="At least 8 characters"></div>
       <div><button class="btn" type="submit">Add staff member</button></div>
     </form>
     <ol class="steps">
-      <li>Add the person here with the email they'll log in with. They start with no permissions, so they can look but not change anything.</li>
-      <li>Create their login in Supabase under Authentication, Users, Add user, with the same email and Auto Confirm ticked.</li>
-      <li>Tick the permissions they need in the table above.</li>
+      <li>Fill in their name, the email they'll sign in with, their role and a password, then click Add staff member. Their login is created right away.</li>
+      <li>Give them the password in person or by phone. They can change it to their own under Settings.</li>
+      <li>Tick the permissions they need in the table above. They start with none, so they can look but not change anything.</li>
+      <li>Forgot password? Use Set password next to their email. If they ask from the sign-in screen, you'll see it at the top of this page.</li>
     </ol>
   </article>`;
 
@@ -2248,16 +2328,66 @@ function renderStaff(users, perms, note) {
     checkIn();
   }));
 
+  $("#st-pw-make").addEventListener("click", () => { $("#st-pw").value = makePassword(); });
   $("#add-staff").addEventListener("submit", async e => {
     e.preventDefault();
-    const email = $("#st-email").value.trim();
+    const email = $("#st-email").value.trim(), pw = $("#st-pw").value;
+    if (pw && pw.length < 8) { say("Make the password at least 8 characters, or leave it empty and set it later.", true); $("#st-pw").focus(); return; }
     const { error } = await db.rpc("save_staff_member", { p_email: email, p_role: $("#st-role").value,
       p_first_name: $("#st-first").value.trim() || null, p_last_name: $("#st-last").value.trim() || null, p_active: true });
     if (error) { say("Not added: " + error.message, true); return; }
-    reload(`Added ${email}. Now create their login in Supabase and tick their permissions.`);
+    if (!pw) return reload(`Added ${email}. Use Create login next to their email to give them a password, then tick their permissions.`);
+    const r = await setStaffPassword(email, pw);
+    reload(r.error ? `Added ${email}, but the login wasn't created: ${r.error}` : `Added ${email} with the password ${pw}. Give it to them in person, then tick their permissions.`);
   });
+
+  // set or reset a password right here
+  const openPwRow = tr => {
+    document.querySelectorAll("tr.pw-row").forEach(r => r.remove());
+    const cols = tr.children.length, email = tr.dataset.email, id = Number(tr.dataset.user);
+    tr.insertAdjacentHTML("afterend", `<tr class="pw-row"><td colspan="${cols}"><form class="pw-set" autocomplete="off">
+      <strong>${STAFF_LOGINS && !STAFF_LOGINS[email.toLowerCase()] ? "Create a login for" : "New password for"} ${esc(email)}</strong>
+      <input type="text" name="pw" placeholder="At least 8 characters" autocomplete="off" aria-label="New password" minlength="8">
+      <button class="link" type="button" data-make>Make one up</button>
+      <button class="btn" type="submit">Save password</button>
+      <button class="btn quiet-btn" type="button" data-cancel>Cancel</button>
+      <span class="msg" role="status"></span></form></td></tr>`);
+    const f = tr.nextElementSibling.querySelector("form"), m = f.querySelector(".msg");
+    f.pw.focus();
+    f.querySelector("[data-make]").addEventListener("click", () => { f.pw.value = makePassword(); f.pw.focus(); });
+    f.querySelector("[data-cancel]").addEventListener("click", () => tr.nextElementSibling.remove());
+    f.addEventListener("keydown", e => { if (e.key === "Escape") tr.nextElementSibling?.remove(); });
+    f.addEventListener("submit", async e => {
+      e.preventDefault();
+      if (f.pw.value.length < 8) { m.className = "msg err"; m.textContent = "At least 8 characters."; return; }
+      const btn = f.querySelector("button[type=submit]"); btn.disabled = true; m.className = "msg"; m.textContent = "Saving…";
+      const r = await setStaffPassword(email, f.pw.value);
+      btn.disabled = false;
+      if (r.error) { m.className = "msg err"; m.textContent = r.error; return; }
+      const pw = f.pw.value;
+      await reload(`${r.created ? "Login created" : "Password changed"} for ${email}. The new password is ${pw}. Give it to them in person or by phone.`);
+    });
+  };
+  document.querySelectorAll("[data-set-pw]").forEach(b => b.addEventListener("click", () => openPwRow(b.closest("tr"))));
+  document.querySelectorAll("[data-reset-for]").forEach(b => b.addEventListener("click", () => {
+    const tr = document.querySelector(`tr[data-user="${b.dataset.resetFor}"]`); if (tr) { tr.scrollIntoView({ block: "center" }); openPwRow(tr); }
+  }));
+  document.querySelectorAll("[data-reset-dismiss]").forEach(b => b.addEventListener("click", async () => {
+    await db.rpc("close_password_reset", { p_app_user_id: Number(b.dataset.resetDismiss) }); reload("Request dismissed."); checkIn();
+  }));
 }
 
+async function setStaffPassword(email, password) {
+  const { data, error } = await db.functions.invoke("staff-login", { body: { action: "set_password", email, password } });
+  if (error) {
+    let msg = error.message;
+    try { const body = await error.context?.json?.(); if (body?.error) msg = body.error; } catch {}
+    if (/Failed to send|not found|404|FunctionsFetchError|FunctionsRelayError/i.test(msg)) msg = "The staff-login helper isn't set up in Supabase yet (see the steps Claude gave you).";
+    return { error: msg };
+  }
+  checkIn();
+  return data || {};
+}
 function reqDateLink(e) {
   if (!(can("notes.add") || can("equipment.edit"))) return "";
   if ((e.requested_info || []).includes("install date")) return ` <span class="req-done">✓ Install date requested</span>`;
