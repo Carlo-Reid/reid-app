@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.113521">
+<meta name="app-version" content="2026-10-15.125443">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -981,12 +981,14 @@ const CHAT = { open: null, name: "", msgs: [], unread: {}, live: false };
 let chatStarted = false;
 function startChat() {
   chatStarted = true;
+  startFollowLive();
   try {
     db.channel("staff-chat")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "staff_messages" }, p => {
         const m = p.new || {};
         if (CHAT.open && (m.from_user_id === CHAT.open || m.to_user_id === CHAT.open)) loadThread();
         else if (m.to_user_id === ME.id) refreshUnread(true);
+        if (m.to_user_id === ME.id && /^I sent you a follow up/.test(m.body || "")) followChanged();
       })
       .subscribe(st => { CHAT.live = st === "SUBSCRIBED"; });
   } catch {}
@@ -1898,9 +1900,45 @@ function alertLine(near, text) {
   (near.closest("td, label, li") || near).appendChild(m); setTimeout(() => m.remove(), 4000);
 }
 $("#fu-link").addEventListener("click", () => openFollowUps());
+
+/* follow ups update right away: when someone sends you one, finishes one you sent, or you change one in another window */
+let fuLive = false, fuTimer = null, fuPending = false;
+function startFollowLive() {
+  try {
+    db.channel("follow-ups-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "follow_ups" }, () => followChanged())
+      .subscribe(st => { fuLive = st === "SUBSCRIBED"; });
+  } catch {}
+  // back-up check: every 15 seconds when the live connection is down, and whenever the window comes back into view
+  setInterval(() => { if (!fuLive && !document.hidden) followChanged(); }, CONFIG.fuPollMs || 15000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) followChanged(); });
+}
+function followChanged() {
+  if (FU.off) return;
+  clearTimeout(fuTimer);
+  fuTimer = setTimeout(async () => {
+    await loadFollowKeys();
+    const page = document.querySelector(".followups");
+    if (!page) return;
+    // don't redraw while someone is typing a note or picking a person; do it as soon as they're done
+    if (page.contains(document.activeElement) && document.activeElement.matches("input.fu-note, select")) { fuPending = true; return; }
+    refreshFollowPage();
+  }, 300);
+}
+async function refreshFollowPage() {
+  fuPending = false;
+  const main = $("#main"), top = main.scrollTop;
+  await openFollowUps(document.querySelector(".followups .staff-msg.ok")?.textContent || null, true);
+  main.scrollTop = top;
+}
+document.addEventListener("focusout", e => {
+  if (fuPending && e.target.closest?.(".followups")) setTimeout(() => {
+    if (!document.querySelector(".followups")?.contains(document.activeElement) || !document.activeElement.matches("input.fu-note, select")) refreshFollowPage();
+  }, 200);
+});
 let FU_PEOPLE = null;
-async function openFollowUps(flash) {
-  setPage("followups", "followups");
+async function openFollowUps(flash, quiet) {
+  if (!quiet) setPage("followups", "followups");
   if (!document.querySelector(".followups")) $("#main").innerHTML = `<div class="loading">Loading your follow ups…</div>`;
   const [res, ppl] = await Promise.all([db.rpc("my_follow_ups"), FU_PEOPLE ? { data: FU_PEOPLE } : db.rpc("follow_up_people")]);
   const { data, error } = res;
