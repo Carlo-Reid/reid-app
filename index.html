@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.225848">
+<meta name="app-version" content="2026-10-14.230109">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -425,6 +425,26 @@
   .slot-move .link:disabled { opacity: .35; cursor: default; }
   .slot-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 14px; }
   @media (max-width: 860px) { .slot-row { grid-template-columns: 52px 48px 1fr; } .slot-row .slot-preview, .slot-move { grid-column: 1 / -1; } }
+  .calls { max-width: 1240px; }
+  .calls-bar { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; margin-bottom: 10px; }
+  .calls-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .chip.small { padding: 4px 11px; font-size: calc(13px * var(--fs, 1)); }
+  .calls-range { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .calls-range label { display: flex; flex-direction: column; gap: 3px; font-size: calc(13px * var(--fs, 1)); color: var(--steel); font-weight: 600; margin: 0; }
+  .calls-range input { padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--ink); font: inherit; }
+  .calls-filters { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 4px 0 14px; }
+  .calls-filters > span { display: flex; flex-wrap: wrap; gap: 6px; }
+  .calls-sum { margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
+  .calls-table { width: 100%; }
+  .calls-table th { position: sticky; top: 0; z-index: 1; }
+  .calls-day td { background: var(--paper); font-weight: 700; font-size: calc(13px * var(--fs, 1)); text-transform: uppercase; letter-spacing: .05em; color: var(--steel); padding-top: 14px; }
+  .call-row { cursor: pointer; }
+  .call-row:hover td { background: var(--blue-wash); }
+  .vstat { display: inline-block; font-size: calc(12.5px * var(--fs, 1)); font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--blue-wash); color: var(--blue); white-space: nowrap; }
+  .vstat.completed { background: var(--green-wash); color: var(--green); }
+  .vstat.cancelled { background: var(--red-wash); color: var(--red); }
+  .vstat.on_site, .vstat.en_route, .vstat.dispatched { background: var(--amber-wash); color: var(--amber); }
   .hist-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
   .chip { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-weight: 600; font-size: calc(14px * var(--fs, 1)); }
   .chip[aria-selected="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
@@ -544,7 +564,7 @@
 <div id="app" class="hidden">
   <aside id="side">
     <header>
-      <div class="brand"><button class="home-link" id="home-link" title="Back to your last customer">Customers</button><span class="side-links"><button class="link hidden" id="history-link">History</button><button class="link hidden" id="settings-link">Settings</button><button class="link hidden" id="staff-link">Staff</button><button class="link" id="signout">Sign out</button></span></div>
+      <div class="brand"><button class="home-link" id="home-link" title="Back to your last customer">Customers</button><span class="side-links"><button class="link hidden" id="calls-link">Calls</button><button class="link hidden" id="history-link">History</button><button class="link hidden" id="settings-link">Settings</button><button class="link hidden" id="staff-link">Staff</button><button class="link" id="signout">Sign out</button></span></div>
       <input id="q" type="search" placeholder="Name, phone, address, invoice, serial…" autocomplete="off" aria-label="Search customers">
       <div class="hint quiet">Search by anything: old ServiceTitan numbers work too.</div>
     </header>
@@ -635,6 +655,7 @@ async function showApp() {
   $("#staff-link").classList.toggle("hidden", !ME.perms.has("staff.manage"));
   $("#settings-link").classList.toggle("hidden", !ME.role);
   $("#history-link").classList.toggle("hidden", !ME.perms.has("history.restore"));
+  $("#calls-link").classList.toggle("hidden", !ME.role);
   await loadPinSlots();
   loadTheme();
   checkForUpdate();
@@ -646,6 +667,7 @@ async function showApp() {
   if (location.hash === "#staff" && can("staff.manage")) return openStaff();
   if (location.hash === "#settings" && ME.role) return openSettings();
   if (location.hash === "#history" && can("history.restore")) return openHistory();
+  if (location.hash === "#calls" && ME.role) return openCalls();
   const id = new URLSearchParams(location.hash.slice(1)).get("customer");
   if (id) openCustomer(Number(id));
 }
@@ -1419,6 +1441,92 @@ async function checkForUpdate() {
 $("#update-btn").addEventListener("click", () => location.reload());
 setInterval(checkForUpdate, 60000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });
+
+/* ---------------- calls by date ---------------- */
+$("#calls-link").addEventListener("click", () => openCalls());
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const CALL_PRESETS = [
+  ["today", "Today", () => { const t = new Date(); return [t, t]; }],
+  ["past-week", "Past week", () => { const t = new Date(); return [addDays(t, -6), t]; }],
+  ["past-month", "Past month", () => { const t = new Date(); const f = new Date(t); f.setMonth(f.getMonth() - 1); return [addDays(f, 1), t]; }],
+  ["next-week", "Next week", () => { const t = new Date(); return [t, addDays(t, 6)]; }],
+  ["next-month", "Next month", () => { const t = new Date(); const e = new Date(t); e.setMonth(e.getMonth() + 1); return [t, addDays(e, -1)]; }]];
+const CALL_STATUS = [["all", "All"], ["booked", "Booked"], ["done", "Done"], ["cancelled", "Cancelled"]];
+const CALL_CLASS = [["all", "All types"], ["service", "Service"], ["maintenance", "Maintenance"], ["install", "Install"], ["warranty", "Warranty"], ["security", "Security"], ["other", "Other"]];
+const VISIT_STATUS = { unscheduled: "Not scheduled", scheduled: "Booked", dispatched: "Dispatched", en_route: "On the way", on_site: "On site",
+                       completed: "Done", needs_return: "Needs return", cancelled: "Cancelled" };
+let CALLS = (() => { try { return JSON.parse(localStorage.getItem("reid.calls") || "null"); } catch { return null; } })()
+  || { preset: "today", from: null, to: null, status: "all", cls: "all" };
+async function openCalls() {
+  location.hash = "calls";
+  if (CALLS.preset) { const [f, t] = CALL_PRESETS.find(x => x[0] === CALLS.preset)[2](); CALLS.from = ymd(f); CALLS.to = ymd(t); }
+  renderCallsShell();
+  await runCalls();
+}
+function renderCallsShell() {
+  $("#main").innerHTML = `<article class="staff calls">
+    <h1>Calls by date</h1>
+    <p class="lead">Every call between two dates: done, in progress or booked ahead. Click a call to open the customer.</p>
+    <div class="calls-bar">
+      <div class="calls-presets">${CALL_PRESETS.map(([k, t]) => `<button class="chip" type="button" aria-pressed="${CALLS.preset === k}" data-preset="${k}">${t}</button>`).join("")}</div>
+      <form class="calls-range" id="calls-range">
+        <label>From<input type="date" id="calls-from" value="${CALLS.from}" required></label>
+        <label>To<input type="date" id="calls-to" value="${CALLS.to}" required></label>
+        <button class="btn" type="submit">Search</button>
+      </form>
+    </div>
+    <div class="calls-filters">
+      <span>${CALL_STATUS.map(([k, t]) => `<button class="chip small" type="button" aria-pressed="${CALLS.status === k}" data-cstatus="${k}">${t}</button>`).join("")}</span>
+      <span>${CALL_CLASS.map(([k, t]) => `<button class="chip small" type="button" aria-pressed="${CALLS.cls === k}" data-cclass="${k}">${t}</button>`).join("")}</span>
+    </div>
+    <div id="calls-out"><div class="loading">Searching…</div></div>
+  </article>`;
+  const save = () => { try { localStorage.setItem("reid.calls", JSON.stringify(CALLS)); } catch {} };
+  document.querySelectorAll("[data-preset]").forEach(b => b.addEventListener("click", () => { CALLS.preset = b.dataset.preset; save(); openCalls(); }));
+  document.querySelectorAll("[data-cstatus]").forEach(b => b.addEventListener("click", () => { CALLS.status = b.dataset.cstatus; save(); renderCallsShell(); runCalls(); }));
+  document.querySelectorAll("[data-cclass]").forEach(b => b.addEventListener("click", () => { CALLS.cls = b.dataset.cclass; save(); renderCallsShell(); runCalls(); }));
+  $("#calls-range").addEventListener("submit", e => {
+    e.preventDefault();
+    CALLS.preset = null; CALLS.from = $("#calls-from").value; CALLS.to = $("#calls-to").value; save();
+    renderCallsShell(); runCalls();
+  });
+}
+async function runCalls() {
+  const out = $("#calls-out");
+  const { data, error } = await db.rpc("search_calls", { p_from: CALLS.from, p_to: CALLS.to, p_status: CALLS.status, p_class: CALLS.cls, p_limit: 2000 });
+  if (!$("#calls-out")) return;
+  if (error) { out.innerHTML = `<div class="staff-msg err">${esc(/function/i.test(error.message) ? "Run RUN SETUP.bat to switch on Calls by date." : error.message)}</div>`; return; }
+  const total = data.length ? Number(data[0].total_count) : 0;
+  const by = k => data.filter(r => k(r.visit_status)).length;
+  const range = CALLS.from === CALLS.to ? longDate(CALLS.from) : `${longDate(CALLS.from)} to ${longDate(CALLS.to)}`;
+  const time = d => d ? new Date(d).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }) : "";
+  let lastDay = "";
+  out.innerHTML = `<div class="calls-sum"><strong>${total.toLocaleString()} ${total === 1 ? "call" : "calls"}</strong><span>${esc(range)}</span>
+      ${data.length ? `<span class="quiet"> · ${by(s => s === "completed")} done · ${by(s => !["completed", "cancelled"].includes(s))} booked or in progress · ${by(s => s === "cancelled")} cancelled</span>` : ""}
+      ${total > data.length ? `<div class="staff-msg err">Showing the first ${data.length.toLocaleString()}. Pick a shorter range or a filter to see the rest.</div>` : ""}
+      ${data.length ? `<button class="link" type="button" id="calls-copy">Copy list</button>` : ""}</div>
+    ${data.length ? `<table class="calls-table"><thead><tr><th>Time</th><th>Customer</th><th>Address</th><th>Job</th><th>Tech</th><th>Status</th></tr></thead><tbody>
+      ${data.map(r => { const head = r.scheduled_date !== lastDay ? `<tr class="calls-day"><td colspan="6">${esc(longDate(r.scheduled_date))}</td></tr>` : ""; lastDay = r.scheduled_date;
+        return head + `<tr class="call-row" tabindex="0" data-cust="${r.customer_id}">
+          <td class="num">${r.arrival_start ? `${time(r.arrival_start)}${r.arrival_end ? "–" + time(r.arrival_end) : ""}` : '<span class="quiet">Any time</span>'}</td>
+          <td><strong>${esc(r.customer_name)}</strong></td>
+          <td>${esc([r.street, r.city].filter(Boolean).join(", "))}</td>
+          <td>${esc(r.job_type || "")}<div class="quiet">Job ${esc(r.job_number)}${r.visit_number > 1 ? `, visit ${r.visit_number}` : ""}${r.business_unit ? " · " + esc(r.business_unit) : ""}</div></td>
+          <td>${esc(r.techs || "")}</td>
+          <td><span class="vstat ${r.visit_status}">${esc(VISIT_STATUS[r.visit_status] || r.visit_status)}</span></td></tr>`; }).join("")}
+    </tbody></table>` : `<div class="quiet" style="padding:24px 0">No calls in this range.</div>`}`;
+  document.querySelectorAll(".call-row").forEach(tr => {
+    tr.addEventListener("click", () => openCustomer(Number(tr.dataset.cust)));
+    tr.addEventListener("keydown", e => { if (e.key === "Enter") openCustomer(Number(tr.dataset.cust)); });
+  });
+  $("#calls-copy")?.addEventListener("click", async e => {
+    const text = data.map(r => [r.scheduled_date, r.arrival_start ? time(r.arrival_start) + (r.arrival_end ? "-" + time(r.arrival_end) : "") : "", r.customer_name,
+      [r.street, r.city].filter(Boolean).join(", "), r.job_type, "Job " + r.job_number, r.techs || "", VISIT_STATUS[r.visit_status] || r.visit_status].join("\t")).join("\n");
+    const ok = await copyText("Date\tTime\tCustomer\tAddress\tJob type\tJob\tTech\tStatus\n" + text);
+    e.target.textContent = ok ? "Copied ✓ (pastes into Excel)" : "Couldn't copy"; setTimeout(() => e.target.textContent = "Copy list", 2000);
+  });
+}
 
 /* ---------------- history: see changes and put things back ---------------- */
 $("#history-link").addEventListener("click", () => openHistory());
