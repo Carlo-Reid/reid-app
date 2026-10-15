@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.094431">
+<meta name="app-version" content="2026-10-15.094700">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -96,6 +96,14 @@
   #q { margin-top: 12px; font-size: calc(16px * var(--fs, 1)); padding: 12px 14px; border-width: 2px; }
   #q:focus { border-color: var(--blue); outline: none; }
   .hint { font-size: calc(13px * var(--fs, 1)); margin-top: 8px; }
+  .fields-head { display: flex; justify-content: space-between; align-items: baseline; margin: 12px 0 6px; font-size: calc(12px * var(--fs, 1));
+                 font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--steel); }
+  .fields-head .link { text-transform: none; letter-spacing: 0; font-size: calc(13px * var(--fs, 1)); }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .fields input { width: 100%; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-s);
+                  background: var(--panel); color: var(--ink); font: inherit; font-size: calc(14px * var(--fs, 1)); }
+  .fields input:focus { outline: 2px solid var(--blue); outline-offset: 0; border-color: var(--blue); }
+  .fields #f-addr { grid-column: 1 / -1; }
   .back-bar { padding: 14px 32px 0; max-width: 1360px; }
   .back-btn { border: 1px solid var(--line); background: var(--panel); color: var(--blue); font: inherit; font-weight: 600; padding: 6px 14px;
               border-radius: 999px; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -596,6 +604,12 @@
       <div class="brand"><button class="home-link" id="home-link" title="Back to your last customer">Customers</button><span class="side-links"><button class="link hidden" id="calls-link">Calls</button><button class="link hidden" id="history-link">History</button><button class="link hidden" id="settings-link">Settings</button><button class="link hidden" id="staff-link">Staff</button><button class="link" id="signout">Sign out</button></span></div>
       <input id="q" type="search" placeholder="Name, phone, address, invoice, serial…" autocomplete="off" aria-label="Search customers">
       <div class="hint quiet">Search by anything: old ServiceTitan numbers work too.</div>
+      <div class="fields-head">Or narrow it down <button class="link hidden" type="button" id="f-clear">Clear</button></div>
+      <div class="fields">
+        <input id="f-name" type="search" placeholder="Name" autocomplete="off" aria-label="Search by name">
+        <input id="f-phone" type="search" placeholder="Phone" inputmode="tel" autocomplete="off" aria-label="Search by phone number">
+        <input id="f-addr" type="search" placeholder="Address, city or postal code" autocomplete="off" aria-label="Search by address">
+      </div>
     </header>
     <div id="results" role="list"></div>
     <section class="update-box" id="update-box" role="status">
@@ -908,7 +922,38 @@ $("#signout").addEventListener("click", async () => { clearInterval(onlineTimer)
 
 /* ---------------- search ---------------- */
 let searchTimer, searchSeq = 0;
-$("#q").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 220); });
+$("#q").addEventListener("input", () => {
+  // typing in the main box starts a fresh search: the narrow-down boxes are cleared
+  if ($("#q").value) ["#f-name", "#f-phone", "#f-addr"].forEach(s => $(s).value = "");
+  $("#f-clear").classList.add("hidden");
+  clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 220);
+});
+["#f-name", "#f-phone", "#f-addr"].forEach(sel => $(sel).addEventListener("input", () => {
+  $("#q").value = "";
+  clearTimeout(searchTimer); searchTimer = setTimeout(runFieldSearch, 250);
+}));
+$("#f-clear").addEventListener("click", () => {
+  ["#f-name", "#f-phone", "#f-addr"].forEach(s => $(s).value = ""); $("#results").innerHTML = ""; $("#f-clear").classList.add("hidden"); $("#f-name").focus();
+});
+async function runFieldSearch() {
+  const name = $("#f-name").value.trim(), phone = $("#f-phone").value.trim(), addr = $("#f-addr").value.trim();
+  const seq = ++searchSeq, box = $("#results");
+  const any = name.length >= 2 || phone.replace(/\D/g, "").length >= 3 || addr.length >= 2;
+  $("#f-clear").classList.toggle("hidden", !(name || phone || addr));
+  if (!any) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="hint quiet" style="padding:10px">Searching…</div>`;
+  const { data, error } = await db.rpc("search_customers", { p_name: name || null, p_phone: phone || null, p_address: addr || null, p_limit: 60 });
+  if (seq !== searchSeq) return;
+  if (error) { box.innerHTML = `<div class="error" style="padding:10px">${esc(/function/i.test(error.message) ? "Run RUN SETUP.bat to switch on these search boxes." : "Search failed: " + error.message)}</div>`; return; }
+  if (!data.length) { box.innerHTML = `<div class="hint quiet" style="padding:10px">No customer matches all of that. Try fewer words.</div>`; return; }
+  const total = Number(data[0].total_count);
+  box.innerHTML = `<div class="hint quiet" style="padding:4px 10px 6px">${total.toLocaleString()} ${total === 1 ? "match" : "matches"}${total > data.length ? `, showing the first ${data.length}. Add more to narrow it down.` : ""}</div>`
+    + data.map(r => `<button class="result" role="listitem" data-id="${r.customer_id}">
+      <div class="name">${esc(r.display_name)}${r.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}</div>
+      <div class="sub">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>
+      ${r.phone ? `<div class="why">${esc(phoneFmt(r.phone))}</div>` : ""}</button>`).join("");
+  box.querySelectorAll(".result").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.id))));
+}
 $("#q").addEventListener("keydown", e => {
   if (e.key === "ArrowDown") { e.preventDefault(); $("#results .result")?.focus(); }
   if (e.key === "Enter") { const first = $("#results .result"); if (first) first.click(); }
