@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.231336">
+<meta name="app-version" content="2026-10-14.231708">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -275,6 +275,12 @@
   .eq .badge { font-size: calc(12px * var(--fs, 1)); font-weight: 600; color: var(--steel); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
   .eq.editing { display: block; cursor: default; background: var(--panel); }
   .scroll-box:has(.eq.editing) { max-height: none; }
+  .eq-form-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: -2px 0 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .eq-form-head .btn { padding: 5px 12px; }
+  section.block h2 .fold { margin-left: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--steel); border-radius: 999px;
+                           font: inherit; font-size: calc(12.5px * var(--fs, 1)); font-weight: 600; padding: 2px 10px; cursor: pointer; vertical-align: middle; }
+  section.block h2 .fold:hover { color: var(--blue); border-color: var(--blue); }
+  section.block.folded > *:not(h2) { display: none !important; }
   .eq-form .eq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 14px; }
   .eq-form label { display: flex; flex-direction: column; gap: 3px; font-size: calc(13px * var(--fs, 1)); color: var(--steel); font-weight: 600; margin: 0; }
   .eq-form label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); }
@@ -1355,6 +1361,20 @@ function buildFileNav() {
   nav.innerHTML = `<div class="nav-head">On this file</div>
     <button type="button" data-sec="top" class="cur">${esc(current.c.display_name)}</button>` +
     secs.map(sec => `<button type="button" data-sec="${sec.id}">${esc(title(sec))}${count(sec) ? `<span class="n">${esc(count(sec))}</span>` : ""}</button>`).join("");
+  // every section can be folded away; remembered on this computer
+  let folded = {}; try { folded = JSON.parse(localStorage.getItem("reid.folded") || "{}"); } catch {}
+  secs.forEach(sec => {
+    const h = sec.querySelector("h2"), name = h.childNodes[0].textContent.trim();
+    if (!h || h.querySelector(".fold")) return;
+    sec.classList.toggle("folded", !!folded[name]);
+    h.insertAdjacentHTML("beforeend", `<button class="fold" type="button" aria-expanded="${!folded[name]}">${folded[name] ? "Show ▾" : "Hide ▴"}</button>`);
+    h.querySelector(".fold").addEventListener("click", ev => {
+      const now = !sec.classList.contains("folded");
+      sec.classList.toggle("folded", now); folded[name] = now;
+      ev.currentTarget.textContent = now ? "Show ▾" : "Hide ▴"; ev.currentTarget.setAttribute("aria-expanded", String(!now));
+      try { localStorage.setItem("reid.folded", JSON.stringify(folded)); } catch {}
+    });
+  });
   nav.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
     if (b.dataset.sec === "top") $("#main").scrollTo({ top: 0, behavior: "smooth" });
     else document.getElementById(b.dataset.sec).scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2148,6 +2168,8 @@ async function startEditEquipment(id) {
   const covName = w => (w.covers_parts && w.covers_labour ? "Parts and labour" : w.covers_parts ? "Parts" : "Labour")
     + (w.source === "manufacturer" ? " (manufacturer)" : w.source === "company_workmanship" ? " (our workmanship)" : w.provider_name ? ` (${w.provider_name})` : "");
   el.innerHTML = `<form class="eq-form" novalidate>
+    <div class="eq-form-head"><strong>Editing ${esc(e.equipment_types?.name || "equipment")}${e.manufacturers?.name ? ", " + esc(e.manufacturers.name) : ""}</strong>
+      <button class="btn quiet-btn" type="button" data-close-x title="Close without saving (Esc)">✕ Close</button></div>
     <datalist id="eq-types">${L.types.map(t => `<option value="${esc(t.name)}">`).join("")}</datalist>
     <datalist id="eq-makers">${L.makers.map(t => `<option value="${esc(t.name)}">`).join("")}</datalist>
     <div class="eq-grid">
@@ -2215,7 +2237,10 @@ async function startEditEquipment(id) {
       await reloadEquipment(); startEditEquipment(id);
     });
   }));
-  f.querySelector("[data-cancel]").addEventListener("click", ev => { ev.stopPropagation(); renderFile(); });
+  const closeForm = ev => { ev?.stopPropagation(); redrawKeepingPlace(); };
+  f.querySelector("[data-cancel]").addEventListener("click", closeForm);
+  f.querySelector("[data-close-x]").addEventListener("click", closeForm);
+  f.addEventListener("keydown", ev => { if (ev.key === "Escape") closeForm(ev); });
   f.type.focus();
   f.addEventListener("submit", async ev => {
     ev.preventDefault();
