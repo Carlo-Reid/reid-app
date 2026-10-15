@@ -101,8 +101,13 @@ class ST:
         body = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": self.s["CLIENT_ID"],
                                        "client_secret": self.s["CLIENT_SECRET"]}).encode()
         req = urllib.request.Request(AUTH, data=body, headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            self.token = json.load(r)["access_token"]
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                self.token = json.load(r)["access_token"]
+        except urllib.error.HTTPError as e:
+            body = e.read()[:200].decode("utf-8", "replace")
+            raise RuntimeError(f"ServiceTitan refused the sign-in (HTTP {e.code} {body}). "
+                               "Check CLIENT_ID and CLIENT_SECRET: only the part after the = sign, with no spaces.")
         self.t0 = time.time()
 
     def get(self, path, params=None):
