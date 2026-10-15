@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.131853">
+<meta name="app-version" content="2026-10-15.132020">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -336,10 +336,12 @@
   .pw-set .msg.err { color: var(--red); }
   .add-staff label .link { font-size: calc(12.5px * var(--fs, 1)); margin-left: 6px; }
 
-  .fu-file { float: right; display: inline-flex; align-items: center; gap: 10px; margin: 2px 0 0 14px; }
+  .fu-file { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 6px; }
+  .fu-file .fu-check { order: -1; }
   .fu-file .fu-check { float: none; margin: 0; cursor: pointer; font: inherit; font-size: calc(13px * var(--fs, 1)); font-weight: 700; color: var(--amber); border-color: var(--amber); }
   .fu-file .fu-check:hover { background: var(--amber-wash); }
-  .fu-open { font-size: calc(13px * var(--fs, 1)); }
+  .fu-open { font-size: calc(13px * var(--fs, 1)); text-align: left; }
+  .fu-who { color: var(--ink); font-weight: 600; }
   .task-add { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: end; margin-top: 10px; padding: 10px 12px; border: 2px solid var(--amber);
               border-radius: var(--radius-m); background: var(--amber-wash); }
   .task-add label { display: flex; flex-direction: column; gap: 3px; flex: 1 1 320px; margin: 0; font-size: calc(13px * var(--fs, 1)); font-weight: 700; color: var(--amber); }
@@ -1435,8 +1437,8 @@ function renderFile() {
     <div class="plate">
       <div>
         <h1>${esc(c.display_name)}${can("customers.edit") ? `<button class="pencil" type="button" data-edit-cust title="Edit this customer's name, phones, emails and addresses" aria-label="Edit customer"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z M14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>` : ""}</h1>
-        ${FU.off ? "" : `<span class="fu-file">${FU.byCust?.[c.id] ? `<button class="link fu-open" type="button" data-goto-tasks title="Open your Tasks page">${FU.byCust[c.id]} open ${FU.byCust[c.id] === 1 ? "task" : "tasks"}</button>` : ""}<button class="fu-check" type="button" data-add-task title="Add a task for this customer to your Tasks page">+ Task</button></span>`}
         <div class="meta">Customer ${esc(c.customer_number)}${c.customer_type === "commercial" ? ", commercial" : ""}${c.created_at ? ", since " + monthYear(c.created_at.slice(0, 10)) : ""}</div>
+        ${FU.off ? "" : `<span class="fu-file">${FU.byCust?.[c.id] ? `<button class="link fu-open" type="button" data-goto-tasks title="Open your Tasks page">${fileTaskLabel(c.id)}</button>` : ""}<button class="fu-check" type="button" data-add-task title="Add a task for this customer to your Tasks page">+ Task</button></span>`}
       </div>
       <div class="balance ${owed > 0.004 ? "due" : ""}">
         <div class="quiet">${owed > 0.004 ? "Owes" : "Balance"}</div>
@@ -1918,12 +1920,17 @@ async function loadFollowKeys() {
   const mine = r.data.filter(x => x.list !== "to_me");
   FU.keys = new Set(mine.map(x => x.customer_id + ":" + (x.visit_id || 0)));
   FU.count = r.data.length;
-  FU.byCust = {}; r.data.forEach(x => FU.byCust[x.customer_id] = (FU.byCust[x.customer_id] || 0) + 1);
+  FU.byCust = {}; FU.sentTo = {}; FU.from = {};
+  r.data.forEach(x => {
+    FU.byCust[x.customer_id] = (FU.byCust[x.customer_id] || 0) + 1;
+    if (x.list === "to_me") (FU.from[x.customer_id] ||= new Set()).add(x.from_name);
+    else (x.people || []).forEach(pp => (FU.sentTo[x.customer_id] ||= new Set()).add(pp.name));
+  });
   FU.sig = JSON.stringify(r.data);
   const fb = document.querySelector(".sec1a .fu-file");   // keep the count on an open customer file current
   if (fb && current?.c && !document.querySelector(".task-add")) {
     const n = FU.byCust[current.c.id] || 0, link = fb.querySelector("[data-goto-tasks]");
-    if (n && link) link.textContent = `${n} open ${n === 1 ? "task" : "tasks"}`;
+    if (n && link) link.innerHTML = fileTaskLabel(current.c.id);
     else if (!!n !== !!link) redrawKeepingPlace();
   }
   showFollowCount();
@@ -2017,6 +2024,12 @@ function refreshTimes() {
 setInterval(refreshTimes, 60000);
 
 // add a task: a small box under the name bar (customer file) or under a task card (Tasks page)
+// "2 open tasks · sent to George, Kim · from Carlo"
+function fileTaskLabel(cid) {
+  const n = FU.byCust?.[cid] || 0, to = [...(FU.sentTo?.[cid] || [])], from = [...(FU.from?.[cid] || [])];
+  return `${n} open ${n === 1 ? "task" : "tasks"}` + (to.length ? ` <span class="fu-who">· sent to ${esc(to.join(", "))}</span>` : "")
+    + (from.length ? ` <span class="fu-who">· from ${esc(from.join(", "))}</span>` : "");
+}
 function prioOptions(sel) {
   return `<option value="">No priority</option>` + [1, 2, 3, 4, 5].map(n =>
     `<option value="${n}" ${Number(sel) === n ? "selected" : ""}>Priority ${n} (${PRIOS[n][1]})</option>`).join("");
