@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.230826">
+<meta name="app-version" content="2026-10-14.231336">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -254,6 +254,13 @@
   .tech-head { font-weight: 700; margin-bottom: 4px; }
   .tech-card ul { margin: 4px 0 8px; padding-left: 18px; }
   .tech-card li { margin: 2px 0; }
+  .miss-list li { line-height: 1.9; }
+  .miss-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 999px; padding: 0 4px 0 10px;
+               font-size: calc(13.5px * var(--fs, 1)); line-height: 1.7; background: var(--paper); white-space: nowrap; }
+  .miss-chip.req { border-color: var(--amber); background: var(--amber-wash); }
+  .miss-chip em { font-style: normal; font-size: calc(11.5px * var(--fs, 1)); color: var(--amber); font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+  .miss-x { border: 0; background: none; color: var(--steel); cursor: pointer; font-size: calc(12px * var(--fs, 1)); padding: 0 5px; border-radius: 999px; }
+  .miss-x:hover { background: var(--red-wash); color: var(--red); }
   .tech-status { font-size: calc(13.5px * var(--fs, 1)); color: var(--steel); margin-top: 4px; }
   .tech-status.ok { color: var(--green); font-weight: 600; }
   .tech-why { font-size: calc(13px * var(--fs, 1)); }
@@ -1915,7 +1922,6 @@ async function requestInstallDate(id, btn) {
   const { data, error } = await db.rpc("request_equipment_info", { p_equipment_id: id, p_what: "install date" });
   if (error) { if (btn) { btn.disabled = false; btn.textContent = "Not sent: " + error.message; } return false; }
   current.tech = {};
-  current.notes = await fetchNotes(current.noteFilter, current.jobIds);
   await reloadEquipment();
   return data;
 }
@@ -2046,6 +2052,7 @@ async function fillTechBox(force) {
 }
 function techBoxHtml(t) {
   const out = [];
+  const canChange = can("notes.add") || can("equipment.edit");
   if (t.missing.length) {
     const rq = t.request;
     const status = !rq ? "" : rq.status === "added"
@@ -2053,8 +2060,10 @@ function techBoxHtml(t) {
       : `<div class="tech-status">Waiting: it will be added to the next visit as soon as one is booked.</div>`;
     out.push(`<div class="tech-card missing">
       <div class="tech-head">Missing equipment details <span class="count">${t.missing.length}</span></div>
-      <ul>${t.missing.map(m => `<li><strong>${esc(m.label)}</strong>: ${esc(m.missing.join(", "))}</li>`).join("")}</ul>
-      ${status}
+      <ul class="miss-list">${t.missing.map(m => `<li><strong>${esc(m.label)}</strong>:
+        ${m.missing.map(w => `<span class="miss-chip${(m.requested || []).includes(w) ? " req" : ""}">${esc(w)}${(m.requested || []).includes(w) ? ' <em>requested</em>' : ""}${canChange
+          ? `<button type="button" class="miss-x" data-miss-x="${m.equipment_id}" data-what="${esc(w)}" title="Take ${esc(w)} off the list" aria-label="Take ${esc(w)} off the list for ${esc(m.label)}">✕</button>` : ""}</span>`).join(" ")}</li>`).join("")}</ul>
+      ${status}${rq && can("notes.add") ? ` <button class="link danger" type="button" data-tech-cancel>Cancel the request</button>` : ""}
       <div class="tech-btns"><button class="btn quiet-btn" type="button" data-tech-copy>Copy list</button>
         ${can("notes.add") ? `<button class="btn" type="button" data-tech-send>${rq ? "Update the request" : "Add to the next visit"}</button>` : ""}
         <span class="msg" role="status" data-tech-msg></span></div>
@@ -2088,6 +2097,28 @@ function wireTechBox(loc) {
     const { error } = await db.rpc("request_missing_info", { p_location_id: loc });
     if (error) { e.target.disabled = false; msg.className = "msg err"; msg.textContent = error.message; return; }
     await fillTechBox(true); reloadNotes();
+  });
+  document.querySelectorAll("[data-miss-x]").forEach(b => b.addEventListener("click", async () => {
+    const chip = b.parentElement;
+    chip.innerHTML = `Remove ${esc(b.dataset.what)}? <button class="link danger" type="button" data-yes>Yes</button> <button class="link" type="button" data-no>No</button>`;
+    chip.querySelector("[data-no]").addEventListener("click", () => fillTechBox());
+    chip.querySelector("[data-yes]").addEventListener("click", async () => {
+      const { error } = await db.rpc("remove_missing_item", { p_equipment_id: Number(b.dataset.missX), p_what: b.dataset.what });
+      if (error) { chip.textContent = "Not removed: " + error.message; return; }
+      await reloadEquipment();
+    });
+  }));
+  document.querySelector("[data-tech-cancel]")?.addEventListener("click", e => {
+    const holder = e.target;
+    holder.outerHTML = `<span class="confirm" data-cancel-confirm>Cancel the request and take it off the job? <button class="link danger" type="button" data-yes>Yes</button> <button class="link" type="button" data-no>No</button></span>`;
+    const c = document.querySelector("[data-cancel-confirm]");
+    c.querySelector("[data-no]").addEventListener("click", () => fillTechBox());
+    c.querySelector("[data-yes]").addEventListener("click", async () => {
+      const { error } = await db.rpc("cancel_missing_request", { p_location_id: loc });
+      if (error) { c.textContent = "Not cancelled: " + error.message; return; }
+      current.notes = await fetchNotes(current.noteFilter, current.jobIds);
+      current.tech = {}; redrawKeepingPlace();
+    });
   });
   document.querySelector("[data-yearly-now]")?.addEventListener("click", async e => {
     e.target.disabled = true;
@@ -2221,6 +2252,7 @@ async function reloadEquipment() {
   const eq = locIds.length ? await db.from("equipment").select("*, equipment_types(name), manufacturers(name), warranty_coverages(*)")
     .in("location_id", locIds).order("install_date", { ascending: false, nullsFirst: false }) : { data: [] };
   if (!eq.error) current.equipment = eq.data || [];
+  current.notes = await fetchNotes(current.noteFilter, current.jobIds);   // job notes may have changed with the request
   current.tech = {};
   redrawKeepingPlace();
 }
