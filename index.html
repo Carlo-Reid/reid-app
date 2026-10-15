@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.133307">
+<meta name="app-version" content="2026-10-15.134033">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -385,6 +385,20 @@
   .ft-what { font-weight: 700; color: var(--ink); max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ft-when { color: var(--steel); } .ft-when b { color: var(--ink); }
   .ft-row .prio { font-size: calc(12px * var(--fs, 1)); padding: 1px 8px; }
+
+  .task-tabs { display: flex; gap: 0; margin: 14px 0 4px; border-bottom: 2px solid var(--line); }
+  .task-tab { border: 0; background: none; font: inherit; font-size: calc(16px * var(--fs, 1)); font-weight: 700; color: var(--steel);
+              padding: 10px 18px; cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; }
+  .task-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--blue); }
+  .task-tab:hover { color: var(--blue); }
+  .task-tab .count { font-size: calc(13px * var(--fs, 1)); background: var(--amber); color: #fff; border-radius: 9px; padding: 0 7px; margin-left: 4px; }
+  .closed-task { border-left-color: var(--steel) !important; background: var(--paper); }
+  .ct-mark { width: 26px; height: 26px; border-radius: 50%; background: var(--green); color: #fff; display: grid; place-items: center; font-weight: 800; margin-top: 2px; }
+  .ct-by { font-size: calc(13.5px * var(--fs, 1)); }
+  .ct-prio { font-size: calc(12px * var(--fs, 1)); font-weight: 700; color: var(--steel); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
+  .ct-jobs { margin-top: 6px; display: grid; gap: 3px; font-size: calc(14px * var(--fs, 1)); }
+  .ct-job { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+  .ct-job.done > span:nth-child(2) { text-decoration: line-through; color: var(--steel); }
   /* follow up */
   .fu-check { display: inline-flex; align-items: center; gap: 6px; float: right; margin: 2px 0 0 14px; padding: 3px 10px; border: 1px solid var(--line);
               border-radius: 999px; font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--steel); cursor: pointer; background: var(--paper); }
@@ -2020,6 +2034,7 @@ function followChanged() {
   fuTimer = setTimeout(async () => {
     await loadFollowKeys();
     const page = document.querySelector(".followups");
+    if (page && TASK_TAB === "closed") { showFollowCount(); return; }
     if (!page || FU.sig === FU.shownSig) return;   // nothing new to show
     // don't redraw while someone is typing a note, picking people or confirming a delete; do it as soon as they're done
     if ((page.contains(document.activeElement) && document.activeElement.matches("input.fu-note, input.tj-text, select"))
@@ -2181,9 +2196,65 @@ function wireJobs(li, taskId) {
     });
   });
 }
+
+// Closed tasks: finished ones, newest first, with who closed them; Reopen puts one back on the Open list
+async function openClosedTasks(flash) {
+  if (!document.querySelector(".followups")) $("#main").innerHTML = `<div class="loading">Loading closed tasks…</div>`;
+  const { data, error } = await db.rpc("my_closed_tasks", { p_limit: 200 });
+  if (TASK_TAB !== "closed") return;
+  if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load closed tasks</h2>${esc(/function|schema/i.test(error.message) ? "Run RUN SETUP.bat to switch on Closed tasks." : error.message)}</div></div>`; return; }
+  const when = d => new Date(d).toLocaleString("en-CA", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  const card = r => `<li class="fu-item closed-task" data-id="${r.id}" data-list="${r.list}" data-open-task="${r.task_open}">
+      <div class="ct-mark" aria-hidden="true">✓</div>
+      <div class="fu-main">
+        <div class="fu-top"><span class="fu-line"><span class="fu-when">Closed ${esc(when(r.closed_at))}</span></span>
+          <span class="ct-by">by <strong>${esc(r.closed_by || "")}</strong>${r.list === "to_me" ? ` · from ${esc(r.from_name || "")}` : ""}</span></div>
+        <button class="link fu-name" type="button" data-open="${r.customer_id}">${esc(r.customer_name)}</button>
+        <div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>
+        <div class="fu-what">${r.visit_id ? `<span class="fu-tag call">Call</span> ${esc(longDate(r.scheduled_date))} · Job ${esc(r.job_number)}${r.job_type ? " · " + esc(r.job_type) : ""}` : `<span class="fu-tag file">Customer file</span>`}
+          ${r.priority ? ` <span class="ct-prio">Priority ${r.priority}</span>` : ""} <span class="quiet">· added ${esc(when(r.created_at))}</span></div>
+        ${(r.people || []).length ? `<ul class="fu-progress">${r.people.map(pp => `<li class="${pp.completed_at ? "done" : ""}">${pp.completed_at ? `✓ <strong>${esc(pp.name)}</strong> finished ${esc(when(pp.completed_at))}` : `<strong>${esc(pp.name)}</strong> didn't finish their part`}</li>`).join("")}</ul>` : ""}
+        <div class="ct-jobs">${(r.jobs || []).length ? r.jobs.map((j, n) => `<div class="ct-job ${j.done_at ? "done" : ""}"><span class="tj-n">Job ${n + 1}</span> <span>${esc(j.body || "")}</span>
+            ${j.done_at ? `<span class="tj-stamp">✓ Done by <strong>${esc(j.done_by || "")}</strong>, ${esc(when(j.done_at))}</span>` : `<span class="quiet">not marked done</span>`}</div>`).join("")
+          : r.note ? `<div class="ct-job"><span class="tj-n">Job 1</span> <span>${esc(r.note)}</span></div>` : ""}</div>
+        <div class="fu-actions">${r.list === "to_me" && !r.task_open ? `<span class="quiet">Closed by ${esc(r.from_name || "the sender")}. Only they can reopen it.</span>`
+          : `<button class="btn quiet-btn" type="button" data-reopen>↺ Reopen</button>`}<span class="msg" role="status"></span></div>
+      </div></li>`;
+  $("#main").innerHTML = `<article class="staff followups">
+    <h1>Tasks</h1>
+    <p class="lead">Closed tasks: everything that's been finished, newest first, and who finished it. Press <strong>Reopen</strong> to put one back on your Open list.</p>
+    ${taskTabs(FU.count ?? null)}
+    ${flash ? `<div class="staff-msg ok" role="status">${esc(flash)}</div>` : ""}
+    ${data.length ? `<ol class="fu-list">${data.map(card).join("")}</ol>${data.length === 200 ? `<p class="quiet">Showing the latest 200.</p>` : ""}`
+      : `<div class="fu-empty">No closed tasks yet. When a task is marked complete (or you finish your part of one sent to you), it moves here.</div>`}
+  </article>`;
+  wireTaskTabs();
+  document.querySelectorAll(".closed-task").forEach(li => {
+    const id = Number(li.dataset.id);
+    li.querySelector("[data-open]").addEventListener("click", e => openCustomer(Number(e.target.dataset.open)));
+    li.querySelector("[data-reopen]")?.addEventListener("click", async e => {
+      e.target.disabled = true;
+      const { error } = await db.rpc("complete_follow_up", { p_id: id, p_done: false });
+      if (error) { e.target.disabled = false; const m = li.querySelector(".msg"); m.className = "msg err"; m.textContent = "Couldn't reopen: " + error.message; return; }
+      await loadFollowKeys();
+      openClosedTasks("Reopened. It's back on your Open tasks.");
+    });
+  });
+}
 let FU_PEOPLE = null;
+let TASK_TAB = "open";
+const taskTabs = (openN) => `<div class="task-tabs" role="tablist" aria-label="Show">
+    <button class="task-tab" role="tab" type="button" data-task-tab="open" aria-selected="${TASK_TAB === "open"}">Open tasks${openN != null ? ` <span class="count">${openN}</span>` : ""}</button>
+    <button class="task-tab" role="tab" type="button" data-task-tab="closed" aria-selected="${TASK_TAB === "closed"}">Closed tasks</button></div>`;
+function wireTaskTabs() {
+  document.querySelectorAll("[data-task-tab]").forEach(b => b.addEventListener("click", () => {
+    if (TASK_TAB === b.dataset.taskTab) return;
+    TASK_TAB = b.dataset.taskTab; openFollowUps(null, true);
+  }));
+}
 async function openFollowUps(flash, quiet) {
   if (!quiet) setPage("tasks", "followups");
+  if (TASK_TAB === "closed") return openClosedTasks();
   if (!document.querySelector(".followups")) $("#main").innerHTML = `<div class="loading">Loading your tasks…</div>`;
   const [res, ppl] = await Promise.all([db.rpc("my_follow_ups"), FU_PEOPLE ? { data: FU_PEOPLE } : db.rpc("follow_up_people")]);
   const { data, error } = res;
@@ -2240,9 +2311,11 @@ async function openFollowUps(flash, quiet) {
   $("#main").innerHTML = `<article class="staff followups">
     <h1>Tasks</h1>
     <p class="lead">Your own list. Click <strong>+ Task</strong> on a customer file (as many as you need), or tick <strong>Task</strong> next to a call. Each one stays here until it's done. You can send a task to several people and see who has finished.</p>
+    ${taskTabs(data.length)}
     ${flash ? `<div class="staff-msg ok" role="status">${esc(flash)}</div>` : ""}
     ${shown || `<div class="fu-empty">No tasks. Click <strong>+ Task</strong> next to a customer's name, or tick <strong>Task</strong> next to a call on the Calls page, to add one here.</div>`}
   </article>`;
+  wireTaskTabs();
   document.querySelectorAll(".fu-item").forEach(li => {
     const id = Number(li.dataset.id), cust = Number(li.dataset.cust), list = li.dataset.list;
     const msg = li.querySelector(".fu-actions .msg");
