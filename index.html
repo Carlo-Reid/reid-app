@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.222545">
+<meta name="app-version" content="2026-10-14.222834">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -115,6 +115,33 @@
   .online li { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: calc(14.5px * var(--fs, 1)); }
   .online li .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); flex: none; }
   .online li .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .online-hint { font-size: calc(12px * var(--fs, 1)); color: var(--steel); margin: -4px 0 6px; }
+  .chat-start { display: flex; align-items: center; gap: 9px; width: 100%; padding: 4px 6px; margin: 0 -6px; border: 0; border-radius: var(--radius-s);
+                background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .chat-start:hover { background: var(--blue-wash); }
+  .online li .dot.off { background: var(--line); }
+  .chat-start .badge-n { margin-left: auto; }
+  .chat { position: fixed; right: 20px; bottom: 20px; width: min(380px, calc(100vw - 32px)); height: min(520px, calc(100vh - 40px)); z-index: 20;
+          display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m);
+          box-shadow: 0 12px 32px rgba(0, 0, 0, .18); }
+  .chat header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .chat header .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); }
+  .chat header strong { flex: 1; }
+  .chat-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: var(--paper); }
+  .bubble { max-width: 80%; padding: 8px 11px; border-radius: 12px; overflow-wrap: anywhere; }
+  .bubble > div { white-space: pre-wrap; }
+  .bubble span { display: block; font-size: calc(11.5px * var(--fs, 1)); opacity: .75; margin-top: 3px; }
+  .bubble.theirs { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .bubble.mine { align-self: flex-end; background: var(--blue); color: var(--on-accent); border-bottom-right-radius: 4px; }
+  .chat-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+  .chat-form textarea { flex: 1; resize: none; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); font: inherit; color: inherit; }
+  .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 30; display: flex; flex-direction: column; gap: 10px; }
+  .chat:not(.hidden) ~ .toasts { bottom: 560px; }
+  .chat-toast { width: 300px; background: var(--panel); border: 1px solid var(--blue); border-left: 4px solid var(--blue); border-radius: var(--radius-m);
+                box-shadow: 0 10px 28px rgba(0, 0, 0, .18); padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+  .chat-toast span { color: var(--steel); font-size: calc(14px * var(--fs, 1)); }
+  .chat-toast div { display: flex; gap: 12px; align-items: center; margin-top: 6px; }
+  .chat-toast .btn { padding: 6px 14px; }
   .online li .role { color: var(--steel); font-size: calc(13px * var(--fs, 1)); margin-left: auto; white-space: nowrap; }
   @media (max-width: 860px) { .online { display: none; } }
   #results { overflow: auto; padding: 4px 8px 16px; flex: 1; }
@@ -420,9 +447,19 @@
     </section>
     <section class="online hidden" id="online" aria-label="Staff online now">
       <h3>Online now <span class="count" id="online-count"></span></h3>
+      <div class="online-hint">Click a name to chat</div>
       <ul id="online-list"></ul>
     </section>
   </aside>
+  <aside id="chat" class="chat hidden" aria-label="Chat">
+    <header><span class="dot"></span><strong id="chat-name"></strong><button class="link" type="button" id="chat-close" aria-label="Close chat">Close</button></header>
+    <div id="chat-list" class="chat-list" aria-live="polite"></div>
+    <form id="chat-form" class="chat-form">
+      <textarea id="chat-text" rows="2" maxlength="4000" placeholder="Type a message. Enter sends, Shift+Enter for a new line." aria-label="Message"></textarea>
+      <button class="btn" type="submit">Send</button>
+    </form>
+  </aside>
+  <div id="toasts" class="toasts"></div>
   <main id="main">
     <div class="empty"><div><h2>Find a customer</h2>Type in the search box to open their file.</div></div>
   </main>
@@ -527,10 +564,107 @@ async function checkIn() {
     const n = p.error ? 0 : p.data || 0;
     $("#staff-link").innerHTML = n ? `Staff <span class="badge-n" title="${n} waiting for your approval">${n}</span>` : "Staff";
   }
-  $("#online-list").innerHTML = data.map(u => `<li title="${esc(u.login_email)}"><span class="dot"></span>
-    <span class="who">${esc(u.name || u.login_email.split("@")[0])}${u.is_me ? " (you)" : ""}</span>
-    <span class="role">${esc(ROLE_NAMES[u.role] || u.role)}</span></li>`).join("");
+  ONLINE = data;
+  const me = data.find(u => u.is_me); if (me) ME.id = me.app_user_id;
+  renderOnline();
+  if (!chatStarted) startChat();
 }
+let ONLINE = [];
+function renderOnline() {
+  const rows = ONLINE.map(u => ({ ...u, online: true }));
+  // people who messaged me but aren't online right now still show, so I can answer
+  Object.values(CHAT.unread).forEach(x => { if (!rows.some(r => r.app_user_id === x.from_user_id))
+    rows.push({ app_user_id: x.from_user_id, name: x.name, login_email: "", role: "", online: false }); });
+  $("#online-list").innerHTML = rows.map(u => {
+    const n = CHAT.unread[u.app_user_id]?.unread || 0, label = esc(u.name || (u.login_email || "").split("@")[0]);
+    return u.is_me
+      ? `<li title="${esc(u.login_email)}"><span class="dot"></span><span class="who">${label} (you)</span><span class="role">${esc(ROLE_NAMES[u.role] || u.role)}</span></li>`
+      : `<li><button type="button" class="chat-start" data-chat-id="${u.app_user_id}" data-chat-name="${label}" title="Send ${label} a message">
+           <span class="dot ${u.online ? "" : "off"}"></span><span class="who">${label}</span>
+           ${n ? `<span class="badge-n">${n}</span>` : `<span class="role">${esc(ROLE_NAMES[u.role] || u.role || "Offline")}</span>`}</button></li>`;
+  }).join("");
+  document.querySelectorAll("[data-chat-id]").forEach(b => b.addEventListener("click", () => openChat(Number(b.dataset.chatId), b.dataset.chatName)));
+  const total = Object.values(CHAT.unread).reduce((a, x) => a + x.unread, 0);
+  document.title = (total ? `(${total}) ` : "") + "Customers – Reid Heating & Cooling";
+}
+
+/* ---------------- staff chat ---------------- */
+const CHAT = { open: null, name: "", msgs: [], unread: {}, live: false };
+let chatStarted = false;
+function startChat() {
+  chatStarted = true;
+  try {
+    db.channel("staff-chat")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "staff_messages" }, p => {
+        const m = p.new || {};
+        if (CHAT.open && (m.from_user_id === CHAT.open || m.to_user_id === CHAT.open)) loadThread();
+        else if (m.to_user_id === ME.id) refreshUnread(true);
+      })
+      .subscribe(st => { CHAT.live = st === "SUBSCRIBED"; });
+  } catch {}
+  refreshUnread(false);
+  setInterval(() => { if (!CHAT.live) { refreshUnread(true); if (CHAT.open) loadThread(); } }, CONFIG.chatPollMs || 8000);
+}
+async function refreshUnread(announce) {
+  const { data, error } = await db.rpc("my_unread_messages");
+  if (error) return;                                    // setup step 14 not run yet
+  const before = CHAT.unread;
+  CHAT.unread = Object.fromEntries((data || []).filter(x => x.from_user_id !== CHAT.open).map(x => [x.from_user_id, x]));
+  renderOnline();
+  if (announce) Object.values(CHAT.unread).forEach(x => {
+    if (!before[x.from_user_id] || before[x.from_user_id].unread < x.unread) chatToast(x);
+  });
+}
+function chatToast(x) {
+  document.querySelectorAll(`.chat-toast[data-from="${x.from_user_id}"]`).forEach(t => t.remove());
+  const t = document.createElement("div");
+  t.className = "chat-toast"; t.dataset.from = x.from_user_id; t.setAttribute("role", "alert");
+  t.innerHTML = `<strong>${esc(x.name)}</strong><span>${esc(x.last_body.slice(0, 120))}</span>
+    <div><button class="btn" type="button" data-open>Reply</button><button class="link" type="button" data-close>Later</button></div>`;
+  t.querySelector("[data-open]").addEventListener("click", () => { t.remove(); openChat(x.from_user_id, x.name); });
+  t.querySelector("[data-close]").addEventListener("click", () => t.remove());
+  $("#toasts").appendChild(t);
+  setTimeout(() => t.remove(), 20000);
+}
+async function openChat(id, name) {
+  CHAT.open = id; CHAT.name = name; CHAT.msgs = [];
+  document.querySelectorAll(`.chat-toast[data-from="${id}"]`).forEach(t => t.remove());
+  const box = $("#chat"); box.classList.remove("hidden");
+  $("#chat-name").textContent = name;
+  $("#chat-list").innerHTML = `<div class="quiet" style="padding:12px">Loading…</div>`;
+  await loadThread();
+  delete CHAT.unread[id]; renderOnline();
+  $("#chat-text").focus();
+}
+async function loadThread() {
+  if (!CHAT.open) return;
+  const id = CHAT.open;
+  const { data, error } = await db.rpc("chat_thread", { p_other: id });
+  if (CHAT.open !== id) return;
+  if (error) { $("#chat-list").innerHTML = `<div class="staff-msg err" style="padding:12px">Chat isn't switched on yet. Run RUN SETUP.bat.</div>`; return; }
+  if (data.length === CHAT.msgs.length && data.length && data[data.length - 1].id === CHAT.msgs[CHAT.msgs.length - 1].id) return;
+  CHAT.msgs = data; renderThread();
+}
+function renderThread() {
+  const list = $("#chat-list"), atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 30;
+  const fmt = d => { const t = new Date(d), today = new Date().toDateString() === t.toDateString();
+    return (today ? "" : t.toLocaleDateString("en-CA", { month: "short", day: "numeric" }) + ", ") + t.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }); };
+  list.innerHTML = CHAT.msgs.length ? CHAT.msgs.map(m => `<div class="bubble ${m.from_user_id === ME.id ? "mine" : "theirs"}">
+      <div>${esc(m.body)}</div><span>${fmt(m.created_at)}${m.from_user_id === ME.id && m.read_at ? " · Seen" : ""}</span></div>`).join("")
+    : `<div class="quiet" style="padding:12px">No messages yet. Say hello.</div>`;
+  if (atBottom || CHAT.msgs.length <= 1 || CHAT.msgs[CHAT.msgs.length - 1].from_user_id === ME.id) list.scrollTop = list.scrollHeight;
+}
+$("#chat-close").addEventListener("click", () => { CHAT.open = null; $("#chat").classList.add("hidden"); });
+$("#chat-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const ta = $("#chat-text"), body = ta.value.trim(); if (!body || !CHAT.open) return;
+  ta.value = ""; ta.focus();
+  const { data, error } = await db.rpc("send_message", { p_to: CHAT.open, p_body: body });
+  if (error) { ta.value = body; $("#chat-list").insertAdjacentHTML("beforeend", `<div class="staff-msg err" style="padding:6px 12px">Not sent: ${esc(error.message)}</div>`); return; }
+  if (!CHAT.msgs.some(m => m.id === data.id)) CHAT.msgs.push(data);
+  renderThread();
+});
+$("#chat-text").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#chat-form").requestSubmit(); } });
 function startOnline() { clearInterval(onlineTimer); checkIn(); onlineTimer = setInterval(checkIn, 60000); }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && onlineTimer) checkIn(); });
 
