@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.230647">
+<meta name="app-version" content="2026-10-14.230826">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -96,6 +96,11 @@
   #q { margin-top: 12px; font-size: calc(16px * var(--fs, 1)); padding: 12px 14px; border-width: 2px; }
   #q:focus { border-color: var(--blue); outline: none; }
   .hint { font-size: calc(13px * var(--fs, 1)); margin-top: 8px; }
+  .back-bar { padding: 14px 32px 0; max-width: 1360px; }
+  .back-btn { border: 1px solid var(--line); background: var(--panel); color: var(--blue); font: inherit; font-weight: 600; padding: 6px 14px;
+              border-radius: 999px; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .back-btn:hover { background: var(--blue-wash); }
+  @media (max-width: 860px) { .back-bar { padding: 12px 16px 0; } }
   .update-box { margin: 10px 16px 14px; padding: 12px 14px; border-radius: var(--radius-m); background: var(--paper);
                 border: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; text-align: center; }
   .update-box strong { font-size: calc(14.5px * var(--fs, 1)); } .update-box span { font-size: calc(13px * var(--fs, 1)); color: var(--steel); }
@@ -672,7 +677,7 @@ async function showApp() {
   if (location.hash === "#history" && can("history.restore")) return openHistory();
   if (location.hash === "#calls" && ME.role) return openCalls();
   const id = new URLSearchParams(location.hash.slice(1)).get("customer");
-  if (id) openCustomer(Number(id));
+  if (id) openCustomer(Number(id)); else setPage("", "search");
 }
 $("#signin-form").addEventListener("submit", async e => {
   e.preventDefault();
@@ -929,15 +934,71 @@ const SEARCH_SCREEN = `<div class="empty"><div><h2>Find a customer</h2>Type in t
 $("#home-link").addEventListener("click", () => {
   const showing = location.hash === "#customer=" + lastCustomer && document.querySelector(".file .plate");
   if (lastCustomer && !showing) return openCustomer(lastCustomer);
-  history.replaceState(null, "", location.pathname);
+  openSearchScreen();
+});
+function openSearchScreen() {
+  setPage("", "search");
   $("#main").innerHTML = SEARCH_SCREEN;
   $("#q").value = ""; $("#results").innerHTML = ""; $("#q").focus();
+}
+
+/* ---------------- back button on every page ---------------- */
+// NAV.stack holds the pages visited this session; the Back button returns to the one before.
+const NAV = { stack: [], lastSet: null };
+const PAGE_NAMES = { search: "search", staff: "Staff", settings: "Settings", history: "History", calls: "Calls by date" };
+function setPage(hash, kind, label) {
+  const h = hash ? "#" + hash : "";
+  NAV.lastSet = h;
+  if (location.hash !== h) { if (h) location.hash = hash; else history.pushState(null, "", location.pathname); }
+  const top = NAV.stack[NAV.stack.length - 1];
+  if (top && top.hash === h) { if (label) top.label = label; }
+  else { NAV.stack.push({ hash: h, label: label || PAGE_NAMES[kind] || kind }); if (NAV.stack.length > 60) NAV.stack.shift(); }
+}
+function nameCurrentPage(label) { const top = NAV.stack[NAV.stack.length - 1]; if (top) top.label = label; }
+function goBack() {
+  if (NAV.stack.length < 2) return;
+  NAV.stack.pop();
+  routeTo(NAV.stack[NAV.stack.length - 1].hash);
+}
+function routeTo(h) {
+  if (!h || h === "#") return openSearchScreen();
+  if (h === "#staff") return openStaff();
+  if (h === "#settings") return openSettings();
+  if (h === "#history") return openHistory();
+  if (h === "#calls") return openCalls();
+  const id = new URLSearchParams(h.slice(1)).get("customer");
+  if (id) return openCustomer(Number(id));
+  openSearchScreen();
+}
+// the browser's own Back / Forward buttons work too
+window.addEventListener("hashchange", () => {
+  if (location.hash === NAV.lastSet || $("#app").classList.contains("hidden")) return;
+  const prev = NAV.stack[NAV.stack.length - 2];
+  if (prev && prev.hash === location.hash) NAV.stack.pop();
+  routeTo(location.hash);
 });
+window.addEventListener("popstate", () => {
+  if (location.hash || NAV.lastSet === "" || $("#app").classList.contains("hidden")) return;
+  const prev = NAV.stack[NAV.stack.length - 2];
+  if (prev && prev.hash === "") NAV.stack.pop();
+  routeTo("");
+});
+function backBarHtml() {
+  const prev = NAV.stack[NAV.stack.length - 2];
+  return prev ? `<div class="back-bar"><button class="back-btn" type="button" data-back>← Back to ${esc(prev.label)}</button></div>` : "";
+}
+new MutationObserver(() => {
+  const main = $("#main"), first = main.firstElementChild;
+  if (first && first.classList.contains("back-bar")) return;
+  const html = backBarHtml(); if (!html) return;
+  main.insertAdjacentHTML("afterbegin", html);
+  main.querySelector("[data-back]").addEventListener("click", goBack);
+}).observe($("#main"), { childList: true });
 
 async function openCustomer(id) {
   lastCustomer = id; try { localStorage.setItem(LAST_KEY, String(id)); } catch {}
   document.querySelectorAll("#results .result").forEach(b => b.setAttribute("aria-current", b.dataset.id == id));
-  location.hash = "customer=" + id;
+  setPage("customer=" + id, "customer", "customer");
   $("#main").innerHTML = `<div class="loading">Opening file…</div>`;
   const [cust, plans, jobs, invoices, estimates] = await Promise.all([
     db.from("customers").select("*, customer_contacts(*), locations(*), customer_flags(*)").eq("id", id).single(),
@@ -1072,6 +1133,7 @@ async function loadPinSlots() {
 const pinColor = rank => (PIN_SLOTS[Math.min(rank, PIN_SLOTS.length - 1)] || {}).color || "#FBF0DD";
 
 function renderFile() {
+  if (current.c && NAV.stack.length && NAV.stack[NAV.stack.length - 1].hash === "#customer=" + current.c.id) nameCurrentPage(current.c.display_name);
   if (current.pendingNotes) { current.notes = current.pendingNotes; current.pendingNotes = null; }
   const { c, notes, plans, jobs, invoices, estimates, equipment, loc } = current;
   const owed = invoices.reduce((s, i) => s + (i.status !== "void" && i.balance_due > 0 ? Number(i.balance_due) : 0), 0);
@@ -1463,7 +1525,7 @@ const VISIT_STATUS = { unscheduled: "Not scheduled", scheduled: "Booked", dispat
 let CALLS = (() => { try { return JSON.parse(localStorage.getItem("reid.calls") || "null"); } catch { return null; } })()
   || { preset: "today", from: null, to: null, status: "all", cls: "all" };
 async function openCalls() {
-  location.hash = "calls";
+  setPage("calls", "calls");
   if (CALLS.preset) { const [f, t] = CALL_PRESETS.find(x => x[0] === CALLS.preset)[2](); CALLS.from = ymd(f); CALLS.to = ymd(t); }
   renderCallsShell();
   await runCalls();
@@ -1537,7 +1599,7 @@ $("#history-link").addEventListener("click", () => openHistory());
 let HIST = { kind: "all", rows: [], more: false };
 const HIST_KINDS = [["all", "Everything"], ["deleted", "Deleted"], ["changed", "Changed"], ["notes", "Notes"], ["staff", "Staff"], ["restored", "Put back"]];
 async function openHistory(kind) {
-  location.hash = "history";
+  setPage("history", "history");
   HIST = { kind: kind || HIST.kind || "all", rows: [], more: false };
   $("#main").innerHTML = `<div class="loading">Loading history…</div>`;
   await loadHistory();
@@ -1593,7 +1655,7 @@ function renderHistory(note) {
 /* ---------------- settings (control panel) ---------------- */
 $("#settings-link").addEventListener("click", openSettings);
 async function openSettings() {
-  location.hash = "settings";
+  setPage("settings", "settings");
   await loadPinSlots();
   renderSettings(PIN_SLOTS.map(x => ({ color: x.color.toUpperCase(), name: x.name || "" })));
 }
@@ -1715,7 +1777,7 @@ const ROLES = [["owner", "Owner"], ["admin", "Admin"], ["office", "Office"], ["d
 $("#staff-link").addEventListener("click", openStaff);
 
 async function openStaff() {
-  location.hash = "staff";
+  setPage("staff", "staff");
   document.querySelectorAll("#results .result").forEach(b => b.setAttribute("aria-current", "false"));
   $("#main").innerHTML = `<div class="loading">Loading staff…</div>`;
   const userQuery = (removedFilter) => { let q = db.from("app_users").select("id, login_email, role, active, employees(first_name, last_name), user_permissions!user_permissions_app_user_id_fkey(permission_code)");
