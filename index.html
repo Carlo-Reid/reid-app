@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.130918">
+<meta name="app-version" content="2026-10-15.131853">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -349,6 +349,15 @@
   .fu-age { font-weight: 800; color: var(--ink); }
   div.fu-age { margin-top: 4px; font-size: calc(15px * var(--fs, 1)); }
   .fu-took { color: var(--steel); font-weight: 500; }
+  .fu-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 4px; font-size: calc(13.5px * var(--fs, 1)); }
+  .fu-when { color: var(--steel); }
+  .fu-top .fu-age { font-weight: 800; color: var(--ink); }
+  .fu-top .fu-date { color: var(--steel); font-style: italic; }
+  .prio { display: inline-block; padding: 2px 9px; border-radius: 999px; font-weight: 800; font-size: calc(12.5px * var(--fs, 1)); color: #fff; }
+  .prio.ok { background: #2E7D4F; } .prio.half { background: #7B3FB0; } .prio.late { background: #C0392B; }
+  .fu-item.prio-ok { border-left-color: #2E7D4F; } .fu-item.prio-half { border-left-color: #7B3FB0; } .fu-item.prio-late { border-left-color: #C0392B; background: color-mix(in srgb, #C0392B 6%, var(--panel)); }
+  .prio-pick, .task-prio select { padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--ink); font: inherit; font-size: calc(13.5px * var(--fs, 1)); }
+  .task-add label.task-prio { flex: 0 0 auto; }
   /* follow up */
   .fu-check { display: inline-flex; align-items: center; gap: 6px; float: right; margin: 2px 0 0 14px; padding: 3px 10px; border: 1px solid var(--line);
               border-radius: 999px; font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--steel); cursor: pointer; background: var(--paper); }
@@ -357,7 +366,7 @@
   .calls-table .fu-col { width: 70px; text-align: center; }
   .calls-table td.fu-col input { width: 18px; height: 18px; cursor: pointer; }
   .fu-list { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 10px; }
-  .fu-item { display: grid; grid-template-columns: 34px 1fr auto; gap: 6px 12px; align-items: start; background: var(--panel);
+  .fu-item { display: grid; grid-template-columns: 34px 1fr; gap: 6px 12px; align-items: start; background: var(--panel);
              border: 2px solid var(--box-edge, var(--line)); border-left: 5px solid var(--amber); border-radius: var(--radius-m); padding: 12px 14px; }
   .fu-item.done { opacity: .5; border-left-color: var(--box-edge, var(--line)); }
   .fu-item.done .fu-name { text-decoration: line-through; }
@@ -400,7 +409,7 @@
   .fu-send .msg.err { color: var(--red); }
   .fu-empty { margin-top: 24px; padding: 28px; text-align: center; background: var(--panel); border: 2px dashed var(--line); border-radius: var(--radius-m); color: var(--steel); }
   .badge-n.fu-n { background: var(--amber); }
-  @media (max-width: 860px) { .fu-item { grid-template-columns: 30px 1fr; } .fu-date { grid-column: 2; } }
+  @media (max-width: 860px) { .fu-item { grid-template-columns: 30px 1fr; } }
   /* equipment with coverage bars: the one strong visual */
   .equip { display: grid; gap: 2px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-m); overflow: hidden; }
   .eq { background: var(--panel); padding: 14px 16px; display: grid; grid-template-columns: minmax(200px, 300px) 1fr; gap: 20px; align-items: center; }
@@ -1984,13 +1993,39 @@ function agoText(ts) {
   return [d && `${d} ${d === 1 ? "day" : "days"}`, h && `${h} ${h === 1 ? "hour" : "hours"}`, m && `${m} min`].filter(Boolean).join(" ");
 }
 function spanText(a, b) { return agoText(new Date(Date.now() - (new Date(b) - new Date(a)))); }
-setInterval(() => document.querySelectorAll("[data-since]").forEach(el => el.textContent = agoText(el.dataset.since)), 60000);
+// Priority: how long you have, counted from when the priority was set
+const PRIOS = { 5: [14 * 24, "2 weeks"], 4: [7 * 24, "1 week"], 3: [4 * 24, "4 days"], 2: [48, "48 hours"], 1: [24, "24 hours"] };
+function prioState(priority, setAt) {
+  if (!priority || !setAt) return null;
+  const start = new Date(setAt).getTime(), span = PRIOS[priority][0] * 3600000, due = start + span, now = Date.now();
+  const st = now > due ? "late" : now - start >= span / 2 ? "half" : "ok";
+  const left = st === "late" ? `overdue by ${agoText(due)}` : `due in ${spanText(now, due)}`;
+  return { st, text: `Priority ${priority} · ${left}` };
+}
+function prioBadge(priority, setAt) {
+  const p = prioState(priority, setAt);
+  return p ? `<span class="prio ${p.st}" data-prio="${priority}" data-prio-set="${esc(setAt)}">${esc(p.text)}</span>` : "";
+}
+function refreshTimes() {
+  document.querySelectorAll("[data-since]").forEach(el => el.textContent = agoText(el.dataset.since));
+  document.querySelectorAll("[data-prio]").forEach(el => {
+    const p = prioState(Number(el.dataset.prio), el.dataset.prioSet); if (!p) return;
+    el.textContent = p.text; el.className = "prio " + p.st;
+    const li = el.closest(".fu-item"); if (li) { li.classList.remove("prio-ok", "prio-half", "prio-late"); li.classList.add("prio-" + p.st); }
+  });
+}
+setInterval(refreshTimes, 60000);
 
 // add a task: a small box under the name bar (customer file) or under a task card (Tasks page)
+function prioOptions(sel) {
+  return `<option value="">No priority</option>` + [1, 2, 3, 4, 5].map(n =>
+    `<option value="${n}" ${Number(sel) === n ? "selected" : ""}>Priority ${n} (${PRIOS[n][1]})</option>`).join("");
+}
 function openAddTask(host, customerId, visitId, after) {
   document.querySelectorAll(".task-add").forEach(x => x.remove());
   const box = document.createElement("form"); box.className = "task-add"; box.autocomplete = "off";
   box.innerHTML = `<label>New task<input name="note" maxlength="2000" placeholder="What needs doing? (e.g. call back about the quote)"></label>
+    <label class="task-prio">Priority<select name="prio">${prioOptions(null)}</select></label>
     <button class="btn" type="submit">Add task</button><button class="btn quiet-btn" type="button" data-x>Cancel</button><span class="msg" role="status"></span>`;
   (after ? host.after(box) : host.appendChild(box));
   box.note.focus();
@@ -2000,7 +2035,7 @@ function openAddTask(host, customerId, visitId, after) {
     e.preventDefault();
     const btn = box.querySelector("button[type=submit]"), msg = box.querySelector(".msg");
     btn.disabled = true;
-    const { error } = await db.rpc("add_task", { p_customer_id: customerId, p_visit_id: visitId, p_note: box.note.value });
+    const { error } = await db.rpc("add_task", { p_customer_id: customerId, p_visit_id: visitId, p_note: box.note.value, p_priority: box.prio.value ? Number(box.prio.value) : null });
     btn.disabled = false;
     if (error) { msg.className = "msg err"; msg.textContent = /function/i.test(error.message) ? "Run RUN SETUP.bat to switch this on." : "Not added: " + error.message; return; }
     box.remove();
@@ -2035,17 +2070,20 @@ async function openFollowUps(flash, quiet) {
         <div class="fu-people">${FU_PEOPLE.map(p => `<label class="fu-person ${sendTo.includes(p.app_user_id) ? "already" : ""}">
           <input type="checkbox" value="${p.app_user_id}" ${sendTo.includes(p.app_user_id) ? "disabled checked" : ""}> ${esc(p.name)}${sendTo.includes(p.app_user_id) ? ' <span class="quiet">(has it)</span>' : ""}</label>`).join("") || '<span class="quiet">No other staff yet.</span>'}</div>
         <div class="fu-send-row"><button class="btn" type="button" data-send>Send</button><button class="btn quiet-btn" type="button" data-send-cancel>Cancel</button></div></div>`;
-    return `<li class="fu-item ${r.list} ${done ? "finished" : ""}" data-id="${r.id}" data-list="${r.list}" data-cust="${r.customer_id}" data-visit="${r.visit_id || ""}">
+    const ps = prioState(r.priority, r.priority_set_at);
+    return `<li class="fu-item ${r.list} ${done ? "finished" : ""} ${ps ? "prio-" + ps.st : ""}" data-id="${r.id}" data-list="${r.list}" data-cust="${r.customer_id}" data-visit="${r.visit_id || ""}">
       <label class="fu-tick" title="${r.list === "to_me" ? "Untick when your part is done" : "Untick to mark it complete for everyone"}"><input type="checkbox" checked aria-label="Still to do"></label>
       <div class="fu-main">
+        <div class="fu-top"><span class="fu-when">${r.list === "to_me" ? "Sent" : "Added"} ${esc(when(r.list === "to_me" ? (r.assigned_at || r.created_at) : r.created_at))}</span>
+          <span class="fu-age"><span data-since="${esc(r.list === "to_me" ? (r.assigned_at || r.created_at) : r.created_at)}">${esc(agoText(r.list === "to_me" ? (r.assigned_at || r.created_at) : r.created_at))}</span> ago</span>
+          ${prioBadge(r.priority, r.priority_set_at)}<span class="fu-date"></span></div>
         <button class="link fu-name" type="button" data-open="${r.customer_id}">${esc(r.customer_name)}</button>
         <div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}${r.phone ? ` · <a href="tel:${esc(String(r.phone).replace(/\D/g, ""))}">${esc(phoneFmt(r.phone))}</a>` : ""}</div>
         <div class="fu-what">${r.visit_id
           ? `<span class="fu-tag call">Call</span> ${esc(longDate(r.scheduled_date))} · Job ${esc(r.job_number)}${r.job_type ? " · " + esc(r.job_type) : ""}${r.techs ? " · " + esc(r.techs) : ""}
              <span class="vstat ${r.visit_status}">${esc(VISIT_STATUS[r.visit_status] || r.visit_status)}</span>`
           : `<span class="fu-tag file">Customer file</span>`}</div>
-        ${r.list === "to_me" ? `<div class="fu-age">Sent <span data-since="${esc(r.assigned_at || r.created_at)}">${esc(agoText(r.assigned_at || r.created_at))}</span> ago</div>
-          <div class="fu-from">From <strong>${esc(r.from_name || "")}</strong>${r.assigned_at ? ", " + esc(when(r.assigned_at)) : ""}${others.length ? ` · also sent to ${esc(others.join(", "))}` : ""}</div>` : ""}
+        ${r.list === "to_me" ? `<div class="fu-from">From <strong>${esc(r.from_name || "")}</strong>${r.assigned_at ? ", " + esc(when(r.assigned_at)) : ""}${others.length ? ` · also sent to ${esc(others.join(", "))}` : ""}</div>` : ""}
         ${r.list === "sent" ? `<ul class="fu-progress">${ppl.map(p => `<li class="${p.completed_at ? "done" : ""}">${p.completed_at
             ? `✓ <strong>${esc(p.name)}</strong> finished ${esc(when(p.completed_at))} <span class="fu-took">(took ${esc(spanText(p.assigned_at, p.completed_at))})</span>`
             : `<strong>${esc(p.name)}</strong> has it, not done yet · <span class="fu-age">sent <span data-since="${esc(p.assigned_at)}">${esc(agoText(p.assigned_at))}</span> ago</span>`}
@@ -2054,12 +2092,13 @@ async function openFollowUps(flash, quiet) {
         <input class="fu-note" maxlength="2000" value="${esc(r.note || "")}" placeholder="${r.list === "to_me" ? "Add a note about what you did…" : "Add a reminder (what needs doing)…"}" aria-label="Note">
         ${r.list === "to_me" ? `<div class="fu-actions"><button class="link" type="button" data-add-another>+ Another task for this customer</button></div>` : `<div class="fu-actions">
           <button class="btn quiet-btn" type="button" data-open-send>${r.list === "sent" ? "Send to more people" : "Send to…"}</button>
+          <select class="prio-pick" aria-label="Priority">${prioOptions(r.priority)}</select>
           <button class="btn quiet-btn" type="button" data-complete>✓ Mark complete</button>
           <button class="link" type="button" data-add-another>+ Another task for this customer</button>
           <button class="link danger" type="button" data-delete>Delete</button>
           <span class="msg" role="status"></span></div>${chooser}`}
       </div>
-      <div class="fu-date quiet">Added ${esc(when(r.created_at))}</div></li>`;
+      </li>`;
   };
   const shown = groups.map(([k, title, help]) => { const rows = data.filter(r => r.list === k); return rows.length ? `<section class="fu-group">
       <h2>${title} <span class="count">${rows.length}</span></h2><p class="quiet fu-help">${help}</p>
@@ -2113,6 +2152,11 @@ async function openFollowUps(flash, quiet) {
       openFollowUps(`Sent to ${names.join(", ")}. They got a chat message, and you'll see here as each one finishes.`, true);
     });
     li.querySelector("[data-add-another]")?.addEventListener("click", e => openAddTask(e.target.closest(".fu-actions"), cust, null, true));
+    li.querySelector(".prio-pick")?.addEventListener("change", async e => {
+      const { error } = await db.rpc("set_task_priority", { p_id: id, p_priority: e.target.value ? Number(e.target.value) : null });
+      if (error) { fail(/function/i.test(error.message) ? "Run RUN SETUP.bat to switch on priorities." : "Not saved: " + error.message); return; }
+      openFollowUps(e.target.value ? `Priority ${e.target.value} set: ${PRIOS[e.target.value][1]} from now.` : "Priority removed.", true);
+    });
     li.querySelectorAll("[data-take-from]").forEach(b => b.addEventListener("click", async () => {
       const { error } = await db.rpc("take_back_follow_up", { p_id: id, p_from: Number(b.dataset.takeFrom) });
       if (error) { fail(error.message); return; }
