@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.225541">
+<meta name="app-version" content="2026-10-14.225848">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -262,6 +262,7 @@
   .eq .eq-note { white-space: pre-wrap; }
   .eq .badge { font-size: calc(12px * var(--fs, 1)); font-weight: 600; color: var(--steel); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
   .eq.editing { display: block; cursor: default; background: var(--panel); }
+  .scroll-box:has(.eq.editing) { max-height: none; }
   .eq-form .eq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 14px; }
   .eq-form label { display: flex; flex-direction: column; gap: 3px; font-size: calc(13px * var(--fs, 1)); color: var(--steel); font-weight: 600; margin: 0; }
   .eq-form label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); }
@@ -270,8 +271,15 @@
       background: var(--panel); color: var(--ink); font: inherit; font-weight: 400; }
   .eq-warr { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
   .eq-warr-head { font-weight: 700; margin-bottom: 6px; }
-  .eq-warr-row { display: grid; grid-template-columns: minmax(150px, 1.3fr) repeat(3, minmax(130px, 1fr)); gap: 10px; align-items: end; padding: 6px 0; }
+  .eq-warr-row { display: grid; grid-template-columns: minmax(150px, 1.3fr) repeat(3, minmax(120px, 1fr)) auto; gap: 10px; align-items: end; padding: 6px 0; }
   .eq-warr-row > span { font-weight: 600; padding-bottom: 8px; }
+  .eq-warr-row .w-remove { font-weight: 400; }
+  .eq-warr-new { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 14px; align-items: end; margin-top: 8px;
+                 padding: 12px; border: 1px dashed var(--line); border-radius: var(--radius-s); }
+  .nw-quick { display: flex; gap: 10px; padding-bottom: 8px; }
+  .nw-check { margin: 6px 0 4px !important; }
+  .eq-warr [data-w-add-open] { margin-top: 6px; font-weight: 600; }
+  .nw-link { font-size: calc(13px * var(--fs, 1)); margin-left: 6px; }
   .eq-form .row { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
   @media (max-width: 860px) { .eq-warr-row { grid-template-columns: 1fr 1fr; } }
   .eq .model { font-size: calc(13.5px * var(--fs, 1)); color: var(--steel); }
@@ -1196,8 +1204,14 @@ function renderFile() {
     renderFile();
     const m = $("#note-msg"); if (m) { m.className = "msg ok"; m.textContent = "Note added."; }
   });
+  document.querySelectorAll("[data-no-warranty]").forEach(b => b.addEventListener("click", async e => {
+    e.stopPropagation(); b.disabled = true;
+    const { error } = await db.rpc("save_equipment", { p_id: Number(b.dataset.noWarranty), p: { no_warranty: true } });
+    if (error) { b.disabled = false; b.textContent = "Not saved: " + error.message; return; }
+    reloadEquipment();
+  }));
   document.querySelectorAll(".eq.editable").forEach(el => {
-    el.addEventListener("click", e => { if (!e.target.closest("form")) startEditEquipment(Number(el.dataset.eq)); });
+    el.addEventListener("click", e => { if (!e.target.closest("form") && !e.target.closest("[data-no-warranty]")) startEditEquipment(Number(el.dataset.eq)); });
     el.addEventListener("keydown", e => { if (e.key === "Enter" && !e.target.closest("form")) startEditEquipment(Number(el.dataset.eq)); });
   });
   document.querySelectorAll("[data-compose]").forEach(a => a.addEventListener("click", e => {
@@ -1737,7 +1751,8 @@ function equipmentHtml(list) {
     }
     const line = (label, d) => d ? (d >= today ? `<span class="ok">${label} until ${monthYear(d)}</span>` : `<span class="gone">${label} ended ${monthYear(d)}</span>`) : "";
     const coverText = [line("Parts", partsEnd), line("Labour", labourEnd)].filter(Boolean).join(", ")
-      || `<span class="gone">No warranty on file</span>`;
+      || (e.no_warranty ? `<span class="gone">Out of warranty</span>`
+          : `<span class="gone">No warranty on file</span>${can("equipment.edit") ? ` <button class="link nw-link" type="button" data-no-warranty="${e.id}">Mark out of warranty</button>` : ""}`);
     const editable = can("equipment.edit");
     return `<div class="eq${editable ? " editable" : ""}${e.status !== "active" ? " gone-eq" : ""}" data-eq="${e.id}" ${editable ? `role="button" tabindex="0" title="Click to edit"` : ""}>
       <div><div class="what">${esc(e.equipment_types?.name || "Equipment")}${e.manufacturers?.name ? ", " + esc(e.manufacturers.name) : ""}${e.status !== "active" ? ` <span class="badge">${e.status === "removed" ? "Removed" : "Replaced"}${e.removed_on ? " " + fmtDate(e.removed_on) : ""}</span>` : ""}</div>
@@ -1929,15 +1944,50 @@ async function startEditEquipment(id) {
       <label class="check eq-wide"><input type="checkbox" name="installed_by_company" ${e.installed_by_company ? "checked" : ""}> We installed it</label>
       <label class="eq-wide">Notes<textarea name="notes" rows="2">${esc(e.notes || "")}</textarea></label>
     </div>
-    ${cov.length ? `<div class="eq-warr"><div class="eq-warr-head">Warranty</div>${cov.map(w => `<div class="eq-warr-row" data-w="${w.id}">
+    <div class="eq-warr"><div class="eq-warr-head">Warranty</div>
+      ${cov.map(w => `<div class="eq-warr-row" data-w="${w.id}">
         <span>${esc(covName(w))}</span>
         <label>From<input type="date" name="w_start" value="${w.start_date || ""}"></label>
         <label>Until<input type="date" name="w_end" value="${w.end_date || ""}"></label>
-        <label>Registration #<input name="w_reg" value="${esc(w.registration_number || "")}"></label></div>`).join("")}</div>` : `<div class="quiet" style="margin-top:8px">No warranty on file for this equipment.</div>`}
+        <label>Registration #<input name="w_reg" value="${esc(w.registration_number || "")}"></label>
+        <span class="w-remove"><button class="link danger" type="button" data-w-remove="${w.id}">Remove</button></span></div>`).join("")}
+      ${cov.length ? "" : `<label class="check nw-check"><input type="checkbox" name="no_warranty" ${e.no_warranty ? "checked" : ""}> Out of warranty (this equipment has no warranty)</label>`}
+      <button class="link" type="button" data-w-add-open>+ Add a warranty</button>
+      <div class="eq-warr-new hidden">
+        <label>Covers<select name="nw_covers"><option value="both">Parts and labour</option><option value="parts">Parts only</option><option value="labour">Labour only</option></select></label>
+        <label>Given by<select name="nw_source"><option value="manufacturer">Manufacturer</option><option value="company_workmanship">Us (workmanship)</option>
+          <option value="company_protection">Us (protection plan)</option><option value="extended">Extended / other company</option></select></label>
+        <label class="nw-provider hidden">Company name<input name="nw_provider" placeholder="e.g. Enercare"></label>
+        <label>From<input type="date" name="nw_start" value="${e.install_date || new Date().toISOString().slice(0, 10)}"></label>
+        <label>Until<input type="date" name="nw_end"></label>
+        <span class="nw-quick">${[1, 2, 5, 10, 12].map(y => `<button class="link" type="button" data-years="${y}">${y} yr</button>`).join("")}</span>
+        <label>Registration #<input name="nw_reg"></label>
+      </div>
+    </div>
     <div class="row"><button class="btn" type="submit">Save</button><button class="btn quiet-btn" type="button" data-cancel>Cancel</button><span class="msg" role="status"></span></div>
   </form>`;
   const f = el.querySelector("form"), msg = f.querySelector(".msg");
   f.status.addEventListener("change", () => f.querySelector(".eq-removed").classList.toggle("hidden", f.status.value === "active"));
+  f.querySelector("[data-w-add-open]").addEventListener("click", ev => {
+    ev.target.classList.add("hidden"); f.querySelector(".eq-warr-new").classList.remove("hidden");
+    if (f.no_warranty) f.no_warranty.checked = false;
+    f.nw_end.focus();
+  });
+  f.nw_source.addEventListener("change", () => f.querySelector(".nw-provider").classList.toggle("hidden", f.nw_source.value !== "extended"));
+  f.querySelectorAll("[data-years]").forEach(b => b.addEventListener("click", () => {
+    const st = f.nw_start.value || new Date().toISOString().slice(0, 10), d = new Date(st + "T12:00:00");
+    d.setFullYear(d.getFullYear() + Number(b.dataset.years)); f.nw_end.value = d.toISOString().slice(0, 10);
+  }));
+  f.querySelectorAll("[data-w-remove]").forEach(b => b.addEventListener("click", () => {
+    const cell = b.parentElement;
+    cell.innerHTML = `<span class="confirm">Remove?</span> <button class="link danger" type="button" data-yes>Yes</button> <button class="link" type="button" data-no>No</button>`;
+    cell.querySelector("[data-no]").addEventListener("click", () => { cell.innerHTML = ""; cell.appendChild(b); });
+    cell.querySelector("[data-yes]").addEventListener("click", async () => {
+      const { error } = await db.rpc("remove_warranty", { p_id: Number(b.dataset.wRemove) });
+      if (error) { msg.className = "msg err"; msg.textContent = "Not removed: " + error.message; return; }
+      await reloadEquipment(); startEditEquipment(id);
+    });
+  }));
   f.querySelector("[data-cancel]").addEventListener("click", ev => { ev.stopPropagation(); renderFile(); });
   f.type.focus();
   f.addEventListener("submit", async ev => {
@@ -1950,7 +2000,8 @@ async function startEditEquipment(id) {
     const { error } = await db.rpc("save_equipment", { p_id: id, p: {
       equipment_type_id: type.id, manufacturer_id: maker ? maker.id : null, model_number: f.model_number.value, serial_number: f.serial_number.value,
       install_date: f.install_date.value || null, installed_by_company: f.installed_by_company.checked, location_in_home: f.location_in_home.value,
-      status: f.status.value, removed_on: f.removed_on.value || null, notes: f.notes.value } });
+      status: f.status.value, removed_on: f.removed_on.value || null, notes: f.notes.value,
+      ...(f.no_warranty ? { no_warranty: f.no_warranty.checked } : {}) } });
     if (error) { btn.disabled = false; msg.className = "msg err"; msg.textContent = "Not saved: " + error.message; return; }
     for (const row of f.querySelectorAll(".eq-warr-row")) {
       const w = cov.find(x => x.id === Number(row.dataset.w));
@@ -1958,6 +2009,13 @@ async function startEditEquipment(id) {
       if (st === (w.start_date || "") && en === (w.end_date || "") && reg === (w.registration_number || "")) continue;
       const r = await db.rpc("save_warranty", { p_id: w.id, p_start: st || null, p_end: en || null, p_registration_number: reg });
       if (r.error) { btn.disabled = false; msg.className = "msg err"; msg.textContent = "Equipment saved, but the warranty wasn't: " + r.error.message; return; }
+    }
+    if (!f.querySelector(".eq-warr-new").classList.contains("hidden") && (f.nw_end.value || f.nw_reg.value.trim())) {
+      const cv = f.nw_covers.value;
+      if (!f.nw_end.value) { btn.disabled = false; msg.className = "msg err"; msg.textContent = "Equipment saved. Add the warranty's end date (or pick 1 yr, 5 yr…)."; f.nw_end.focus(); return; }
+      const r = await db.rpc("add_warranty", { p_equipment_id: id, p_covers_parts: cv !== "labour", p_covers_labour: cv !== "parts", p_source: f.nw_source.value,
+        p_provider: f.nw_provider.value, p_start: f.nw_start.value || null, p_end: f.nw_end.value, p_registration_number: f.nw_reg.value });
+      if (r.error) { btn.disabled = false; msg.className = "msg err"; msg.textContent = "Equipment saved, but the warranty wasn't added: " + r.error.message; return; }
     }
     await reloadEquipment();
   });
