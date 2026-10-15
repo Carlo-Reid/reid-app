@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.104208">
+<meta name="app-version" content="2026-10-15.104456">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -289,6 +289,22 @@
   .file .tech-card.yearly { border-left-color: var(--blue); }
   .file .plan.off { border-left-color: var(--box-edge); }
   .file .scroll-box .equip { border: 0; }
+
+  /* pencil next to the customer name + the edit form */
+  .pencil { margin-left: 10px; vertical-align: middle; border: 1px solid var(--line); background: var(--paper); color: var(--steel); border-radius: 999px;
+            width: 32px; height: 32px; display: inline-grid; place-items: center; cursor: pointer; padding: 0; }
+  .pencil:hover, .pencil:focus-visible { color: var(--blue); border-color: var(--blue); background: var(--blue-wash); }
+  .cust-form h3 { font-size: calc(14px * var(--fs, 1)); margin: 16px 0 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .cf-row { display: grid; gap: 8px 10px; align-items: end; padding: 6px 0; }
+  .cf-contact { grid-template-columns: 110px minmax(170px, 1.6fr) minmax(120px, 1fr) minmax(140px, 1fr) auto auto; }
+  .cf-loc { grid-template-columns: minmax(170px, 2fr) 80px minmax(120px, 1fr) 60px 100px auto; }
+  .cf-loc .cf-notes { grid-column: 1 / -1; }
+  .cf-row.removed { opacity: .45; }
+  .cf-row.removed input, .cf-row.removed select { text-decoration: line-through; }
+  .cf-row .check { padding-bottom: 8px; white-space: nowrap; }
+  .cf-row .link { padding-bottom: 8px; white-space: nowrap; }
+  .cf-sep { border-top: 1px dashed var(--line); margin: 4px 0; }
+  @media (max-width: 860px) { .cf-contact, .cf-loc { grid-template-columns: 1fr 1fr; } }
   /* equipment with coverage bars: the one strong visual */
   .equip { display: grid; gap: 2px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-m); overflow: hidden; }
   .eq { background: var(--panel); padding: 14px 16px; display: grid; grid-template-columns: minmax(200px, 300px) 1fr; gap: 20px; align-items: center; }
@@ -1201,7 +1217,7 @@ async function refreshNotesLive() {
   if (notesSig(fresh) === notesSig(current.pendingNotes || current.notes)) return;
   const known = new Set(current.notes.map(n => n.id));
   fresh.forEach(n => { if (!known.has(n.id)) n.fresh = true; });
-  if (document.querySelector(".note-edit, .note-actions .confirm")) {     // someone is mid-edit: don't yank the screen
+  if (document.querySelector(".note-edit, .note-actions .confirm, .cust-form, .eq-form")) {     // someone is mid-edit: don't yank the screen
     current.pendingNotes = fresh;
     if (!document.querySelector(".live-bar")) document.querySelector(".note-tabs")?.insertAdjacentHTML("beforebegin",
       `<div class="live-bar" role="status">Notes were changed by someone else. They'll show when you finish.</div>`);
@@ -1283,7 +1299,7 @@ function renderFile() {
     <div class="sec1" data-tag="Section 1">
     <div class="plate">
       <div>
-        <h1>${esc(c.display_name)}</h1>
+        <h1>${esc(c.display_name)}${can("customers.edit") ? `<button class="pencil" type="button" data-edit-cust title="Edit this customer's name, phones, emails and addresses" aria-label="Edit customer"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z M14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>` : ""}</h1>
         <div class="meta">Customer ${esc(c.customer_number)}${c.customer_type === "commercial" ? ", commercial" : ""}${c.created_at ? ", since " + monthYear(c.created_at.slice(0, 10)) : ""}</div>
       </div>
       <div class="balance ${owed > 0.004 ? "due" : ""}">
@@ -1374,6 +1390,7 @@ function renderFile() {
   </article><nav class="file-nav" aria-label="Sections"></nav></div>`;
 
   document.querySelectorAll(".loc-tab").forEach(b => b.addEventListener("click", () => { current.loc = Number(b.dataset.loc); current.notesTab = null; renderFile(); }));
+  document.querySelector("[data-edit-cust]")?.addEventListener("click", startEditCustomer);
   document.querySelectorAll(".job-row").forEach(r => r.addEventListener("click", () => toggleJob(r)));
   document.querySelectorAll(".job-row").forEach(r => r.addEventListener("keydown", e => { if (e.key === "Enter") toggleJob(r); }));
   document.querySelectorAll("[data-goto-job]").forEach(b => b.addEventListener("click", () => {
@@ -2279,6 +2296,108 @@ async function eqLookups() {
     db.from("manufacturers").select("id, name").order("name").limit(5000)]);
   EQ_LOOKUPS = { types: t.data || [], makers: m.data || [] };
   return EQ_LOOKUPS;
+}
+
+/* ---------------- edit the customer (pencil next to the name) ---------------- */
+function startEditCustomer() {
+  const box = document.querySelector(".sec1"); if (!box || box.querySelector(".cust-form")) return;
+  const c = current.c;
+  const locs = (c.locations || []).slice().sort((a, b) => b.active - a.active || a.id - b.id);
+  const contacts = (c.customer_contacts || []).slice().sort((a, b) => (a.location_id || 0) - (b.location_id || 0) || b.is_primary - a.is_primary || a.id - b.id);
+  const KINDS = [["mobile", "Mobile"], ["phone", "Phone"], ["email", "Email"], ["fax", "Fax"]];
+  const locOpts = sel => `<option value="">Whole customer</option>` + locs.map(l =>
+    `<option value="${l.id}" ${String(sel || "") === String(l.id) ? "selected" : ""}>On site: ${esc(l.street)}</option>`).join("");
+  const contactRow = x => `<div class="cf-row cf-contact" data-cid="${x.id || ""}">
+      <label>Type<select name="kind">${KINDS.map(([v, t]) => `<option value="${v}" ${v === x.kind ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>Number or email<input name="value" data-orig="${esc(x.value || "")}" value="${esc(x.kind === "email" || !x.value ? (x.value || "") : phoneFmt(x.value))}"></label>
+      <label>Whose (optional)<input name="contact_name" value="${esc(x.contact_name || "")}" placeholder="e.g. Cathy cell"></label>
+      <label>For<select name="location_id">${locOpts(x.location_id)}</select></label>
+      <label class="check"><input type="checkbox" name="is_primary" ${x.is_primary ? "checked" : ""}> Main</label>
+      <button class="link danger" type="button" data-c-remove>Remove</button></div>`;
+  const locRow = l => `<div class="cf-row cf-loc" data-lid="${l.id || ""}">
+      <label>Street<input name="street" value="${esc(l.street || "")}" required></label>
+      <label>Unit<input name="unit" value="${esc(l.unit || "")}"></label>
+      <label>City<input name="city" value="${esc(l.city || "")}" required></label>
+      <label>Prov.<input name="province" value="${esc(l.province || "ON")}" maxlength="3"></label>
+      <label>Postal code<input name="postal_code" value="${esc(l.postal_code || "")}" maxlength="7"></label>
+      <label class="check"><input type="checkbox" name="active" ${l.active !== false ? "checked" : ""}> In use</label>
+      <label class="cf-notes">Access notes (gate code, parking, pets…)<input name="access_notes" value="${esc(l.access_notes || "")}"></label></div>`;
+  box.innerHTML = `<form class="eq-form cust-form" novalidate>
+    <div class="eq-form-head"><strong>Editing ${esc(c.display_name)}</strong>
+      <button class="btn quiet-btn" type="button" data-close-x title="Close without saving (Esc)">✕ Close</button></div>
+    <div class="eq-grid">
+      <label>Name<input name="display_name" value="${esc(c.display_name)}" required></label>
+      <label>Company (optional)<input name="company_name" value="${esc(c.company_name || "")}"></label>
+      <label>Type<select name="customer_type">${[["residential", "Residential"], ["commercial", "Commercial"], ["builder", "Builder"], ["partner_account", "Partner account"]].map(([v, t]) =>
+        `<option value="${v}" ${v === c.customer_type ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>Status<select name="status">${[["active", "Active"], ["inactive", "Inactive"], ["warranty_contact", "Warranty contact only"]].map(([v, t]) =>
+        `<option value="${v}" ${v === c.status ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label class="check"><input type="checkbox" name="do_not_contact" ${c.do_not_contact ? "checked" : ""}> Do not contact</label>
+      <label class="check"><input type="checkbox" name="marketing_opt_in" ${c.marketing_opt_in ? "checked" : ""}> OK to send offers and reminders</label>
+    </div>
+    <h3>Phones and emails</h3>
+    <div class="cf-contacts">${contacts.map(contactRow).join("") || ""}</div>
+    <button class="link" type="button" data-c-add>+ Add a phone or email</button>
+    <h3>Service addresses</h3>
+    <div class="cf-locs">${locs.map(locRow).join('<div class="cf-sep"></div>')}</div>
+    <button class="link" type="button" data-l-add>+ Add an address</button>
+    <div class="row"><button class="btn" type="submit">Save changes</button>
+      <button class="btn quiet-btn" type="button" data-cancel>Cancel</button><span class="msg" role="status"></span></div>
+  </form>`;
+  const f = box.querySelector("form"), msg = f.querySelector(".msg");
+  const wireRemove = row => row.querySelector("[data-c-remove]")?.addEventListener("click", ev => {
+    if (!row.dataset.cid) { row.remove(); return; }
+    const off = row.classList.toggle("removed");
+    ev.target.textContent = off ? "Undo" : "Remove";
+    row.querySelectorAll("input, select").forEach(i => i.disabled = off);
+  });
+  f.querySelectorAll(".cf-contact").forEach(wireRemove);
+  f.querySelector("[data-c-add]").addEventListener("click", () => {
+    f.querySelector(".cf-contacts").insertAdjacentHTML("beforeend", contactRow({ kind: "mobile" }));
+    const row = f.querySelector(".cf-contacts").lastElementChild; wireRemove(row); row.querySelector("[name=value]").focus();
+  });
+  f.querySelector("[data-l-add]").addEventListener("click", () => {
+    const list = f.querySelector(".cf-locs");
+    list.insertAdjacentHTML("beforeend", (list.children.length ? '<div class="cf-sep"></div>' : "") + locRow({ province: "ON", active: true }));
+    list.lastElementChild.querySelector("[name=street]").focus();
+  });
+  const closeForm = ev => { ev?.stopPropagation(); redrawKeepingPlace(); };
+  f.querySelector("[data-cancel]").addEventListener("click", closeForm);
+  f.querySelector("[data-close-x]").addEventListener("click", closeForm);
+  f.addEventListener("keydown", ev => { if (ev.key === "Escape") closeForm(ev); });
+  f.display_name.focus();
+  f.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    if (!f.display_name.value.trim()) { msg.className = "msg err"; msg.textContent = "The customer needs a name."; f.display_name.focus(); return; }
+    const val = (row, n) => row.querySelector(`[name=${n}]`);
+    const contactsOut = [...f.querySelectorAll(".cf-contact")].map(row => row.classList.contains("removed")
+      ? { id: Number(row.dataset.cid), remove: true }
+      : { id: row.dataset.cid ? Number(row.dataset.cid) : null, kind: val(row, "kind").value, value: (() => { const i = val(row, "value"), v = i.value.trim(), o = i.dataset.orig;
+            return o && val(row, "kind").value !== "email" && v.replace(/\D/g, "") === o.replace(/\D/g, "") ? o : v; })(),
+          contact_name: val(row, "contact_name").value, location_id: val(row, "location_id").value || null, is_primary: val(row, "is_primary").checked })
+      .filter(x => x.remove || x.id || x.value);
+    const locsOut = [...f.querySelectorAll(".cf-loc")].map(row => ({
+      id: row.dataset.lid ? Number(row.dataset.lid) : null, street: val(row, "street").value, unit: val(row, "unit").value, city: val(row, "city").value,
+      province: val(row, "province").value, postal_code: val(row, "postal_code").value, access_notes: val(row, "access_notes").value, active: val(row, "active").checked }))
+      .filter(x => x.id || x.street.trim() || x.city.trim());
+    const bad = locsOut.find(x => !x.street.trim() || !x.city.trim());
+    if (bad) { msg.className = "msg err"; msg.textContent = "Each address needs a street and a city."; return; }
+    const btn = f.querySelector("button[type=submit]"); btn.disabled = true; msg.className = "msg"; msg.textContent = "Saving…";
+    const { error } = await db.rpc("save_customer", { p_id: current.c.id, p: {
+      display_name: f.display_name.value, company_name: f.company_name.value, customer_type: f.customer_type.value, status: f.status.value,
+      do_not_contact: f.do_not_contact.checked, marketing_opt_in: f.marketing_opt_in.checked, contacts: contactsOut, locations: locsOut } });
+    btn.disabled = false;
+    if (error) { msg.className = "msg err"; msg.textContent = /function/i.test(error.message) && /save_customer/.test(error.message)
+      ? "Run RUN SETUP.bat to switch on customer editing." : "Not saved: " + error.message; return; }
+    const id = current.c.id;
+    const fresh = await db.from("customers").select("*, customer_contacts(*), locations(*), customer_flags(*)").eq("id", id).single();
+    if (!fresh.error && current && current.c.id === id) {
+      const hadLocs = new Set((current.c.locations || []).map(l => l.id));
+      current.c = fresh.data;
+      if ((fresh.data.locations || []).some(l => !hadLocs.has(l.id))) return openCustomer(id);   // new address: reload everything for it
+    }
+    redrawKeepingPlace();
+  });
 }
 async function startEditEquipment(id) {
   const e = current.equipment.find(x => x.id === id), el = document.querySelector(`.eq[data-eq="${id}"]`);
