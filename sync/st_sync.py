@@ -65,9 +65,12 @@ def find_file(name):
 
 def settings():
     st, db = {}, {}
-    if QUIET and not (os.environ.get("ST_CLIENT_ID") and os.environ.get("DB_HOST")):
-        fail("The GitHub secrets aren't all set. Add ST_TENANT_ID, ST_APP_KEY, ST_CLIENT_ID, ST_CLIENT_SECRET, "
-                 "DB_HOST, DB_PORT, DB_NAME, DB_USER and DB_PASSWORD under Settings > Secrets and variables > Actions.")
+    if QUIET:
+        need = ["ST_TENANT_ID", "ST_APP_KEY", "ST_CLIENT_ID", "ST_CLIENT_SECRET", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"]
+        miss = [k for k in need if not os.environ.get(k, "").strip()]
+        if miss:
+            fail("These GitHub secrets are missing or empty: " + ", ".join(miss) + ". Check the names under Settings > Secrets and variables > Actions "
+                 "(they must be Repository secrets, spelled exactly like this).")
     if os.environ.get("ST_CLIENT_ID"):
         st = {k: os.environ.get("ST_" + k, "") for k in ("TENANT_ID", "APP_KEY", "CLIENT_ID", "CLIENT_SECRET")}
     else:
