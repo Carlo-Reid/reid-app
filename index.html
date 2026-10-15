@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.231708">
+<meta name="app-version" content="2026-10-14.232246">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -456,6 +456,9 @@
   .calls-range input { padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--ink); font: inherit; }
   .calls-filters { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 4px 0 14px; }
   .calls-filters > span { display: flex; flex-wrap: wrap; gap: 6px; }
+  .calls-tech { display: flex; align-items: center; gap: 6px; margin: 0; font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--steel); }
+  .calls-tech select { padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--ink); font: inherit; }
+  .calls-sort { display: flex; align-items: center; gap: 6px; font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--steel); }
   .calls-sum { margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
   .calls-table { width: 100%; }
   .calls-table th { position: sticky; top: 0; z-index: 1; }
@@ -1551,9 +1554,12 @@ const VISIT_STATUS = { unscheduled: "Not scheduled", scheduled: "Booked", dispat
                        completed: "Done", needs_return: "Needs return", cancelled: "Cancelled" };
 let CALLS = (() => { try { return JSON.parse(localStorage.getItem("reid.calls") || "null"); } catch { return null; } })()
   || { preset: "today", from: null, to: null, status: "all", cls: "all" };
+CALLS.tech = CALLS.tech ?? ""; CALLS.sort = CALLS.sort || "time";
+let CALL_TECHS = null;
 async function openCalls() {
   setPage("calls", "calls");
   if (CALLS.preset) { const [f, t] = CALL_PRESETS.find(x => x[0] === CALLS.preset)[2](); CALLS.from = ymd(f); CALLS.to = ymd(t); }
+  if (!CALL_TECHS) { const r = await db.rpc("call_techs"); CALL_TECHS = r.error ? [] : r.data; }
   renderCallsShell();
   await runCalls();
 }
@@ -1572,6 +1578,12 @@ function renderCallsShell() {
     <div class="calls-filters">
       <span>${CALL_STATUS.map(([k, t]) => `<button class="chip small" type="button" aria-pressed="${CALLS.status === k}" data-cstatus="${k}">${t}</button>`).join("")}</span>
       <span>${CALL_CLASS.map(([k, t]) => `<button class="chip small" type="button" aria-pressed="${CALLS.cls === k}" data-cclass="${k}">${t}</button>`).join("")}</span>
+      <label class="calls-tech">Tech <select id="calls-tech">
+        <option value="">Everyone</option><option value="0" ${CALLS.tech === "0" ? "selected" : ""}>No tech assigned</option>
+        ${(CALL_TECHS || []).map(t => `<option value="${t.employee_id}" ${String(t.employee_id) === CALLS.tech ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+      </select></label>
+      <span class="calls-sort">Sort by ${[["time", "Date and time"], ["tech", "Tech"]].map(([k, t]) =>
+        `<button class="chip small" type="button" aria-pressed="${CALLS.sort === k}" data-csort="${k}">${t}</button>`).join("")}</span>
     </div>
     <div id="calls-out"><div class="loading">Searching…</div></div>
   </article>`;
@@ -1579,6 +1591,8 @@ function renderCallsShell() {
   document.querySelectorAll("[data-preset]").forEach(b => b.addEventListener("click", () => { CALLS.preset = b.dataset.preset; save(); openCalls(); }));
   document.querySelectorAll("[data-cstatus]").forEach(b => b.addEventListener("click", () => { CALLS.status = b.dataset.cstatus; save(); renderCallsShell(); runCalls(); }));
   document.querySelectorAll("[data-cclass]").forEach(b => b.addEventListener("click", () => { CALLS.cls = b.dataset.cclass; save(); renderCallsShell(); runCalls(); }));
+  $("#calls-tech").addEventListener("change", e => { CALLS.tech = e.target.value; save(); runCalls(); });
+  document.querySelectorAll("[data-csort]").forEach(b => b.addEventListener("click", () => { CALLS.sort = b.dataset.csort; save(); renderCallsShell(); runCalls(); }));
   $("#calls-range").addEventListener("submit", e => {
     e.preventDefault();
     CALLS.preset = null; CALLS.from = $("#calls-from").value; CALLS.to = $("#calls-to").value; save();
@@ -1587,12 +1601,24 @@ function renderCallsShell() {
 }
 async function runCalls() {
   const out = $("#calls-out");
-  const { data, error } = await db.rpc("search_calls", { p_from: CALLS.from, p_to: CALLS.to, p_status: CALLS.status, p_class: CALLS.cls, p_limit: 2000 });
+  out.innerHTML = `<div class="loading">Searching…</div>`;
+  const { data, error } = await db.rpc("search_calls", { p_from: CALLS.from, p_to: CALLS.to, p_status: CALLS.status, p_class: CALLS.cls, p_limit: 2000,
+    p_tech: CALLS.tech === "" ? null : Number(CALLS.tech) });
   if (!$("#calls-out")) return;
   if (error) { out.innerHTML = `<div class="staff-msg err">${esc(/function/i.test(error.message) ? "Run RUN SETUP.bat to switch on Calls by date." : error.message)}</div>`; return; }
   const total = data.length ? Number(data[0].total_count) : 0;
   const by = k => data.filter(r => k(r.visit_status)).length;
-  const range = CALLS.from === CALLS.to ? longDate(CALLS.from) : `${longDate(CALLS.from)} to ${longDate(CALLS.to)}`;
+  const range = (CALLS.from === CALLS.to ? longDate(CALLS.from) : `${longDate(CALLS.from)} to ${longDate(CALLS.to)}`)
+    + (CALLS.tech === "0" ? ", no tech assigned" : CALLS.tech ? ", " + ((CALL_TECHS || []).find(t => String(t.employee_id) === CALLS.tech)?.name || "") : "");
+  // sorting by tech: group under each tech (a call with two techs shows under each), unassigned last
+  let rows = data.map(r => ({ ...r, group: r.scheduled_date }));
+  if (CALLS.sort === "tech") {
+    rows = [];
+    data.forEach(r => { const names = (r.techs || "").split(", ").filter(Boolean); (names.length ? names : ["No tech assigned"]).forEach(n => rows.push({ ...r, group: n })); });
+    rows.sort((a, b) => (a.group === "No tech assigned") - (b.group === "No tech assigned") || a.group.localeCompare(b.group)
+      || a.scheduled_date.localeCompare(b.scheduled_date) || (a.arrival_start || "").localeCompare(b.arrival_start || ""));
+  }
+  const groupLabel = g => CALLS.sort === "tech" ? `${g} · ${rows.filter(x => x.group === g).length} ${rows.filter(x => x.group === g).length === 1 ? "call" : "calls"}` : longDate(g);
   const time = d => d ? new Date(d).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }) : "";
   let lastDay = "";
   out.innerHTML = `<div class="calls-sum"><strong>${total.toLocaleString()} ${total === 1 ? "call" : "calls"}</strong><span>${esc(range)}</span>
@@ -1600,9 +1626,9 @@ async function runCalls() {
       ${total > data.length ? `<div class="staff-msg err">Showing the first ${data.length.toLocaleString()}. Pick a shorter range or a filter to see the rest.</div>` : ""}
       ${data.length ? `<button class="link" type="button" id="calls-copy">Copy list</button>` : ""}</div>
     ${data.length ? `<table class="calls-table"><thead><tr><th>Time</th><th>Customer</th><th>Address</th><th>Job</th><th>Tech</th><th>Status</th></tr></thead><tbody>
-      ${data.map(r => { const head = r.scheduled_date !== lastDay ? `<tr class="calls-day"><td colspan="6">${esc(longDate(r.scheduled_date))}</td></tr>` : ""; lastDay = r.scheduled_date;
+      ${rows.map(r => { const head = r.group !== lastDay ? `<tr class="calls-day"><td colspan="6">${esc(groupLabel(r.group))}</td></tr>` : ""; lastDay = r.group;
         return head + `<tr class="call-row" tabindex="0" data-cust="${r.customer_id}">
-          <td class="num">${r.arrival_start ? `${time(r.arrival_start)}${r.arrival_end ? "–" + time(r.arrival_end) : ""}` : '<span class="quiet">Any time</span>'}</td>
+          <td class="num">${CALLS.sort === "tech" ? `<div>${esc(new Date(r.scheduled_date + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }))}</div>` : ""}${r.arrival_start ? `${time(r.arrival_start)}${r.arrival_end ? "–" + time(r.arrival_end) : ""}` : '<span class="quiet">Any time</span>'}</td>
           <td><strong>${esc(r.customer_name)}</strong></td>
           <td>${esc([r.street, r.city].filter(Boolean).join(", "))}</td>
           <td>${esc(r.job_type || "")}<div class="quiet">Job ${esc(r.job_number)}${r.visit_number > 1 ? `, visit ${r.visit_number}` : ""}${r.business_unit ? " · " + esc(r.business_unit) : ""}</div></td>
