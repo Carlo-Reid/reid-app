@@ -227,8 +227,9 @@
   @keyframes flash { from { background: var(--blue-wash); } to { background: transparent; } }
   .note { white-space: pre-wrap; padding: 10px 0; border-top: 1px solid var(--line); }
   .note:first-child { border-top: 0; }
-  .note.pin { background: var(--amber-wash); border-left: 3px solid var(--amber); padding: 10px 12px; margin: 8px 0; border-top: 0; border-radius: var(--radius-s); }
-  .note .pin-label { color: var(--amber); font-weight: 650; font-size: 13px; display: block; margin-bottom: 2px; }
+  .note.pin { --pin: var(--amber-wash); background: var(--pin); border-left: 4px solid color-mix(in srgb, var(--pin) 45%, #000 40%);
+              padding: 10px 12px; margin: 8px 0; border-top: 0; border-radius: var(--radius-s); color: var(--ink); }
+  .note .pin-label { color: color-mix(in srgb, var(--pin) 30%, #000 65%); font-weight: 700; font-size: 13px; display: block; margin-bottom: 2px; }
   .note .when { font-size: 12.5px; color: var(--steel); display: block; margin-top: 2px; }
   .notes-empty { padding: 12px 0; color: var(--steel); }
   .plans { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
@@ -265,6 +266,16 @@
   .staff select, .staff input[type=text], .staff input[type=email] { padding: 7px 9px; border: 1px solid var(--line);
       border-radius: var(--radius-s); background: var(--panel); font: inherit; color: inherit; }
   .staff .all { font-size: 13px; color: var(--steel); }
+  .slots { display: grid; gap: 10px; max-width: 900px; }
+  .slot-row { display: grid; grid-template-columns: 52px 48px 180px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+              background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 8px 12px; }
+  .slot-row .slot-n { font-weight: 700; }
+  .slot-row input[type=color] { width: 44px; height: 34px; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); }
+  .slot-row .slot-preview { margin: 0; font-size: 14px; }
+  .slot-move { display: flex; gap: 10px; }
+  .slot-move .link:disabled { opacity: .35; cursor: default; }
+  .slot-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 14px; }
+  @media (max-width: 860px) { .slot-row { grid-template-columns: 52px 48px 1fr; } .slot-row .slot-preview, .slot-move { grid-column: 1 / -1; } }
   .approve-banner { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between;
                     background: var(--amber-wash); border: 1px solid var(--amber); border-radius: var(--radius-m); padding: 12px 16px; margin: 0 0 16px; }
   .approve-banner span { display: flex; gap: 8px; }
@@ -321,7 +332,7 @@
 <div id="app" class="hidden">
   <aside id="side">
     <header>
-      <div class="brand"><button class="home-link" id="home-link" title="Back to your last customer">Customers</button><span class="side-links"><button class="link hidden" id="staff-link">Staff</button><button class="link" id="signout">Sign out</button></span></div>
+      <div class="brand"><button class="home-link" id="home-link" title="Back to your last customer">Customers</button><span class="side-links"><button class="link hidden" id="settings-link">Settings</button><button class="link hidden" id="staff-link">Staff</button><button class="link" id="signout">Sign out</button></span></div>
       <input id="q" type="search" placeholder="Name, phone, address, invoice, serial…" autocomplete="off" aria-label="Search customers">
       <div class="hint quiet">Search by anything: old ServiceTitan numbers work too.</div>
     </header>
@@ -385,12 +396,15 @@ async function showApp() {
   const perms = await db.rpc("my_permissions");
   ME.perms = new Set(perms.data || []);
   $("#staff-link").classList.toggle("hidden", !ME.perms.has("staff.manage"));
+  $("#settings-link").classList.toggle("hidden", !ME.perms.has("settings.manage"));
+  await loadPinSlots();
   if (error || !data) {
     $("#main").innerHTML = `<div class="empty"><div><h2>No access yet</h2>This login isn't set up as staff. Ask the owner to add your email to the staff list.</div></div>`;
   }
   $("#q").focus();
   if (data) startOnline();
   if (location.hash === "#staff" && can("staff.manage")) return openStaff();
+  if (location.hash === "#settings" && can("settings.manage")) return openSettings();
   const id = new URLSearchParams(location.hash.slice(1)).get("customer");
   if (id) openCustomer(Number(id));
 }
@@ -515,23 +529,47 @@ async function openCustomer(id) {
     .in("location_id", locIds).order("install_date", { ascending: false, nullsFirst: false }) : { data: [] };
   const noteFilter = [`and(entity_type.eq.customer,entity_id.eq.${id})`]
     .concat(locIds.length ? [`and(entity_type.eq.location,entity_id.in.(${locIds.join(",")}))`] : []).join(",");
-  const NOTE_COLS = "id, entity_type, entity_id, body, pinned, created_at, app_users(login_email, employees(first_name, last_name))";
-  const noteQuery = cols => db.from("notes").select(cols)
-    .or(noteFilter).order("pinned", { ascending: false }).order("created_at", { ascending: false });
-  let notes = await noteQuery(NOTE_COLS + ", source");
-  if (notes.error) notes = await noteQuery(NOTE_COLS);   // setup step 05 not run yet
-  const jobIds = (jobs.data || []).map(j => j.id), jobNotes = [];
-  for (let i = 0; i < jobIds.length; i += 150) {
-    const r = await db.from("notes").select(NOTE_COLS)
-      .eq("entity_type", "job").in("entity_id", jobIds.slice(i, i + 150))
-      .order("pinned", { ascending: false }).order("created_at", { ascending: false });
-    if (r.data) jobNotes.push(...r.data);
-  }
-  current = { c, notes: (notes.data || []).concat(jobNotes), plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
+  const jobIds = (jobs.data || []).map(j => j.id);
+  const allNotes = await fetchNotes(noteFilter, jobIds);
+  current = { c, noteFilter, jobIds, notes: allNotes, plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
               estimates: estimates.data || [], equipment: eq.data || [],
               loc: (c.locations || []).find(l => l.active)?.id ?? locIds[0] };
   renderFile();
 }
+
+const NOTE_BASE = "id, entity_type, entity_id, body, pinned, created_at, app_users(login_email, employees(first_name, last_name))";
+let NOTE_EXTRA = ", source, pin_order";
+async function fetchNotes(noteFilter, jobIds) {
+  const q = cols => db.from("notes").select(cols).or(noteFilter).order("created_at", { ascending: false });
+  let notes = await q(NOTE_BASE + NOTE_EXTRA);
+  if (notes.error) { NOTE_EXTRA = ", source"; notes = await q(NOTE_BASE + NOTE_EXTRA); }   // setup step 09 not run yet
+  if (notes.error) { NOTE_EXTRA = ""; notes = await q(NOTE_BASE); }                       // setup step 05 not run yet
+  const out = notes.data || [];
+  for (let i = 0; i < jobIds.length; i += 150) {
+    const r = await db.from("notes").select(NOTE_BASE + (NOTE_EXTRA.includes("pin_order") ? ", pin_order" : ""))
+      .eq("entity_type", "job").in("entity_id", jobIds.slice(i, i + 150)).order("created_at", { ascending: false });
+    if (r.data) out.push(...r.data);
+  }
+  return out.sort(noteSort);
+}
+function noteSort(a, b) {
+  if (a.pinned !== b.pinned) return b.pinned - a.pinned;
+  if (a.pinned) { const d = (a.pin_order ?? 999) - (b.pin_order ?? 999); if (d) return d; }
+  return (b.created_at || "").localeCompare(a.created_at || "");
+}
+async function reloadNotes() {
+  current.notes = await fetchNotes(current.noteFilter, current.jobIds);
+  renderFile();
+}
+
+/* pin slots: colour of each pinned position */
+let PIN_SLOTS = [{ slot: 1, color: "#F8D7D5" }, { slot: 2, color: "#FBF0DD" }, { slot: 3, color: "#DDF1E2" }];
+let PIN_SLOTS_LIVE = false;
+async function loadPinSlots() {
+  const r = await db.from("pin_slots").select("*").order("slot");
+  if (!r.error && r.data && r.data.length) { PIN_SLOTS = r.data; PIN_SLOTS_LIVE = true; }
+}
+const pinColor = rank => (PIN_SLOTS[Math.min(rank, PIN_SLOTS.length - 1)] || {}).color || "#FBF0DD";
 
 function renderFile() {
   const { c, notes, plans, jobs, invoices, estimates, equipment, loc } = current;
@@ -562,7 +600,7 @@ function renderFile() {
   const locNotes = notes.filter(n => n.entity_type === "location" && l && n.entity_id === l.id);
   const jobById = Object.fromEntries(jobs.map(j => [j.id, j]));
   const jobNotesHere = notes.filter(n => n.entity_type === "job" && jobById[n.entity_id] && (!l || jobById[n.entity_id].location_id === l.id))
-    .sort((a, b) => (b.pinned - a.pinned) || (b.created_at || "").localeCompare(a.created_at || ""));
+    .sort(noteSort);
   const tab = current.notesTab || (locNotes.length ? "location" : custNotes.length ? "customer" : jobNotesHere.length ? "job" : podNotes.length ? "podium" : "location");
   const shown = { location: locNotes, customer: custNotes, job: jobNotesHere, podium: podNotes }[tab];
   current.notesTab = tab;
@@ -599,7 +637,10 @@ function renderFile() {
         <button class="note-tab" role="tab" data-tab="podium" aria-selected="${tab === "podium"}">Podium <span class="count">${podNotes.length}</span></button>
       </div>
       <div class="notes-list" role="tabpanel" tabindex="0" aria-label="${{ location: "Location notes", customer: "Customer notes", job: "Job notes", podium: "Podium messages" }[tab]}">
-        ${shown.length ? shown.map(n => noteHtml(n, false, tab === "job" ? jobById[n.entity_id] : null)).join("")
+        ${shown.length ? (() => { const rank = {}; return shown.map(n => {
+            const key = n.entity_type + n.entity_id; const r = n.pinned ? (rank[key] = (rank[key] ?? -1) + 1) : null;
+            const pinCount = n.pinned ? shown.filter(x => x.pinned && x.entity_type === n.entity_type && x.entity_id === n.entity_id).length : 0;
+            return noteHtml(n, false, tab === "job" ? jobById[n.entity_id] : null, r, pinCount); }).join(""); })()
           : `<div class="notes-empty">${{ location: "No notes for this address.", customer: "No notes on this customer.", job: "No job notes at this address.", podium: "No Podium messages for this customer." }[tab]}</div>`}
       </div>
       ${shown.length > 4 ? `<div class="notes-foot">Scroll inside the box to see all ${shown.length} notes.</div>` : ""}
@@ -669,12 +710,24 @@ function renderFile() {
     if (error) { btn.disabled = false; msg.className = "msg err"; msg.textContent = "Note not saved: " + error.message; return; }
     data.app_users = { login_email: (await db.auth.getUser()).data?.user?.email || "you" };
     data.fresh = true;
-    current.notes.unshift(data);
-    current.notes.sort((x, y) => (y.pinned - x.pinned) || (y.created_at || "").localeCompare(x.created_at || ""));
     current.notesTab = t;
+    await reloadNotes();
+    current.notes.forEach(x => { if (x.id === data.id) x.fresh = true; });
     renderFile();
     const m = $("#note-msg"); if (m) { m.className = "msg ok"; m.textContent = "Note added."; }
   });
+  document.querySelectorAll("[data-pin-move]").forEach(b => b.addEventListener("click", async () => {
+    b.disabled = true;
+    const { error } = await db.rpc("move_note_pin", { p_note_id: Number(b.dataset.noteId), p_up: b.dataset.pinMove === "up" });
+    if (error) { b.disabled = false; alertNote(b, error.message); return; }
+    reloadNotes();
+  }));
+  document.querySelectorAll("[data-pin-set]").forEach(b => b.addEventListener("click", async () => {
+    b.disabled = true;
+    const { error } = await db.rpc("set_note_pin", { p_note_id: Number(b.dataset.noteId), p_pinned: b.dataset.pinSet === "1" });
+    if (error) { b.disabled = false; alertNote(b, error.message); return; }
+    reloadNotes();
+  }));
   document.querySelectorAll("[data-edit-note]").forEach(b => b.addEventListener("click", () => startEditNote(Number(b.dataset.editNote))));
   document.querySelectorAll("[data-delete-note]").forEach(b => b.addEventListener("click", () => confirmDeleteNote(Number(b.dataset.deleteNote), b)));
   document.querySelectorAll(".note-tab").forEach(b => b.addEventListener("click", () => { current.notesTab = b.dataset.tab; renderFile(); }));
@@ -736,11 +789,20 @@ function podiumBody(text) {
   return esc(body) + (m ? ` <a class="podium-link" href="${esc(m[1])}" target="_blank" rel="noopener">Open in Podium</a>` : "");
 }
 
-function noteHtml(n, hide, job) {
+function noteHtml(n, hide, job, rank, pinCount) {
   const jobLabel = job ? `<button class="link job-link" data-goto-job="${job.id}">Job ${esc(job.job_number)}${job.job_types?.name ? ", " + esc(job.job_types.name) : ""}</button><br>` : "";
   const who = n.app_users ? (n.app_users.employees ? `${n.app_users.employees.first_name} ${n.app_users.employees.last_name}`.trim() : n.app_users.login_email) : "";
-  const actions = (can("notes.edit") || can("notes.delete")) ? `<span class="note-actions">${can("notes.edit") ? `<button class="link" data-edit-note="${n.id}">Edit</button>` : ""}${can("notes.delete") ? `<button class="link danger" data-delete-note="${n.id}">Delete</button>` : ""}</span>` : "";
-  return `<div class="note${n.pinned ? " pin" : ""}${n.fresh ? " fresh" : ""}${hide === true ? " hidden" : ""}" data-note="${n.id}">${n.pinned ? '<span class="pin-label">Pinned</span>' : ""}${jobLabel}<span class="body">${n.source === "podium" ? podiumBody(n.body) : esc(n.body)}</span><span class="when">${fmtDate(n.created_at)}${who ? ", by " + esc(who) : ""}${actions}</span></div>`;
+  const pinTools = !can("notes.edit") || rank === undefined ? "" : n.pinned
+    ? `${rank > 0 ? `<button class="link" data-pin-move="up" data-note-id="${n.id}" title="Move up" aria-label="Move pinned note up">&uarr; Up</button>` : ""}${rank < pinCount - 1 ? `<button class="link" data-pin-move="down" data-note-id="${n.id}" title="Move down" aria-label="Move pinned note down">&darr; Down</button>` : ""}<button class="link" data-pin-set="0" data-note-id="${n.id}">Unpin</button>`
+    : `<button class="link" data-pin-set="1" data-note-id="${n.id}">Pin</button>`;
+  const actions = (can("notes.edit") || can("notes.delete")) ? `<span class="note-actions">${pinTools}${can("notes.edit") ? `<button class="link" data-edit-note="${n.id}">Edit</button>` : ""}${can("notes.delete") ? `<button class="link danger" data-delete-note="${n.id}">Delete</button>` : ""}</span>` : "";
+  const pinStyle = n.pinned && rank != null ? ` style="--pin:${pinColor(rank)}"` : "";
+  return `<div class="note${n.pinned ? " pin" : ""}${n.fresh ? " fresh" : ""}${hide === true ? " hidden" : ""}"${pinStyle} data-note="${n.id}">${n.pinned ? `<span class="pin-label">Pinned${rank != null ? " " + (rank + 1) : ""}</span>` : ""}${jobLabel}<span class="body">${n.source === "podium" ? podiumBody(n.body) : esc(n.body)}</span><span class="when">${fmtDate(n.created_at)}${who ? ", by " + esc(who) : ""}${actions}</span></div>`;
+}
+
+function alertNote(btn, text) {
+  const holder = btn.closest(".note-actions");
+  holder.insertAdjacentHTML("beforeend", `<span class="confirm">${esc(text)}</span>`);
 }
 
 function startEditNote(id) {
@@ -760,9 +822,7 @@ function startEditNote(id) {
     btn.disabled = true; msg.className = "msg"; msg.textContent = "Saving…";
     const { data, error } = await db.rpc("edit_note", { p_note_id: id, p_body: ta.value, p_pinned: form.querySelector("input[type=checkbox]").checked });
     if (error) { btn.disabled = false; msg.className = "msg err"; msg.textContent = "Not saved: " + error.message; return; }
-    Object.assign(n, { body: data.body, pinned: data.pinned, fresh: true });
-    current.notes.sort((x, y) => (y.pinned - x.pinned) || (y.created_at || "").localeCompare(x.created_at || ""));
-    renderFile();
+    await reloadNotes();
   });
 }
 
@@ -775,6 +835,59 @@ function confirmDeleteNote(id, btn) {
     if (error) { holder.innerHTML = `<span class="confirm">Not deleted: ${esc(error.message)}</span>`; return; }
     current.notes = current.notes.filter(x => x.id !== id);
     renderFile();
+  });
+}
+
+/* ---------------- settings (control panel) ---------------- */
+$("#settings-link").addEventListener("click", openSettings);
+async function openSettings() {
+  location.hash = "settings";
+  await loadPinSlots();
+  renderSettings(PIN_SLOTS.map(x => ({ color: x.color.toUpperCase(), name: x.name || "" })));
+}
+function renderSettings(slots, note) {
+  $("#main").innerHTML = `<article class="staff settings">
+    <h1>Settings</h1>
+    <p class="lead">Changes here apply to everyone.</p>
+    <section class="block" style="margin-top:8px">
+      <h2>Pinned notes</h2>
+      <p class="quiet" style="max-width:720px;margin:0 0 14px">Each customer, address and job can have up to <strong>${slots.length}</strong> pinned ${slots.length === 1 ? "note" : "notes"}.
+        The first pinned note gets colour 1, the second gets colour 2, and so on. Add a slot to allow one more pinned note.</p>
+      ${PIN_SLOTS_LIVE ? "" : `<p class="staff-msg err">Run RUN SETUP.bat to turn these settings on.</p>`}
+      <div class="slots">${slots.map((x, i) => `<div class="slot-row" data-i="${i}">
+          <span class="slot-n">Pin ${i + 1}</span>
+          <input type="color" value="${esc(x.color)}" aria-label="Colour for pin ${i + 1}" data-k="color">
+          <input type="text" value="${esc(x.name)}" placeholder="Name (optional)" aria-label="Name for pin ${i + 1}" data-k="name" maxlength="40">
+          <div class="note pin slot-preview" style="--pin:${esc(x.color)}"><span class="pin-label">Pinned ${i + 1}</span>This is how pin ${i + 1} looks.</div>
+          <span class="slot-move">
+            <button class="link" type="button" data-slot-up ${i === 0 ? "disabled" : ""} aria-label="Move pin ${i + 1} colour up">&uarr;</button>
+            <button class="link" type="button" data-slot-down ${i === slots.length - 1 ? "disabled" : ""} aria-label="Move pin ${i + 1} colour down">&darr;</button>
+            <button class="link danger" type="button" data-slot-del ${slots.length === 1 ? "disabled" : ""}>Remove</button>
+          </span></div>`).join("")}</div>
+      <div class="slot-actions">
+        <button class="btn quiet-btn" type="button" id="slot-add" ${slots.length >= 20 ? "disabled" : ""}>+ Add a pin slot</button>
+        <button class="btn" type="button" id="slot-save">Save</button>
+        <button class="link" type="button" id="slot-reset">Back to light red, amber, green</button>
+      </div>
+      <div class="staff-msg ${note?.err ? "err" : "ok"}" id="settings-msg" role="status">${note ? esc(note.text) : ""}</div>
+    </section>
+  </article>`;
+  const read = () => [...document.querySelectorAll(".slot-row")].map(r => ({ color: r.querySelector("[data-k=color]").value.toUpperCase(), name: r.querySelector("[data-k=name]").value.trim() }));
+  document.querySelectorAll(".slot-row").forEach(r => {
+    const i = Number(r.dataset.i);
+    r.querySelector("[data-k=color]").addEventListener("input", e => r.querySelector(".slot-preview").style.setProperty("--pin", e.target.value));
+    r.querySelector("[data-slot-up]").addEventListener("click", () => { const a = read(); [a[i - 1], a[i]] = [a[i], a[i - 1]]; renderSettings(a, { text: "Not saved yet." }); });
+    r.querySelector("[data-slot-down]").addEventListener("click", () => { const a = read(); [a[i + 1], a[i]] = [a[i], a[i + 1]]; renderSettings(a, { text: "Not saved yet." }); });
+    r.querySelector("[data-slot-del]").addEventListener("click", () => { const a = read(); a.splice(i, 1); renderSettings(a, { text: "Not saved yet." }); });
+  });
+  const PALETTE = ["#DCE8F7", "#EADCF5", "#FFF3B0", "#D9F2F2", "#F5DDE9", "#E4E4E4"];
+  $("#slot-add").addEventListener("click", () => { const a = read(); a.push({ color: PALETTE[(a.length - 3 + PALETTE.length) % PALETTE.length], name: "" }); renderSettings(a, { text: "Not saved yet." }); });
+  $("#slot-reset").addEventListener("click", () => renderSettings([{ color: "#F8D7D5", name: "Light red" }, { color: "#FBF0DD", name: "Amber" }, { color: "#DDF1E2", name: "Green" }], { text: "Not saved yet." }));
+  $("#slot-save").addEventListener("click", async () => {
+    const { error } = await db.rpc("save_pin_slots", { p_slots: read() });
+    if (error) { $("#settings-msg").className = "staff-msg err"; $("#settings-msg").textContent = "Not saved: " + error.message; return; }
+    await loadPinSlots();
+    renderSettings(PIN_SLOTS.map(x => ({ color: x.color.toUpperCase(), name: x.name || "" })), { text: "Saved. Everyone sees the new pin colours the next time they open a customer." });
   });
 }
 
@@ -975,7 +1088,7 @@ function toggleJob(row) {
     .order("created_at").then(({ data }) => {
       if (data && data.length && tr.isConnected)
         tr.firstElementChild.insertAdjacentHTML("beforeend",
-          `<div style="margin-top:10px"><strong>Job notes</strong>${data.map(noteHtml).join("")}</div>`);
+          `<div style="margin-top:10px"><strong>Job notes</strong>${data.map(n => noteHtml(n)).join("")}</div>`);
     });
 }
 
