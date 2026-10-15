@@ -72,7 +72,9 @@ def settings():
             fail("These GitHub secrets are missing or empty: " + ", ".join(miss) + ". Check the names under Settings > Secrets and variables > Actions "
                  "(they must be Repository secrets, spelled exactly like this).")
     if os.environ.get("ST_CLIENT_ID"):
-        st = {k: os.environ.get("ST_" + k, "") for k in ("TENANT_ID", "APP_KEY", "CLIENT_ID", "CLIENT_SECRET")}
+        # forgive copy-and-paste extras: spaces, quotes, or the "CLIENT_ID=" label itself
+        clean = lambda k, v: re.sub(r"^\s*(ST_)?" + k + r"\s*=\s*", "", v.strip(), flags=re.I).strip().strip('"').strip("'").strip()
+        st = {k: clean(k, os.environ.get("ST_" + k, "")) for k in ("TENANT_ID", "APP_KEY", "CLIENT_ID", "CLIENT_SECRET")}
     else:
         p = find_file("servicetitan-settings.txt")
         if not p: sys.exit("Can't find servicetitan-settings.txt (put this folder inside the Sevice Titan Export folder).")
