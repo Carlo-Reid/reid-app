@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.224804">
+<meta name="app-version" content="2026-10-14.225306">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -243,6 +243,17 @@
   .equip { display: grid; gap: 2px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-m); overflow: hidden; }
   .eq { background: var(--panel); padding: 14px 16px; display: grid; grid-template-columns: minmax(200px, 300px) 1fr; gap: 20px; align-items: center; }
   .eq .what { font-weight: 650; }
+  .tech-wrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin: 0 0 14px; }
+  .tech-card { border: 1px solid var(--line); border-left: 4px solid var(--amber); background: var(--panel); border-radius: var(--radius-m); padding: 12px 14px; }
+  .tech-card.yearly { border-left-color: var(--blue); }
+  .tech-head { font-weight: 700; margin-bottom: 4px; }
+  .tech-card ul { margin: 4px 0 8px; padding-left: 18px; }
+  .tech-card li { margin: 2px 0; }
+  .tech-status { font-size: calc(13.5px * var(--fs, 1)); color: var(--steel); margin-top: 4px; }
+  .tech-status.ok { color: var(--green); font-weight: 600; }
+  .tech-why { font-size: calc(13px * var(--fs, 1)); }
+  .tech-btns { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+  .tech-btns .btn { padding: 6px 12px; }
   .eq.editable { cursor: pointer; position: relative; }
   .eq.editable:hover { background: var(--blue-wash); }
   .eq .eq-edit-hint { display: none; position: absolute; top: 10px; right: 14px; font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--blue); }
@@ -1081,6 +1092,7 @@ function renderFile() {
 
     <section class="block">
       <h2>Equipment and coverage <span class="count">${locEquip.length || "none recorded"}</span></h2>
+      <div id="tech-box" data-loc="${l ? l.id : ""}">${l && current.tech && current.tech[l.id] ? techBoxHtml(current.tech[l.id]) : ""}</div>
       ${locEquip.length ? equipmentHtml(locEquip) : `<div class="quiet">No equipment recorded at this address yet.</div>`}
     </section>
 
@@ -1173,6 +1185,7 @@ function renderFile() {
   }));
   addBoxJumps();
   buildFileNav();
+  fillTechBox();
 }
 
 /* ---------------- section side bar ---------------- */
@@ -1690,6 +1703,74 @@ function equipmentHtml(list) {
     <div class="${list.length > 4 ? "scroll-box" : ""}" tabindex="${list.length > 4 ? 0 : -1}" aria-label="Equipment"><div class="equip">${items.join("")}</div></div>`;
 }
 
+/* ---------------- missing equipment details and yearly parts ---------------- */
+const longDate = d => d ? new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : "a date to be set";
+async function fillTechBox(force) {
+  const box = $("#tech-box"); if (!box || !box.dataset.loc) return;
+  const loc = Number(box.dataset.loc);
+  current.tech = current.tech || {};
+  if (!current.tech[loc] || force) {
+    const { data, error } = await db.rpc("location_tech_status", { p_location_id: loc });
+    if (error || !data) return;                                   // setup step 17 not run yet
+    current.tech[loc] = data;
+  }
+  const b2 = $("#tech-box"); if (!b2 || Number(b2.dataset.loc) !== loc) return;
+  b2.innerHTML = techBoxHtml(current.tech[loc]);
+  wireTechBox(loc);
+}
+function techBoxHtml(t) {
+  const out = [];
+  if (t.missing.length) {
+    const rq = t.request;
+    const status = !rq ? "" : rq.status === "added"
+      ? `<div class="tech-status ok">✓ On the visit for ${esc(longDate(rq.date))}${rq.job_number ? ` (job ${esc(rq.job_number)})` : ""}. The tech will see it pinned on the job.</div>`
+      : `<div class="tech-status">Waiting: it will be added to the next visit as soon as one is booked.</div>`;
+    out.push(`<div class="tech-card missing">
+      <div class="tech-head">Missing equipment details <span class="count">${t.missing.length}</span></div>
+      <ul>${t.missing.map(m => `<li><strong>${esc(m.label)}</strong>: ${esc(m.missing.join(", "))}</li>`).join("")}</ul>
+      ${status}
+      <div class="tech-btns"><button class="btn quiet-btn" type="button" data-tech-copy>Copy list</button>
+        ${can("notes.add") ? `<button class="btn" type="button" data-tech-send>${rq ? "Update the request" : "Add to the next visit"}</button>` : ""}
+        <span class="msg" role="status" data-tech-msg></span></div>
+    </div>`);
+  }
+  if (t.yearly.length) {
+    const nm = t.next_maintenance;
+    const status = !nm ? `<div class="tech-status">No maintenance visit booked yet. It will be added automatically when one is.</div>`
+      : nm.has_parts ? `<div class="tech-status ok">✓ On the maintenance visit for ${esc(longDate(nm.date))} (job ${esc(nm.job_number)}).</div>`
+      : `<div class="tech-status">The maintenance visit for ${esc(longDate(nm.date))} was booked before this was switched on.
+          ${can("notes.add") ? `<button class="link" type="button" data-yearly-now>Add it to that visit</button>` : ""}</div>`;
+    out.push(`<div class="tech-card yearly">
+      <div class="tech-head">Yearly parts</div>
+      <ul>${t.yearly.map(y => `<li><strong>${esc(y.task)}</strong> (${esc(y.label)})</li>`).join("")}</ul>
+      <div class="quiet tech-why">Added to every maintenance visit automatically, so it's done at the same visit each year.</div>
+      ${status}<span class="msg" role="status" data-yearly-msg></span>
+    </div>`);
+  }
+  return out.length ? `<div class="tech-wrap">${out.join("")}</div>` : "";
+}
+function wireTechBox(loc) {
+  const t = current.tech[loc];
+  document.querySelector("[data-tech-copy]")?.addEventListener("click", async e => {
+    const addr = (current.c.locations || []).find(x => x.id === loc);
+    const text = `Missing equipment details – ${current.c.display_name}${addr ? ", " + [addr.street, addr.city].filter(Boolean).join(", ") : ""}\n`
+      + t.missing.map(m => `• ${m.label}: ${m.missing.join(", ")}`).join("\n");
+    const ok = await copyText(text); e.target.textContent = ok ? "Copied ✓" : "Couldn't copy"; setTimeout(() => e.target.textContent = "Copy list", 1600);
+  });
+  document.querySelector("[data-tech-send]")?.addEventListener("click", async e => {
+    const msg = document.querySelector("[data-tech-msg]"); e.target.disabled = true; msg.className = "msg"; msg.textContent = "Saving…";
+    const { error } = await db.rpc("request_missing_info", { p_location_id: loc });
+    if (error) { e.target.disabled = false; msg.className = "msg err"; msg.textContent = error.message; return; }
+    await fillTechBox(true); reloadNotes();
+  });
+  document.querySelector("[data-yearly-now]")?.addEventListener("click", async e => {
+    e.target.disabled = true;
+    const { error } = await db.rpc("add_yearly_parts_now", { p_location_id: loc });
+    if (error) { const m = document.querySelector("[data-yearly-msg]"); m.className = "msg err"; m.textContent = error.message; e.target.disabled = false; return; }
+    await fillTechBox(true); reloadNotes();
+  });
+}
+
 /* ---------------- edit equipment ---------------- */
 let EQ_LOOKUPS = null;
 async function eqLookups() {
@@ -1763,6 +1844,7 @@ async function reloadEquipment() {
   const eq = locIds.length ? await db.from("equipment").select("*, equipment_types(name), manufacturers(name), warranty_coverages(*)")
     .in("location_id", locIds).order("install_date", { ascending: false, nullsFirst: false }) : { data: [] };
   if (!eq.error) current.equipment = eq.data || [];
+  current.tech = {};
   redrawKeepingPlace();
 }
 
