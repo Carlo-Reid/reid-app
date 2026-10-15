@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.223514">
+<meta name="app-version" content="2026-10-14.223747">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -223,6 +223,26 @@
   .equip { display: grid; gap: 2px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-m); overflow: hidden; }
   .eq { background: var(--panel); padding: 14px 16px; display: grid; grid-template-columns: minmax(200px, 300px) 1fr; gap: 20px; align-items: center; }
   .eq .what { font-weight: 650; }
+  .eq.editable { cursor: pointer; position: relative; }
+  .eq.editable:hover { background: var(--blue-wash); }
+  .eq .eq-edit-hint { display: none; position: absolute; top: 10px; right: 14px; font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--blue); }
+  .eq.editable:hover .eq-edit-hint, .eq.editable:focus-visible .eq-edit-hint { display: block; }
+  .eq.gone-eq { opacity: .7; }
+  .eq .eq-note { white-space: pre-wrap; }
+  .eq .badge { font-size: calc(12px * var(--fs, 1)); font-weight: 600; color: var(--steel); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+  .eq.editing { display: block; cursor: default; background: var(--panel); }
+  .eq-form .eq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 14px; }
+  .eq-form label { display: flex; flex-direction: column; gap: 3px; font-size: calc(13px * var(--fs, 1)); color: var(--steel); font-weight: 600; margin: 0; }
+  .eq-form label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); }
+  .eq-form .eq-wide { grid-column: 1 / -1; }
+  .eq-form input:not([type=checkbox]), .eq-form select, .eq-form textarea { padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius-s);
+      background: var(--panel); color: var(--ink); font: inherit; font-weight: 400; }
+  .eq-warr { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .eq-warr-head { font-weight: 700; margin-bottom: 6px; }
+  .eq-warr-row { display: grid; grid-template-columns: minmax(150px, 1.3fr) repeat(3, minmax(130px, 1fr)); gap: 10px; align-items: end; padding: 6px 0; }
+  .eq-warr-row > span { font-weight: 600; padding-bottom: 8px; }
+  .eq-form .row { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+  @media (max-width: 860px) { .eq-warr-row { grid-template-columns: 1fr 1fr; } }
   .eq .model { font-size: calc(13.5px * var(--fs, 1)); color: var(--steel); }
   .bar { position: relative; height: 40px; }
   .bar .track { position: absolute; left: 0; right: 0; top: 7px; height: 8px; background: var(--paper); border-radius: 4px; }
@@ -1011,6 +1031,10 @@ function renderFile() {
     renderFile();
     const m = $("#note-msg"); if (m) { m.className = "msg ok"; m.textContent = "Note added."; }
   });
+  document.querySelectorAll(".eq.editable").forEach(el => {
+    el.addEventListener("click", e => { if (!e.target.closest("form")) startEditEquipment(Number(el.dataset.eq)); });
+    el.addEventListener("keydown", e => { if (e.key === "Enter" && !e.target.closest("form")) startEditEquipment(Number(el.dataset.eq)); });
+  });
   document.querySelectorAll("[data-pin-move]").forEach(b => b.addEventListener("click", async () => {
     b.disabled = true;
     const { error } = await db.rpc("move_note_pin", { p_note_id: Number(b.dataset.noteId), p_up: b.dataset.pinMove === "up" });
@@ -1544,14 +1568,92 @@ function equipmentHtml(list) {
     const line = (label, d) => d ? (d >= today ? `<span class="ok">${label} until ${monthYear(d)}</span>` : `<span class="gone">${label} ended ${monthYear(d)}</span>`) : "";
     const coverText = [line("Parts", partsEnd), line("Labour", labourEnd)].filter(Boolean).join(", ")
       || `<span class="gone">No warranty on file</span>`;
-    return `<div class="eq">
-      <div><div class="what">${esc(e.equipment_types?.name || "Equipment")}${e.manufacturers?.name ? ", " + esc(e.manufacturers.name) : ""}</div>
+    const editable = can("equipment.edit");
+    return `<div class="eq${editable ? " editable" : ""}${e.status !== "active" ? " gone-eq" : ""}" data-eq="${e.id}" ${editable ? `role="button" tabindex="0" title="Click to edit"` : ""}>
+      <div><div class="what">${esc(e.equipment_types?.name || "Equipment")}${e.manufacturers?.name ? ", " + esc(e.manufacturers.name) : ""}${e.status !== "active" ? ` <span class="badge">${e.status === "removed" ? "Removed" : "Replaced"}${e.removed_on ? " " + fmtDate(e.removed_on) : ""}</span>` : ""}</div>
         <div class="model">${esc([e.model_number && "Model " + e.model_number, e.serial_number && "Serial " + e.serial_number].filter(Boolean).join(", ") || "Model and serial not recorded")}</div>
-        <div class="model">${e.install_date ? "Installed " + fmtDate(e.install_date) : "Install date unknown"}${e.installed_by_company ? " by us" : ""}${e.owner_type === "partner" ? ", rental" : ""}</div></div>
+        <div class="model">${e.install_date ? "Installed " + fmtDate(e.install_date) : "Install date unknown"}${e.installed_by_company ? " by us" : ""}${e.owner_type === "partner" ? ", rental" : ""}${e.location_in_home ? ", " + esc(e.location_in_home) : ""}</div>
+        ${e.notes ? `<div class="model eq-note">${esc(e.notes)}</div>` : ""}${editable ? `<div class="eq-edit-hint">Edit</div>` : ""}</div>
       <div>${bar}<div class="cover-text">${coverText}</div></div></div>`;
   });
   return `<div class="legend"><span><i style="background:var(--blue)"></i>Parts coverage</span><span><i style="background:var(--green)"></i>Labour coverage</span><span><i style="background:var(--ink);width:2px;height:12px"></i>Today</span></div>
     <div class="${list.length > 4 ? "scroll-box" : ""}" tabindex="${list.length > 4 ? 0 : -1}" aria-label="Equipment"><div class="equip">${items.join("")}</div></div>`;
+}
+
+/* ---------------- edit equipment ---------------- */
+let EQ_LOOKUPS = null;
+async function eqLookups() {
+  if (EQ_LOOKUPS) return EQ_LOOKUPS;
+  const [t, m] = await Promise.all([
+    db.from("equipment_types").select("id, name").order("name").limit(5000),
+    db.from("manufacturers").select("id, name").order("name").limit(5000)]);
+  EQ_LOOKUPS = { types: t.data || [], makers: m.data || [] };
+  return EQ_LOOKUPS;
+}
+async function startEditEquipment(id) {
+  const e = current.equipment.find(x => x.id === id), el = document.querySelector(`.eq[data-eq="${id}"]`);
+  if (!e || !el || el.querySelector("form")) return;
+  el.classList.add("editing"); el.classList.remove("editable"); el.removeAttribute("role"); el.removeAttribute("title");
+  el.innerHTML = `<div class="quiet">Loading…</div>`;
+  const L = await eqLookups();
+  const cov = (e.warranty_coverages || []).filter(w => w.status !== "void");
+  const covName = w => (w.covers_parts && w.covers_labour ? "Parts and labour" : w.covers_parts ? "Parts" : "Labour")
+    + (w.source === "manufacturer" ? " (manufacturer)" : w.source === "company_workmanship" ? " (our workmanship)" : w.provider_name ? ` (${w.provider_name})` : "");
+  el.innerHTML = `<form class="eq-form" novalidate>
+    <datalist id="eq-types">${L.types.map(t => `<option value="${esc(t.name)}">`).join("")}</datalist>
+    <datalist id="eq-makers">${L.makers.map(t => `<option value="${esc(t.name)}">`).join("")}</datalist>
+    <div class="eq-grid">
+      <label>Type<input name="type" list="eq-types" value="${esc(e.equipment_types?.name || "")}" required></label>
+      <label>Brand<input name="maker" list="eq-makers" value="${esc(e.manufacturers?.name || "")}" placeholder="Unknown"></label>
+      <label>Model<input name="model_number" value="${esc(e.model_number || "")}"></label>
+      <label>Serial<input name="serial_number" value="${esc(e.serial_number || "")}"></label>
+      <label>Installed on<input name="install_date" type="date" value="${e.install_date || ""}"></label>
+      <label>Where in the home<input name="location_in_home" value="${esc(e.location_in_home || "")}" placeholder="Basement, attic…"></label>
+      <label>Status<select name="status">${[["active", "In use"], ["replaced", "Replaced"], ["removed", "Removed"]].map(([v, t]) =>
+        `<option value="${v}" ${v === e.status ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label class="eq-removed ${e.status === "active" ? "hidden" : ""}">Taken out on<input name="removed_on" type="date" value="${e.removed_on || ""}"></label>
+      <label class="check eq-wide"><input type="checkbox" name="installed_by_company" ${e.installed_by_company ? "checked" : ""}> We installed it</label>
+      <label class="eq-wide">Notes<textarea name="notes" rows="2">${esc(e.notes || "")}</textarea></label>
+    </div>
+    ${cov.length ? `<div class="eq-warr"><div class="eq-warr-head">Warranty</div>${cov.map(w => `<div class="eq-warr-row" data-w="${w.id}">
+        <span>${esc(covName(w))}</span>
+        <label>From<input type="date" name="w_start" value="${w.start_date || ""}"></label>
+        <label>Until<input type="date" name="w_end" value="${w.end_date || ""}"></label>
+        <label>Registration #<input name="w_reg" value="${esc(w.registration_number || "")}"></label></div>`).join("")}</div>` : `<div class="quiet" style="margin-top:8px">No warranty on file for this equipment.</div>`}
+    <div class="row"><button class="btn" type="submit">Save</button><button class="btn quiet-btn" type="button" data-cancel>Cancel</button><span class="msg" role="status"></span></div>
+  </form>`;
+  const f = el.querySelector("form"), msg = f.querySelector(".msg");
+  f.status.addEventListener("change", () => f.querySelector(".eq-removed").classList.toggle("hidden", f.status.value === "active"));
+  f.querySelector("[data-cancel]").addEventListener("click", ev => { ev.stopPropagation(); renderFile(); });
+  f.type.focus();
+  f.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const byName = (list, name) => list.find(x => x.name.toLowerCase() === name.trim().toLowerCase());
+    const type = byName(L.types, f.type.value), maker = f.maker.value.trim() ? byName(L.makers, f.maker.value) : null;
+    if (!type) { msg.className = "msg err"; msg.textContent = "Pick the type from the list."; f.type.focus(); return; }
+    if (f.maker.value.trim() && !maker) { msg.className = "msg err"; msg.textContent = "Pick the brand from the list, or leave it blank."; f.maker.focus(); return; }
+    const btn = f.querySelector("button[type=submit]"); btn.disabled = true; msg.className = "msg"; msg.textContent = "Saving…";
+    const { error } = await db.rpc("save_equipment", { p_id: id, p: {
+      equipment_type_id: type.id, manufacturer_id: maker ? maker.id : null, model_number: f.model_number.value, serial_number: f.serial_number.value,
+      install_date: f.install_date.value || null, installed_by_company: f.installed_by_company.checked, location_in_home: f.location_in_home.value,
+      status: f.status.value, removed_on: f.removed_on.value || null, notes: f.notes.value } });
+    if (error) { btn.disabled = false; msg.className = "msg err"; msg.textContent = "Not saved: " + error.message; return; }
+    for (const row of f.querySelectorAll(".eq-warr-row")) {
+      const w = cov.find(x => x.id === Number(row.dataset.w));
+      const st = row.querySelector("[name=w_start]").value, en = row.querySelector("[name=w_end]").value, reg = row.querySelector("[name=w_reg]").value.trim();
+      if (st === (w.start_date || "") && en === (w.end_date || "") && reg === (w.registration_number || "")) continue;
+      const r = await db.rpc("save_warranty", { p_id: w.id, p_start: st || null, p_end: en || null, p_registration_number: reg });
+      if (r.error) { btn.disabled = false; msg.className = "msg err"; msg.textContent = "Equipment saved, but the warranty wasn't: " + r.error.message; return; }
+    }
+    await reloadEquipment();
+  });
+}
+async function reloadEquipment() {
+  const locIds = (current.c.locations || []).map(l => l.id);
+  const eq = locIds.length ? await db.from("equipment").select("*, equipment_types(name), manufacturers(name), warranty_coverages(*)")
+    .in("location_id", locIds).order("install_date", { ascending: false, nullsFirst: false }) : { data: [] };
+  if (!eq.error) current.equipment = eq.data || [];
+  redrawKeepingPlace();
 }
 
 function jobsHtml(jobs) {
