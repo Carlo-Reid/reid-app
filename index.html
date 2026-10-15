@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-14.224009">
+<meta name="app-version" content="2026-10-14.224804">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -135,6 +135,26 @@
   .bubble.mine { align-self: flex-end; background: var(--blue); color: var(--on-accent); border-bottom-right-radius: 4px; }
   .chat-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
   .chat-form textarea { flex: 1; resize: none; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); font: inherit; color: inherit; }
+  .mail { position: fixed; right: 20px; bottom: 20px; width: min(560px, calc(100vw - 32px)); height: min(600px, calc(100vh - 40px)); z-index: 25;
+          display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m);
+          box-shadow: 0 12px 32px rgba(0, 0, 0, .2); }
+  .mail header { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .mail header .quiet { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mail-form { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .mail-row { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); margin: 0; }
+  .mail-row > span { width: 60px; color: var(--steel); font-size: calc(13.5px * var(--fs, 1)); flex: none; }
+  .mail-row input { flex: 1; border: 0; background: none; font: inherit; color: inherit; padding: 4px 0; }
+  .mail-row input:focus { outline: none; }
+  .mail-form textarea { flex: 1; border: 0; resize: none; padding: 12px 16px; font: inherit; color: inherit; background: var(--panel); }
+  .mail-form textarea:focus { outline: none; }
+  .mail-form .row { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--line); }
+  .note.email-item { white-space: normal; }
+  .email-item .body { display: block; white-space: pre-wrap; }
+  .email-item .email-subj { font-weight: 700; }
+  .email-item .email-to { font-size: calc(13px * var(--fs, 1)); margin-bottom: 4px; }
+  .email-item.failed .email-subj { color: var(--red); }
+  .email-item .badge { font-size: calc(12px * var(--fs, 1)); font-weight: 600; border: 1px solid; border-radius: 4px; padding: 0 5px; }
+  .red-badge { color: var(--red) !important; border-color: var(--red) !important; }
   .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 30; display: flex; flex-direction: column; gap: 10px; }
   .chat:not(.hidden) ~ .toasts { bottom: 560px; }
   .chat-toast { width: 300px; background: var(--panel); border: 1px solid var(--blue); border-left: 4px solid var(--blue); border-radius: var(--radius-m);
@@ -483,6 +503,16 @@
     </form>
   </aside>
   <div id="toasts" class="toasts"></div>
+  <aside id="mail" class="mail hidden" aria-label="Write an email">
+    <header><strong>New email</strong><span class="quiet" id="mail-cust"></span><button class="link" type="button" id="mail-close">Close</button></header>
+    <form id="mail-form" class="mail-form">
+      <div class="mail-row"><span>From</span><div>Reid Heating &amp; Cooling &lt;info@homeservicegroup.ca&gt;</div></div>
+      <label class="mail-row"><span>To</span><input id="mail-to" type="email" required></label>
+      <label class="mail-row"><span>Subject</span><input id="mail-subject" maxlength="300"></label>
+      <textarea id="mail-body" maxlength="20000" aria-label="Message"></textarea>
+      <div class="row"><button class="btn" type="submit" id="mail-send">Send</button><span class="msg" id="mail-msg" role="status"></span></div>
+    </form>
+  </aside>
   <main id="main">
     <div class="empty"><div><h2>Find a customer</h2>Type in the search box to open their file.</div></div>
   </main>
@@ -610,6 +640,55 @@ function renderOnline() {
   const total = Object.values(CHAT.unread).reduce((a, x) => a + x.unread, 0);
   document.title = (total ? `(${total}) ` : "") + "Customers – Reid Heating & Cooling";
 }
+
+/* ---------------- email a customer ---------------- */
+const MAIL_FROM = "info@homeservicegroup.ca";
+function emailHtml(m) {
+  const who = m.app_users ? (m.app_users.employees ? `${m.app_users.employees.first_name} ${m.app_users.employees.last_name}`.trim() : m.app_users.login_email) : "";
+  return `<div class="note email-item${m.status === "failed" ? " failed" : ""}">
+    <div class="email-subj">${esc(m.subject)}${m.status === "failed" ? ` <span class="badge red-badge">Not sent</span>` : ""}</div>
+    <div class="quiet email-to">To ${esc(m.to_address)}</div>
+    <span class="body">${esc(m.body)}</span>
+    <span class="when">${fmtDate(m.sent_at)}${who ? ", by " + esc(who) : ""}${m.error ? `, ${esc(m.error)}` : ""}<span class="note-actions"><button class="link" type="button" data-copy-email="${m.id}">Copy</button></span></span></div>`;
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-copy-email]"); if (!b) return;
+  const m = (current?.emails || []).find(x => x.id === Number(b.dataset.copyEmail)); if (!m) return;
+  const ok = await copyText(`Subject: ${m.subject}\n\n${m.body}`);
+  b.textContent = ok ? "Copied ✓" : "Couldn't copy"; setTimeout(() => b.textContent = "Copy", 1600);
+});
+function openCompose(to, contactName) {
+  const c = current?.c; if (!c) return;
+  const first = (contactName || c.display_name || "").trim().split(/\s+/)[0] || "";
+  const myName = (ONLINE.find(u => u.is_me)?.name || "").trim();
+  $("#mail").classList.remove("hidden");
+  $("#mail-to").value = to; $("#mail-subject").value = "";
+  $("#mail-body").value = `Hi ${first},\n\n\n\nThank you,\n${myName ? myName + "\n" : ""}Reid Heating & Cooling`;
+  $("#mail-msg").textContent = ""; $("#mail-msg").className = "msg";
+  $("#mail-cust").textContent = c.display_name;
+  $("#mail").dataset.customer = c.id;
+  $("#mail-subject").focus();
+}
+$("#mail-close").addEventListener("click", () => $("#mail").classList.add("hidden"));
+$("#mail-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const msg = $("#mail-msg"), btn = $("#mail-send"), customerId = Number($("#mail").dataset.customer);
+  const payload = { customer_id: customerId, to: $("#mail-to").value.trim(), subject: $("#mail-subject").value.trim(), body: $("#mail-body").value };
+  if (!payload.subject) { msg.className = "msg err"; msg.textContent = "Add a subject."; $("#mail-subject").focus(); return; }
+  btn.disabled = true; msg.className = "msg"; msg.textContent = "Sending…";
+  const { error } = await db.functions.invoke("send-email", { body: payload });
+  btn.disabled = false;
+  if (error) {
+    let text = error.message;
+    try { const j = await error.context.json(); if (j && j.error) text = j.error; } catch {}
+    if (/Failed to send a request|not found|404/i.test(text)) text = "Email isn't connected yet. The send-email function needs to be added in Supabase.";
+    msg.className = "msg err"; msg.textContent = text;
+    if (current?.c?.id === customerId) { current.emails = await fetchEmails(customerId); redrawKeepingPlace(); }
+    return;
+  }
+  $("#mail").classList.add("hidden");
+  if (current?.c?.id === customerId) { current.emails = await fetchEmails(customerId); current.notesTab = "emails"; redrawKeepingPlace(); }
+});
 
 /* ---------------- copy a note ---------------- */
 async function copyText(text) {
@@ -789,7 +868,8 @@ async function openCustomer(id) {
     .concat(locIds.length ? [`and(entity_type.eq.location,entity_id.in.(${locIds.join(",")}))`] : []).join(",");
   const jobIds = (jobs.data || []).map(j => j.id);
   const allNotes = await fetchNotes(noteFilter, jobIds);
-  current = { c, noteFilter, jobIds, notes: allNotes, plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
+  const emails = await fetchEmails(id);
+  current = { c, noteFilter, jobIds, notes: allNotes, emails, plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
               estimates: estimates.data || [], equipment: eq.data || [],
               loc: (c.locations || []).find(l => l.active)?.id ?? locIds[0] };
   renderFile();
@@ -881,6 +961,11 @@ function redrawKeepingPlace() {
   if (focused && document.getElementById(focused)) document.getElementById(focused).focus({ preventScroll: true });
 }
 
+async function fetchEmails(customerId) {
+  const r = await db.from("customer_emails").select("*, app_users(login_email, employees(first_name, last_name))")
+    .eq("customer_id", customerId).order("sent_at", { ascending: false }).limit(500);
+  return r.error ? [] : (r.data || []).map(m => ({ ...m, isEmail: true, created_at: m.sent_at }));
+}
 async function reloadNotes() {
   current.notes = await fetchNotes(current.noteFilter, current.jobIds);
   renderFile();
@@ -912,7 +997,7 @@ function renderFile() {
     const kind = { phone: "Phone", mobile: "Mobile", email: "Email", fax: "Fax" }[x.kind];
     const shown = x.kind === "email" ? x.value : phoneFmt(x.value);
     const href = x.kind === "email" ? "mailto:" + x.value : "tel:" + x.value_digits;
-    return `<span><span class="kind">${kind}${x.contact_name ? " (" + esc(x.contact_name) + ")" : ""}</span><a href="${esc(href)}">${esc(shown)}</a></span>`;
+    return `<span><span class="kind">${kind}${x.contact_name ? " (" + esc(x.contact_name) + ")" : ""}</span><a href="${esc(href)}"${x.kind === "email" ? ` data-compose="${esc(x.value)}" data-compose-name="${esc(x.contact_name || "")}"` : ""}>${esc(shown)}</a></span>`;
   }).join("");
 
   const locs = (c.locations || []).sort((a, b) => b.active - a.active);
@@ -928,7 +1013,8 @@ function renderFile() {
     .sort(noteSort);
   const tab = current.notesTab || (locNotes.length ? "location" : custNotes.length ? "customer" : jobNotesHere.length ? "job" : podNotes.length ? "podium" : "location");
   const keep = noteRangeKeep();
-  const allShown = { location: locNotes, customer: custNotes, job: jobNotesHere, podium: podNotes }[tab];
+  const mailList = current.emails || [];
+  const allShown = { location: locNotes, customer: custNotes, job: jobNotesHere, podium: podNotes, emails: mailList }[tab];
   const shown = allShown.filter(keep), hiddenOld = allShown.length - shown.length;
   current.notesTab = tab;
 
@@ -952,7 +1038,9 @@ function renderFile() {
       ${l ? `<div class="address">${esc([l.street, l.unit && "Unit " + l.unit].filter(Boolean).join(", "))}</div>
              <div class="quiet">${esc([l.city, l.province, l.postal_code].filter(Boolean).join(", "))}</div>
              ${l.access_notes ? `<div class="address-note">${esc(l.access_notes)}</div>` : ""}
-             ${locContacts.length ? `<div class="contacts">${locContacts.map(x => `<span><span class="kind">On site${x.contact_name ? " (" + esc(x.contact_name) + ")" : ""}</span>${esc(x.kind === "email" ? x.value : phoneFmt(x.value))}</span>`).join("")}</div>` : ""}` : `<div class="quiet">No address on file.</div>`}
+             ${locContacts.length ? `<div class="contacts">${locContacts.map(x => `<span><span class="kind">On site${x.contact_name ? " (" + esc(x.contact_name) + ")" : ""}</span>${x.kind === "email"
+                 ? `<a href="mailto:${esc(x.value)}" data-compose="${esc(x.value)}" data-compose-name="${esc(x.contact_name || "")}">${esc(x.value)}</a>`
+                 : `<a href="tel:${esc(x.value_digits || x.value)}">${esc(phoneFmt(x.value))}</a>`}</span>`).join("")}</div>` : ""}` : `<div class="quiet">No address on file.</div>`}
     </section>
 
     <section class="block">
@@ -962,22 +1050,23 @@ function renderFile() {
         <button class="note-tab" role="tab" data-tab="customer" aria-selected="${tab === "customer"}">Customer notes <span class="count">${custNotes.filter(keep).length}</span></button>
         <button class="note-tab" role="tab" data-tab="job" aria-selected="${tab === "job"}">Job notes <span class="count">${jobNotesHere.filter(keep).length}</span></button>
         <button class="note-tab" role="tab" data-tab="podium" aria-selected="${tab === "podium"}">Podium <span class="count">${podNotes.filter(keep).length}</span></button>
+        <button class="note-tab" role="tab" data-tab="emails" aria-selected="${tab === "emails"}">Emails <span class="count">${mailList.filter(keep).length}</span></button>
         <span class="note-range" role="group" aria-label="Show notes from">${NOTE_RANGES.map(([k, t]) =>
           `<button type="button" class="${k === NOTE_RANGE ? "on" : ""}" aria-pressed="${k === NOTE_RANGE}" data-range="${k}">${t}</button>`).join("")}</span>
       </div>
-      <div class="notes-list" role="tabpanel" tabindex="0" aria-label="${{ location: "Location notes", customer: "Customer notes", job: "Job notes", podium: "Podium messages" }[tab]}">
-        ${shown.length ? (() => { const rank = {}; return shown.map(n => {
+      <div class="notes-list" role="tabpanel" tabindex="0" aria-label="${{ location: "Location notes", customer: "Customer notes", job: "Job notes", podium: "Podium messages", emails: "Emails sent" }[tab]}">
+        ${shown.length && tab === "emails" ? shown.map(emailHtml).join("") : shown.length ? (() => { const rank = {}; return shown.map(n => {
             const key = n.entity_type + n.entity_id; const r = n.pinned ? (rank[key] = (rank[key] ?? -1) + 1) : null;
             const pinCount = n.pinned ? shown.filter(x => x.pinned && x.entity_type === n.entity_type && x.entity_id === n.entity_id).length : 0;
             return noteHtml(n, false, tab === "job" ? jobById[n.entity_id] : null, r, pinCount); }).join(""); })()
-          : `<div class="notes-empty">${hiddenOld ? `No notes in this time range.` : { location: "No notes for this address.", customer: "No notes on this customer.", job: "No job notes at this address.", podium: "No Podium messages for this customer." }[tab]}</div>`}
+          : `<div class="notes-empty">${hiddenOld ? `No notes in this time range.` : { location: "No notes for this address.", customer: "No notes on this customer.", job: "No job notes at this address.", podium: "No Podium messages for this customer.", emails: "No emails sent from the system yet. Click a customer's email address to write one." }[tab]}</div>`}
       </div>
       <div class="note-range-foot"><span class="note-range" role="group" aria-label="Show notes from">${NOTE_RANGES.map(([k, t]) =>
           `<button type="button" class="${k === NOTE_RANGE ? "on" : ""}" aria-pressed="${k === NOTE_RANGE}" data-range="${k}">${t}</button>`).join("")}</span></div>
       ${shown.length > 4 || hiddenOld ? `<div class="notes-foot">${shown.length > 4 ? `Scroll inside the box to see all ${shown.length} notes.` : ""}
         ${hiddenOld ? ` ${hiddenOld} older ${hiddenOld === 1 ? "note is" : "notes are"} hidden. <button class="link" type="button" data-range="all">Show all</button>` : ""}</div>` : ""}
       ${tab === "podium" ? `<div class="notes-foot">Texts, calls and review requests that Podium logged in ServiceTitan.</div>` : ""}
-      ${can("notes.add") && tab !== "podium" ? `<form class="note-add" id="note-add">
+      ${can("notes.add") && tab !== "podium" && tab !== "emails" ? `<form class="note-add" id="note-add">
         <label for="note-text" class="${tab === "job" ? "" : ""}">${{ location: "Add a note for this address", customer: "Add a note to this customer", job: "Add a note to a job" }[tab]}</label>
         <textarea id="note-text" maxlength="10000" placeholder="${{ location: "Gate code, where the furnace is, parking, pets…", customer: "Billing preferences, how they like to be contacted…", job: "What was done, what to check next visit…" }[tab]}"></textarea>
         <div class="row">
@@ -1052,6 +1141,10 @@ function renderFile() {
     el.addEventListener("click", e => { if (!e.target.closest("form")) startEditEquipment(Number(el.dataset.eq)); });
     el.addEventListener("keydown", e => { if (e.key === "Enter" && !e.target.closest("form")) startEditEquipment(Number(el.dataset.eq)); });
   });
+  document.querySelectorAll("[data-compose]").forEach(a => a.addEventListener("click", e => {
+    if (!can("email.send")) return;                     // no permission: their own email program opens as before
+    e.preventDefault(); openCompose(a.dataset.compose, a.dataset.composeName);
+  }));
   document.querySelectorAll("[data-pin-move]").forEach(b => b.addEventListener("click", async () => {
     b.disabled = true;
     const { error } = await db.rpc("move_note_pin", { p_note_id: Number(b.dataset.noteId), p_up: b.dataset.pinMove === "up" });
