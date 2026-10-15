@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.140716">
+<meta name="app-version" content="2026-10-15.143742">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -796,6 +796,9 @@
     .file { animation: arrive .18s ease-out; }
     @keyframes arrive { from { opacity: .4; } to { opacity: 1; } }
   }
+.sync-list { margin: 0; padding-left: 20px; line-height: 1.6; }
+.sync-list li { margin: 2px 0 6px; }
+.sync-list .sync-bad { color: #C0392B; }
 </style>
 </head>
 <body>
@@ -2477,6 +2480,39 @@ function wireMyPassword() {
     f.reset(); say("Your password is changed. Use the new one next time you sign in.");
   });
 }
+// Settings: when ServiceTitan was last copied in (the nightly sync, or SYNC NOW.bat)
+const SYNC_WORDS = { customers: "customers", "customer-contacts": "customer phones/emails", locations: "addresses",
+  "location-contacts": "address phones/emails", leads: "leads", bookings: "bookings", projects: "projects", jobs: "jobs",
+  appointments: "calls", "appointment-assignments": "tech assignments", estimates: "estimates", invoices: "invoices",
+  "invoice-items": "invoice lines", payments: "payments", memberships: "plans", "installed-equipment": "equipment" };
+function syncWhen(t) {
+  return new Date(t).toLocaleString("en-CA", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+function syncLine(r) {
+  const took = r.finished_at ? Math.max(1, Math.round((new Date(r.finished_at) - new Date(r.started_at)) / 60000)) : null;
+  const how = r.source === "nightly" ? "nightly" : r.source === "manual" ? "SYNC NOW" : r.source;
+  if (r.ok === null || r.ok === undefined) return `<li><b>${esc(syncWhen(r.started_at))}</b> (${esc(how)}) <span class="quiet">still running, or stopped without finishing</span></li>`;
+  if (!r.ok) return `<li class="sync-bad"><b>${esc(syncWhen(r.started_at))}</b> (${esc(how)}) <b>didn't finish:</b> ${esc(r.error || "no reason given")}<br><span class="quiet">Nothing was half-saved. The next run picks up from the same place.</span></li>`;
+  const ch = (r.summary && r.summary.changed) || {};
+  const parts = Object.keys(SYNC_WORDS).filter(k => ch[k]).map(k => `${ch[k].toLocaleString()} ${SYNC_WORDS[k]}`);
+  const notes = r.summary && r.summary.notes_added ? `, ${r.summary.notes_added.toLocaleString()} new notes` : "";
+  return `<li><b>${esc(syncWhen(r.started_at))}</b> (${esc(how)}, ${took} min) ${parts.length ? "brought in " + esc(parts.join(", ")) + esc(notes) : "nothing had changed"}</li>`;
+}
+async function loadSyncBox() {
+  const box = $("#sync-box"); if (!box) return;
+  const { data, error } = await db.rpc("last_syncs", { p_limit: 5 });
+  if (!$("#sync-box")) return;
+  let body;
+  if (error) body = `<p class="quiet">${/function|schema/i.test(error.message) ? "Run RUN SETUP.bat to turn this on." : esc(error.message)}</p>`;
+  else if (!data.length) body = `<p class="quiet">It hasn't run yet. Run SYNC NOW.bat once on the computer with the ServiceTitan export; after that it runs by itself every night.</p>`;
+  else {
+    const last = data[0], stale = Date.now() - new Date(last.started_at) > 36 * 3600 * 1000;
+    body = `<p class="quiet" style="margin:0 0 8px">Every night at about 3:15 am, anything new or changed in ServiceTitan is copied in here. ServiceTitan itself is never changed.</p>
+      ${stale ? `<p class="staff-msg err">It hasn't run since ${esc(syncWhen(last.started_at))}. Check the GitHub page for the app (Actions tab), or run SYNC NOW.bat.</p>` : ""}
+      <ul class="sync-list">${data.map(syncLine).join("")}</ul>`;
+  }
+  box.innerHTML = `<h2>ServiceTitan sync</h2>${body}`;
+}
 function renderSettings(slots, note) {
   setTimeout(wireMyPassword, 0);
   $("#main").innerHTML = `<article class="staff settings">
@@ -2538,7 +2574,12 @@ function renderSettings(slots, note) {
       </div>
       <div class="staff-msg ${note?.err ? "err" : "ok"}" id="settings-msg" role="status">${note ? esc(note.text) : ""}</div>
     </section>` : ""}
+    <section class="block" id="sync-box">
+      <h2>ServiceTitan sync</h2>
+      <p class="quiet">Loading…</p>
+    </section>
   </article>`;
+  loadSyncBox();
   const saveCustom = async (msgOk) => {
     const error = await saveMyTheme();
     const m = $("#theme-msg");
