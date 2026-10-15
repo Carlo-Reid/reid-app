@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.132329">
+<meta name="app-version" content="2026-10-15.132605">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -364,6 +364,19 @@
   .fu-item.prio-ok { border-left-color: #2E7D4F; } .fu-item.prio-half { border-left-color: #7B3FB0; } .fu-item.prio-late { border-left-color: #C0392B; background: color-mix(in srgb, #C0392B 6%, var(--panel)); }
   .prio-pick, .task-prio select { padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--ink); font: inherit; font-size: calc(13.5px * var(--fs, 1)); }
   .task-add label.task-prio { flex: 0 0 auto; }
+
+  .jobs { margin-top: 8px; display: grid; gap: 6px; }
+  .job-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+  .job-n { font-weight: 800; font-size: calc(13px * var(--fs, 1)); min-width: 46px; color: var(--ink); }
+  .job-text { flex: 1 1 260px; min-width: 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--radius-s);
+              background: var(--paper); color: var(--ink); font: inherit; font-size: calc(14px * var(--fs, 1)); }
+  .job-text.saved { border-color: var(--green); }
+  .job-done { padding: 5px 16px; background: var(--green); color: #fff; font-weight: 700; }
+  .job-done[disabled] { opacity: .45; cursor: default; }
+  .job-row.done .job-text { text-decoration: line-through; color: var(--steel); background: var(--green-wash); border-color: var(--green); }
+  .job-stamp { color: var(--green); font-size: calc(13.5px * var(--fs, 1)); }
+  .job-x { font-size: calc(13px * var(--fs, 1)); }
+  .job-add { margin-top: 6px; font-weight: 700; }
   /* follow up */
   .fu-check { display: inline-flex; align-items: center; gap: 6px; float: right; margin: 2px 0 0 14px; padding: 3px 10px; border: 1px solid var(--line);
               border-radius: 999px; font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--steel); cursor: pointer; background: var(--paper); }
@@ -1979,8 +1992,8 @@ function followChanged() {
     const page = document.querySelector(".followups");
     if (!page || FU.sig === FU.shownSig) return;   // nothing new to show
     // don't redraw while someone is typing a note, picking people or confirming a delete; do it as soon as they're done
-    if ((page.contains(document.activeElement) && document.activeElement.matches("input.fu-note, select"))
-        || page.querySelector("[data-chooser]:not(.hidden), .fu-actions .confirm, .task-add")) { fuPending = true; return; }
+    if ((page.contains(document.activeElement) && document.activeElement.matches("input.fu-note, input.job-text, select"))
+        || page.querySelector('[data-chooser]:not(.hidden), .fu-actions .confirm, .task-add, .job-row[data-job=""]:not(:only-child)')) { fuPending = true; return; }
     refreshFollowPage();
   }, 300);
 }
@@ -1992,7 +2005,7 @@ async function refreshFollowPage() {
 }
 document.addEventListener("focusout", e => {
   if (fuPending && e.target.closest?.(".followups")) setTimeout(() => {
-    if (!document.querySelector(".followups")?.contains(document.activeElement) || !document.activeElement.matches("input.fu-note, select")) refreshFollowPage();
+    if (!document.querySelector(".followups")?.contains(document.activeElement) || !document.activeElement.matches("input.fu-note, input.job-text, select")) refreshFollowPage();
   }, 200);
 });
 
@@ -2041,7 +2054,7 @@ function prioOptions(sel) {
 function openAddTask(host, customerId, visitId, after) {
   document.querySelectorAll(".task-add").forEach(x => x.remove());
   const box = document.createElement("form"); box.className = "task-add"; box.autocomplete = "off";
-  box.innerHTML = `<label>New task<input name="note" maxlength="2000" placeholder="What needs doing? (e.g. call back about the quote)"></label>
+  box.innerHTML = `<label>New task · Job 1<input name="note" maxlength="2000" placeholder="What needs doing? (e.g. call back about the quote). You can add more jobs after."></label>
     <label class="task-prio">Priority<select name="prio">${prioOptions(null)}</select></label>
     <button class="btn" type="submit">Add task</button><button class="btn quiet-btn" type="button" data-x>Cancel</button><span class="msg" role="status"></span>`;
   (after ? host.after(box) : host.appendChild(box));
@@ -2063,6 +2076,64 @@ function openAddTask(host, customerId, visitId, after) {
       const t = document.createElement("div"); t.className = "task-added"; t.textContent = "✓ Task added to your Tasks page";
       document.querySelector(".sec1a")?.appendChild(t); setTimeout(() => t.remove(), 3000);
     }
+  });
+}
+
+// one job line inside a task: "Job 1  [what to do]  [Done]"  →  "✓ Done by George, Oct 15 1:32 p.m."
+function jobRow(jb, n, r) {
+  const stamp = jb.done_at ? new Date(jb.done_at).toLocaleString("en-CA", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+  const canRemove = jb.id && (r.list !== "to_me" || jb.created_by === ME.id);
+  return `<div class="job-row ${jb.done_at ? "done" : ""}" data-job="${jb.id || ""}">
+    <span class="job-n">Job ${n + 1}</span>
+    <input class="job-text" maxlength="2000" value="${esc(jb.body || "")}" placeholder="What needs doing…" aria-label="Job ${n + 1}" ${jb.done_at ? "disabled" : ""}>
+    ${jb.done_at
+      ? `<span class="job-stamp">✓ Done by <strong>${esc(jb.done_by || "")}</strong>, ${esc(stamp)}</span><button class="link" type="button" data-job-undo>Undo</button>`
+      : `<button class="btn job-done" type="button" data-job-done ${jb.id ? "" : "disabled title='Type the job first'"}>Done</button>`}
+    ${canRemove && !jb.done_at ? `<button class="link danger job-x" type="button" data-job-x title="Remove this job">✕</button>` : ""}</div>`;
+}
+function wireJobs(li, taskId) {
+  const reload = t => openFollowUps(t || null, true);
+  li.querySelectorAll(".job-row").forEach(row => {
+    const jobId = row.dataset.job ? Number(row.dataset.job) : null, input = row.querySelector(".job-text");
+    input.addEventListener("keydown", e => { if (e.key === "Enter") input.blur(); });
+    input.addEventListener("change", async () => {
+      const { error } = jobId ? await db.rpc("set_task_job", { p_job_id: jobId, p_body: input.value })
+                              : await db.rpc("add_task_job", { p_follow_up_id: taskId, p_body: input.value });
+      if (error) { alertLine(row, (/function/i.test(error.message) ? "Run RUN SETUP.bat to switch on jobs." : "Not saved: " + error.message)); return; }
+      input.classList.add("saved"); setTimeout(() => input.classList.remove("saved"), 1200);
+      if (!jobId) reload();
+    });
+    row.querySelector("[data-job-done]")?.addEventListener("click", async e => {
+      e.target.disabled = true;
+      if (input.value !== input.defaultValue) await db.rpc("set_task_job", { p_job_id: jobId, p_body: input.value });
+      const { error } = await db.rpc("set_task_job_done", { p_job_id: jobId, p_done: true });
+      if (error) { e.target.disabled = false; alertLine(row, "Not saved: " + error.message); return; }
+      reload();
+    });
+    row.querySelector("[data-job-undo]")?.addEventListener("click", async () => {
+      const { error } = await db.rpc("set_task_job_done", { p_job_id: jobId, p_done: false });
+      if (error) { alertLine(row, "Not saved: " + error.message); return; } reload();
+    });
+    row.querySelector("[data-job-x]")?.addEventListener("click", async () => {
+      const { error } = await db.rpc("delete_task_job", { p_job_id: jobId });
+      if (error) { alertLine(row, error.message); return; } reload();
+    });
+  });
+  li.querySelector("[data-add-job]")?.addEventListener("click", e => {
+    const list = li.querySelector(".jobs"), n = list.children.length;
+    const blank = [...list.querySelectorAll('.job-row[data-job=""] .job-text')].find(x => !x.value.trim());
+    if (blank) { blank.focus(); return; }
+    list.insertAdjacentHTML("beforeend", jobRow({ id: null, body: "" }, n, { list: "mine" }));
+    const row = list.lastElementChild, input = row.querySelector(".job-text");
+    e.target.textContent = `+ Add Job ${n + 2}`;
+    input.focus();
+    input.addEventListener("keydown", ev => { if (ev.key === "Enter") input.blur(); if (ev.key === "Escape") { row.remove(); e.target.textContent = `+ Add Job ${n + 1}`; } });
+    input.addEventListener("change", async () => {
+      if (!input.value.trim()) return;
+      const { error } = await db.rpc("add_task_job", { p_follow_up_id: taskId, p_body: input.value });
+      if (error) { alertLine(row, (/function/i.test(error.message) ? "Run RUN SETUP.bat to switch on jobs." : "Not saved: " + error.message)); return; }
+      reload();
+    });
   });
 }
 let FU_PEOPLE = null;
@@ -2106,7 +2177,8 @@ async function openFollowUps(flash, quiet) {
             : `<strong>${esc(p.name)}</strong> has it, not done yet · <span class="fu-age">sent <span data-since="${esc(p.assigned_at)}">${esc(agoText(p.assigned_at))}</span> ago</span>`}
             <button class="link" type="button" data-take-from="${p.id}" title="Take it back from ${esc(p.name)}">Take back</button></li>`).join("")}</ul>
             ${done ? `<div class="fu-status done">Everyone has finished. Untick or Mark complete to clear it.</div>` : ""}` : ""}
-        <input class="fu-note" maxlength="2000" value="${esc(r.note || "")}" placeholder="${r.list === "to_me" ? "Add a note about what you did…" : "Add a reminder (what needs doing)…"}" aria-label="Note">
+        <div class="jobs">${(r.jobs && r.jobs.length ? r.jobs : [{ id: null, body: r.note || "" }]).map((jb, n) => jobRow(jb, n, r)).join("")}</div>
+        <button class="link job-add" type="button" data-add-job>+ Add Job ${(r.jobs?.length || 1) + 1}</button>
         ${r.list === "to_me" ? `<div class="fu-actions"><button class="link" type="button" data-add-another>+ Another task for this customer</button></div>` : `<div class="fu-actions">
           <button class="btn quiet-btn" type="button" data-open-send>${r.list === "sent" ? "Send to more people" : "Send to…"}</button>
           <select class="prio-pick" aria-label="Priority">${prioOptions(r.priority)}</select>
@@ -2147,13 +2219,7 @@ async function openFollowUps(flash, quiet) {
     };
     cb.addEventListener("change", () => complete(!cb.checked));
     li.querySelector("[data-complete]")?.addEventListener("click", () => complete(true));
-    const note = li.querySelector(".fu-note");
-    note.addEventListener("change", async () => {
-      const { error } = await db.rpc("set_follow_up_note", { p_id: id, p_note: note.value });
-      note.classList.toggle("saved", !error); if (error) alertLine(note, "Not saved: " + error.message);
-      setTimeout(() => note.classList.remove("saved"), 1500);
-    });
-    note.addEventListener("keydown", e => { if (e.key === "Enter") note.blur(); });
+    wireJobs(li, id);
     // send to one or more people
     const chooser = li.querySelector("[data-chooser]");
     li.querySelector("[data-open-send]")?.addEventListener("click", () => { chooser.classList.toggle("hidden"); });
@@ -2162,7 +2228,7 @@ async function openFollowUps(flash, quiet) {
       const picked = [...chooser.querySelectorAll("input:checked:not(:disabled)")];
       if (!picked.length) { fail("Tick at least one person."); return; }
       e.target.disabled = true; if (msg) { msg.className = "msg"; msg.textContent = "Sending…"; }
-      const { error } = await db.rpc("send_follow_up", { p_id: id, p_to: picked.map(x => Number(x.value)), p_note: note.value });
+      const { error } = await db.rpc("send_follow_up", { p_id: id, p_to: picked.map(x => Number(x.value)), p_note: null });
       e.target.disabled = false;
       if (error) { fail("Not sent: " + error.message); return; }
       const names = picked.map(x => x.parentElement.textContent.trim());
