@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-16.105847">
+<meta name="app-version" content="2026-10-16.110719">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -973,6 +973,17 @@
     body[data-page="mycalls"] #side header { padding: 10px 14px; }
   }
   .not-owed { color: var(--steel); font-style: italic; }
+  .mc-po { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+  .mc-po-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+  .mc-po-item { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 4px 0; }
+  .po-num { font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+  .po-form { display: flex; flex-direction: column; gap: 8px; width: 100%; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 10px 12px; }
+  .po-form label { display: flex; flex-direction: column; gap: 4px; margin: 0; font-weight: 650; }
+  .po-form select, .po-form input { padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--ink); font: inherit; }
+  .po-msg.err { color: var(--red); font-weight: 600; }
+  .po-big { position: fixed; inset: 0; z-index: 60; background: rgba(15, 20, 25, .55); display: grid; place-items: center; padding: 16px; }
+  .po-big-box { background: var(--panel); border-radius: var(--radius-m); padding: 24px 28px; text-align: center; display: flex; flex-direction: column; gap: 10px; min-width: min(360px, 100%); }
+  .po-big-num { font-size: 40px; font-weight: 800; letter-spacing: .03em; font-variant-numeric: tabular-nums; color: var(--blue); word-break: break-all; }
   .owing { max-width: 1300px; }
   .ow-totals { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 10px; margin: 0 0 16px; }
   .ow-totals > div { background: var(--panel); border: 2px solid var(--box-edge, var(--line)); border-radius: var(--radius-m); padding: 12px 16px; display: flex; flex-direction: column; gap: 2px; }
@@ -2844,6 +2855,10 @@ function renderMyCalls() {
       MC.eqOpen = null; MC.saved = "Saved. Thanks!"; await loadMyCalls();
     });
   });
+  document.querySelectorAll("[data-po-open]").forEach(b => b.addEventListener("click", async () => {
+    await loadSuppliers(); MC.poOpen = Number(b.dataset.poOpen); renderMyCalls(); document.querySelector(".po-form select")?.focus();
+  }));
+  wirePoForms(async r => { MC.poOpen = null; await loadMyCalls(); if (r) poShow(r); else renderMyCalls(); });
   document.querySelectorAll(".mc-finish").forEach(f => {
     f.addEventListener("submit", e => { e.preventDefault(); const card = f.closest(".mc"); mcSet(card, Number(card.dataset.visit), f.dataset.status, f.querySelector("textarea").value.trim()); });
     f.querySelector("[data-mc-x]").addEventListener("click", () => f.classList.add("hidden"));
@@ -2878,6 +2893,47 @@ async function mcBrands() {
   const r = await db.rpc("brand_names"); MC.brands = r.error ? [] : r.data;
   if (!$("#mc-brands")) document.body.insertAdjacentHTML("beforeend", `<datalist id="mc-brands">${MC.brands.map(b => `<option value="${esc(b)}">`).join("")}</datalist>`);
 }
+// PO numbers: pick the supplier, say what it's for, get the number
+let SUPPLIERS = null;
+async function loadSuppliers() { if (!SUPPLIERS) { const r = await db.rpc("supplier_list"); SUPPLIERS = r.error ? [] : r.data; } return SUPPLIERS; }
+function poForm(jobId) {
+  return `<form class="po-form" data-po-job="${jobId}" autocomplete="off">
+    <label>Supplier<select name="supplier" required><option value="">Pick one…</option>${(SUPPLIERS || []).map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}<option value="other">Someone else…</option></select></label>
+    <label class="po-other hidden">Supplier name<input name="other" maxlength="120"></label>
+    <label>What for <span class="quiet">(optional)</span><input name="what" maxlength="200" placeholder="e.g. igniter, 2 filters"></label>
+    <div><button class="btn" type="submit">Get the number</button> <button class="link" type="button" data-po-x>Never mind</button> <span class="po-msg" role="status"></span></div>
+  </form>`;
+}
+function wirePoForms(after) {
+  document.querySelectorAll(".po-form").forEach(f => {
+    f.supplier.addEventListener("change", () => { f.querySelector(".po-other").classList.toggle("hidden", f.supplier.value !== "other"); if (f.supplier.value === "other") f.other.focus(); });
+    f.querySelector("[data-po-x]").addEventListener("click", () => after(null));
+    f.addEventListener("submit", async e => {
+      e.preventDefault();
+      const m = f.querySelector(".po-msg"), other = f.supplier.value === "other";
+      if (other && !f.other.value.trim()) { m.className = "po-msg err"; m.textContent = "Type the supplier's name."; return; }
+      m.className = "po-msg"; m.textContent = "Getting a number…"; f.querySelector("button[type=submit]").disabled = true;
+      const { data, error } = await db.rpc("get_po_number", { p_job_id: Number(f.dataset.poJob), p_supplier_id: other ? null : Number(f.supplier.value),
+        p_supplier_name: other ? f.other.value.trim() : null, p_what: f.what.value.trim() || null });
+      if (error) { f.querySelector("button[type=submit]").disabled = false; m.className = "po-msg err"; m.textContent = "No number: " + rpcErr(error); return; }
+      if (other) SUPPLIERS = null;
+      after(data);
+    });
+  });
+  document.querySelectorAll("[data-po-cancel]").forEach(b => b.addEventListener("click", async () => {
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Cancel this PO"; return; }
+    const { error } = await db.rpc("cancel_po", { p_id: Number(b.dataset.poCancel) });
+    if (error) { b.textContent = "Not cancelled: " + rpcErr(error); return; }
+    after(null);
+  }));
+}
+function poShow(r) {   // big, easy to read out to the supplier
+  const d = document.createElement("div"); d.className = "po-big"; d.setAttribute("role", "dialog");
+  d.innerHTML = `<div class="po-big-box"><div class="quiet">PO number for ${esc(r.supplier)}</div><div class="po-big-num">${esc(r.po_number)}</div>
+    <button class="btn" type="button">Done</button></div>`;
+  d.querySelector("button").addEventListener("click", () => d.remove()); d.addEventListener("click", e => { if (e.target === d) d.remove(); });
+  document.body.appendChild(d);
+}
 function mcCard(c) {
   const open = MC.open === c.visit_id, done = ["completed", "needs_return", "cancelled"].includes(c.status);
   const addr = [c.street, c.unit && "Unit " + c.unit, c.city].filter(Boolean).join(", ");
@@ -2908,6 +2964,9 @@ function mcCard(c) {
         <ul>${c.equipment.map(e => mcEqItem(c, e)).join("")}</ul></div>` : ""}
       ${(c.notes || []).length ? `<div class="mc-notes">${c.notes.map(n => `<div class="mc-note ${n.pinned ? "pin" : ""}"><span class="quiet">${n.pinned ? "Pinned · " : ""}${n.where === "job" ? "Job" : n.where === "location" ? "Address" : "Customer"} note · ${esc(new Date(n.at).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }))}</span>${esc(n.body)}</div>`).join("")}</div>` : ""}
       ${(c.last_visits || []).length ? `<details class="mc-past"><summary>Last visits here</summary>${c.last_visits.map(v => `<div><b>${esc(v.date ? longDate(v.date) : "")}</b> ${esc(v.type)}${v.summary ? ": " + esc(v.summary) : ""}${v.outcome ? `<div class="quiet">${esc(v.outcome)}</div>` : ""}</div>`).join("")}</details>` : ""}
+      <div class="mc-po">${(c.pos || []).length ? `<div class="mc-po-list">${c.pos.map(p => `<div class="mc-po-item"><span class="po-num">PO ${esc(p.po_number)}</span>
+          <span>${esc(p.supplier)}${p.what ? ` · ${esc(p.what)}` : ""}</span>${p.mine || can("po.create") ? ` <button class="link" type="button" data-po-cancel="${p.id}">Cancel</button>` : ""}</div>`).join("")}</div>` : ""}
+        ${MC.poOpen === c.visit_id ? poForm(c.job_id) : `<button class="btn quiet-btn" type="button" data-po-open="${c.visit_id}">Get a PO number</button>`}</div>
       <div class="mc-actions">${next.map(([s, t], i) => `<button class="btn ${i ? "quiet-btn" : ""}" type="button" data-mc-status="${s}">${t}</button>`).join("")}
         ${c.status === "on_site" || c.status === "en_route" ? `<button class="link" type="button" data-mc-status="scheduled">Undo</button>` : ""}
         ${done && c.status !== "cancelled" ? `<button class="link" type="button" data-mc-status="on_site">Not finished after all</button>` : ""}</div>
@@ -4504,8 +4563,22 @@ function toggleJob(row) {
     ${j.description ? `<div style="white-space:pre-wrap;margin-bottom:8px">${esc(j.description)}</div>` : ""}
     ${visits || '<div class="quiet">No visits recorded.</div>'}
     ${inv.length ? `<div style="margin-top:6px">${inv.map(i => `<button class="link" type="button" data-invoice="${i.id}">Invoice ${esc(i.invoice_number)}</button>: <span class="num">${money(i.total)}</span> ${badge(i.status)}`).join("<br>")}</div>` : ""}
-    ${j.completed_at ? `<div class="quiet" style="margin-top:6px">Completed ${fmtDate(j.completed_at)}</div>` : ""}</td>`;
+    ${j.completed_at ? `<div class="quiet" style="margin-top:6px">Completed ${fmtDate(j.completed_at)}</div>` : ""}
+    <div class="job-pos" data-job-pos="${j.id}"></div></td>`;
   row.after(tr);
+  const showPos = async () => {
+    const box = tr.querySelector(".job-pos"); if (!box) return;
+    const { data, error } = await db.rpc("job_pos", { p_job_id: j.id });
+    if (error || !tr.isConnected) return;
+    const live = (data || []).filter(p => p.status !== "cancelled"), canGet = can("po.create") || can("calls.book") || can("calls.dispatch");
+    box.innerHTML = `${live.length ? `<div style="margin-top:8px"><strong>PO numbers</strong>${live.map(p => `<div class="mc-po-item"><span class="po-num">PO ${esc(p.po_number)}</span>
+        <span>${esc(p.supplier)}${p.description ? " · " + esc(p.description) : ""} <span class="quiet">· ${esc(p.created_by || "")}, ${fmtDate(p.created_at.slice(0, 10))}</span></span>
+        ${can("po.create") ? `<button class="link" type="button" data-po-cancel="${p.id}">Cancel</button>` : ""}</div>`).join("")}</div>` : ""}
+      ${canGet ? (box.dataset.open ? poForm(j.id) : `<button class="link" type="button" data-po-get style="margin-top:6px">+ Get a PO number for this job</button>`) : ""}`;
+    box.querySelector("[data-po-get]")?.addEventListener("click", async () => { await loadSuppliers(); box.dataset.open = "1"; showPos(); });
+    wirePoForms(r => { delete box.dataset.open; showPos(); if (r) poShow(r); });
+  };
+  showPos();
   addBoxJumps();
   db.from("notes").select("body, pinned, created_at").eq("entity_type", "job").eq("entity_id", j.id)
     .order("created_at").then(({ data }) => {
