@@ -386,6 +386,54 @@ def remove_gone(cur, delta):
     return gone
 
 
+def match_assignments(cur, st, day_from, day_to):
+    """Make the techs on ServiceTitan's calls in a date range match ServiceTitan exactly.
+    (Catches techs moved from one call to another that the change feed didn't report.)"""
+    cur.execute("SELECT id FROM visits WHERE scheduled_date BETWEEN %s AND %s AND id < 10000000000 AND status <> 'cancelled'", (day_from, day_to))
+    vids = [r[0] for r in cur.fetchall()]
+    if not vids: return 0, 0
+    want, asked = {}, set()
+    for i in range(0, len(vids), 50):
+        chunk = vids[i:i + 50]
+        try:
+            rows = []
+            for page in range(1, 20):
+                o = st.get("dispatch/v2/tenant/{t}/appointment-assignments",
+                           {"appointmentIds": ",".join(map(str, chunk)), "active": "True", "page": page, "pageSize": 500})
+                rows += o.get("data") or []
+                if not o.get("hasMore"): break
+        except RuntimeError as e:
+            log(f"  couldn't check the techs on calls ({str(e)[:120]}); left them as they are")
+            return None
+        stray = [r for r in rows if int(r.get("appointmentId") or 0) not in chunk]
+        if stray and len(stray) > len(rows) // 2:
+            log("  ServiceTitan didn't filter the call list as expected; left the techs as they are")
+            return None
+        asked.update(chunk)
+        for r in rows:
+            vid = int(r.get("appointmentId") or 0)
+            if vid in chunk and r.get("active") is not False:
+                want.setdefault(vid, []).append((r.get("assignedOn") or "", int(r["technicianId"]), int(r["id"])))
+    cur.execute("SELECT visit_id, employee_id FROM visit_assignments WHERE visit_id = ANY(%s)", (list(asked),))
+    have = {}
+    for v, e in cur.fetchall(): have.setdefault(v, set()).add(e)
+    cur.execute("SELECT id FROM employees WHERE id = ANY(%s)", (list({t for l in want.values() for _, t, _ in l}) or [0],))
+    known = {r[0] for r in cur.fetchall()}
+    removed = added = 0
+    for vid in asked:
+        techs = [(a, t, sid) for a, t, sid in sorted(want.get(vid, [])) if t in known]
+        want_ids = {t for _, t, _ in techs}
+        if want_ids == have.get(vid, set()): continue
+        cur.execute("DELETE FROM visit_assignments WHERE visit_id = %s AND NOT (employee_id = ANY(%s))", (vid, list(want_ids) or [0]))
+        removed += cur.rowcount
+        for n, (_, t, sid) in enumerate(techs):
+            cur.execute("""INSERT INTO visit_assignments (visit_id, employee_id, role, st_id) VALUES (%s, %s, %s, %s)
+                           ON CONFLICT (visit_id, employee_id) DO UPDATE SET role = EXCLUDED.role""",
+                        (vid, t, "lead" if n == 0 else "helper", sid))
+            added += 1 if t not in have.get(vid, set()) else 0
+    return added, removed
+
+
 def sync_notes(cur, st, delta):
     """Notes on the customers, addresses and jobs that changed."""
     targets = []
@@ -523,6 +571,14 @@ def main():
         gone = remove_gone(cur, delta)
         cur.execute("ALTER TABLE invoice_lines ENABLE TRIGGER USER; ALTER TABLE payment_applications ENABLE TRIGGER USER")
         notes = sync_notes(cur, st, delta) if st else 0
+        if st:
+            # the techs on calls from 2 days ago to 6 weeks ahead always match ServiceTitan; the first time, go back 6 months
+            cur.execute("SELECT 1 FROM st_sync_state WHERE endpoint = 'techs-matched'")
+            back = 2 if cur.fetchone() else 183
+            res = match_assignments(cur, st, (started - timedelta(days=back)).date(), (started + timedelta(days=42)).date())
+            if res is not None:
+                if res[0] or res[1]: log(f"Techs on calls brought in line with ServiceTitan: {res[0]} added, {res[1]} taken off.")
+                new_state["techs-matched"] = {"continue_from": None, "since": started.isoformat()}
         for name, v in new_state.items():
             cur.execute("INSERT INTO st_sync_state (endpoint, continue_from, since, updated_at) VALUES (%s, %s, %s, now()) "
                         "ON CONFLICT (endpoint) DO UPDATE SET continue_from = EXCLUDED.continue_from, since = EXCLUDED.since, updated_at = now()",
