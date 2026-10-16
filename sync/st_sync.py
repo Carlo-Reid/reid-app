@@ -449,6 +449,11 @@ def sync_purchase_orders(cur, st, state, new_state):
                 "(turn on Inventory read access for the app in ServiceTitan's API settings).")
             return None
         raise
+    # ServiceTitan can have two POs with the same number: only the app's own numbers must be unique
+    cur.execute("ALTER TABLE purchase_orders DROP CONSTRAINT IF EXISTS purchase_orders_po_number_key")
+    cur.execute("DROP INDEX IF EXISTS purchase_orders_po_number_key")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS purchase_orders_app_po_number_key ON purchase_orders (po_number) WHERE st_id IS NULL")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS purchase_orders_st_id_key ON purchase_orders (st_id) WHERE st_id IS NOT NULL")
     prev = (state.get("purchase-orders") or {}).get("continue_from")
     pos, marker = pull_export(st, "inventory/v2/tenant/{t}/export/purchase-orders", prev)
     new_state["purchase-orders"] = {"continue_from": marker, "since": None}
@@ -485,7 +490,7 @@ def sync_purchase_orders(cur, st, state, new_state):
     cur.execute("""
         INSERT INTO purchase_orders (po_number, supplier_id, purpose, job_id, status, ordered_by_employee_id, ordered_at, expected_on,
                                      supplier_reference, notes, description, amount, st_id, created_at)
-        SELECT CASE WHEN EXISTS (SELECT 1 FROM purchase_orders x WHERE x.po_number = p.num AND x.st_id IS DISTINCT FROM p.st_id)
+        SELECT CASE WHEN EXISTS (SELECT 1 FROM purchase_orders x WHERE x.po_number = p.num AND x.st_id IS NULL)
                     THEN p.num || ' (ST)' ELSE p.num END,
                coalesce((SELECT id FROM suppliers WHERE st_id = p.vendor LIMIT 1), (SELECT id FROM suppliers WHERE name = 'Unknown supplier' LIMIT 1)),
                CASE WHEN j.id IS NULL THEN 'other' ELSE 'job' END, j.id, p.status, e.id,
