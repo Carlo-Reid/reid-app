@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-16.130151">
+<meta name="app-version" content="2026-10-16.155548">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -990,6 +990,25 @@
   .installs { max-width: 1500px; }
   .pb { max-width: 1500px; }
   .pb-pick { width: 28px; }
+  .files-job { font-weight: 700; margin: 12px 0 6px; font-size: calc(14px * var(--fs, 1)); }
+  .files-job:first-child { margin-top: 0; }
+  .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+  .file-tile { aspect-ratio: 1; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--paper); padding: 0; overflow: hidden; cursor: pointer;
+               display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; text-decoration: none; color: var(--ink); }
+  .file-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .file-tile:hover, .file-tile:focus-visible { border-color: var(--blue); outline: 2px solid var(--blue); }
+  .file-doc { padding: 8px; text-align: center; }
+  .file-ext { background: var(--blue-wash); color: var(--blue); font-weight: 800; border-radius: var(--radius-s); padding: 6px 8px; font-size: calc(13px * var(--fs, 1)); }
+  .file-name { font-size: calc(12px * var(--fs, 1)); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+  .files-more { margin-top: 10px; }
+  .file-viewer { position: fixed; inset: 0; z-index: 80; background: rgba(10, 14, 18, .92); display: flex; flex-direction: column; color: #fff; }
+  .fv-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; padding: 10px 16px; }
+  .fv-top .quiet { color: #B8C0C7; } .fv-top .link { color: #9CC7F5; margin-right: 10px; }
+  .fv-body { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 8px 16px; }
+  .fv-body img { max-width: calc(100% - 120px); max-height: 100%; object-fit: contain; }
+  .fv-nav { flex: 0 0 48px; height: 72px; border: 0; border-radius: var(--radius-m); background: rgba(255, 255, 255, .12); color: #fff; font-size: 36px; cursor: pointer; }
+  .fv-nav:hover { background: rgba(255, 255, 255, .25); }
+  @media (max-width: 600px) { .fv-body img { max-width: 100%; } .fv-nav { position: absolute; bottom: 20px; } .fv-nav[data-fv=prev] { left: 16px; } .fv-nav[data-fv=next] { right: 16px; } }
   .pb-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 16px; align-items: start; }
   .pb-main { min-width: 0; }
   .pb-cats { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 10px 10px 12px; position: sticky; top: 10px; max-height: calc(100vh - 120px); overflow-y: auto; }
@@ -1994,6 +2013,11 @@ function renderFile() {
       <h2>Estimates <span class="count">${estimates.length}</span></h2>
       ${estimates.length ? estimatesHtml(estimates) : `<div class="quiet">No estimates.</div>`}
     </section>
+
+    <section class="block" data-tag="Section 8">
+      <h2>Photos and files <span class="count" id="files-count"></span></h2>
+      <div id="files-box" data-cust="${c.id}" data-loc="${l ? l.id : ""}"><div class="quiet">Loading…</div></div>
+    </section>
   </article><nav class="file-nav" aria-label="Sections"></nav></div>`;
 
   document.querySelectorAll(".loc-tab").forEach(b => b.addEventListener("click", () => { current.loc = Number(b.dataset.loc); current.notesTab = null; renderFile(); }));
@@ -2073,6 +2097,79 @@ function renderFile() {
   addBoxJumps();
   buildFileNav();
   fillTechBox();
+  fillFiles();
+}
+
+/* ---------------- job photos and files (copied from ServiceTitan into file storage) ---------------- */
+let FILES = { rows: [], shown: 0, urls: new Map() };
+async function fillFiles() {
+  const box = $("#files-box"); if (!box) return;
+  const cid = Number(box.dataset.cust), lid = box.dataset.loc ? Number(box.dataset.loc) : null;
+  const key = cid + ":" + lid, fresh = FILES.key === key && Date.now() - FILES.t < 45 * 60e3, keepShown = fresh ? FILES.shown : 0;
+  const { data, error } = fresh ? { data: FILES.rows } : await db.rpc("customer_files", { p_customer: cid, p_location: lid, p_limit: 2000 });
+  if (!$("#files-box") || Number($("#files-box").dataset.cust) !== cid) return;
+  const sec = box.closest("section"), setCount = n => {
+    $("#files-count").textContent = n;
+    const b = document.querySelector(`.file-nav button[data-sec="${sec.id}"]`);
+    if (b) { b.querySelector(".n")?.remove(); if (n !== "") b.insertAdjacentHTML("beforeend", `<span class="n">${esc(String(n))}</span>`); }
+  };
+  if (error) { box.innerHTML = `<div class="quiet">${/function|schema/i.test(error.message) ? "Photos and files will show here once they're copied from ServiceTitan." : esc(error.message)}</div>`; setCount(""); return; }
+  FILES = fresh ? { ...FILES, shown: 0 } : { rows: data, shown: 0, urls: new Map(), key, t: Date.now() };
+  setCount(data.length ? Number(data[0].total_count) : 0);
+  if (!data.length) { box.innerHTML = `<div class="quiet">No photos or files for ${lid ? "this address" : "this customer"} yet.</div>`; return; }
+  box.innerHTML = `<div id="files-list"></div><div class="files-more"></div>`;
+  do { await moreFiles(); } while ($("#files-list") && FILES.shown < keepShown && FILES.shown < FILES.rows.length);
+}
+const isPic = f => /^image\//.test(f.mime_type || "") && !/heic|heif|tiff/i.test(f.mime_type);
+async function signFiles(rows) {
+  const need = rows.filter(f => !FILES.urls.has(f.storage_key)).map(f => f.storage_key);
+  for (let i = 0; i < need.length; i += 100) {
+    const { data } = await db.storage.from("job-files").createSignedUrls(need.slice(i, i + 100), 3600);
+    (data || []).forEach(x => { if (x.signedUrl) FILES.urls.set(x.path, x.signedUrl); });
+  }
+}
+async function moreFiles() {
+  const list = $("#files-list"); if (!list) return;
+  const from = FILES.shown, rows = FILES.rows.slice(from, from + 48); FILES.shown += rows.length;
+  await signFiles(rows);
+  if (!$("#files-list")) return;
+  let lastJob = list.querySelector(".files-job:last-of-type")?.dataset.job, html = "";
+  rows.forEach((f, k) => {
+    const i = from + k, url = FILES.urls.get(f.storage_key);
+    if (String(f.job_id) !== lastJob) {
+      if (lastJob !== undefined && html) html += `</div>`;
+      html += `<div class="files-job" data-job="${f.job_id}">Job ${esc(f.job_number)} · ${fmtDate(f.job_date)}${f.job_type ? " · " + esc(f.job_type) : ""}</div><div class="files-grid">`;
+      lastJob = String(f.job_id);
+    } else if (k === 0) html += `<div class="files-grid">`;
+    html += isPic(f) && url
+      ? `<button class="file-tile" type="button" data-fi="${i}" title="${esc(f.file_name)}"><img loading="lazy" alt="${esc(f.file_name)}" src="${esc(url)}"></button>`
+      : `<a class="file-tile file-doc" ${url ? `href="${esc(url)}" target="_blank" rel="noopener"` : ""} title="${esc(f.file_name)}"><span class="file-ext">${esc(((f.file_name.match(/\.([a-z0-9]{1,5})$/i) || [])[1] || (f.mime_type || "file").split("/").pop()).toUpperCase().slice(0, 5))}</span><span class="file-name">${esc(f.file_name)}</span>${url ? "" : `<span class="quiet">not available</span>`}</a>`;
+  });
+  html += `</div>`;
+  list.insertAdjacentHTML("beforeend", html);
+  // a job split over two "show more" pages: join its two grids
+  list.querySelectorAll(".files-grid + .files-grid").forEach(g => { g.previousElementSibling.append(...g.children); g.remove(); });
+  list.querySelectorAll("[data-fi]:not([data-wired])").forEach(b => { b.dataset.wired = 1; b.addEventListener("click", () => showFile(Number(b.dataset.fi))); });
+  const left = FILES.rows.length - FILES.shown, more = document.querySelector(".files-more");
+  more.innerHTML = left > 0 ? `<button class="btn quiet-btn" type="button">Show ${Math.min(48, left)} more <span class="quiet">(${left} left)</span></button>` : "";
+  more.querySelector("button")?.addEventListener("click", moreFiles);
+}
+function showFile(i) {
+  const pics = FILES.rows.map((f, k) => [f, k]).filter(([f]) => isPic(f) && FILES.urls.has(f.storage_key));
+  let pos = pics.findIndex(([, k]) => k === i); if (pos < 0) return;
+  document.querySelector(".file-viewer")?.remove();
+  const v = document.createElement("div"); v.className = "file-viewer"; v.setAttribute("role", "dialog"); v.setAttribute("aria-label", "Photo");
+  const draw = () => { const [f] = pics[pos], url = FILES.urls.get(f.storage_key);
+    v.innerHTML = `<div class="fv-top"><span>${esc(f.file_name)} · Job ${esc(f.job_number)} · ${fmtDate(f.job_date)} <span class="quiet">(${pos + 1} of ${pics.length})</span></span>
+      <span><a class="link" href="${esc(url)}" target="_blank" rel="noopener">Open full size</a> <button class="btn" type="button" data-fv="close">Close</button></span></div>
+      <div class="fv-body">${pics.length > 1 ? `<button class="fv-nav" type="button" data-fv="prev" aria-label="Previous photo">‹</button>` : ""}<img alt="${esc(f.file_name)}" src="${esc(url)}">${pics.length > 1 ? `<button class="fv-nav" type="button" data-fv="next" aria-label="Next photo">›</button>` : ""}</div>`; };
+  const close = () => { v.remove(); document.removeEventListener("keydown", key); };
+  const go = d => { pos = (pos + d + pics.length) % pics.length; draw(); };
+  const key = e => { if (e.key === "Escape") close(); else if (e.key === "ArrowLeft") go(-1); else if (e.key === "ArrowRight") go(1); };
+  v.addEventListener("click", e => { const a = e.target.closest("[data-fv]")?.dataset.fv; if (a === "close" || e.target === v || e.target.classList.contains("fv-body")) close(); else if (a === "prev") go(-1); else if (a === "next") go(1); });
+  let sx = null; v.addEventListener("touchstart", e => { sx = e.touches[0].clientX; }, { passive: true });
+  v.addEventListener("touchend", e => { if (sx == null) return; const dx = e.changedTouches[0].clientX - sx; if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1); sx = null; });
+  document.addEventListener("keydown", key); draw(); document.body.append(v); v.querySelector("[data-fv=close]").focus();
 }
 
 /* ---------------- section side bar ---------------- */
