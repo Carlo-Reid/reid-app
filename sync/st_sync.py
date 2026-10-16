@@ -513,6 +513,14 @@ def main():
                    "api_calls": st.calls if st else 0}
         cur.execute("UPDATE st_sync_runs SET finished_at = now(), ok = true, summary = %s WHERE id = %s", (json.dumps(summary), run_id))
         conn.commit()
+        # one-time repair of calls loaded without their tech (only where the export folder is on this computer)
+        cur.execute("SELECT 1 FROM st_sync_state WHERE endpoint = 'backfill-assignments'")
+        if not cur.fetchone() and not QUIET:
+            res = backfill_assignments(cur, args.from_files)
+            if res is not None:
+                log(f"Repaired {res[0]} calls that were missing their tech" + (f" ({res[1]} techs still unknown to ServiceTitan's staff list)" if res[1] else "") + ".")
+                cur.execute("INSERT INTO st_sync_state (endpoint, since, updated_at) VALUES ('backfill-assignments', now(), now()) ON CONFLICT DO NOTHING")
+                conn.commit()
         log("Saved. Updating search...")
         cur.execute("SELECT public._sync_after()")
         conn.commit()
@@ -532,6 +540,44 @@ def main():
     finally:
         try: cur.execute("SELECT pg_advisory_unlock(80451)"); conn.commit()
         except Exception: pass
+
+
+def backfill_assignments(cur, folder=None):
+    """One-time repair: techs who were missing from ServiceTitan's staff list in the export (e.g. Kane) had their calls
+    loaded without them. Put back every call-to-tech link from the export's saved pages, if that tech and call now exist."""
+    if not folder:
+        root = os.path.dirname(find_file("servicetitan-settings.txt") or HERE)
+        exports = sorted(glob.glob(os.path.join(root, "export_*")))
+        if not exports: return None
+        folder = os.path.join(exports[-1], "raw-json")
+    pages = sorted(glob.glob(os.path.join(folder, "appointment-assignments_*.json")))
+    if not pages: return None
+    rows = {}
+    for pth in pages:
+        for r in json.load(open(pth, encoding="utf-8")).get("data") or []:
+            if r.get("active") is not False and r.get("appointmentId") and r.get("technicianId"):
+                rows[r["id"]] = (r["id"], int(r["appointmentId"]), int(r["technicianId"]), r.get("assignedOn") or "")
+    cur.execute("DROP TABLE IF EXISTS _s_aa")
+    cur.execute("CREATE TEMP TABLE _s_aa (st_id bigint, visit_id bigint, employee_id bigint, assigned text) ON COMMIT DROP")
+    with cur.copy("COPY _s_aa FROM STDIN") as cp:
+        for r in rows.values(): cp.write_row(r)
+    cur.execute("""
+        INSERT INTO visit_assignments (visit_id, employee_id, role, st_id)
+        SELECT DISTINCT ON (a.visit_id, a.employee_id) a.visit_id, a.employee_id,
+               CASE WHEN EXISTS (SELECT 1 FROM visit_assignments x WHERE x.visit_id = a.visit_id) THEN 'helper'
+                    WHEN row_number() OVER (PARTITION BY a.visit_id ORDER BY a.assigned) = 1 THEN 'lead' ELSE 'helper' END,
+               a.st_id
+        FROM _s_aa a
+        WHERE EXISTS (SELECT 1 FROM visits v WHERE v.id = a.visit_id)
+          AND EXISTS (SELECT 1 FROM employees e WHERE e.id = a.employee_id)
+          AND NOT EXISTS (SELECT 1 FROM visit_assignments x WHERE x.st_id = a.st_id)
+          AND NOT EXISTS (SELECT 1 FROM visit_assignments x WHERE x.visit_id = a.visit_id AND x.employee_id = a.employee_id)
+        ORDER BY a.visit_id, a.employee_id, a.assigned
+        ON CONFLICT DO NOTHING""")
+    added = cur.rowcount
+    cur.execute("""SELECT count(DISTINCT a.employee_id) FROM _s_aa a WHERE NOT EXISTS (SELECT 1 FROM employees e WHERE e.id = a.employee_id)""")
+    still_missing = cur.fetchone()[0]
+    return added, still_missing
 
 
 def pull_export_marker_only(st, path):
