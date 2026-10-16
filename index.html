@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-16.101145">
+<meta name="app-version" content="2026-10-16.101821">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -937,6 +937,13 @@
     .side-links { flex-wrap: wrap; }
   }
   .not-owed { color: var(--steel); font-style: italic; }
+  .owing { max-width: 1300px; }
+  .owing-table td { vertical-align: top; }
+  .owing-table .link { text-align: left; }
+  .ow-act { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 300px; }
+  .ow-still { border-color: var(--amber); color: var(--amber); }
+  .ow-tag { display: inline-block; font-size: calc(11.5px * var(--fs, 1)); font-weight: 650; padding: 0 7px; border-radius: 999px; background: var(--blue-wash); color: var(--blue); margin-top: 2px; }
+  .ow-tag.mo { background: var(--green-wash); color: var(--green); }
   .inv-owed { margin-top: 18px; padding: 10px 14px; border: 1px dashed var(--line); border-radius: var(--radius-m); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: calc(14px * var(--fs, 1)); }
   @media print { .no-print { display: none !important; } }
   .sync-list { margin: 0; padding-left: 20px; line-height: 1.6; }
@@ -974,7 +981,7 @@
 <div id="app" class="hidden">
   <aside id="side">
     <header>
-      <div class="brand"><button class="home-link" id="home-link" title="Back to your last customer">Customers</button><span class="side-links"><button class="link hidden" id="mycalls-link">My calls</button><button class="link hidden" id="dispatch-link">Dispatch</button><button class="link hidden" id="calls-link">Calls</button><button class="link hidden" id="fu-link">Tasks</button><button class="link hidden" id="history-link">History</button><button class="link hidden" id="settings-link">Settings</button><button class="link hidden" id="staff-link">Staff</button><button class="link" id="signout">Sign out</button></span></div>
+      <div class="brand"><button class="home-link" id="home-link" title="Back to your last customer">Customers</button><span class="side-links"><button class="link hidden" id="mycalls-link">My calls</button><button class="link hidden" id="dispatch-link">Dispatch</button><button class="link hidden" id="calls-link">Calls</button><button class="link hidden" id="owing-link">Owing</button><button class="link hidden" id="fu-link">Tasks</button><button class="link hidden" id="history-link">History</button><button class="link hidden" id="settings-link">Settings</button><button class="link hidden" id="staff-link">Staff</button><button class="link" id="signout">Sign out</button></span></div>
       <input id="q" name="reid-find-any" type="search" placeholder="Name, phone, address, invoice, serial…" autocomplete="reid-find-any" data-lpignore="true" data-1p-ignore aria-label="Search customers">
       <div class="hint quiet">Search by anything: old ServiceTitan numbers work too.</div>
       <div class="fields-head">Or narrow it down <button class="link hidden" type="button" id="f-clear">Clear</button></div>
@@ -1075,6 +1082,7 @@ async function showApp() {
   const emp = ME.role ? await db.rpc("my_employee_id") : { data: null };
   ME.emp = emp.error ? null : emp.data;
   ME.booking = !emp.error;   // setup file 25 has been run
+  $("#owing-link").classList.toggle("hidden", !can("invoices.adjust"));
   $("#dispatch-link").classList.toggle("hidden", !ME.booking || !(can("calls.dispatch") || can("calls.book")));
   $("#mycalls-link").classList.toggle("hidden", !ME.booking || !(ME.emp || ME.role === "technician" || can("calls.dispatch")));
   $("#fu-link").classList.toggle("hidden", !ME.role);
@@ -1092,6 +1100,7 @@ async function showApp() {
   if (location.hash === "#history" && can("history.restore")) return openHistory();
   if (location.hash === "#calls" && ME.role) return openCalls();
   if (location.hash === "#dispatch" && ME.role) return openDispatch();
+  if (location.hash === "#owing" && can("invoices.adjust")) return openOwing();
   if (location.hash === "#mycalls" && ME.role) return openMyCalls();
   if (location.hash === "#newcustomer" && can("customers.add")) return openNewCustomer();
   const bookFor = new URLSearchParams(location.hash.slice(1)).get("book");
@@ -1429,7 +1438,7 @@ function openSearchScreen() {
 /* ---------------- back button on every page ---------------- */
 // NAV.stack holds the pages visited this session; the Back button returns to the one before.
 const NAV = { stack: [], lastSet: null };
-const PAGE_NAMES = { search: "search", staff: "Staff", settings: "Settings", history: "History", calls: "Calls by date", followups: "Tasks", dispatch: "Dispatch", mycalls: "My calls", book: "Book a call", newcustomer: "New customer" };
+const PAGE_NAMES = { search: "search", staff: "Staff", settings: "Settings", history: "History", calls: "Calls by date", followups: "Tasks", dispatch: "Dispatch", owing: "Owing", mycalls: "My calls", book: "Book a call", newcustomer: "New customer" };
 function setPage(hash, kind, label) {
   const h = hash ? "#" + hash : "";
   NAV.lastSet = h;
@@ -1452,6 +1461,7 @@ function routeTo(h) {
   if (h === "#history") return openHistory();
   if (h === "#calls") return openCalls();
   if (h === "#dispatch") return openDispatch();
+  if (h === "#owing") return openOwing();
   if (h === "#mycalls") return openMyCalls();
   if (h === "#newcustomer") return openNewCustomer();
   const bk = new URLSearchParams(h.slice(1)).get("book");
@@ -2041,6 +2051,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) chec
 /* ---------------- calls by date ---------------- */
 $("#calls-link").addEventListener("click", () => openCalls());
 $("#dispatch-link").addEventListener("click", () => openDispatch());
+$("#owing-link").addEventListener("click", () => openOwing());
 $("#mycalls-link").addEventListener("click", () => openMyCalls());
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
@@ -2791,6 +2802,77 @@ function mcCard(c) {
   </section>`;
 }
 
+
+/* ---------- Owing: every invoice still showing a balance, to go through one at a time ---------- */
+let OW = { show: "todo", kind: "all", rows: [], counts: {} };
+const OW_SHOW = [["todo", "To check"], ["checked", "Checked, still owing"], ["not_owed", "Marked not owed"]];
+const OW_KIND = [["all", "All invoices"], ["plan", "Plan sales"], ["monthly", "Customers on a monthly plan"]];
+async function openOwing() {
+  setPage("owing", "owing");
+  $("#main").innerHTML = `<div class="loading">Loading what's owing…</div>`;
+  await loadOwing();
+}
+async function loadOwing() {
+  const [list, ...counts] = await Promise.all([db.rpc("open_balances", { p_show: OW.show, p_kind: OW.kind }),
+    ...OW_SHOW.map(([k]) => db.rpc("open_balances", { p_show: k, p_kind: OW.kind }))]);
+  if (!document.querySelector(".owing, .loading")) return;
+  if (list.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the list</h2>${esc(rpcErr(list.error))}</div></div>`; return; }
+  OW.rows = list.data;
+  OW_SHOW.forEach(([k], n) => { const d = counts[n].data || []; OW.counts[k] = { n: d.length, sum: d.reduce((s, r) => s + Number(r.balance), 0) }; });
+  renderOwing();
+}
+function renderOwing(msg) {
+  const top = $("#main").scrollTop, rows = OW.rows, total = rows.reduce((s, r) => s + Number(r.balance), 0);
+  const done = OW.show !== "todo";
+  $("#main").innerHTML = `<article class="staff owing">
+    <h1>Owing</h1>
+    <p class="lead">Every invoice that still shows money owing. Open one to check it, then mark it: if it isn't really owed (for example, paid monthly), pick the reason; if it is, press <b>Still owing</b>. Either way it moves off the To check list.</p>
+    <div class="calls-filters">
+      <span>${OW_SHOW.map(([k, t]) => `<button class="chip" type="button" data-ow-show="${k}" aria-pressed="${OW.show === k}">${t} <span class="count">${OW.counts[k]?.n ?? ""}</span></button>`).join("")}</span>
+      <span>${OW_KIND.map(([k, t]) => `<button class="chip small" type="button" data-ow-kind="${k}" aria-pressed="${OW.kind === k}">${t}</button>`).join("")}</span>
+    </div>
+    <div class="calls-sum"><strong>${rows.length.toLocaleString()} ${rows.length === 1 ? "invoice" : "invoices"}</strong><span>${money(total)}</span>
+      ${rows.length >= 2000 ? `<span class="staff-msg err">Showing the first 2,000.</span>` : ""}<span class="staff-msg ok" id="ow-msg" role="status">${msg ? esc(msg) : ""}</span></div>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table owing-table"><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Job</th><th class="r">Owing</th><th>${done ? "Marked" : "Mark it"}</th></tr></thead><tbody>
+      ${rows.map(r => `<tr data-inv="${r.invoice_id}">
+        <td class="num">${fmtDate(r.invoice_date)}</td>
+        <td><button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button>
+          ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}</td>
+        <td><button class="link" type="button" data-ow-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
+        <td>${esc(r.job_type || "")}</td>
+        <td class="r num"><strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div></td>
+        <td class="ow-act">${OW.show === "todo" ? `${["Paid monthly", "Paid elsewhere", "Written off"].map(x => `<button class="chip small" type="button" data-ow-not="${x}">${x}</button>`).join("")}
+            <button class="chip small" type="button" data-ow-not="">Other…</button>
+            <button class="chip small ow-still" type="button" data-ow-still>Still owing</button>`
+          : OW.show === "checked" ? `<span class="quiet">Still owing · ${esc(r.checked_by || "")} ${r.checked_at ? esc(fmtDate(r.checked_at.slice(0, 10))) : ""}</span> <button class="link" type="button" data-ow-undo-check>Undo</button>`
+          : `<span>${esc(r.not_owed_reason)}</span> <span class="quiet">· ${esc(r.marked_by || "")}</span> <button class="link" type="button" data-ow-undo-not>Undo</button>`}</td>
+      </tr>`).join("")}</tbody></table></div>` : `<div class="quiet" style="padding:24px 0">${OW.show === "todo" ? "Nothing left to check here." : "None yet."}</div>`}
+  </article>`;
+  $("#main").scrollTop = top;
+  document.querySelectorAll("[data-ow-show]").forEach(b => b.addEventListener("click", () => { OW.show = b.dataset.owShow; loadOwing(); }));
+  document.querySelectorAll("[data-ow-kind]").forEach(b => b.addEventListener("click", () => { OW.kind = b.dataset.owKind; loadOwing(); }));
+  document.querySelectorAll("[data-ow-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.owCust))));
+  document.querySelectorAll(".owing [data-invoice]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.invoice))));
+  const act = async (tr, call, args, said) => {
+    tr.querySelectorAll("button").forEach(b => b.disabled = true);
+    const { error } = await db.rpc(call, args);
+    if (error) { tr.querySelectorAll("button").forEach(b => b.disabled = false); $("#ow-msg").className = "staff-msg err"; $("#ow-msg").textContent = "Not saved: " + rpcErr(error); return; }
+    const id = Number(tr.dataset.inv), r = OW.rows.find(x => x.invoice_id === id);
+    OW.rows = OW.rows.filter(x => x.invoice_id !== id);
+    OW.counts[OW.show].n--; OW.counts[OW.show].sum -= Number(r.balance);
+    const to = call === "set_invoice_checked" ? (args.p_checked ? "checked" : "todo") : (args.p_reason ? "not_owed" : "todo");
+    if (OW.counts[to]) { OW.counts[to].n++; OW.counts[to].sum += Number(r.balance); }
+    renderOwing(`${said}: invoice ${r.invoice_number}, ${r.customer_name}.`);
+  };
+  document.querySelectorAll("[data-ow-not]").forEach(b => b.addEventListener("click", () => {
+    const tr = b.closest("tr"); let why = b.dataset.owNot;
+    if (!why) { why = (prompt("Why isn't this invoice owed?") || "").trim(); if (!why) return; }
+    act(tr, "set_invoice_not_owed", { p_invoice_id: Number(tr.dataset.inv), p_reason: why }, "Marked not owed (" + why + ")");
+  }));
+  document.querySelectorAll("[data-ow-still]").forEach(b => b.addEventListener("click", () => { const tr = b.closest("tr"); act(tr, "set_invoice_checked", { p_invoice_id: Number(tr.dataset.inv), p_checked: true }, "Checked, still owing"); }));
+  document.querySelectorAll("[data-ow-undo-check]").forEach(b => b.addEventListener("click", () => { const tr = b.closest("tr"); act(tr, "set_invoice_checked", { p_invoice_id: Number(tr.dataset.inv), p_checked: false }, "Put back on the To check list"); }));
+  document.querySelectorAll("[data-ow-undo-not]").forEach(b => b.addEventListener("click", () => { const tr = b.closest("tr"); act(tr, "set_invoice_not_owed", { p_invoice_id: Number(tr.dataset.inv), p_reason: null }, "Counted as owing again"); }));
+}
 
 /* ---------------- follow up: each person's own list ---------------- */
 let FU = { keys: new Set(), off: false };
@@ -3859,6 +3941,7 @@ async function openInvoice(id) {
     if (error) { if (m) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); } return; }
     await openInvoice(i.id);
     if (current?.c?.id === i.customer_id && document.querySelector(".file")) openCustomer(i.customer_id);   // refresh the balance behind
+    if (document.querySelector(".owing")) loadOwing();
   };
   document.querySelectorAll("[data-not-owed]").forEach(b => b.addEventListener("click", () => {
     let r = b.dataset.notOwed;
