@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-15.145311">
+<meta name="app-version" content="2026-10-16.100127">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -927,6 +927,9 @@
     body[data-page="mycalls"] #side header { padding: 10px 14px; }
     .side-links { flex-wrap: wrap; }
   }
+  .not-owed { color: var(--steel); font-style: italic; }
+  .inv-owed { margin-top: 18px; padding: 10px 14px; border: 1px dashed var(--line); border-radius: var(--radius-m); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: calc(14px * var(--fs, 1)); }
+  @media print { .no-print { display: none !important; } }
   .sync-list { margin: 0; padding-left: 20px; line-height: 1.6; }
 .sync-list li { margin: 2px 0 6px; }
 .sync-list .sync-bad { color: #C0392B; }
@@ -1484,7 +1487,7 @@ async function openCustomer(id) {
     db.from("memberships").select("*, plan_types(name)").eq("customer_id", id).order("start_date", { ascending: false }),
     db.from("jobs").select("id, job_number, status, summary, description, priority, created_at, completed_at, location_id, job_types(name), business_units(name), partners(name), visits(id, visit_number, scheduled_date, status, visit_assignments(role, employees(first_name, last_name)))")
       .eq("customer_id", id).order("created_at", { ascending: false }).limit(300),
-    db.from("invoices").select("id, invoice_number, invoice_date, total, balance_due, status, job_id, location_id")
+    db.from("invoices").select("*")
       .eq("customer_id", id).order("invoice_date", { ascending: false }).limit(300),
     db.from("estimates").select("id, estimate_number, status, created_at, job_id, location_id, estimate_options!estimate_options_estimate_id_fkey(name, estimate_lines(line_total))")
       .eq("customer_id", id).order("created_at", { ascending: false }).limit(100)
@@ -1624,7 +1627,7 @@ function renderFile() {
   if (current.c && NAV.stack.length && NAV.stack[NAV.stack.length - 1].hash === "#customer=" + current.c.id) nameCurrentPage(current.c.display_name);
   if (current.pendingNotes) { current.notes = current.pendingNotes; current.pendingNotes = null; }
   const { c, notes, plans, jobs, invoices, estimates, equipment, loc } = current;
-  const owed = invoices.reduce((s, i) => s + (i.status !== "void" && i.balance_due > 0 ? Number(i.balance_due) : 0), 0);
+  const owed = invoices.reduce((s, i) => s + (i.status !== "void" && !i.not_owed_reason && i.balance_due > 0 ? Number(i.balance_due) : 0), 0);
   const flags = [];
   (c.customer_flags || []).filter(f => !f.resolved_at).forEach(f =>
     flags.push(`<span class="flag ${f.flag_type === "do_not_service" || f.flag_type === "declined_payment" ? "red" : "amber"}">${esc(f.message)}</span>`));
@@ -3793,10 +3796,28 @@ async function openInvoice(id) {
         <tr><td>HST</td><td class="r num">${money(tax)}</td></tr>
         <tr class="inv-total"><td>Total</td><td class="r num">${money(total)}</td></tr>
         ${paid ? `<tr><td>Paid</td><td class="r num">−${money(paid)}</td></tr>` : ""}
-        <tr class="inv-balance"><td>Balance owing</td><td class="r num">${money(balance)}</td></tr>
+        <tr class="inv-balance"><td>Balance owing</td><td class="r num">${i.not_owed_reason && balance > 0.004 ? `<s>${money(balance)}</s> ${money(0)}` : money(balance)}</td></tr>
       </table>
     </div>
+    ${balance > 0.004 && i.status !== "void" ? `<div class="inv-owed no-print">${i.not_owed_reason
+      ? `<strong>Not owed:</strong> ${esc(i.not_owed_reason)}. It doesn't count toward what the customer owes.${can("invoices.adjust") ? ` <button class="link" type="button" data-owed-undo>Count it as owing again</button>` : ""}`
+      : can("invoices.adjust") ? `<span>Shouldn't this be owing?</span> ${["Paid monthly", "Paid elsewhere", "Written off"].map(r => `<button class="chip small" type="button" data-not-owed="${r}">${r}</button>`).join("")}
+          <button class="chip small" type="button" data-not-owed="">Other…</button>` : ""}
+      <span class="staff-msg" id="owed-msg" role="status"></span></div>` : ""}
     <div class="inv-thanks">Thank you for choosing ${esc(c.company_name || "Reid Heating & Cooling")}.</div>`;
+  const setOwed = async reason => {
+    const m = $("#owed-msg"); if (m) { m.className = "staff-msg"; m.textContent = "Saving…"; }
+    const { error } = await db.rpc("set_invoice_not_owed", { p_invoice_id: i.id, p_reason: reason });
+    if (error) { if (m) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); } return; }
+    await openInvoice(i.id);
+    if (current?.c?.id === i.customer_id && document.querySelector(".file")) openCustomer(i.customer_id);   // refresh the balance behind
+  };
+  document.querySelectorAll("[data-not-owed]").forEach(b => b.addEventListener("click", () => {
+    let r = b.dataset.notOwed;
+    if (!r) { r = (prompt("Why isn't this invoice owed?") || "").trim(); if (!r) return; }
+    setOwed(r);
+  }));
+  $("[data-owed-undo]")?.addEventListener("click", () => setOwed(null));
   $("#inv-copy").onclick = async () => {
     const text = `${c.company_name || "Reid Heating & Cooling"} – Invoice ${i.invoice_number} (${fmtDate(i.invoice_date)})\n${cust.display_name || ""}\n${addr.join(", ")}\n\n`
       + lines.map(x => `${x.description || ""}  ${x.quantity != null ? "x" + Number(x.quantity) : ""}  ${money(x.line_total)}`).join("\n")
@@ -4174,7 +4195,7 @@ function toggleJob(row) {
 function invoicesHtml(list) {
   return `<div class="scroll-box" tabindex="0" aria-label="Invoices"><table><thead><tr><th>Date</th><th>Invoice</th><th class="r">Total</th><th class="r">Owing</th><th>Status</th></tr></thead><tbody>
     ${list.map((i, n) => `<tr class="inv-row" tabindex="0" data-invoice="${i.id}" title="Open invoice"><td class="num">${fmtDate(i.invoice_date)}</td><td class="num"><span class="inv-link">${esc(i.invoice_number)}</span></td>
-      <td class="r num">${money(i.total)}</td><td class="r num">${i.balance_due > 0.004 ? money(i.balance_due) : ""}</td><td>${badge(i.status)}</td></tr>`).join("")}
+      <td class="r num">${money(i.total)}</td><td class="r num">${i.balance_due > 0.004 ? (i.not_owed_reason ? `<span class="not-owed" title="${esc(i.not_owed_reason)}">Not owed</span>` : money(i.balance_due)) : ""}</td><td>${badge(i.status)}</td></tr>`).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} invoices.</div>` : ""}`;
 }
 
