@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2026-10-16.100127">
+<meta name="app-version" content="2026-10-16.101145">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -908,6 +908,15 @@
   .mc-eq { background: var(--amber-wash); border: 1px solid var(--amber); border-radius: var(--radius-s); padding: 8px 12px; }
   .mc-eq ul { margin: 4px 0 0; padding-left: 18px; }
   .mc-eq li span { font-weight: 650; color: var(--amber); }
+  .mc-eq ul { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .mc-eq-btn { width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--amber); border-radius: var(--radius-s); padding: 10px 12px; font: inherit; color: var(--ink); cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+  .mc-eq-btn em { margin-left: auto; font-style: normal; font-weight: 700; color: var(--blue); }
+  .mc-eq-form { display: flex; flex-direction: column; gap: 10px; padding: 10px 4px 4px; }
+  .mc-eq-form label { display: flex; flex-direction: column; gap: 4px; margin: 0; font-weight: 650; }
+  .mc-eq-form input:not([type=checkbox]) { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); color: var(--ink); font: inherit; font-size: 16px; }
+  .mc-eq-form input:disabled { opacity: .45; }
+  .mc-cant { font-weight: 500; font-size: calc(13px * var(--fs, 1)); color: var(--steel); display: flex; gap: 6px; align-items: center; }
+  .mc-eq-msg.err { color: var(--red); font-weight: 600; }
   .mc-notes { display: flex; flex-direction: column; gap: 6px; }
   .mc-note { border-left: 3px solid var(--line); padding: 2px 0 2px 10px; white-space: pre-wrap; }
   .mc-note.pin { border-left-color: var(--amber); background: var(--amber-wash); padding: 6px 10px; border-radius: 0 var(--radius-s) var(--radius-s) 0; }
@@ -2622,7 +2631,7 @@ function callsChanged() {
       const sig = JSON.stringify([day.data, wait.data || []]);
       if (sig === DSP.sig) return;
       DSP.rows = day.data; DSP.waiting = wait.data || []; DSP.sig = sig; renderDispatch();
-    } else if (document.querySelector(".mycalls") && !document.querySelector(".mycalls form:not(.hidden) textarea:focus")) {
+    } else if (document.querySelector(".mycalls") && !document.querySelector(".mycalls form:not(.hidden) textarea:focus, .mc-eq-form")) {
       loadMyCalls(true);
     }
   }, 700);
@@ -2691,6 +2700,25 @@ function renderMyCalls() {
     }
     await mcSet(card, id, s, null);
   }));
+  document.querySelectorAll("[data-mc-eq]").forEach(b => b.addEventListener("click", () => {
+    const id = Number(b.dataset.mcEq); MC.eqOpen = MC.eqOpen === id ? null : id; renderMyCalls();
+    if (MC.eqOpen) { mcBrands(); document.querySelector(".mc-eq-form input:not([type=checkbox])")?.focus(); }
+  }));
+  document.querySelectorAll(".mc-eq-form").forEach(f => {
+    f.querySelectorAll("[name=cant]").forEach(cb => cb.addEventListener("change", () => {
+      const inp = cb.closest("label").querySelector("input:not([type=checkbox])"); inp.disabled = cb.checked; if (cb.checked) inp.value = "";
+    }));
+    f.addEventListener("submit", async e => {
+      e.preventDefault();
+      const m = f.querySelector(".mc-eq-msg"), p = { cant: [...f.querySelectorAll("[name=cant]:checked")].map(x => x.value) };
+      f.querySelectorAll("input[name]:not([type=checkbox])").forEach(i => { if (i.value.trim()) p[i.name] = i.value.trim(); });
+      if (Object.keys(p).length === 1 && !p.cant.length) { m.className = "mc-eq-msg err"; m.textContent = "Type at least one detail, or tick Can't get it."; return; }
+      m.className = "mc-eq-msg"; m.textContent = "Saving…"; f.querySelector("button[type=submit]").disabled = true;
+      const { error } = await db.rpc("tech_fill_equipment", { p_visit_id: Number(f.dataset.visit), p_equipment_id: Number(f.dataset.eq), p });
+      if (error) { f.querySelector("button[type=submit]").disabled = false; m.className = "mc-eq-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
+      MC.eqOpen = null; MC.saved = "Saved. Thanks!"; await loadMyCalls();
+    });
+  });
   document.querySelectorAll(".mc-finish").forEach(f => {
     f.addEventListener("submit", e => { e.preventDefault(); const card = f.closest(".mc"); mcSet(card, Number(card.dataset.visit), f.dataset.status, f.querySelector("textarea").value.trim()); });
     f.querySelector("[data-mc-x]").addEventListener("click", () => f.classList.add("hidden"));
@@ -2703,6 +2731,25 @@ async function mcSet(card, id, status, note) {
   if (error) { card.querySelectorAll("button").forEach(b => b.disabled = false); m.className = "mc-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
   if (status === "completed" || status === "needs_return") MC.open = null;
   await loadMyCalls();
+}
+const EQ_FIELDS = { "brand": ["brand", "Brand", "text", "e.g. Honeywell"], "model number": ["model_number", "Model number", "text", "From the label"],
+                    "serial number": ["serial_number", "Serial number", "text", "From the label"], "install date": ["install_date", "Install date (roughly)", "date", ""] };
+function mcEqItem(c, e) {
+  const open = MC.eqOpen === e.id;
+  return `<li class="mc-eq-item ${open ? "open" : ""}">
+    <button class="mc-eq-btn" type="button" data-mc-eq="${e.id}" aria-expanded="${open}">${esc(e.label)}: <span>${esc(e.missing.join(", "))}</span><em>${open ? "Close" : "Fill in"}</em></button>
+    ${open ? `<form class="mc-eq-form" data-visit="${c.visit_id}" data-eq="${e.id}" autocomplete="off">
+      ${e.missing.filter(m => EQ_FIELDS[m]).map(m => { const [k, t, type, ph] = EQ_FIELDS[m];
+        return `<label>${t}<input name="${k}" type="${type}" ${k === "brand" ? 'list="mc-brands"' : ""} placeholder="${esc(ph)}" ${type === "date" ? `max="${ymd(new Date())}"` : 'autocapitalize="characters"'}>
+          <span class="mc-cant"><input type="checkbox" name="cant" value="${m}"> Can't get it</span></label>`; }).join("")}
+      <div><button class="btn" type="submit">Save</button> <span class="mc-eq-msg" role="status"></span></div>
+    </form>` : ""}
+  </li>`;
+}
+async function mcBrands() {
+  if (MC.brands) return;
+  const r = await db.rpc("brand_names"); MC.brands = r.error ? [] : r.data;
+  if (!$("#mc-brands")) document.body.insertAdjacentHTML("beforeend", `<datalist id="mc-brands">${MC.brands.map(b => `<option value="${esc(b)}">`).join("")}</datalist>`);
 }
 function mcCard(c) {
   const open = MC.open === c.visit_id, done = ["completed", "needs_return", "cancelled"].includes(c.status);
@@ -2730,7 +2777,8 @@ function mcCard(c) {
         ${c.visit_purpose ? `<div><b>This visit:</b> ${esc(c.visit_purpose)}</div>` : ""}
         ${(c.techs || []).length > 1 ? `<div class="quiet">With ${esc(c.techs.filter(n => n !== MC.data.name).join(", "))}</div>` : ""}</div>
       ${Number(c.balance) > 0.004 ? `<div class="mc-warn">They owe ${money(c.balance)} on past invoices. Ask about it before you start.</div>` : ""}
-      ${(c.equipment || []).length ? `<div class="mc-eq"><b>Please get these details while you're there:</b><ul>${c.equipment.map(e => `<li>${esc(e.label)}: <span>${esc(e.missing.join(", "))}</span></li>`).join("")}</ul></div>` : ""}
+      ${(c.equipment || []).length ? `<div class="mc-eq"><b>Please get these details while you're there:</b> <span class="quiet">Tap one to fill it in.</span>
+        <ul>${c.equipment.map(e => mcEqItem(c, e)).join("")}</ul></div>` : ""}
       ${(c.notes || []).length ? `<div class="mc-notes">${c.notes.map(n => `<div class="mc-note ${n.pinned ? "pin" : ""}"><span class="quiet">${n.pinned ? "Pinned · " : ""}${n.where === "job" ? "Job" : n.where === "location" ? "Address" : "Customer"} note · ${esc(new Date(n.at).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }))}</span>${esc(n.body)}</div>`).join("")}</div>` : ""}
       ${(c.last_visits || []).length ? `<details class="mc-past"><summary>Last visits here</summary>${c.last_visits.map(v => `<div><b>${esc(v.date ? longDate(v.date) : "")}</b> ${esc(v.type)}${v.summary ? ": " + esc(v.summary) : ""}${v.outcome ? `<div class="quiet">${esc(v.outcome)}</div>` : ""}</div>`).join("")}</details>` : ""}
       <div class="mc-actions">${next.map(([s, t], i) => `<button class="btn ${i ? "quiet-btn" : ""}" type="button" data-mc-status="${s}">${t}</button>`).join("")}
