@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-16.102622">
+<meta name="app-version" content="2026-10-16.102952">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -961,6 +961,13 @@
   @media (max-width: 900px) { .ow-totals { grid-template-columns: 1fr 1fr; } }
   .owing-table td { vertical-align: top; }
   .owing-table .link { text-align: left; }
+  .ow-sortbar { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; margin: 0 0 10px; }
+  .th-sort { background: none; border: 0; padding: 0; font: inherit; font-weight: inherit; color: inherit; cursor: pointer; text-transform: inherit; letter-spacing: inherit; }
+  .th-sort.on { color: var(--blue); }
+  tr.ow-group td { background: var(--blue-wash); padding: 8px 10px; position: sticky; top: 34px; z-index: 1; }
+  tr.ow-group td { display: table-cell; }
+  .ow-g-btn { background: none; border: 0; font: inherit; font-weight: 750; color: var(--ink); cursor: pointer; padding: 0; margin-right: 12px; }
+  tr.ow-group strong { float: right; font-variant-numeric: tabular-nums; }
   .ow-act { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 300px; }
   .ow-still { border-color: var(--amber); color: var(--amber); }
   .ow-tag { display: inline-block; font-size: calc(11.5px * var(--fs, 1)); font-weight: 650; padding: 0 7px; border-radius: 999px; background: var(--blue-wash); color: var(--blue); margin-top: 2px; }
@@ -2850,6 +2857,40 @@ function mcCard(c) {
 
 /* ---------- Owing: every invoice still showing a balance, to go through one at a time ---------- */
 let OW = { show: "todo", kind: "all", rows: [], counts: {} };
+try { Object.assign(OW, JSON.parse(localStorage.getItem("reid.owing") || "{}")); } catch {}
+OW.sort = OW.sort || "date_desc"; OW.group = OW.group || "none";
+const saveOw = () => { try { localStorage.setItem("reid.owing", JSON.stringify({ sort: OW.sort, group: OW.group })); } catch {} };
+const OW_SORT = [["date_desc", "Newest first"], ["date_asc", "Oldest first"], ["amt_desc", "Biggest amount"], ["amt_asc", "Smallest amount"], ["cust", "Customer A–Z"], ["city", "City"]];
+const OW_GROUP = [["none", "No groups"], ["age", "How old"], ["month", "Month"], ["year", "Year"], ["customer", "Customer"], ["job", "Job type"], ["city", "City"], ["tag", "Plan sale / monthly"]];
+const owAgeDays = r => Math.floor((Date.now() - new Date(r.invoice_date + "T12:00:00")) / 86400000);
+const OW_AGES = [[30, "Under 30 days"], [60, "30 to 60 days"], [90, "60 to 90 days"], [365, "90 days to a year"], [730, "1 to 2 years"], [Infinity, "Over 2 years"]];
+function owGroupOf(r) {
+  switch (OW.group) {
+    case "age": { const d = owAgeDays(r); const i = OW_AGES.findIndex(([n]) => d < n); return [String(i).padStart(2, "0"), OW_AGES[i][1]]; }
+    case "month": return [r.invoice_date.slice(0, 7), new Date(r.invoice_date + "T12:00:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" })];
+    case "year": return [r.invoice_date.slice(0, 4), r.invoice_date.slice(0, 4)];
+    case "customer": return [(r.customer_name || "").toLowerCase() + r.customer_id, r.customer_name];
+    case "job": return [(r.job_type || "~").toLowerCase(), r.job_type || "No job type"];
+    case "city": return [(r.city || "~").toLowerCase(), r.city || "No city"];
+    case "tag": { const k = r.plan_sale ? (r.monthly_plan ? 0 : 1) : r.monthly_plan ? 2 : 3;
+      return [String(k), ["Plan sale, customer on a monthly plan", "Plan sale", "Customer on a monthly plan", "Everything else"][k]]; }
+    default: return ["", ""];
+  }
+}
+function owSorted(rows) {
+  const by = { date_desc: (a, b) => b.invoice_date.localeCompare(a.invoice_date) || b.invoice_id - a.invoice_id,
+    date_asc: (a, b) => a.invoice_date.localeCompare(b.invoice_date) || a.invoice_id - b.invoice_id,
+    amt_desc: (a, b) => b.balance - a.balance, amt_asc: (a, b) => a.balance - b.balance,
+    cust: (a, b) => (a.customer_name || "").localeCompare(b.customer_name || "") || b.invoice_date.localeCompare(a.invoice_date),
+    city: (a, b) => (a.city || "~").localeCompare(b.city || "~") || (a.customer_name || "").localeCompare(b.customer_name || "") }[OW.sort];
+  const list = rows.map(r => ({ ...r, balance: Number(r.balance) })).sort(by);
+  if (OW.group === "none") return list;
+  const keyed = list.map((r, i) => ({ r, i, g: owGroupOf(r) }));
+  // groups: oldest/biggest first where it makes sense, otherwise A–Z; rows keep the chosen sort inside each group
+  const desc = ["month", "year"].includes(OW.group);
+  keyed.sort((a, b) => (desc ? b.g[0].localeCompare(a.g[0]) : a.g[0].localeCompare(b.g[0])) || a.i - b.i);
+  return keyed.map(x => Object.assign(x.r, { _g: x.g }));
+}
 const OW_SHOW = [["todo", "To check"], ["checked", "Checked, still owing"], ["not_owed", "Marked not owed"]];
 const OW_KIND = [["all", "All invoices"], ["plan", "Plan sales"], ["monthly", "Customers on a monthly plan"]];
 async function openOwing() {
@@ -2887,8 +2928,22 @@ function renderOwing(msg) {
     </div>
     <div class="calls-sum"><strong>${rows.length.toLocaleString()} ${rows.length === 1 ? "invoice" : "invoices"}</strong><span>${money(total)}</span>
       ${rows.length >= 2000 ? `<span class="staff-msg err">Showing the first 2,000.</span>` : ""}<span class="staff-msg ok" id="ow-msg" role="status">${msg ? esc(msg) : ""}</span></div>
-    ${rows.length ? `<div class="staff-wrap"><table class="calls-table owing-table"><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Job</th><th class="r">Owing</th><th>${done ? "Marked" : "Mark it"}</th></tr></thead><tbody>
-      ${rows.map(r => `<tr data-inv="${r.invoice_id}">
+    <div class="ow-sortbar">
+      <label class="calls-tech">Sort <select id="ow-sort">${OW_SORT.map(([k, t]) => `<option value="${k}" ${OW.sort === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label class="calls-tech">Group by <select id="ow-group">${OW_GROUP.map(([k, t]) => `<option value="${k}" ${OW.group === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      ${OW.group !== "none" ? `<button class="link" type="button" id="ow-fold">${OW.folded ? "Open all groups" : "Close all groups"}</button>` : ""}
+    </div>
+    ${rows.length ? (() => { const list = owSorted(rows), sums = {};
+      list.forEach(r => { if (r._g) { const s = sums[r._g[0]] ||= { n: 0, t: 0 }; s.n++; s.t += r.balance; } });
+      let last = null;
+      const th = (k, t, cls = "") => { const on = OW.sort.startsWith(k) || OW.sort === k; return `<th class="${cls}"><button class="th-sort ${on ? "on" : ""}" type="button" data-ow-th="${k}">${t}${on ? (OW.sort.endsWith("asc") || k === "cust" || k === "city" ? " ▲" : " ▼") : ""}</button></th>`; };
+      return `<div class="staff-wrap"><table class="calls-table owing-table"><thead><tr>${th("date", "Date")}<th>Invoice</th>${th("cust", "Customer")}<th>Job</th>${th("amt", "Owing", "r")}<th>${done ? "Marked" : "Mark it"}</th></tr></thead><tbody>
+      ${list.map(r => { let head = "";
+        if (r._g && r._g[0] !== last) { last = r._g[0]; const s = sums[last], shut = (OW.closed || []).includes(last);
+          head = `<tr class="ow-group" data-ow-g="${esc(last)}"><td colspan="6"><button type="button" class="ow-g-btn" aria-expanded="${!shut}">${shut ? "▸" : "▾"} ${esc(r._g[1])}</button>
+            <span class="quiet">${s.n} ${s.n === 1 ? "invoice" : "invoices"}</span><strong>${money(s.t)}</strong></td></tr>`; }
+        if (r._g && (OW.closed || []).includes(r._g[0])) return head;
+        return head + `<tr data-inv="${r.invoice_id}">
         <td class="num">${fmtDate(r.invoice_date)}</td>
         <td><button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button>
           ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}</td>
@@ -2900,10 +2955,24 @@ function renderOwing(msg) {
             <button class="chip small ow-still" type="button" data-ow-still>Still owing</button>`
           : OW.show === "checked" ? `<span class="quiet">Still owing · ${esc(r.checked_by || "")} ${r.checked_at ? esc(fmtDate(r.checked_at.slice(0, 10))) : ""}</span> <button class="link" type="button" data-ow-undo-check>Undo</button>`
           : `<span>${esc(r.not_owed_reason)}</span> <span class="quiet">· ${esc(r.marked_by || "")}</span> <button class="link" type="button" data-ow-undo-not>Undo</button>`}</td>
-      </tr>`).join("")}</tbody></table></div>` : `<div class="quiet" style="padding:24px 0">${OW.show === "todo" ? "Nothing left to check here." : "None yet."}</div>`}
+      </tr>`; }).join("")}</tbody></table></div>`; })() : `<div class="quiet" style="padding:24px 0">${OW.show === "todo" ? "Nothing left to check here." : "None yet."}</div>`}
   </article>`;
   $("#main").scrollTop = top;
   document.querySelectorAll("[data-ow-show]").forEach(b => b.addEventListener("click", () => { OW.show = b.dataset.owShow; loadOwing(); }));
+  $("#ow-sort")?.addEventListener("change", e => { OW.sort = e.target.value; saveOw(); renderOwing(); });
+  $("#ow-group")?.addEventListener("change", e => { OW.group = e.target.value; OW.closed = []; OW.folded = false; saveOw(); renderOwing(); });
+  document.querySelectorAll("[data-ow-th]").forEach(b => b.addEventListener("click", () => {
+    const k = b.dataset.owTh;
+    OW.sort = k === "date" ? (OW.sort === "date_desc" ? "date_asc" : "date_desc") : k === "amt" ? (OW.sort === "amt_desc" ? "amt_asc" : "amt_desc") : k;
+    saveOw(); renderOwing();
+  }));
+  document.querySelectorAll(".ow-g-btn").forEach(b => b.addEventListener("click", () => {
+    const g = b.closest("tr").dataset.owG; OW.closed = OW.closed || [];
+    OW.closed = OW.closed.includes(g) ? OW.closed.filter(x => x !== g) : OW.closed.concat(g); renderOwing();
+  }));
+  $("#ow-fold")?.addEventListener("click", () => {
+    OW.folded = !OW.folded; OW.closed = OW.folded ? [...new Set(OW.rows.map(r => owGroupOf(r)[0]))] : []; renderOwing();
+  });
   document.querySelectorAll("[data-ow-kind]").forEach(b => b.addEventListener("click", () => { OW.kind = b.dataset.owKind; loadOwing(); }));
   document.querySelectorAll("[data-ow-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.owCust))));
   document.querySelectorAll(".owing [data-invoice]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.invoice))));
