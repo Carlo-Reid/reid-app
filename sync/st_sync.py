@@ -439,7 +439,8 @@ PO_STATUS = {"pending": "draft", "sent": "sent", "partiallyreceived": "partially
 
 
 def sync_purchase_orders(cur, st, state, new_state):
-    """ServiceTitan's purchase orders (and the suppliers on them). All of them the first time, then what changed."""
+    """ServiceTitan's purchase orders (and the suppliers on them). All of them the first time, then what changed.
+    Saved in bulk, so thousands of POs take seconds, not an hour."""
     try:
         vendors = pull_pages(st, "inventory/v2/tenant/{t}/vendors")
     except RuntimeError as e:
@@ -451,62 +452,58 @@ def sync_purchase_orders(cur, st, state, new_state):
     prev = (state.get("purchase-orders") or {}).get("continue_from")
     pos, marker = pull_export(st, "inventory/v2/tenant/{t}/export/purchase-orders", prev)
     new_state["purchase-orders"] = {"continue_from": marker, "since": None}
-    # suppliers: match ServiceTitan's vendors to ours by number, then by name; add any that are new
-    vmap = {}
-    for v in vendors:
-        name = (v.get("name") or "").strip()
-        if not name: continue
-        cur.execute("SELECT id FROM suppliers WHERE st_id = %s", (v["id"],))
-        row = cur.fetchone()
-        if not row:
-            cur.execute("SELECT id FROM suppliers WHERE st_id IS NULL AND lower(btrim(name)) = lower(%s) LIMIT 1", (name,))
-            row = cur.fetchone()
-            if row: cur.execute("UPDATE suppliers SET st_id = %s WHERE id = %s", (v["id"], row[0]))
-            else:
-                cur.execute("INSERT INTO suppliers (name, active, st_id) VALUES (%s, %s, %s) RETURNING id", (name, v.get("active") is not False, v["id"]))
-                row = cur.fetchone()
-        vmap[int(v["id"])] = row[0]
+    # suppliers: match by ServiceTitan number, then by name; add the new ones
+    cur.execute("DROP TABLE IF EXISTS _s_vend; CREATE TEMP TABLE _s_vend (st_id bigint, name text, active boolean) ON COMMIT DROP")
+    with cur.copy("COPY _s_vend FROM STDIN") as cp:
+        for v in vendors:
+            if (v.get("name") or "").strip(): cp.write_row((int(v["id"]), v["name"].strip(), v.get("active") is not False))
+    cur.execute("""UPDATE suppliers s SET st_id = v.st_id FROM _s_vend v
+                   WHERE s.st_id IS NULL AND lower(btrim(s.name)) = lower(v.name)
+                     AND NOT EXISTS (SELECT 1 FROM suppliers x WHERE x.st_id = v.st_id)""")
+    cur.execute("""INSERT INTO suppliers (name, active, st_id) SELECT v.name, v.active, v.st_id FROM _s_vend v
+                   WHERE NOT EXISTS (SELECT 1 FROM suppliers x WHERE x.st_id = v.st_id)""")
     if not pos: return 0
-    cur.execute("SELECT id FROM jobs WHERE id = ANY(%s)", ([int(p["jobId"]) for p in pos if p.get("jobId")] or [0],))
-    jobs = {r[0] for r in cur.fetchall()}
-    cur.execute("SELECT id FROM employees WHERE id = ANY(%s)", ([int(p["technicianId"]) for p in pos if p.get("technicianId")] or [0],))
-    emps = {r[0] for r in cur.fetchall()}
-    saved = 0
-    for p in pos:
-        sup = vmap.get(int(p.get("vendorId") or 0))
-        if not sup:
-            cur.execute("SELECT id FROM suppliers WHERE name = 'Unknown supplier'"); r = cur.fetchone()
-            if not r: cur.execute("INSERT INTO suppliers (name, active) VALUES ('Unknown supplier', false) RETURNING id"); r = cur.fetchone()
-            sup = r[0]
-        jid = int(p["jobId"]) if p.get("jobId") and int(p["jobId"]) in jobs else None
-        num = str(p.get("number") or p["id"]).strip()
-        cur.execute("SELECT id FROM purchase_orders WHERE po_number = %s AND st_id IS DISTINCT FROM %s", (num, p["id"]))
-        if cur.fetchone(): num = f"{num} (ST)"
-        status = PO_STATUS.get(str(p.get("status") or "").replace(" ", "").lower(), "sent")
-        tech = int(p["technicianId"]) if p.get("technicianId") and int(p["technicianId"]) in emps else None
-        cur.execute("""
-            INSERT INTO purchase_orders (po_number, supplier_id, purpose, job_id, status, ordered_by_employee_id, ordered_at, expected_on,
-                                         supplier_reference, notes, description, amount, st_id, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, coalesce(%s::timestamptz, now()))
-            ON CONFLICT (st_id) WHERE st_id IS NOT NULL DO UPDATE SET po_number = EXCLUDED.po_number, supplier_id = EXCLUDED.supplier_id,
-              purpose = EXCLUDED.purpose, job_id = EXCLUDED.job_id, status = EXCLUDED.status, ordered_by_employee_id = EXCLUDED.ordered_by_employee_id,
-              ordered_at = EXCLUDED.ordered_at, expected_on = EXCLUDED.expected_on, supplier_reference = EXCLUDED.supplier_reference,
-              notes = EXCLUDED.notes, description = EXCLUDED.description, amount = EXCLUDED.amount
-            RETURNING id""",
-            (num, sup, "job" if jid else "other", jid, status, tech, p.get("sentOn") or p.get("date") or p.get("createdOn"),
-             (p.get("requiredOn") or "")[:10] or None, (p.get("vendorDocumentNumber") or None), (p.get("summary") or None),
-             (p.get("summary") or None), p.get("total"), p["id"], p.get("createdOn") or p.get("date")))
-        po_id = cur.fetchone()[0]
-        cur.execute("DELETE FROM purchase_order_lines WHERE purchase_order_id = %s AND NOT EXISTS "
-                    "(SELECT 1 FROM po_receipt_lines r WHERE r.purchase_order_line_id = purchase_order_lines.id)", (po_id,))
-        for it in p.get("items") or []:
-            qty = float(it.get("quantity") or 0)
-            if qty <= 0: continue
-            desc = (it.get("description") or it.get("skuName") or it.get("skuCode") or "Item").strip()[:2000]
-            cur.execute("""INSERT INTO purchase_order_lines (purchase_order_id, description, quantity, unit_cost, quantity_received, job_id)
-                           VALUES (%s, %s, %s, %s, %s, %s)""",
-                        (po_id, desc, round(qty, 2), round(float(it.get("cost") or 0), 2), round(float(it.get("quantityReceived") or 0), 2), jid))
-        saved += 1
+    cur.execute("""INSERT INTO suppliers (name, active) SELECT 'Unknown supplier', false
+                   WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE name = 'Unknown supplier')""")
+    cur.execute("""DROP TABLE IF EXISTS _s_po; CREATE TEMP TABLE _s_po (st_id bigint, num text, vendor bigint, job bigint, status text, tech bigint,
+                   ordered text, expected text, ref text, summary text, total numeric, created text) ON COMMIT DROP""")
+    cur.execute("""DROP TABLE IF EXISTS _s_pol; CREATE TEMP TABLE _s_pol (po_st bigint, n int, descr text, qty numeric, cost numeric, rec numeric) ON COMMIT DROP""")
+    with cur.copy("COPY _s_po FROM STDIN") as cp:
+        for p in pos:
+            cp.write_row((int(p["id"]), str(p.get("number") or p["id"]).strip(), int(p.get("vendorId") or 0) or None,
+                          int(p.get("jobId") or 0) or None, PO_STATUS.get(str(p.get("status") or "").replace(" ", "").lower(), "sent"),
+                          int(p.get("technicianId") or 0) or None, p.get("sentOn") or p.get("date") or p.get("createdOn"),
+                          (p.get("requiredOn") or "")[:10] or None, p.get("vendorDocumentNumber") or None,
+                          p.get("summary") or None, p.get("total"), p.get("createdOn") or p.get("date")))
+    with cur.copy("COPY _s_pol FROM STDIN") as cp:
+        for p in pos:
+            for n, it in enumerate(p.get("items") or []):
+                q = float(it.get("quantity") or 0)
+                if q > 0:
+                    cp.write_row((int(p["id"]), n, (it.get("description") or it.get("skuName") or it.get("skuCode") or "Item").strip()[:2000],
+                                  round(q, 2), round(float(it.get("cost") or 0), 2), round(float(it.get("quantityReceived") or 0), 2)))
+    cur.execute("""
+        INSERT INTO purchase_orders (po_number, supplier_id, purpose, job_id, status, ordered_by_employee_id, ordered_at, expected_on,
+                                     supplier_reference, notes, description, amount, st_id, created_at)
+        SELECT CASE WHEN EXISTS (SELECT 1 FROM purchase_orders x WHERE x.po_number = p.num AND x.st_id IS DISTINCT FROM p.st_id)
+                    THEN p.num || ' (ST)' ELSE p.num END,
+               coalesce((SELECT id FROM suppliers WHERE st_id = p.vendor LIMIT 1), (SELECT id FROM suppliers WHERE name = 'Unknown supplier' LIMIT 1)),
+               CASE WHEN j.id IS NULL THEN 'other' ELSE 'job' END, j.id, p.status, e.id,
+               nullif(p.ordered, '')::timestamptz, nullif(p.expected, '')::date, p.ref, p.summary, p.summary, p.total, p.st_id,
+               coalesce(nullif(p.created, '')::timestamptz, now())
+        FROM (SELECT DISTINCT ON (st_id) * FROM _s_po ORDER BY st_id) p
+        LEFT JOIN jobs j ON j.id = p.job LEFT JOIN employees e ON e.id = p.tech
+        ON CONFLICT (st_id) WHERE st_id IS NOT NULL DO UPDATE SET supplier_id = EXCLUDED.supplier_id, purpose = EXCLUDED.purpose,
+          job_id = EXCLUDED.job_id, status = EXCLUDED.status, ordered_by_employee_id = EXCLUDED.ordered_by_employee_id,
+          ordered_at = EXCLUDED.ordered_at, expected_on = EXCLUDED.expected_on, supplier_reference = EXCLUDED.supplier_reference,
+          notes = EXCLUDED.notes, description = EXCLUDED.description, amount = EXCLUDED.amount""")
+    saved = cur.rowcount
+    cur.execute("""DELETE FROM purchase_order_lines l USING purchase_orders po
+                   WHERE l.purchase_order_id = po.id AND po.st_id IN (SELECT st_id FROM _s_po)
+                     AND NOT EXISTS (SELECT 1 FROM po_receipt_lines r WHERE r.purchase_order_line_id = l.id)""")
+    cur.execute("""INSERT INTO purchase_order_lines (purchase_order_id, description, quantity, unit_cost, quantity_received, job_id)
+                   SELECT po.id, l.descr, l.qty, l.cost, l.rec, po.job_id FROM _s_pol l JOIN purchase_orders po ON po.st_id = l.po_st
+                   ORDER BY po.id, l.n""")
     return saved
 
 
