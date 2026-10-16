@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-16.102952">
+<meta name="app-version" content="2026-10-16.103152">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -972,6 +972,9 @@
   .ow-still { border-color: var(--amber); color: var(--amber); }
   .ow-tag { display: inline-block; font-size: calc(11.5px * var(--fs, 1)); font-weight: 650; padding: 0 7px; border-radius: 999px; background: var(--blue-wash); color: var(--blue); margin-top: 2px; }
   .ow-tag.mo { background: var(--green-wash); color: var(--green); }
+  .ow-tag.odd { background: var(--red-wash); color: var(--red); }
+  .ow-odd-note { color: var(--red); font-size: calc(12.5px * var(--fs, 1)); font-weight: 600; }
+  .ow-help { max-width: 900px; margin: 0 0 12px; }
   .inv-owed { margin-top: 18px; padding: 10px 14px; border: 1px dashed var(--line); border-radius: var(--radius-m); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: calc(14px * var(--fs, 1)); }
   @media print { .no-print { display: none !important; } }
   /* on-screen keyboard open (iPad / iPhone): leave room to scroll the last boxes above it, and lift the pop-up panels */
@@ -2861,7 +2864,7 @@ try { Object.assign(OW, JSON.parse(localStorage.getItem("reid.owing") || "{}"));
 OW.sort = OW.sort || "date_desc"; OW.group = OW.group || "none";
 const saveOw = () => { try { localStorage.setItem("reid.owing", JSON.stringify({ sort: OW.sort, group: OW.group })); } catch {} };
 const OW_SORT = [["date_desc", "Newest first"], ["date_asc", "Oldest first"], ["amt_desc", "Biggest amount"], ["amt_asc", "Smallest amount"], ["cust", "Customer A–Z"], ["city", "City"]];
-const OW_GROUP = [["none", "No groups"], ["age", "How old"], ["month", "Month"], ["year", "Year"], ["customer", "Customer"], ["job", "Job type"], ["city", "City"], ["tag", "Plan sale / monthly"]];
+const OW_GROUP = [["none", "No groups"], ["age", "How old"], ["month", "Month"], ["year", "Year"], ["customer", "Customer"], ["job", "Job type"], ["city", "City"], ["tag", "Kind (needs a look, plan sale, monthly)"]];
 const owAgeDays = r => Math.floor((Date.now() - new Date(r.invoice_date + "T12:00:00")) / 86400000);
 const OW_AGES = [[30, "Under 30 days"], [60, "30 to 60 days"], [90, "60 to 90 days"], [365, "90 days to a year"], [730, "1 to 2 years"], [Infinity, "Over 2 years"]];
 function owGroupOf(r) {
@@ -2872,8 +2875,8 @@ function owGroupOf(r) {
     case "customer": return [(r.customer_name || "").toLowerCase() + r.customer_id, r.customer_name];
     case "job": return [(r.job_type || "~").toLowerCase(), r.job_type || "No job type"];
     case "city": return [(r.city || "~").toLowerCase(), r.city || "No city"];
-    case "tag": { const k = r.plan_sale ? (r.monthly_plan ? 0 : 1) : r.monthly_plan ? 2 : 3;
-      return [String(k), ["Plan sale, customer on a monthly plan", "Plan sale", "Customer on a monthly plan", "Everything else"][k]]; }
+    case "tag": { const k = r.over_total ? 0 : r.plan_sale ? (r.monthly_plan ? 1 : 2) : r.monthly_plan ? 3 : 4;
+      return [String(k), ["Owing more than the invoice total", "Plan sale, customer on a monthly plan", "Plan sale", "Customer on a monthly plan", "Everything else"][k]]; }
     default: return ["", ""];
   }
 }
@@ -2892,7 +2895,7 @@ function owSorted(rows) {
   return keyed.map(x => Object.assign(x.r, { _g: x.g }));
 }
 const OW_SHOW = [["todo", "To check"], ["checked", "Checked, still owing"], ["not_owed", "Marked not owed"]];
-const OW_KIND = [["all", "All invoices"], ["plan", "Plan sales"], ["monthly", "Customers on a monthly plan"]];
+const OW_KIND = [["all", "All invoices"], ["over", "Owing more than the total"], ["plan", "Plan sales"], ["monthly", "Customers on a monthly plan"]];
 async function openOwing() {
   setPage("owing", "owing");
   $("#main").innerHTML = `<div class="loading">Loading what's owing…</div>`;
@@ -2928,6 +2931,10 @@ function renderOwing(msg) {
     </div>
     <div class="calls-sum"><strong>${rows.length.toLocaleString()} ${rows.length === 1 ? "invoice" : "invoices"}</strong><span>${money(total)}</span>
       ${rows.length >= 2000 ? `<span class="staff-msg err">Showing the first 2,000.</span>` : ""}<span class="staff-msg ok" id="ow-msg" role="status">${msg ? esc(msg) : ""}</span></div>
+    ${OW.kind === "all" && OW.show === "todo" && rows.some(r => r.over_total) ? `<div class="approve-banner"><div><strong>${rows.filter(r => r.over_total).length} invoices show more owing than the invoice itself</strong>
+        (${money(rows.filter(r => r.over_total).reduce((s, r) => s + Number(r.balance) - Number(r.total), 0))} extra). ServiceTitan recorded a negative payment on them, usually a refund or a reversed payment. Check these first.</div>
+        <button class="btn" type="button" data-ow-kind="over">Show them</button></div>` : ""}
+    ${OW.kind === "over" ? `<p class="quiet ow-help">These show more owing than the invoice total because ServiceTitan recorded a negative payment (the "paid" amount under each). Open each one: if the customer really owes it, press <b>Still owing</b>; if it was a refund or a mistake, mark it with the reason.</p>` : ""}
     <div class="ow-sortbar">
       <label class="calls-tech">Sort <select id="ow-sort">${OW_SORT.map(([k, t]) => `<option value="${k}" ${OW.sort === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <label class="calls-tech">Group by <select id="ow-group">${OW_GROUP.map(([k, t]) => `<option value="${k}" ${OW.group === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
@@ -2946,10 +2953,11 @@ function renderOwing(msg) {
         return head + `<tr data-inv="${r.invoice_id}">
         <td class="num">${fmtDate(r.invoice_date)}</td>
         <td><button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button>
+          ${r.over_total ? `<div><span class="ow-tag odd" title="ServiceTitan shows ${esc(money(r.paid))} paid on this invoice, so it shows more owing than the invoice total. Usually a refund or a reversed payment.">Owing more than total</span></div>` : ""}
           ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}</td>
         <td><button class="link" type="button" data-ow-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${esc(r.job_type || "")}</td>
-        <td class="r num"><strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div></td>
+        <td class="r num"><strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>${r.over_total ? `<div class="ow-odd-note">paid ${money(r.paid)}</div>` : ""}</td>
         <td class="ow-act">${OW.show === "todo" ? `${["Paid monthly", "Paid elsewhere", "Written off"].map(x => `<button class="chip small" type="button" data-ow-not="${x}">${x}</button>`).join("")}
             <button class="chip small" type="button" data-ow-not="">Other…</button>
             <button class="chip small ow-still" type="button" data-ow-still>Still owing</button>`
