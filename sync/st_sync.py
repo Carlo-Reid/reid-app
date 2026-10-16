@@ -209,12 +209,19 @@ def write_csv(path, recs):
 # ---------------------------------------------------------------------------
 # first run: markers from the October export
 # ---------------------------------------------------------------------------
-def seed_from_export():
+def latest_export():
+    """The newest export_YYYY-MM-DD_HHMM folder (not files like export_notes.py)."""
     root = os.path.dirname(find_file("servicetitan-settings.txt") or HERE)
-    folders = sorted(glob.glob(os.path.join(root, "export_*")))
-    if not folders:
+    found = [p for p in glob.glob(os.path.join(root, "export_*"))
+             if os.path.isdir(p) and re.match(r"export_\d{4}-\d{2}-\d{2}_\d{4}$", os.path.basename(p))
+             and os.path.isdir(os.path.join(p, "raw-json"))]
+    return sorted(found)[-1] if found else None
+
+
+def seed_from_export():
+    exp = latest_export()
+    if not exp:
         return None
-    exp = folders[-1]
     raw = os.path.join(exp, "raw-json")
     state = {}
     for name, _, kind in FEEDS:
@@ -447,15 +454,27 @@ def main():
     run_id = cur.fetchone()[0]; conn.commit()
 
     try:
+        new_state = {}
         cur.execute("SELECT endpoint, continue_from, since FROM st_sync_state")
         state = {e: {"continue_from": c, "since": s.isoformat() if s else None} for e, c, s in cur.fetchall()}
+        # one time: go back over every change since the export (the first run may have started from the wrong place)
+        cur.execute("SELECT 1 FROM st_sync_state WHERE endpoint = 'reseed-from-export'")
+        if state and not cur.fetchone() and not args.from_files and not QUIET:
+            seed = seed_from_export()
+            if seed and len(seed) > 5:
+                for k, v in seed.items():
+                    if k != "installed-equipment": state[k] = v
+                state["installed-equipment"] = seed["installed-equipment"]
+                log("Going back over everything since the export once, to catch anything missed.")
+                new_state["reseed-from-export"] = {"continue_from": None, "since": started.isoformat()}
         if not state and not args.from_files:
             state = seed_from_export()
             if not state:
                 raise RuntimeError("This is the first sync and there's no ServiceTitan export folder to start from. "
                                    "Run SYNC NOW.bat once on the computer that has the export_... folder.")
+            new_state["reseed-from-export"] = {"continue_from": None, "since": started.isoformat()}
         st = ST(st_s) if not args.from_files else None
-        delta, new_state = {}, {}
+        delta = {}
         log("Asking ServiceTitan what changed...")
         for name, path, kind in FEEDS:
             if args.from_files:
@@ -546,10 +565,9 @@ def backfill_assignments(cur, folder=None):
     """One-time repair: techs who were missing from ServiceTitan's staff list in the export (e.g. Kane) had their calls
     loaded without them. Put back every call-to-tech link from the export's saved pages, if that tech and call now exist."""
     if not folder:
-        root = os.path.dirname(find_file("servicetitan-settings.txt") or HERE)
-        exports = sorted(glob.glob(os.path.join(root, "export_*")))
-        if not exports: return None
-        folder = os.path.join(exports[-1], "raw-json")
+        exp = latest_export()
+        if not exp: return None
+        folder = os.path.join(exp, "raw-json")
     pages = sorted(glob.glob(os.path.join(folder, "appointment-assignments_*.json")))
     if not pages: return None
     rows = {}
