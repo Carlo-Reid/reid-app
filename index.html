@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.194800">
+<meta name="app-version" content="2026-10-17.195112">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1697,6 +1697,10 @@
   .zb-form .btn { padding: 4px 12px; }
   .sec1a.stuck .zb-edit { display: none; }
   .zone-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 3px 10px 3px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); font-size: calc(14px * var(--fs, 1)); }
+  .dsp-cby { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; } .dsp-cby select { padding: 4px 6px; border-radius: 6px; border: 1px solid rgba(255,255,255,.5); font: inherit; background: var(--panel); color: var(--ink); }
+  .dsp-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: calc(13.5px * var(--fs, 1)); }
+  .dsp-leg { display: inline-flex; align-items: center; gap: 6px; } .dsp-leg b { color: var(--steel); font-weight: 600; }
+  .dsp-leg-hint { flex-basis: 100%; color: var(--steel); }
   .dc.zc { background: color-mix(in srgb, var(--zc) 22%, var(--panel)); border-color: color-mix(in srgb, var(--zc) 55%, var(--line)); }
   .dc.zc.pr-emergency { background: color-mix(in srgb, var(--zc) 22%, var(--red-wash)); }
   body[data-page="dispatch"].dsp-mapmode #app { grid-template-columns: 1fr; }
@@ -4484,6 +4488,22 @@ async function loadDispatch() {
   DSP.sig = JSON.stringify([DSP.rows, DSP.waiting]);
   renderDispatch();
 }
+// the colours on the board, with how many calls each, and a hint when they're all one colour
+function dspLegendRow(rows) {
+  const by = DSP.colorBy || "hood", g = new Map();
+  rows.forEach(r => { const k = dspKey(r, by); const x = g.get(k.key) || { ...k, n: 0 }; x.n++; g.set(k.key, x); });
+  const list = [...g.values()].sort((a, b) => b.n - a.n), cols = new Set(list.filter(x => x.color !== MAP_GREY).map(x => x.color));
+  const greyN = list.filter(x => x.color === MAP_GREY).reduce((t, x) => t + x.n, 0);
+  let hint = "";
+  if (rows.length > 3 && cols.size <= 1) {
+    if (by === "hood" && !(MAPH.list || []).length) hint = "Neighbourhoods aren't loaded yet, so calls use their postal code area colour. Load them on Map colours (Neighbourhoods tab).";
+    else if (by === "town") hint = "Most calls are in one town (Ottawa), so they're all one colour. Try Neighbourhood or Postal code area.";
+    else if (greyN === rows.length) hint = `No colours are picked for ${(DSP_BY_TITLE[by] || "these").toLowerCase()} yet. Pick them on Map colours, or colour by something else.`;
+    else hint = "All calls today fall in one colour. Try colouring by something else.";
+  } else if (greyN && by !== "tech") hint = `${greyN} call${greyN === 1 ? " has" : "s have"} no colour picked yet (grey).`;
+  return `<div class="dsp-legend">${list.slice(0, 14).map(x => `<span class="dsp-leg"><span class="dm-dot" style="background:${esc(x.color)}"></span>${esc(x.label)} <b>${x.n}</b></span>`).join("")}${list.length > 14 ? `<span class="quiet">+${list.length - 14} more</span>` : ""}
+    ${hint ? `<span class="dsp-leg-hint">ℹ️ ${esc(hint)} ${can("calls.dispatch") || ME.role === "owner" ? `<button class="link" type="button" onclick="openMapColours()">Map colours…</button>` : ""}</span>` : ""}</div>`;
+}
 // each call card is filled with its map colour (same as its dot on the map)
 function dspTint(r) { const c = typeof dspMarkColor === "function" ? dspMarkColor(r) : null;
   if (!c || c === MAP_GREY) return ["", "", ""]; return ["zc", `style="--zc:${esc(c)}"`, `;--zc:${esc(c)}`]; }
@@ -4570,8 +4590,10 @@ function renderDispatch() {
       <div class="dsp-sum quiet">${callsWord(rows.length)}${none.length ? ` · <span class="owe">${none.length} without a tech</span>` : ""}${cancelled ? ` · ${cancelled} cancelled` : ""}
         <label class="dsp-all"><input type="checkbox" id="dsp-all" ${DSP.all ? "checked" : ""}> Show every tech</label>
         <button class="btn ${DSP.map ? "" : "quiet-btn"} dsp-mapbtn" type="button" id="dsp-map" aria-pressed="${!!DSP.map}">🗺 ${DSP.map ? "Hide map" : "Map"}</button>
+        <label class="dsp-cby">Colour calls by <select id="dsp-cby">${DSP_BY.map(([k, t]) => `<option value="${k}" ${(DSP.colorBy || "hood") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
         <span class="live-dot ${callsLive ? "on" : ""}" title="${callsLive ? "Live: changes show up by themselves" : "Checks for changes every 30 seconds"}"></span></div>
     </div>
+    ${dspLegendRow(rows)}
     ${DSP.waiting.length ? `<details class="dsp-wait" ${DSP.waitOpen ? "open" : ""}><summary><strong>Waiting for a day</strong> <span class="count">${DSP.waiting.length}</span>
         <span class="quiet">Drag one onto a tech to book it for ${isToday ? "today" : "this day"}, or click it to pick the time.</span></summary>
       <div class="dsp-wait-list" data-col="wait">${DSP.waiting.map(r => dspCard(r, 0)).join("")}</div></details>` : ""}
@@ -4588,6 +4610,7 @@ function renderDispatch() {
   $("#dsp-all").addEventListener("change", e => { DSP.all = e.target.checked; saveDsp(); renderDispatch(); });
   $("#dsp-map").addEventListener("click", () => { DSP.map = !DSP.map; saveDspMap(); renderDispatch(); });
   $("#dsp-menu")?.addEventListener("click", () => { DSP.map = false; saveDspMap(); renderDispatch(); });
+  $("#dsp-cby").addEventListener("change", e => { DSP.colorBy = e.target.value; saveDspMap(); if (DSP.mp && DSP.mp.same !== false) DSP.mp.group = DSP.colorBy; renderDispatch(); });
   if (DSP.map) mountDspMap();
   $(".dsp-wait")?.addEventListener("toggle", e => { DSP.waitOpen = e.target.open; saveDsp(); });
   document.querySelectorAll(".dc").forEach(c => {
