@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.144323">
+<meta name="app-version" content="2026-10-17.144920">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -827,6 +827,13 @@
   .ie-foot { margin: 6px 0 40px; }
   .ie-topbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
   .ie-close { font-weight: 650; }
+  .ie-opts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: calc(13px * var(--fs, 1)); color: var(--steel); }
+  .ie-opts label { display: inline-flex; align-items: center; gap: 5px; margin: 0; font-weight: 600; cursor: pointer; }
+  .ie-tag { background: var(--blue-wash); color: var(--blue); border-radius: 999px; padding: 1px 9px; font-weight: 650; }
+  .ie-free { color: var(--green); font-weight: 700; } .ie-free s { color: var(--steel); font-weight: 500; }
+  tr.ie-hid td { background: repeating-linear-gradient(-45deg, transparent 0 8px, var(--paper) 8px 16px); }
+  tr.ie-hid td:first-child { box-shadow: inset 3px 0 0 var(--steel); }
+  .ie-hid-warn { margin-top: 4px; color: var(--amber); font-weight: 650; font-size: calc(13px * var(--fs, 1)); }
   .ie-grid.has-cost { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
   .ie-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .ie-cost { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 12px; }
@@ -4737,11 +4744,16 @@ function renderInvoiceEditor(msg) {
         <div class="seg" role="group"><button type="button" data-ie-look="" aria-pressed="${!I.look_partner_id}">Reid Heating &amp; Cooling</button>${I.looks.map(l =>
           `<button type="button" data-ie-look="${l.id}" aria-pressed="${I.look_partner_id === l.id}">${esc(l.name)} <span class="ie-look-sub">installed by Reid</span></button>`).join("")}</div></div>` : ""}
       <table class="ie-table"><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">HST</th><th class="r">Amount</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
-        ${I.lines.length ? I.lines.map((l, n) => `<tr data-ie-line="${l.id}">
+        ${I.lines.length ? I.lines.map((l, n) => `<tr data-ie-line="${l.id}" class="${l.hidden ? "ie-hid" : ""}">
           <td>${edit ? `<textarea class="ie-desc" data-ie-f="description" rows="${Math.min(6, Math.max(1, Math.ceil((l.description || "").length / 70), (l.description || "").split("\n").length))}">${esc(l.description)}</textarea>`
-                     : `<div class="ie-desc-ro">${esc(l.description)}</div>`}${l.sku ? `<div class="quiet">${esc(l.sku)}</div>` : ""}</td>
+                     : `<div class="ie-desc-ro">${esc(l.description)}</div>`}${l.sku ? `<div class="quiet">${esc(l.sku)}</div>` : ""}
+            ${edit ? `<div class="ie-opts"><label><input type="checkbox" data-ie-opt="no_charge" ${l.no_charge ? "checked" : ""}> No charge</label>
+              <label><input type="checkbox" data-ie-opt="hidden" ${l.hidden ? "checked" : ""}> Hide on the printed invoice</label></div>`
+              : (l.no_charge || l.hidden) ? `<div class="ie-opts">${l.no_charge ? `<span class="ie-tag">No charge</span>` : ""}${l.hidden ? `<span class="ie-tag">Hidden from the customer</span>` : ""}</div>` : ""}
+            ${l.hidden && Number(l.line_total) ? `<div class="ie-hid-warn">Hidden but still charged: the customer's total includes ${money(l.line_total)} they can't see.</div>` : ""}</td>
           <td class="r">${edit ? `<input class="ie-num" data-ie-f="quantity" inputmode="decimal" value="${Number(l.quantity)}">` : Number(l.quantity)}</td>
-          <td class="r">${edit ? `<input class="ie-num ie-price" data-ie-f="unit_price" inputmode="decimal" value="${Number(l.unit_price).toFixed(2)}">` : money(l.unit_price)}</td>
+          <td class="r">${l.no_charge ? `<span class="ie-free">${l.regular_price != null ? `<s>${money(l.regular_price)}</s><br>` : ""}No charge</span>`
+            : edit ? `<input class="ie-num ie-price" data-ie-f="unit_price" inputmode="decimal" value="${Number(l.unit_price).toFixed(2)}">` : money(l.unit_price)}</td>
           <td class="r">${edit ? `<input type="checkbox" data-ie-f="taxable" ${l.taxable ? "checked" : ""} aria-label="Charge HST">` : l.taxable ? "Yes" : "No"}</td>
           <td class="r num"><strong>${money(l.line_total)}</strong></td>
           ${edit ? `<td class="ie-row-act"><button class="link" type="button" data-ie-up ${n ? "" : "disabled"} aria-label="Move up">↑</button><button class="link" type="button" data-ie-down ${n < I.lines.length - 1 ? "" : "disabled"} aria-label="Move down">↓</button><button class="link danger" type="button" data-ie-del aria-label="Remove">×</button></td>` : ""}</tr>`).join("")
@@ -4800,6 +4812,11 @@ function wireInvoiceEditor() {
     const tr = el.closest("tr"), k = el.dataset.ieF; let v = el.type === "checkbox" ? el.checked : el.value;
     if (k === "quantity" || k === "unit_price") { v = String(v).replace(/[$,\s]/g, ""); if (v === "" || !isFinite(Number(v))) { reload("Not saved: type a number."); return; } }
     call("inv_update_line", { p_line: Number(tr.dataset.ieLine), p: { [k]: v } });
+  }));
+  document.querySelectorAll("[data-ie-opt]").forEach(el => el.addEventListener("change", () => {
+    const o = el.dataset.ieOpt;
+    call("inv_line_option", { p_line: Number(el.closest("tr").dataset.ieLine), p_option: o, p_on: el.checked },
+      o === "hidden" ? (el.checked ? "Hidden: it stays on the invoice but won't print." : "It shows on the printed invoice again.") : (el.checked ? "Set to no charge." : "Charged again."));
   }));
   document.querySelectorAll("[data-ie-del]").forEach(b => b.addEventListener("click", () => call("inv_update_line", { p_line: Number(b.closest("tr").dataset.ieLine), p: { quantity: 0 } }, "Line removed.")));
   document.querySelectorAll("[data-ie-up]").forEach(b => b.addEventListener("click", () => call("inv_move_line", { p_line: Number(b.closest("tr").dataset.ieLine), p_dir: -1 })));
@@ -6334,7 +6351,7 @@ async function openInvoice(id) {
   COMPANY = co.data || { company_name: "Reid Heating & Cooling" };
   const i = inv.data, c = COMPANY, l = i.locations || {}, cust = i.customers || {};
   // ServiceTitan's $0 "Used to track…" lines are for costing only, so the customer doesn't see them
-  const lines = (i.invoice_lines || []).filter(x => !(Number(x.line_total || 0) === 0 && /^used to track/i.test(x.description || "")))
+  const lines = (i.invoice_lines || []).filter(x => !x.hidden && !(Number(x.line_total || 0) === 0 && /^used to track/i.test(x.description || "")))
     .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0) || a.id - b.id);
   const pays = (i.payment_applications || []).sort((a, b) => (a.payments?.received_on || "").localeCompare(b.payments?.received_on || ""));
   const contact = (cust.customer_contacts || []).filter(x => !x.location_id).sort((a, b) => b.is_primary - a.is_primary);
@@ -6372,7 +6389,7 @@ async function openInvoice(id) {
     <table class="inv-lines"><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th></tr></thead><tbody>
       ${lines.length ? lines.map(x => `<tr><td>${esc(x.description || "")}${x.line_type === "discount" ? ' <span class="inv-small">(discount)</span>' : ""}</td>
         <td class="r num">${x.quantity != null ? Number(x.quantity).toLocaleString("en-CA", { maximumFractionDigits: 2 }) : ""}</td>
-        <td class="r num">${x.unit_price != null ? money(x.unit_price) : ""}</td><td class="r num">${money(x.line_total)}</td></tr>`).join("")
+        <td class="r num">${x.no_charge && x.regular_price != null ? `<s>${money(x.regular_price)}</s>` : x.unit_price != null ? money(x.unit_price) : ""}</td><td class="r num">${x.no_charge ? "No charge" : money(x.line_total)}</td></tr>`).join("")
       : `<tr><td colspan="4" class="quiet">No line items came over from ServiceTitan for this invoice.</td></tr>`}
     </tbody></table>
     <div class="inv-bottom">
