@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.151849">
+<meta name="app-version" content="2026-10-17.152330">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -827,6 +827,11 @@
   .ie-foot { margin: 6px 0 40px; }
   .ie-topbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
   .ie-close { font-weight: 650; }
+  tr.ie-kitline td { padding-top: 4px; padding-bottom: 4px; font-size: calc(14px * var(--fs, 1)); }
+  tr.ie-kitline td:first-child { padding-left: 22px; }
+  tr.ie-kitline .ie-desc { min-height: 30px; padding: 4px 8px; }
+  .ie-kittog { display: block; margin-top: 6px; font-weight: 650; }
+  .ie-kitof { font-size: calc(12px * var(--fs, 1)); font-weight: 700; color: var(--steel); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
   .ie-table td:first-child { min-width: 200px; } .ie-grid.has-cost .ie-num { width: 56px; } .ie-grid.has-cost .ie-price { width: 88px; }
   .ie-lines-box { overflow-x: auto; }
   .ie-costcell { color: var(--steel); font-size: calc(14px * var(--fs, 1)); } .ie-rcost { font-size: calc(13px * var(--fs, 1)); }
@@ -4766,6 +4771,7 @@ function wireCosting(root, I, call, reload) {
   }));
 }
 function renderInvoiceEditor(msg) {
+  const kids = l => IE.lines.filter(x => x.kit_parent === l.id);
   const I = IE, draft = I.status === "draft", edit = I.can_edit && draft, top = $("#main").scrollTop;
   const st = { draft: ["Not finished", "ie-draft"], posted: ["Finished, not paid", "ie-open"], partially_paid: ["Part paid", "ie-part"], paid: ["Paid", "ie-paid"], void: ["Void", "ie-void"] }[I.status] || [I.status, ""];
   $("#main").innerHTML = `<article class="staff ie">
@@ -4784,10 +4790,11 @@ function renderInvoiceEditor(msg) {
         <div class="seg" role="group"><button type="button" data-ie-look="" aria-pressed="${!I.look_partner_id}">Reid Heating &amp; Cooling</button>${I.looks.map(l =>
           `<button type="button" data-ie-look="${l.id}" aria-pressed="${I.look_partner_id === l.id}">${esc(l.name)} <span class="ie-look-sub">installed by Reid</span></button>`).join("")}</div></div>` : ""}
       <table class="ie-table"><thead><tr><th>Description</th><th class="r">Qty</th>${seeCost() ? `<th class="r">Cost</th>` : ""}<th class="r">Price</th><th class="r">HST</th><th class="r">Amount</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
-        ${I.lines.length ? I.lines.map((l, n) => `<tr data-ie-line="${l.id}" class="${l.hidden ? "ie-hid" : ""}">
-          <td>${edit ? `<textarea class="ie-desc" data-ie-f="description" rows="${Math.min(6, Math.max(1, Math.ceil((l.description || "").length / 70), (l.description || "").split("\n").length))}">${esc(l.description)}</textarea>`
+        ${I.lines.length ? I.lines.map((l, n) => `<tr data-ie-line="${l.id}" class="${l.hidden ? "ie-hid" : ""} ${l.kit_parent ? "ie-kitline" : ""}" ${l.kit_parent && !IE.kitOpen?.has(l.kit_parent) && I.lines.some(x => x.id === l.kit_parent) ? "hidden" : ""}>
+          <td>${l.kit_parent ? `<div class="ie-kitof">Add-on kit</div><div>${esc(pbName(l.description))}</div>` : edit ? `<textarea class="ie-desc" data-ie-f="description" rows="${Math.min(6, Math.max(1, Math.ceil((l.description || "").length / 70), (l.description || "").split("\n").length))}">${esc(l.description)}</textarea>`
                      : `<div class="ie-desc-ro">${esc(l.description)}</div>`}${l.sku ? `<div class="quiet">${esc(l.sku)}</div>` : ""}
-            ${edit ? `<div class="ie-opts"><label><input type="checkbox" data-ie-opt="no_charge" ${l.no_charge ? "checked" : ""}> No charge</label>
+            ${kids(l).length ? `<button class="link ie-kittog" type="button" data-ie-kit="${l.id}">${IE.kitOpen?.has(l.id) ? "▾ Hide" : "▸ Show"} the ${kids(l).length} add-on kit parts${seeCost() ? ` (cost ${money(kids(l).reduce((a, k) => a + Number(k.quantity) * Number(k.unit_cost || 0), 0))})` : ""}</button>` : ""}
+            ${l.kit_parent ? "" : edit ? `<div class="ie-opts"><label><input type="checkbox" data-ie-opt="no_charge" ${l.no_charge ? "checked" : ""}> No charge</label>
               <label><input type="checkbox" data-ie-opt="hidden" ${l.hidden ? "checked" : ""}> Hide on the printed invoice</label></div>`
               : (l.no_charge || l.hidden) ? `<div class="ie-opts">${l.no_charge ? `<span class="ie-tag">No charge</span>` : ""}${l.hidden ? `<span class="ie-tag">Hidden from the customer</span>` : ""}</div>` : ""}
             ${l.hidden && Number(l.line_total) ? `<div class="ie-hid-warn">Hidden but still charged: the customer's total includes ${money(l.line_total)} they can't see.</div>` : ""}</td>
@@ -4854,6 +4861,10 @@ function wireInvoiceEditor() {
     if (k === "quantity" || k === "unit_price") { v = String(v).replace(/[$,\s]/g, ""); if (v === "" || !isFinite(Number(v))) { reload("Not saved: type a number."); return; } }
     call("inv_update_line", { p_line: Number(tr.dataset.ieLine), p: { [k]: v } });
   }));
+  document.querySelectorAll("[data-ie-kit]").forEach(b => b.addEventListener("click", () => {
+    IE.kitOpen = IE.kitOpen || new Set(); const id = Number(b.dataset.ieKit);
+    IE.kitOpen.has(id) ? IE.kitOpen.delete(id) : IE.kitOpen.add(id); renderInvoiceEditor();
+  }));
   document.querySelectorAll("[data-ie-opt]").forEach(el => el.addEventListener("change", () => {
     const o = el.dataset.ieOpt;
     call("inv_line_option", { p_line: Number(el.closest("tr").dataset.ieLine), p_option: o, p_on: el.checked },
@@ -4869,7 +4880,10 @@ function wireInvoiceEditor() {
     if (my !== seq || !$("#ie-res")) return;
     res.innerHTML = (data || []).map(x => `<button class="pb-kopt" type="button" data-ie-add="${x.id}"><span>${PB.thumbs?.get?.(x.id) ? `<img class="ie-thumb" alt="" src="${PB.thumbs.get(x.id)}">` : ""}${esc(pbName(x.name))}<span class="quiet"> · ${esc(x.sku)}</span></span>
       <span class="num">${seeCost() && x.unit_cost != null ? `<span class="quiet ie-rcost">cost ${money(x.unit_cost)} · </span>` : ""}${I.member && pbHasMember(x) ? `<s class="quiet">${money(x.unit_price)}</s> ${money(x.member_price)}` : money(x.unit_price)}</span></button>`).join("") || `<div class="quiet">Nothing matches.</div>`;
-    res.querySelectorAll("[data-ie-add]").forEach(b => b.addEventListener("click", async () => { if (await call("inv_add_item", { p_invoice: I.id, p_item: Number(b.dataset.ieAdd), p_qty: 1 }, "Added.")) $("#ie-q")?.focus(); }));
+    res.querySelectorAll("[data-ie-add]").forEach(b => b.addEventListener("click", async () => {
+      const { data: n, error } = await db.rpc("inv_add_item", { p_invoice: I.id, p_item: Number(b.dataset.ieAdd), p_qty: 1 });
+      await reload(error ? "Not saved: " + rpcErr(error) : n ? `Added, with ${n} add-on kit part${n > 1 ? "s" : ""} (hidden on the printed invoice).` : "Added.");
+      if (!error) $("#ie-q")?.focus(); }));
   }, 250); });
   $("#ie-custom")?.addEventListener("submit", e => { e.preventDefault(); const f = e.target, n = v => Number(String(v).replace(/[$,\s]/g, ""));
     if (!isFinite(n(f.p.value)) || !isFinite(n(f.q.value))) return reload("Not saved: type numbers for the quantity and price.");
@@ -4911,7 +4925,7 @@ function wireInvoiceEditor() {
 /* ---------- Price book ---------- */
 const PB_TYPES = [["all", "Everything"], ["service", "Services"], ["material", "Materials"], ["equipment", "Equipment"], ["fee", "Fees"], ["labour", "Labour"]];
 const PB_TYPE_NAME = { service: "Service", material: "Material", equipment: "Equipment", fee: "Fee", labour: "Labour", warranty: "Warranty", plan: "Plan", monitoring: "Monitoring" };
-const PB_FLAGS = [["", "All"], ["off_rule", "Off the markup rule"], ["member", "Member price"], ["kits", "Kits"], ["no_picture", "No picture"], ["no_category", "No category"]];
+const PB_FLAGS = [["", "All"], ["off_rule", "Off the markup rule"], ["member", "Member price"], ["kits", "Add-on kits"], ["no_picture", "No picture"], ["no_category", "No category"]];
 let PB = { q: "", type: "all", active: "true", sel: null, picked: new Set(), view: "list", cat: null, flag: "", open: new Set(), thumbs: new Map(), photos: new Map(), showPricing: false };
 try { PB.view = localStorage.getItem("pb_view") === "pics" ? "pics" : "list"; } catch (e) {}
 const pbMargin = r => Number(r.unit_price) > 0 ? Math.round((1 - Number(r.unit_cost) / Number(r.unit_price)) * 100) : null;
@@ -5101,7 +5115,7 @@ function renderPricebook(msg) {
             : `<table class="calls-table pb-table"><thead><tr>${edit ? `<th></th>` : ""}<th>Item</th><th>Type</th><th class="r">Price</th><th class="r">Member</th>${seeCost() ? `<th class="r">Cost</th><th class="r">Margin</th>` : ""}<th class="r">Used (12 mo)</th></tr></thead><tbody>
             ${rows.map(r => { const m = pbMargin(r), u = pbUnit(r.unit_of_measure); return `<tr class="po-row ${PB.sel === r.id ? "sel" : ""} ${r.active ? "" : "po-cx"}" tabindex="0" data-pb="${r.id}">
               ${edit ? `<td class="pb-pick"><input type="checkbox" data-pb-pick="${r.id}" ${PB.picked.has(r.id) ? "checked" : ""} aria-label="Pick ${esc(pbName(r.name))}"></td>` : ""}
-              <td><strong>${esc(pbName(r.name))}</strong>${r.kit_parts ? ` <span class="ow-tag">Kit</span>` : ""}<div class="quiet">${esc(r.sku)}${r.supplier ? " · " + esc(r.supplier) : ""}${r.categories ? " · " + esc(r.categories) : ""}</div></td>
+              <td><strong>${esc(pbName(r.name))}</strong>${r.kit_parts ? ` <span class="ow-tag">Add-on kit</span>` : ""}<div class="quiet">${esc(r.sku)}${r.supplier ? " · " + esc(r.supplier) : ""}${r.categories ? " · " + esc(r.categories) : ""}</div></td>
               <td>${esc(PB_TYPE_NAME[r.item_type] || r.item_type)}${r.taxable ? "" : ` <span class="ow-tag">No tax</span>`}</td>
               <td class="r num"><strong>${money(r.unit_price)}</strong>${u ? `<div class="quiet">per ${esc(u)}</div>` : ""}${pbOff(r) ? `<div class="pb-off">rule ${money(r.rule_price)}</div>` : ""}</td>
               <td class="r num">${pbHasMember(r) ? money(r.member_price) : ""}</td>
@@ -5262,7 +5276,7 @@ function showPbItem(id) {
       ${!nw ? `<label class="pb-check"><input type="checkbox" name="active" ${r.active ? "checked" : ""} ${dis}> In use <span class="quiet">(untick to retire it; old invoices keep it)</span></label>` : ""}
       ${edit ? `<div><button class="btn" type="submit">Save</button> <span class="staff-msg" id="pb-msg" role="status"></span></div>` : `<p class="quiet">Ask Carlo for the "Edit the price book" permission to change items.</p>`}
     </form>
-    ${!nw ? `<h3>Categories</h3><div id="pb-icats"></div><h3>Parts inside (kit)</h3><div id="pb-kit"><span class="quiet">Loading…</span></div>` : ""}`;
+    ${!nw ? `<h3>Categories</h3><div id="pb-icats"></div><h3>Add-on kit</h3><p class="quiet" style="margin:0">Everything listed here is posted to the invoice with this item, at $0 with its cost, hidden on the printed invoice. A kit inside the list (like the Furnace Add-on Kit) brings all its parts.</p><div id="pb-kit"><span class="quiet">Loading…</span></div>` : ""}`;
   const f = $("#pb-form"), showM = () => {
     const pr = Number(f.unit_price.value.replace(/[$,\s]/g, "")), c = Number(f.unit_cost.value.replace(/[$,\s]/g, ""));
     $("#pb-margin").textContent = seeCost() && pr > 0 && isFinite(c) ? `Margin ${Math.round((1 - c / pr) * 100)}% · markup ${c > 0 ? Math.round((pr / c - 1) * 100) + "%" : "—"} · profit ${money(pr - c)}` : "";
@@ -5350,7 +5364,7 @@ async function pbLoadKit(id, r, edit) {
         <td class="r num">${money(l.quantity * l.unit_price)}</td>${edit ? `<td><button class="link danger" type="button" data-pb-kdel="${l.item_id}" aria-label="Take ${esc(pbName(l.name))} out">×</button></td>` : ""}</tr>`).join("")}
       </tbody></table>
       <div class="quiet">The parts add up to ${money(tp)}${seeCost() ? ` (they cost us ${money(tc)})` : ""}. This item sells for ${money(r.unit_price)}${seeCost() && Number(r.unit_price) > 0 && tc > 0 ? `, ${Math.round((1 - tc / Number(r.unit_price)) * 100)}% margin over the parts` : ""}.</div>`
-    : `<div class="quiet">No parts inside. Add parts to make this a kit, for example a service and the parts it always uses.</div>`}
+    : `<div class="quiet">No add-on kit yet. Add the parts (or a kit) that always go with this item.</div>`}
     ${edit ? `<div class="pb-kadd"><input type="search" id="pb-kfind" placeholder="Add a part: name or code" aria-label="Find a part to add" autocomplete="off"><div id="pb-kres" class="pb-kres"></div><span class="staff-msg err" id="pb-kmsg" role="status"></span></div>` : ""}`;
   const save = async (comp, q) => {
     const { error } = await db.rpc("save_pb_kit_line", { p_parent: id, p_component: comp, p_quantity: q });
