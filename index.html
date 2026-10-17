@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.151533">
+<meta name="app-version" content="2026-10-17.151849">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1074,6 +1074,10 @@
   .inv-row .inv-link { color: var(--blue); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
   .inv-view { position: fixed; inset: 0; z-index: 50; background: rgba(15, 20, 25, .55); overflow-y: auto; padding: 24px 16px 48px; }
   body.inv-open { overflow: hidden; }
+  .inv-cost { position: fixed !important; top: 24px; right: 16px; bottom: 24px; width: 340px; overflow-y: auto; z-index: 51; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
+  .inv-cost-head { display: flex; justify-content: flex-end; margin-bottom: -8px; }
+  .inv-view.with-cost { padding-right: 380px; }
+  @media (max-width: 1100px) { .inv-view.with-cost { padding-right: 16px; } .inv-cost { position: static !important; width: auto; max-width: 860px; margin: 16px auto 0; box-shadow: none; } }
   .inv-bar { max-width: 860px; margin: 0 auto 12px; display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
   .inv-paper { max-width: 860px; margin: 0 auto; background: #FFFFFF; color: #1C2630; border-radius: 6px; padding: 44px 48px; box-shadow: 0 12px 40px rgba(0,0,0,.3);
                font-size: 14.5px; line-height: 1.45; }
@@ -1110,7 +1114,7 @@
     body.inv-open > *:not(#inv-view) { display: none !important; }
     body.inv-open { background: #FFFFFF; overflow: visible; }
     .inv-view { position: static; background: none; padding: 0; overflow: visible; }
-    .inv-bar { display: none; }
+    .inv-bar, .inv-cost { display: none !important; }
     .inv-paper { box-shadow: none; max-width: none; padding: 0; border-radius: 0; }
   }
   .approve-banner { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between;
@@ -1527,9 +1531,11 @@
 
 <div id="inv-view" class="inv-view hidden" role="dialog" aria-modal="true" aria-label="Invoice">
   <div class="inv-bar"><button class="btn" type="button" onclick="window.print()">Print or save as PDF</button>
+    <button class="btn quiet-btn hidden" type="button" id="inv-costbtn">Job costing</button>
     <button class="btn quiet-btn" type="button" id="inv-copy">Copy</button>
     <button class="btn quiet-btn" type="button" onclick="closeInvoice()">Close</button></div>
   <div class="inv-paper" id="inv-paper" tabindex="-1"></div>
+  <aside class="cl-tools ie-cost inv-cost hidden" id="inv-cost" aria-label="Job costing"></aside>
 </div>
 <div id="app" class="hidden">
   <aside id="side">
@@ -4740,6 +4746,25 @@ function costingHtml(I) {
     </table></details>` : ""}
     <p class="quiet" style="margin:0">Only people allowed to see job costing see this box. The customer never sees it.</p>`;
 }
+// The job costing box's inputs (used on the invoice screen and when viewing an invoice)
+function wireCosting(root, I, call, reload) {
+  if (!root) return;
+  const num = v => { const x = String(v).replace(/[$,%\s]/g, ""); return x === "" ? null : Number(x); };
+  root.querySelectorAll("[data-cost]").forEach(el => el.addEventListener("change", () => {
+    const f = el.dataset.cost, v = f === "other_note" ? el.value : num(el.value);
+    if (f !== "other_note" && v != null && !isFinite(v)) return reload("Not saved: type a number.");
+    if (f === "cut" || f === "card") { const st = I.cost.store;
+      return call("inv_set_store_cut", { p_invoice: I.id, p_cut: f === "cut" ? v : Number(st.cut_pct), p_card: f === "card" ? v : Number(st.card_fee) }, "Saved."); }
+    if (f === "vehicle") return call("inv_set_vehicle", { p_invoice: I.id, p_amount: v }, "Vehicle cost saved.");
+    if (f === "rate") return call("set_labour_cost", { p_rate: v }, "Labour cost saved for all jobs.");
+    call("inv_set_costs", { p_invoice: I.id, p: { [f]: v == null ? "" : String(v) } }, "Saved.");
+  }));
+  root.querySelector("[data-cost-vreset]")?.addEventListener("click", () => call("inv_set_vehicle", { p_invoice: I.id, p_amount: null }, "Back to the usual vehicle cost."));
+  root.querySelectorAll("[data-cost-line]").forEach(el => el.addEventListener("change", () => {
+    const v = num(el.value); if (v != null && !isFinite(v)) return reload("Not saved: type a number.");
+    call("inv_set_line_cost", { p_line: Number(el.dataset.costLine), p_cost: v }, "Saved.");
+  }));
+}
 function renderInvoiceEditor(msg) {
   const I = IE, draft = I.status === "draft", edit = I.can_edit && draft, top = $("#main").scrollTop;
   const st = { draft: ["Not finished", "ie-draft"], posted: ["Finished, not paid", "ie-open"], partially_paid: ["Part paid", "ie-part"], paid: ["Paid", "ie-paid"], void: ["Void", "ie-void"] }[I.status] || [I.status, ""];
@@ -4852,21 +4877,7 @@ function wireInvoiceEditor() {
   $("#ie-notes")?.addEventListener("change", e => { IE.notes = e.target.value; });
   $("#ie-finish")?.addEventListener("click", () => call("inv_finish", { p_invoice: I.id, p_notes: $("#ie-notes")?.value || null }, "Finished. The customer can sign, then take the payment."));
   $("#ie-reopen")?.addEventListener("click", () => call("inv_reopen", { p_invoice: I.id }, "Open again: change what you need, then finish it again."));
-  const num = v => { const x = String(v).replace(/[$,%\s]/g, ""); return x === "" ? null : Number(x); };
-  document.querySelectorAll("[data-cost]").forEach(el => el.addEventListener("change", () => {
-    const f = el.dataset.cost, v = f === "other_note" ? el.value : num(el.value);
-    if (f !== "other_note" && v != null && !isFinite(v)) return reload("Not saved: type a number.");
-    if (f === "cut" || f === "card") { const st = I.cost.store;
-      return call("inv_set_store_cut", { p_invoice: I.id, p_cut: f === "cut" ? v : Number(st.cut_pct), p_card: f === "card" ? v : Number(st.card_fee) }, "Saved."); }
-    if (f === "vehicle") return call("inv_set_vehicle", { p_invoice: I.id, p_amount: v }, "Vehicle cost saved.");
-    if (f === "rate") return call("set_labour_cost", { p_rate: v }, "Labour cost saved for all jobs.");
-    call("inv_set_costs", { p_invoice: I.id, p: { [f]: v == null ? "" : String(v) } }, "Saved.");
-  }));
-  $("[data-cost-vreset]") && $("[data-cost-vreset]").addEventListener("click", () => call("inv_set_vehicle", { p_invoice: I.id, p_amount: null }, "Back to the usual vehicle cost."));
-  document.querySelectorAll("[data-cost-line]").forEach(el => el.addEventListener("change", () => {
-    const v = num(el.value); if (v != null && !isFinite(v)) return reload("Not saved: type a number.");
-    call("inv_set_line_cost", { p_line: Number(el.dataset.costLine), p_cost: v }, "Saved.");
-  }));
+  wireCosting(document.querySelector("#main .ie-cost"), I, call, reload);
   document.querySelectorAll("[data-ie-close]").forEach(b => b.addEventListener("click", () => {
     IE.cancelOpen = false;
     if (NAV.stack.length >= 2) goBack(); else if (I.customer_id) openCustomer(I.customer_id); else openSearchScreen();
@@ -6359,6 +6370,30 @@ document.addEventListener("keydown", e => {
 let COMPANY = null;
 const PAY_NAMES = { cash: "Cash", cheque: "Cheque", card: "Card", credit: "Credit card", e_transfer: "e-Transfer", eft: "EFT", autopay: "Auto-pay", financing: "Financing" };
 function closeInvoice() { $("#inv-view").classList.add("hidden"); document.body.classList.remove("inv-open"); }
+let INV_COST_OPEN = false;
+try { INV_COST_OPEN = sessionStorage.getItem("invCostOpen") === "1"; } catch (e) {}
+async function showInvoiceCosting(inv, msg) {
+  const box = $("#inv-cost"), view = $("#inv-view");
+  const shown = INV_COST_OPEN && can("jobs.costing");
+  box.classList.toggle("hidden", !shown); view.classList.toggle("with-cost", shown);
+  $("#inv-costbtn").textContent = shown ? "Hide job costing" : "Job costing";
+  if (!shown) return;
+  if (!box.innerHTML || box.dataset.inv !== String(inv.id)) box.innerHTML = `<div class="quiet">Working out the costs…</div>`;
+  box.dataset.inv = inv.id;
+  const [{ data, error }, t] = await Promise.all([db.rpc("inv_costing", { p_invoice: inv.id }),
+    db.from("invoices").select("subtotal, total").eq("id", inv.id).single()]);
+  if (box.dataset.inv !== String(inv.id)) return;
+  if (error || !data) { box.innerHTML = `<div class="staff-msg err">Couldn't work out the costs${error ? ": " + esc(rpcErr(error)) : ""}</div>`; return; }
+  const I = { id: inv.id, subtotal: t.data?.subtotal ?? inv.subtotal, total: t.data?.total ?? inv.total, cost: data };
+  const top = box.scrollTop;
+  box.innerHTML = `<div class="inv-cost-head"><button class="link" type="button" data-invcost-close>Close</button></div>
+    ${msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"}" role="status">${esc(msg)}</div>` : ""}${costingHtml(I)}`;
+  box.scrollTop = top;
+  const reload = m => showInvoiceCosting(inv, m);
+  const call = async (fn, args, m) => { const { error } = await db.rpc(fn, args); await reload(error ? "Not saved: " + rpcErr(error) : m); return !error; };
+  wireCosting(box, I, call, reload);
+  box.querySelector("[data-invcost-close]").addEventListener("click", () => { INV_COST_OPEN = false; try { sessionStorage.setItem("invCostOpen", "0"); } catch (e) {} showInvoiceCosting(inv); });
+}
 const officeInv = () => can("invoices.adjust") || ["owner", "admin", "accounting"].includes(ME.role);
 async function openInvoice(id) {
   const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open");
@@ -6468,6 +6503,9 @@ async function openInvoice(id) {
       + `\n\nSubtotal ${money(subtotal)}\nHST ${money(tax)}\nTotal ${money(total)}\nPaid ${money(paid)}\nBalance owing ${money(balance)}`;
     const ok = await copyText(text); $("#inv-copy").textContent = ok ? "Copied ✓" : "Couldn't copy"; setTimeout(() => $("#inv-copy").textContent = "Copy", 1600);
   };
+  const cb = $("#inv-costbtn"); cb.classList.toggle("hidden", !can("jobs.costing"));
+  cb.onclick = () => { INV_COST_OPEN = !INV_COST_OPEN; try { sessionStorage.setItem("invCostOpen", INV_COST_OPEN ? "1" : "0"); } catch (e) {} showInvoiceCosting(i); };
+  showInvoiceCosting(i);
   $("#inv-paper").focus();
 }
 
