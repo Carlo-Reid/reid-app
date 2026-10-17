@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.172357">
+<meta name="app-version" content="2026-10-17.172622">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -5584,11 +5584,13 @@ const pbCatOptions = (skip) => { const out = [];
   (PB.catTop || []).forEach(c => walk(c, 0)); return out.join(""); };
 
 async function loadPricebook() {
+  const mySeq = PB.loadSeq = (PB.loadSeq || 0) + 1;
   let { data, error } = await db.rpc("pb_list", { p_search: PB.q || null, p_type: PB.type, p_active: PB.active === "" ? null : PB.active === "true",
     p_category: PB.cat, p_flag: PB.flag || null, p_limit: PB.type === "equipment" ? 2000 : 500 });
   if (error && /function|schema/i.test(error.message))   // setup file 34 not run yet: the plain list still works
     ({ data, error } = await db.rpc("pb_list", { p_search: PB.q || null, p_type: PB.type, p_active: PB.active === "" ? null : PB.active === "true", p_limit: 500 }));
   if (!document.querySelector(".pb, .loading")) return;
+  if (mySeq !== PB.loadSeq) return;   // a newer search has started
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the price book</h2>${esc(rpcErr(error))}</div></div>`; return; }
   PB.rows = data; PB.picked = new Set([...PB.picked].filter(id => data.some(r => r.id === id)));
   if (PB.sel && PB.sel !== "new" && !data.some(r => r.id === PB.sel)) PB.sel = null;
@@ -5710,6 +5712,7 @@ function renderPricebook(msg) {
   if (PB.itemPage && location.hash === "#pb-item=" + PB.itemPage) return renderPbItemPage(msg);
   PB.itemPage = null;
   PB.catScroll = document.querySelector(".pb-cats")?.scrollTop ?? PB.catScroll ?? 0;
+  const typed = PB.qFocus ? $("#pb-q")?.value : null;
   const rows = PB.rows || [], total = rows.length ? Number(rows[0].total_count) : 0, edit = can("pricebook.edit"), top = $("#main").scrollTop;
   const pics = PB.view === "pics", catName = PB.cat ? pbCatPath(PB.cat) : "";
   $("#main").innerHTML = `<article class="staff pb">
@@ -5767,11 +5770,17 @@ function renderPricebook(msg) {
       </div>
     </div>
   </article>`;
-  $("#main").scrollTop = top; { const cb = document.querySelector(".pb-cats"); if (cb) cb.scrollTop = PB.catScroll || 0; }
+  $("#main").scrollTop = top; { const cb = document.querySelector(".pb-cats"); if (cb) cb.scrollTop = PB.catScroll || 0; } if (PB.qFocus) { const q = $("#pb-q"); if (q) { if (typed != null) q.value = typed; q.focus({ preventScroll: true }); const n = q.value.length; q.setSelectionRange(n, n); } }
   if (PB.sel) showPbItem(PB.sel);
   if (pics) pbWatchPics();
   const reload = () => { PB.sel = null; loadPricebook(); };
-  $("#pb-filters").addEventListener("submit", e => { e.preventDefault(); PB.q = $("#pb-q").value.trim(); reload(); });
+  $("#pb-filters").addEventListener("submit", e => { e.preventDefault(); clearTimeout(PB.typeT); PB.q = $("#pb-q").value.trim(); PB.qFocus = true; reload(); });
+  // search as you type
+  $("#pb-q").addEventListener("input", e => { clearTimeout(PB.typeT); const v = e.target.value.trim();
+    if (v.length === 1) return;
+    PB.typeT = setTimeout(() => { if (v === (PB.q || "")) return; PB.q = v; PB.qFocus = true; PB.sel = null;
+      const bar = document.querySelector(".pb .ow-sortbar strong"); if (bar) bar.textContent = "Searching…"; loadPricebook(); }, 250); });
+  $("#pb-q").addEventListener("blur", e => { const el = e.target; setTimeout(() => { if (document.body.contains(el) && document.activeElement?.id !== "pb-q") PB.qFocus = false; }, 0); });
   document.querySelectorAll("[data-pb-type]").forEach(b => b.addEventListener("click", () => { PB.type = b.dataset.pbType; reload(); }));
   document.querySelectorAll("[data-pb-active]").forEach(b => b.addEventListener("click", () => { PB.active = b.dataset.pbActive; reload(); }));
   document.querySelectorAll("[data-pb-flag]").forEach(b => b.addEventListener("click", () => { if (b.dataset.pbFlag === "kits") return openAddonKits(); PB.flag = b.dataset.pbFlag; reload(); }));
