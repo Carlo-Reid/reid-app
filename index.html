@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.172058">
+<meta name="app-version" content="2026-10-17.172357">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1405,6 +1405,12 @@
   .pb-tw { flex: 0 0 22px; width: 22px; height: 26px; border: 0; background: none; color: var(--steel); cursor: pointer; padding: 0; font-size: 13px; }
   .pb-catbtn { flex: 1; min-width: 0; text-align: left; border: 0; background: none; color: var(--ink); cursor: pointer; padding: 4px 4px; font: inherit; font-size: calc(14px * var(--fs, 1)); border-radius: var(--radius-s); overflow-wrap: anywhere; }
   .pb-catbtn:hover { color: var(--blue); }
+  .pb-catfind { position: relative; margin: 6px 0 4px; }
+  .pb-catfind input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font: inherit; }
+  .pb-catres { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.18); max-height: 340px; overflow-y: auto; }
+  .pb-catopt { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; padding: 7px 10px; background: none; border: 0; border-bottom: 1px solid var(--line); color: var(--ink); font: inherit; cursor: pointer; }
+  .pb-catopt:last-child { border-bottom: 0; } .pb-catopt.on, .pb-catopt:hover { background: var(--blue-wash); }
+  .pb-catopt .quiet { font-size: calc(12px * var(--fs, 1)); }
   .pb-cat-tools { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); font-size: calc(13px * var(--fs, 1)); }
   .pb-catform { display: flex; flex-direction: column; gap: 6px; width: 100%; }
   .pb-catform label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; margin: 0; }
@@ -5601,6 +5607,8 @@ function pbCatTree(edit) {
   const cur = PB.cat ? PB.catBy.get(PB.cat) : null, f = PB.catForm;
   return `<details class="pb-cats" ${PB.catsOpen ?? matchMedia("(min-width: 900px)").matches ? "open" : ""}>
     <summary>Categories${cur ? ": " + esc(cur.name) : ""}</summary>
+    <div class="pb-catfind"><input type="search" id="pb-catq" placeholder="Find a category…" autocomplete="off" aria-label="Find a category">
+      <div class="pb-catres hidden" id="pb-catres" role="listbox"></div></div>
     ${edit ? `<div class="pb-cat-tools">${f ? `<form id="pb-catform" class="pb-catform"><label>${f.mode === "rename" ? "New name" : f.parent ? "New category inside " + esc(PB.catBy.get(f.parent)?.name || "") : "New top category"}
           <input name="n" value="${f.mode === "rename" ? esc(cur?.name || "") : ""}" maxlength="120" required></label>
           ${f.mode === "rename" ? `<label>Inside<select name="par"><option value="">Top level (not inside another)</option>${pbCatOptions(cur?.id)}</select></label>` : ""}
@@ -5778,6 +5786,30 @@ function renderPricebook(msg) {
     reload();
   }));
   $("#pb-catold")?.addEventListener("click", () => { PB.showRetiredCats = !PB.showRetiredCats; renderPricebook(); });
+  // find a category by typing
+  { const q = $("#pb-catq"), res = $("#pb-catres"); let hits = [], pick = 0;
+    const show = () => {
+      const s = q.value.trim().toLowerCase(); if (!s) { res.classList.add("hidden"); res.innerHTML = ""; return; }
+      hits = (PB.cats || []).filter(c => (c.active || PB.showRetiredCats) && c.name.toLowerCase().includes(s))
+        .sort((a, b) => (a.name.toLowerCase().startsWith(s) ? 0 : 1) - (b.name.toLowerCase().startsWith(s) ? 0 : 1) || a.name.localeCompare(b.name)).slice(0, 40);
+      pick = 0;
+      res.innerHTML = hits.length ? hits.map((c, i) => { const path = pbCatPath(c.id).split(" › "); path.pop();
+        return `<button type="button" class="pb-catopt ${i === pick ? "on" : ""}" data-pb-catgo="${c.id}" role="option"><strong>${esc(c.name)}</strong>${path.length ? `<span class="quiet">${esc(path.join(" › "))}</span>` : ""}${c.total ? `<span class="quiet">${c.total} items</span>` : ""}</button>`; }).join("")
+        : `<div class="quiet" style="padding:8px">No category matches.</div>`;
+      res.classList.remove("hidden");
+      res.querySelectorAll("[data-pb-catgo]").forEach(b => b.addEventListener("mousedown", e => { e.preventDefault(); go(Number(b.dataset.pbCatgo)); }));
+    };
+    const go = id => { PB.cat = id; PB.catForm = null; let c = PB.catBy.get(id); while (c && c.parent_id) { PB.open.add(c.parent_id); c = PB.catBy.get(c.parent_id); }
+      PB.open.add(id); q.value = ""; res.classList.add("hidden"); PB.sel = null; loadPricebook().then(() => document.querySelector(".pb-cat.cur")?.scrollIntoView({ block: "nearest" })); };
+    q?.addEventListener("input", show);
+    q?.addEventListener("keydown", e => {
+      if (!hits.length) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); pick = (pick + (e.key === "ArrowDown" ? 1 : hits.length - 1)) % hits.length;
+        res.querySelectorAll(".pb-catopt").forEach((b, i) => b.classList.toggle("on", i === pick)); res.querySelectorAll(".pb-catopt")[pick]?.scrollIntoView({ block: "nearest" }); }
+      if (e.key === "Enter") { e.preventDefault(); go(hits[pick].id); }
+      if (e.key === "Escape") { q.value = ""; show(); } });
+    q?.addEventListener("blur", () => setTimeout(() => res.classList.add("hidden"), 150));
+    q?.addEventListener("focus", () => { if (q.value.trim()) show(); }); }
   document.querySelectorAll("[data-pb-catnew]").forEach(el => el.addEventListener("click", e => { PB.catForm = { mode: "new", parent: e.target.dataset.pbCatnew ? Number(e.target.dataset.pbCatnew) : null }; renderPricebook(); $("#pb-catform input").focus(); }));
   $("#pb-catren")?.addEventListener("click", () => { PB.catForm = { mode: "rename" }; renderPricebook(); const cur = PB.catBy.get(PB.cat); const s = $("#pb-catform [name=par]"); if (s) s.value = cur?.parent_id || ""; $("#pb-catform input").select(); });
   $("#pb-catcancel")?.addEventListener("click", () => { PB.catForm = null; renderPricebook(); });
