@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.150000">
+<meta name="app-version" content="2026-10-17.151032">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -889,6 +889,7 @@
   .inv-note { margin-top: 16px; padding: 10px 14px; background: #F5F7FA; border-radius: 6px; white-space: pre-line; font-size: 14px; }
   .inv-sig { margin-top: 18px; } .inv-sig img { max-height: 80px; display: block; margin: 4px 0; }
   .inv-edit-row { margin-top: 16px; text-align: center; }
+  .inv-from { margin-top: 18px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: var(--radius-m); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
   .ie-table .ie-desc-ro, .inv-lines td:first-child { white-space: pre-line; }
   @media (max-width: 700px) { .ie-table th:nth-child(4), .ie-table td:nth-child(4) { display: none; } .ie-num { width: 52px; } .ie-price { width: 80px; } }
   h1, h2, .plate h1, .staff h1, .brand strong, .home-link { letter-spacing: -0.015em !important; }
@@ -4746,7 +4747,7 @@ function renderInvoiceEditor(msg) {
     <section class="cl-tools ie-lines-box">
       <div class="ie-steps">${["Add the work", "Finish", "Customer signs", "Payment"].map((x, n) => { const done = [!draft, !draft, !!I.signature, Number(I.balance) <= 0.004 && !draft][n];
         return `<span class="ie-step ${done ? "done" : ""}"><b>${done ? "✓" : n + 1}</b>${x}</span>`; }).join("")}</div>
-      ${I.looks?.length && I.can_edit && I.status !== "void" ? `<div class="ie-look"><span class="cl-label">Invoice look</span>
+      ${I.looks?.length && I.can_look ? `<div class="ie-look"><span class="cl-label">Invoice look</span>
         <div class="seg" role="group"><button type="button" data-ie-look="" aria-pressed="${!I.look_partner_id}">Reid Heating &amp; Cooling</button>${I.looks.map(l =>
           `<button type="button" data-ie-look="${l.id}" aria-pressed="${I.look_partner_id === l.id}">${esc(l.name)} <span class="ie-look-sub">installed by Reid</span></button>`).join("")}</div></div>` : ""}
       <table class="ie-table"><thead><tr><th>Description</th><th class="r">Qty</th>${seeCost() ? `<th class="r">Cost</th>` : ""}<th class="r">Price</th><th class="r">HST</th><th class="r">Amount</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
@@ -6350,12 +6351,14 @@ document.addEventListener("keydown", e => {
 let COMPANY = null;
 const PAY_NAMES = { cash: "Cash", cheque: "Cheque", card: "Card", credit: "Credit card", e_transfer: "e-Transfer", eft: "EFT", autopay: "Auto-pay", financing: "Financing" };
 function closeInvoice() { $("#inv-view").classList.add("hidden"); document.body.classList.remove("inv-open"); }
+const officeInv = () => can("invoices.adjust") || ["owner", "admin", "accounting"].includes(ME.role);
 async function openInvoice(id) {
   const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open");
   $("#inv-paper").innerHTML = `<div class="quiet" style="padding:40px">Opening invoice…</div>`;
-  const [inv, co] = await Promise.all([
+  const [inv, co, looksR] = await Promise.all([
     db.from("invoices").select("*, invoice_lines(id, sequence, line_type, description, quantity, unit_price, taxable, line_total, tax_amount, no_charge, regular_price, hidden), payment_applications(amount, applied_at, payments(payment_number, method, received_on, reference)), jobs(job_number, summary, job_types(name), partners(name, branding_name, branding_logo_url, customer_pays_partner)), look_partner:partners!invoices_branding_partner_id_fkey(name, branding_name, branding_logo_url, customer_pays_partner), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id)), business_units(name)").eq("id", id).single(),
-    COMPANY ? Promise.resolve({ data: COMPANY }) : db.from("company_settings").select("*").limit(1).maybeSingle()]);
+    COMPANY ? Promise.resolve({ data: COMPANY }) : db.from("company_settings").select("*").limit(1).maybeSingle(),
+    officeInv() ? db.rpc("invoice_looks") : Promise.resolve({ data: [] })]);
   if (inv.error) { $("#inv-paper").innerHTML = `<div class="staff-msg err" style="padding:40px">Couldn't open this invoice: ${esc(inv.error.message)}</div>`; return; }
   COMPANY = co.data || { company_name: "Reid Heating & Cooling" };
   const i = inv.data, c = COMPANY, l = i.locations || {}, cust = i.customers || {};
@@ -6419,8 +6422,23 @@ async function openInvoice(id) {
     ${brand && brand.customer_pays_partner && i.status !== "void" && Number(balance) > 0.004 ? `<div class="inv-paystore"><strong>Please pay ${esc(money(total))} at ${esc(brand.branding_name || brand.name)}.</strong> Bring this invoice with you. The installation is booked once ${esc(brand.branding_name || brand.name)} lets us know it's paid.</div>` : ""}
     ${i.notes ? `<div class="inv-note">${esc(i.notes)}</div>` : ""}
     ${i.signature_png ? `<div class="inv-sig"><div class="inv-label">Customer signature</div><img alt="Signature" src="data:image/png;base64,${i.signature_png}"><div class="inv-small">${esc(i.signer_name || "")} · ${fmtDate((i.signed_at || "").slice(0, 10))}</div></div>` : ""}
+    ${officeInv() && i.status !== "void" && (looksR.data || []).length ? `<div class="no-print inv-from">
+      <span class="cl-label">This invoice is from</span>
+      <div class="seg" role="group"><button type="button" data-inv-from="" aria-pressed="${!brand}">Reid Heating &amp; Cooling</button>${looksR.data.map(x =>
+        `<button type="button" data-inv-from="${x.id}" aria-pressed="${!!brand && (brand.name === x.name || brand.branding_name === x.name)}">${esc(x.name)}</button>`).join("")}</div>
+      <span class="quiet">Fix it if it was labelled wrong. A store invoice is paid through the store (Partners page) and isn't owed by the customer.</span>
+      <span class="staff-msg" id="from-msg" role="status"></span></div>` : ""}
     ${!i.st_id && i.status !== "void" ? `<div class="no-print inv-edit-row"><button class="btn" type="button" data-inv-edit="${i.id}">${i.status === "draft" ? "Carry on with this invoice" : Number(balance) > 0.004 ? "Signature and payment" : "Open in the invoice screen"}</button></div>` : ""}
     <div class="inv-thanks">${brand ? `Thank you for choosing ${esc(brand.branding_name || brand.name)}. Installed by ${esc(coName)}.` : `Thank you for choosing ${esc(coName)}.`}</div>`;
+  document.querySelectorAll("[data-inv-from]").forEach(b => b.addEventListener("click", async () => {
+    if (b.getAttribute("aria-pressed") === "true") return;
+    const m = $("#from-msg"); m.className = "staff-msg"; m.textContent = "Saving…";
+    const { error } = await db.rpc("inv_set_look", { p_invoice: i.id, p_partner: b.dataset.invFrom ? Number(b.dataset.invFrom) : null });
+    if (error) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
+    await openInvoice(i.id);
+    if (current?.c?.id === i.customer_id && document.querySelector(".file")) openCustomer(i.customer_id);
+    if (document.querySelector(".owing")) loadOwing();
+  }));
   document.querySelector("[data-inv-edit]")?.addEventListener("click", e => { const id = Number(e.currentTarget.dataset.invEdit); closeInvoice(); openInvoiceEditor(id); });
   const setOwed = async reason => {
     const m = $("#owed-msg"); if (m) { m.className = "staff-msg"; m.textContent = "Saving…"; }
