@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.143056">
+<meta name="app-version" content="2026-10-17.144323">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -827,6 +827,30 @@
   .ie-foot { margin: 6px 0 40px; }
   .ie-topbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
   .ie-close { font-weight: 650; }
+  .ie-grid.has-cost { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+  .ie-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .ie-cost { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .ie-cost h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); }
+  .ie-cost-top { border-radius: var(--radius-m); padding: 12px 14px; display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; }
+  .ie-cost-top.good { background: var(--green-wash); color: var(--green); } .ie-cost-top.ok { background: var(--amber-wash); color: var(--amber); } .ie-cost-top.low { background: var(--red-wash); color: var(--red); }
+  .ie-cost-top span { display: block; font-size: calc(12px * var(--fs, 1)); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  .ie-cost-top strong { font-size: calc(26px * var(--fs, 1)); font-variant-numeric: tabular-nums; }
+  .ie-cost-bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--line); }
+  .ie-cost-bar i { display: block; height: 100%; }
+  .ie-cost-key { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: calc(12px * var(--fs, 1)); color: var(--steel); }
+  .ie-cost-key b { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; }
+  .ie-cost table { width: 100%; border-collapse: collapse; }
+  .ie-cost td { padding: 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .ie-cost td.r { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .ie-cost tr.sub td { font-size: calc(13px * var(--fs, 1)); color: var(--steel); border-bottom: 0; padding-top: 0; }
+  .ie-cost tr.tot td { font-weight: 750; border-bottom: 0; border-top: 2px solid var(--ink); }
+  .ie-cost tr.store td { background: var(--blue-wash); } .ie-cost tr.store td:first-child { padding-left: 8px; border-radius: 8px 0 0 8px; } .ie-cost tr.store td:last-child { padding-right: 8px; border-radius: 0 8px 8px 0; }
+  .ie-cost input { width: 64px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; text-align: right; }
+  .ie-cost input.wide { width: 100%; text-align: left; box-sizing: border-box; margin-top: 4px; }
+  .ie-cost .warn { color: var(--amber); font-weight: 650; }
+  .ie-cost details summary { cursor: pointer; font-weight: 650; color: var(--blue); }
+  .ie-cost-lines td { font-size: calc(13px * var(--fs, 1)); }
+  @media (max-width: 1180px) { .ie-grid.has-cost { grid-template-columns: 1fr; } .ie-cost { position: static; } }
   .ie-sign-box h2, .ie-pay-box h2 { margin: 0; font-size: calc(18px * var(--fs, 1)); }
   .ie-signer { display: flex; flex-direction: column; gap: 4px; font-weight: 650; margin: 0; max-width: 360px; }
   .ie-signer input, .ie-pay-row input { padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font: inherit; }
@@ -4637,11 +4661,62 @@ const alertMsg = m => { const t = document.createElement("div"); t.className = "
 async function openInvoiceEditor(id, msg) {
   if (location.hash !== "#invoice-edit=" + id) setPage("invoice-edit=" + id, "invoice", "invoice");
   if (!document.querySelector(".ie")) $("#main").innerHTML = `<div class="loading">Opening the invoice…</div>`;
-  const { data, error } = await db.rpc("inv_editor", { p_invoice: id });
+  const [{ data, error }, cost] = await Promise.all([db.rpc("inv_editor", { p_invoice: id }), db.rpc("inv_costing", { p_invoice: id })]);
+  if (data) data.cost = cost.error ? null : cost.data;
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the invoice</h2>${esc(error ? rpcErr(error) : "It no longer exists")}</div></div>`; return; }
   IE = { ...(IE?.id === id ? IE : {}), ...data, id };
   nameCurrentPage("invoice " + data.number);
   renderInvoiceEditor(msg);
+}
+// Job costing: what the job cost, what the store keeps, and the profit
+function costingCalc(I) {
+  const C = I.cost, n = v => Number(v) || 0, sale = n(I.subtotal), total = n(I.total);
+  const st = C.store, cut = st ? Math.round(total * n(st.cut_pct)) / 100 : 0, card = st ? n(st.card_fee) : 0;
+  const revenue = sale - cut - card;
+  const parts = C.lines.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0);
+  const noCost = C.lines.filter(l => n(l.unit_price) > 0 && (l.unit_cost == null || n(l.unit_cost) === 0)).length;
+  const hours = C.hours != null ? n(C.hours) : n(C.est_hours);
+  const rates = C.techs.map(t => n(t.rate)).filter(r => r > 0);
+  const rate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : n(C.labour_rate);
+  const labour = hours * rate, S = C.sales;
+  const comm = S ? (S.amount != null ? n(S.amount) : (S.sale_amount != null ? n(S.sale_amount) : sale) * n(S.pct) / 100) : 0;
+  const other = n(C.other), profit = revenue - parts - labour - comm - other;
+  return { sale, total, st, cut, card, revenue, parts, noCost, hours, rate, rateFromTechs: rates.length > 0, labour, comm, other, profit,
+           margin: revenue > 0 ? profit / revenue * 100 : 0 };
+}
+function costingHtml(I) {
+  const C = I.cost, k = costingCalc(I), e = C.can_edit_costs, pct = v => (Math.round(v * 10) / 10) + "%";
+  const lvl = k.margin >= 40 ? "good" : k.margin >= 25 ? "ok" : "low";
+  const segs = [["Parts", k.parts, "#8A6A3B"], ["Labour", k.labour, "#3D7AB8"], ["Commission", k.comm, "#7A5BB0"], ["Other", k.other, "#7B8794"],
+                [k.st ? k.st.name : "Store", k.cut + k.card, "#C0392B"], ["Profit", Math.max(k.profit, 0), "#2E7D4F"]].filter(x => x[1] > 0.004);
+  const base = segs.reduce((a, x) => a + x[1], 0) || 1;
+  const hrsNote = C.hours != null ? "you set" : Number(C.est_hours) ? "price book estimate" : "type the hours";
+  return `<h2>Job costing</h2>
+    <div class="ie-cost-top ${lvl}"><div><span>Profit</span><strong>${money(k.profit)}</strong></div><div style="text-align:right"><span>Margin</span><strong>${pct(k.margin)}</strong></div></div>
+    <div class="quiet" style="margin-top:-6px">${k.st ? `Margin is profit ÷ Reid's share after ${esc(k.st.name)} (${money(k.revenue)}).` : "Margin is profit ÷ the sale before HST."} Green is 40% or more, orange 25 to 40%, red under 25%.</div>
+    <div class="ie-cost-bar" role="img" aria-label="Where the money goes">${segs.map(x => `<i style="width:${x[1] / base * 100}%;background:${x[2]}" title="${esc(x[0])} ${money(x[1])}"></i>`).join("")}</div>
+    <div class="ie-cost-key">${segs.map(x => `<span><b style="background:${x[2]}"></b>${esc(x[0])} ${pct(x[1] / base * 100)}</span>`).join("")}</div>
+    <table>
+      <tr><td>Sale (before HST)</td><td class="r">${money(k.sale)}</td></tr>
+      ${k.st ? `<tr class="store"><td><strong>${esc(k.st.name)} keeps</strong><br><span class="quiet">${C.can_set_store ? `<input data-cost="cut" inputmode="decimal" value="${Number(k.st.cut_pct)}" aria-label="${esc(k.st.name)} cut %">` : Number(k.st.cut_pct)}% of ${money(k.total)} + card
+          ${C.can_set_store ? `<input data-cost="card" inputmode="decimal" value="${Number(k.st.card_fee).toFixed(2)}" aria-label="Card fee">` : money(k.st.card_fee)}</span></td><td class="r"><strong>−${money(k.cut + k.card)}</strong></td></tr>
+        <tr class="sub"><td colspan="2">${esc(k.st.name)} pays Reid ${money(k.total - k.cut - k.card)} (with HST)</td></tr>
+        <tr><td>Reid's share (before HST)</td><td class="r">${money(k.revenue)}</td></tr>` : ""}
+      <tr><td>Parts and equipment${k.noCost ? `<br><span class="warn">${k.noCost} line${k.noCost > 1 ? "s" : ""} with no cost</span>` : ""}</td><td class="r">−${money(k.parts)}</td></tr>
+      <tr><td>Labour <input data-cost="hours" inputmode="decimal" value="${+k.hours.toFixed(2)}" aria-label="Hours"> hrs × ${money(k.rate)}/hr
+          <br><span class="quiet">${esc(hrsNote)}${C.techs.length ? " · " + esc(C.techs.map(t => t.name).join(", ")) : ""}</span>
+          ${!k.rate ? (C.can_set_rate ? `<br><span class="warn">What does a tech hour cost you?</span> <input data-cost="rate" inputmode="decimal" placeholder="$/hr" aria-label="Labour cost per hour">` : `<br><span class="warn">No labour cost set (Settings)</span>`) : ""}</td><td class="r">−${money(k.labour)}</td></tr>
+      ${C.sales ? `<tr><td>Commission<br><span class="quiet">${esc(C.sales.name || "")}${C.sales.amount == null ? " · " + Number(C.sales.pct || 0) + "%" : ""}</span></td><td class="r">−${money(k.comm)}</td></tr>` : ""}
+      <tr><td>Other costs <input data-cost="other" inputmode="decimal" value="${C.other != null ? Number(C.other).toFixed(2) : ""}" placeholder="0.00" aria-label="Other costs">
+          <input class="wide" data-cost="other_note" value="${esc(C.other_note || "")}" placeholder="What for (permit, rental, sub-trade...)" aria-label="What the other costs are for"></td><td class="r">−${money(k.other)}</td></tr>
+      <tr class="tot"><td>Profit</td><td class="r">${money(k.profit)}</td></tr>
+    </table>
+    ${C.lines.length ? `<details ${k.noCost ? "open" : ""}><summary>Cost of each line</summary><table class="ie-cost-lines">
+      ${C.lines.map(l => { const c = l.unit_cost == null ? null : Number(l.unit_cost), p = Number(l.unit_price), m = p > 0 && c != null ? (p - c) / p * 100 : null;
+        return `<tr><td>${esc(l.description)}${Number(l.quantity) !== 1 ? ` <span class="quiet">× ${Number(l.quantity)}</span>` : ""}<br><span class="quiet">sells ${money(p)}${m != null ? " · margin " + pct(m) : ""}</span></td>
+          <td class="r">${e ? `<input data-cost-line="${l.id}" inputmode="decimal" value="${c != null ? c.toFixed(2) : ""}" placeholder="cost" aria-label="Cost each">` : c != null ? money(c) : "—"}</td></tr>`; }).join("")}
+    </table></details>` : ""}
+    <p class="quiet" style="margin:0">Only people allowed to see job costing see this box. The customer never sees it.</p>`;
 }
 function renderInvoiceEditor(msg) {
   const I = IE, draft = I.status === "draft", edit = I.can_edit && draft, top = $("#main").scrollTop;
@@ -4654,6 +4729,7 @@ function renderInvoiceEditor(msg) {
       <div class="cl-hero-range"><span class="ie-status ${st[1]}">${st[0]}</span><strong class="ow-hero-amt">${money(I.total)}</strong><em>${Number(I.balance) > 0.004 && !draft ? "Still owing " + money(I.balance) : draft ? "Total so far" : "Nothing owing"}</em></div></header>
     ${msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"} ie-msg" role="status">${esc(msg)}</div>` : `<div class="staff-msg ie-msg" role="status"></div>`}
     ${I.from_st ? `<div class="approve-banner"><div>This invoice came from ServiceTitan. Change it there until the live date.</div></div>` : ""}
+    <div class="ie-grid${I.cost ? " has-cost" : ""}"><div class="ie-main">
     <section class="cl-tools ie-lines-box">
       <div class="ie-steps">${["Add the work", "Finish", "Customer signs", "Payment"].map((x, n) => { const done = [!draft, !draft, !!I.signature, Number(I.balance) <= 0.004 && !draft][n];
         return `<span class="ie-step ${done ? "done" : ""}"><b>${done ? "✓" : n + 1}</b>${x}</span>`; }).join("")}</div>
@@ -4710,6 +4786,7 @@ function renderInvoiceEditor(msg) {
           <button class="btn" type="submit">Record the payment</button></div>
         ${(IE.method || "card") === "card" ? `<p class="quiet">Run the card on your card machine first, then record it here with the approval number.</p>` : ""}
       </form></section>` : ""}
+    </div>${I.cost ? `<aside class="cl-tools ie-cost" aria-label="Job costing">${costingHtml(I)}</aside>` : ""}</div>
     <div class="ie-actions ie-foot"><button class="btn quiet-btn ie-close" type="button" data-ie-close>✕ Close</button><button class="btn quiet-btn" type="button" id="ie-view">See the invoice / print / save PDF</button>
       ${I.customer_id ? `<button class="link" type="button" id="ie-cust">Open ${esc(I.customer_name)}</button>` : ""}</div>
   </article>`;
@@ -4742,6 +4819,19 @@ function wireInvoiceEditor() {
   $("#ie-notes")?.addEventListener("change", e => { IE.notes = e.target.value; });
   $("#ie-finish")?.addEventListener("click", () => call("inv_finish", { p_invoice: I.id, p_notes: $("#ie-notes")?.value || null }, "Finished. The customer can sign, then take the payment."));
   $("#ie-reopen")?.addEventListener("click", () => call("inv_reopen", { p_invoice: I.id }, "Open again: change what you need, then finish it again."));
+  const num = v => { const x = String(v).replace(/[$,%\s]/g, ""); return x === "" ? null : Number(x); };
+  document.querySelectorAll("[data-cost]").forEach(el => el.addEventListener("change", () => {
+    const f = el.dataset.cost, v = f === "other_note" ? el.value : num(el.value);
+    if (f !== "other_note" && v != null && !isFinite(v)) return reload("Not saved: type a number.");
+    if (f === "cut" || f === "card") { const st = I.cost.store;
+      return call("inv_set_store_cut", { p_invoice: I.id, p_cut: f === "cut" ? v : Number(st.cut_pct), p_card: f === "card" ? v : Number(st.card_fee) }, "Saved."); }
+    if (f === "rate") return call("set_labour_cost", { p_rate: v }, "Labour cost saved for all jobs.");
+    call("inv_set_costs", { p_invoice: I.id, p: { [f]: v == null ? "" : String(v) } }, "Saved.");
+  }));
+  document.querySelectorAll("[data-cost-line]").forEach(el => el.addEventListener("change", () => {
+    const v = num(el.value); if (v != null && !isFinite(v)) return reload("Not saved: type a number.");
+    call("inv_set_line_cost", { p_line: Number(el.dataset.costLine), p_cost: v }, "Saved.");
+  }));
   document.querySelectorAll("[data-ie-close]").forEach(b => b.addEventListener("click", () => {
     IE.cancelOpen = false;
     if (NAV.stack.length >= 2) goBack(); else if (I.customer_id) openCustomer(I.customer_id); else openSearchScreen();
