@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.111024">
+<meta name="app-version" content="2026-10-17.112916">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1329,20 +1329,22 @@ async function start() {
 function showSignin() { $("#app").classList.add("hidden"); $("#signin").classList.remove("hidden"); $("#email").focus(); }
 async function showApp() {
   $("#signin").classList.add("hidden"); $("#app").classList.remove("hidden");
-  const { data, error } = await db.rpc("current_staff_role");
+  // ask for everything at once rather than one after another
+  const [roleR, perms, emp0, sess] = await Promise.all([db.rpc("current_staff_role"), db.rpc("my_permissions"), db.rpc("my_employee_id"),
+    CONFIG.testToken ? Promise.resolve(null) : db.auth.getSession()]);
+  const { data, error } = roleR;
   ME.role = data || null;
   try {
     ME.email = CONFIG.testToken ? JSON.parse(atob(CONFIG.testToken.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).email
-                                : (await db.auth.getSession()).data.session?.user?.email;
+                                : sess.data.session?.user?.email;
     ME.email = (ME.email || "").toLowerCase();
   } catch { ME.email = ""; }
-  const perms = await db.rpc("my_permissions");
   ME.perms = new Set(perms.data || []);
   $("#staff-link").classList.toggle("hidden", !ME.perms.has("staff.manage"));
   $("#settings-link").classList.toggle("hidden", !ME.role);
   $("#history-link").classList.toggle("hidden", !ME.perms.has("history.restore"));
   $("#calls-link").classList.toggle("hidden", !ME.role);
-  const emp = ME.role ? await db.rpc("my_employee_id") : { data: null };
+  const emp = ME.role ? emp0 : { data: null };
   ME.emp = emp.error ? null : emp.data;
   ME.booking = !emp.error;   // setup file 25 has been run
   $("#owing-link").classList.toggle("hidden", !can("invoices.adjust"));
@@ -1353,8 +1355,7 @@ async function showApp() {
   $("#mycalls-link").classList.toggle("hidden", !ME.booking || !(ME.emp || ME.role === "technician" || can("calls.dispatch")));
   $("#fu-link").classList.toggle("hidden", !ME.role);
   loadFollowKeys();
-  await loadPinSlots();
-  loadTheme();
+  await Promise.all([loadPinSlots(), loadTheme()]);
   checkForUpdate();
   if (error || !data) {
     $("#main").innerHTML = `<div class="empty"><div><h2>No access yet</h2>This login isn't set up as staff. Ask the owner to add your email to the staff list.</div></div>`;
@@ -1787,7 +1788,8 @@ async function openCustomer(id) {
   document.querySelectorAll("#results .result").forEach(b => b.setAttribute("aria-current", b.dataset.id == id));
   setPage("customer=" + id, "customer", "customer");
   $("#main").innerHTML = `<div class="loading">Opening file…</div>`;
-  const [cust, plans, jobs, invoices, estimates] = await Promise.all([
+  // everything that only needs the customer number is fetched at the same time
+  const [cust, plans, jobs, invoices, estimates, eq, emails] = await Promise.all([
     db.from("customers").select("*, customer_contacts(*), locations(*), customer_flags(*)").eq("id", id).single(),
     db.from("memberships").select("*, plan_types(name)").eq("customer_id", id).order("start_date", { ascending: false }),
     db.from("jobs").select("id, job_number, status, summary, description, priority, created_at, completed_at, location_id, job_types(name), business_units(name), partners(name), visits(id, visit_number, scheduled_date, status, visit_assignments(role, employees(first_name, last_name)))")
@@ -1795,20 +1797,19 @@ async function openCustomer(id) {
     db.from("invoices").select("*")
       .eq("customer_id", id).order("invoice_date", { ascending: false }).limit(300),
     db.from("estimates").select("id, estimate_number, status, created_at, job_id, location_id, estimate_options!estimate_options_estimate_id_fkey(name, estimate_lines(line_total))")
-      .eq("customer_id", id).order("created_at", { ascending: false }).limit(100)
+      .eq("customer_id", id).order("created_at", { ascending: false }).limit(100),
+    db.from("equipment").select("*, equipment_types(name), manufacturers(name), warranty_coverages(*), locations!inner(customer_id)")
+      .eq("locations.customer_id", id).order("install_date", { ascending: false, nullsFirst: false }),
+    fetchEmails(id)
   ]);
   if (cust.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open this customer</h2>${esc(cust.error.message)}</div></div>`; return; }
   const c = cust.data;
   try { localStorage.setItem(LAST_NAME_KEY, c.display_name || ""); } catch {}
   const locIds = (c.locations || []).map(l => l.id);
-  const eq = locIds.length ? await db.from("equipment")
-    .select("*, equipment_types(name), manufacturers(name), warranty_coverages(*)")
-    .in("location_id", locIds).order("install_date", { ascending: false, nullsFirst: false }) : { data: [] };
   const noteFilter = [`and(entity_type.eq.customer,entity_id.eq.${id})`]
     .concat(locIds.length ? [`and(entity_type.eq.location,entity_id.in.(${locIds.join(",")}))`] : []).join(",");
   const jobIds = (jobs.data || []).map(j => j.id);
   const allNotes = await fetchNotes(noteFilter, jobIds);
-  const emails = await fetchEmails(id);
   current = { c, noteFilter, jobIds, notes: allNotes, emails, plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
               estimates: estimates.data || [], equipment: eq.data || [],
               loc: (c.locations || []).find(l => l.active)?.id ?? locIds[0] };
@@ -1824,12 +1825,11 @@ async function fetchNotes(noteFilter, jobIds) {
   if (notes.error && NOTE_EXTRA.includes("author_name")) { NOTE_EXTRA = ", source, pin_order"; notes = await q(NOTE_BASE + NOTE_EXTRA); }   // setup step 23 not run yet
   if (notes.error) { NOTE_EXTRA = ", source"; notes = await q(NOTE_BASE + NOTE_EXTRA); }   // setup step 09 not run yet
   if (notes.error) { NOTE_EXTRA = ""; notes = await q(NOTE_BASE); }                       // setup step 05 not run yet
-  const out = notes.data || [];
-  for (let i = 0; i < jobIds.length; i += 150) {
-    const r = await db.from("notes").select(NOTE_BASE + (NOTE_EXTRA.includes("pin_order") ? ", pin_order" : "") + (NOTE_EXTRA.includes("author_name") ? ", author_name" : ""))
-      .eq("entity_type", "job").in("entity_id", jobIds.slice(i, i + 150)).order("created_at", { ascending: false });
-    if (r.data) out.push(...r.data);
-  }
+  const out = notes.data || [], chunks = [];
+  for (let i = 0; i < jobIds.length; i += 150) chunks.push(jobIds.slice(i, i + 150));
+  const jobNotes = await Promise.all(chunks.map(ids => db.from("notes").select(NOTE_BASE + (NOTE_EXTRA.includes("pin_order") ? ", pin_order" : "") + (NOTE_EXTRA.includes("author_name") ? ", author_name" : ""))
+      .eq("entity_type", "job").in("entity_id", ids).order("created_at", { ascending: false })));
+  jobNotes.forEach(r => { if (r.data) out.push(...r.data); });
   return out.sort(noteSort);
 }
 // Notes are shown for one year at a time, or all of them. NOTE_RANGE is "all" or a year like "2025".
