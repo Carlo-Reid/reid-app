@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.141723">
+<meta name="app-version" content="2026-10-17.142130">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -834,6 +834,19 @@
   .ie-pay-row label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; margin: 0; }
   .ie-pay-row input[name=amt] { width: 140px; font-size: calc(18px * var(--fs, 1)); font-weight: 700; }
   .mc-inv { display: flex; flex-wrap: wrap; gap: 8px; }
+  .inv-start { margin: 0 0 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  .inv-pick { width: 100%; box-sizing: border-box; background: var(--panel); border: 2px solid var(--blue); border-radius: var(--radius-m); padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .inv-pick-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .inv-pick-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; text-align: left; border: 1px solid var(--line); border-radius: 8px; background: var(--paper);
+    color: var(--ink); padding: 9px 12px; font: inherit; cursor: pointer; }
+  .inv-pick-row:hover { border-color: var(--blue); background: var(--blue-wash); }
+  .inv-pick-tag { font-size: calc(12.5px * var(--fs, 1)); font-weight: 700; color: var(--blue); }
+  .inv-pick-nojob { border-style: dashed; }
+  .ie-cancel { margin-top: 4px; padding-top: 10px; border-top: 1px dashed var(--line); }
+  .ie-cancel-f { display: flex; flex-direction: column; gap: 8px; background: var(--red-wash); border: 1px solid var(--red); border-radius: var(--radius-m); padding: 10px 14px; }
+  .ie-cancel-f label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; margin: 0; max-width: 420px; }
+  .ie-cancel-f input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; }
+  .btn.ie-danger { background: var(--red) !important; color: #fff !important; }
   .ie-look { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
   .ie-look-sub { font-weight: 500; font-size: calc(12px * var(--fs, 1)); opacity: .8; }
   .ie-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--red); color: #fff; padding: 10px 16px; border-radius: 10px; z-index: 90; font-weight: 650; }
@@ -2247,6 +2260,7 @@ function renderFile() {
     </div>
     </div>
     <div class="sec1" data-tag="Section 1B">
+    ${ME.booking ? `<div class="inv-start" id="inv-start" data-cust="${c.id}" data-loc="${l ? l.id : ""}"><button class="btn quiet-btn" type="button" id="inv-start-btn">+ Make an invoice</button><div id="inv-start-pick"></div></div>` : ""}
     ${flags.length ? `<div class="flags">${flags.join("")}</div>` : ""}
     ${contactHtml ? `<div class="contacts">${contactHtml}</div>` : ""}
 
@@ -2410,6 +2424,7 @@ function renderFile() {
   buildFileNav();
   fillTechBox();
   fillFiles();
+  $("#inv-start-btn")?.addEventListener("click", invoicePicker);
 }
 
 /* ---------------- job photos and files (copied from ServiceTitan into file storage) ---------------- */
@@ -4589,6 +4604,28 @@ $("#logins-link").addEventListener("click", () => openLogins());
 /* ---------- making an invoice: price book lines, customer signs, take the payment ---------- */
 let IE = null;
 const PAY_METHODS = [["card", "Card machine"], ["cash", "Cash"], ["cheque", "Cheque"], ["e_transfer", "E-transfer"], ["financing", "Financing"]];
+// "+ Make an invoice" at the top of a customer's file: pick the job (or no job)
+async function invoicePicker() {
+  const box = $("#inv-start"), pick = $("#inv-start-pick"); if (!box) return;
+  if (pick.innerHTML) { pick.innerHTML = ""; return; }
+  pick.innerHTML = `<div class="quiet">Loading jobs…</div>`;
+  const { data, error } = await db.rpc("invoiceable_jobs", { p_customer: Number(box.dataset.cust), p_location: box.dataset.loc ? Number(box.dataset.loc) : null });
+  if (error) { pick.innerHTML = `<div class="staff-msg err">${esc(rpcErr(error))}</div>`; return; }
+  pick.innerHTML = `<div class="inv-pick"><div class="inv-pick-head"><strong>Which job is this invoice for?</strong><button class="link" type="button" data-ip-close>Close</button></div>
+    ${data.length ? data.map(j => `<button class="inv-pick-row" type="button" data-ip-job="${j.job_id}" data-ip-draft="${j.draft_invoice || ""}">
+        <span><strong>${esc(j.job_type || "Job")}</strong> · Job ${esc(j.job_number)}<span class="quiet"> · ${fmtDate(j.created_at.slice(0, 10))}${j.next_visit ? " · visit " + fmtDate(j.next_visit) : ""}</span></span>
+        <span class="inv-pick-tag">${j.draft_invoice ? "Carry on with the invoice" : j.invoices ? `${j.invoices} invoice${j.invoices > 1 ? "s" : ""} already${Number(j.owing) > 0.004 ? " · owes " + money(j.owing) : ""}` : "No invoice yet"}</span></button>`).join("")
+      : `<div class="quiet">No jobs at this address.</div>`}
+    <button class="inv-pick-row inv-pick-nojob" type="button" data-ip-nojob><span><strong>No job</strong><span class="quiet"> · for example a part sold over the counter (office only)</span></span><span class="inv-pick-tag">New invoice</span></button>
+  </div>`;
+  pick.querySelector("[data-ip-close]").addEventListener("click", () => { pick.innerHTML = ""; });
+  pick.querySelectorAll("[data-ip-job]").forEach(b => b.addEventListener("click", () => b.dataset.ipDraft ? openInvoiceEditor(Number(b.dataset.ipDraft)) : startInvoice(Number(b.dataset.ipJob))));
+  pick.querySelector("[data-ip-nojob]").addEventListener("click", async () => {
+    const { data: id, error: e } = await db.rpc("new_invoice_for_customer", { p_customer: Number(box.dataset.cust), p_location: box.dataset.loc ? Number(box.dataset.loc) : null });
+    if (e) { alertMsg("Couldn't start the invoice: " + rpcErr(e)); return; }
+    openInvoiceEditor(id);
+  });
+}
 async function startInvoice(jobId) {
   const { data, error } = await db.rpc("new_invoice", { p_job: jobId });
   if (error) { alertMsg("Couldn't start the invoice: " + rpcErr(error)); return; }
@@ -4644,8 +4681,14 @@ function renderInvoiceEditor(msg) {
       </table></div>
       ${edit ? `<label class="ie-notes">Note on the invoice <span class="quiet">(optional, the customer sees it)</span><textarea id="ie-notes" rows="2">${esc(I.notes || "")}</textarea></label>
         <div class="ie-actions"><button class="btn" type="button" id="ie-finish" ${I.lines.length ? "" : "disabled"}>Finish the invoice</button><span class="quiet">Changes save as you go.</span></div>` : ""}
-      ${!draft && I.can_edit && I.status !== "void" && !(I.payments || []).length ? `<div class="ie-actions"><button class="link" type="button" id="ie-reopen">Change it (open it again)</button>
-        <button class="link danger" type="button" id="ie-void">Void this invoice</button></div>` : ""}
+      ${!draft && I.can_edit && I.status !== "void" && !(I.payments || []).length ? `<div class="ie-actions"><button class="link" type="button" id="ie-reopen">Change it (open it again)</button></div>` : ""}
+      ${I.can_edit && I.status !== "void" ? `<div class="ie-cancel">${IE.cancelOpen ? `<form id="ie-cancel-f" class="ie-cancel-f">
+          <strong>Cancel this invoice?</strong> ${draft ? "It hasn't been finished, so it's removed completely." : "It's kept on the file, marked <b>Void</b>, so there's a record of it."}
+          ${(I.payments || []).length ? `<div class="staff-msg err">A payment is on it. The office needs to take the payment off first (the × next to the payment above).</div>` : ""}
+          <label>Why <input name="why" value="Made in error" maxlength="200"></label>
+          <span><button class="btn ie-danger" type="submit">Yes, cancel the invoice</button> <button class="link" type="button" id="ie-cancel-no">Keep it</button></span></form>`
+        : `<button class="link danger" type="button" id="ie-cancel">Cancel this invoice (made by mistake)</button>`}</div>` : ""}
+      ${I.status === "void" ? `<div class="approve-banner"><div><strong>This invoice was cancelled (void).</strong> It doesn't count toward anything owing.</div></div>` : ""}
     </section>
     ${!draft && I.status !== "void" ? `<section class="cl-tools ie-sign-box"><h2>Customer signature</h2>
       ${I.signature ? `<div class="ie-sig"><img alt="Signature" src="data:image/png;base64,${I.signature}"><div class="quiet">${esc(I.signer_name || "")} · signed ${esc(sfWhen(I.signed_at))}</div>
@@ -4695,7 +4738,16 @@ function wireInvoiceEditor() {
   $("#ie-notes")?.addEventListener("change", e => { IE.notes = e.target.value; });
   $("#ie-finish")?.addEventListener("click", () => call("inv_finish", { p_invoice: I.id, p_notes: $("#ie-notes")?.value || null }, "Finished. The customer can sign, then take the payment."));
   $("#ie-reopen")?.addEventListener("click", () => call("inv_reopen", { p_invoice: I.id }, "Open again: change what you need, then finish it again."));
-  $("#ie-void")?.addEventListener("click", () => { const r = (prompt("Why is this invoice being voided?") || "").trim(); if (r) call("inv_void", { p_invoice: I.id, p_reason: r }, "Voided."); });
+  $("#ie-cancel")?.addEventListener("click", () => { IE.cancelOpen = true; renderInvoiceEditor(); $("#ie-cancel-f [name=why]").select(); });
+  $("#ie-cancel-no")?.addEventListener("click", () => { IE.cancelOpen = false; renderInvoiceEditor(); });
+  $("#ie-cancel-f")?.addEventListener("submit", async e => {
+    e.preventDefault(); const why = e.target.why.value;
+    const { data, error } = await db.rpc("inv_cancel", { p_invoice: I.id, p_reason: why });
+    if (error) { IE.cancelOpen = false; return reload("Not cancelled: " + rpcErr(error)); }
+    IE.cancelOpen = false;
+    if (data === "removed") { const cid = I.customer_id; alertMsg("Invoice " + I.number + " cancelled and removed."); if (cid) openCustomer(cid); else goBack(); }
+    else reload("Invoice cancelled. It's kept on the file marked Void.");
+  });
   $("#ie-unsign")?.addEventListener("click", () => call("inv_sign", { p_invoice: I.id, p_name: null, p_png: null }, "Signature cleared."));
   const pad = $("#ie-pad canvas");
   if (pad) sigPad(pad, png => call("inv_sign", { p_invoice: I.id, p_name: $("#ie-signer").value, p_png: png }, "Signed."));
