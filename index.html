@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.182645">
+<meta name="app-version" content="2026-10-17.193048">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1698,6 +1698,11 @@
   .mapc-t input[data-mz-name] { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; width: 100%; max-width: 260px; box-sizing: border-box; }
   .mapc-t input[type=color] { width: 44px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
   .mapc .cl-tools { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; overflow-x: auto; }
+  .mapc-t { table-layout: fixed; min-width: 640px; } .mapc-t td:nth-child(1) { width: 70px; } .mapc-t td:nth-child(2) { width: 150px; } .mapc-t td:nth-child(3) { width: 90px; } .mapc-t td:nth-child(4) { width: 100px; } .mapc-t td:nth-child(5) { width: 70px; }
+  .mapc-view { flex-direction: row !important; flex-wrap: wrap; align-items: flex-end; gap: 10px 16px !important; position: sticky; top: 0; z-index: 3; }
+  .mapc-view label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; }
+  .mapc-view input, .mapc-view select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; }
+  .mapc-view input { width: 180px; } .mapc-count { align-self: center; }
   .mapc-tools { flex-direction: row !important; flex-wrap: wrap; align-items: center; gap: 10px 16px !important; }
   .mapc-add { display: flex; gap: 8px; align-items: flex-end; } .mapc-add label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; }
   .mapc-add input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; width: 110px; }
@@ -3932,7 +3937,26 @@ function renderMapColours(msg) {
   const ed = MAPZ.can, D = MAPZ.draft, top = $("#main").scrollTop;
   const areas = (MAPZ.areas || []).slice(), fsas = new Set(areas.map(a => a.fsa));
   const custom = [...D.values()].filter(z => !fsas.has(z.prefix)).sort((a, b) => a.prefix.localeCompare(b.prefix));
-  const byRegion = new Map(); areas.forEach(a => { const k = a.fsa.slice(0, 2); if (!byRegion.has(k)) byRegion.set(k, []); byRegion.get(k).push(a); });
+  // how the list is shown: group, sort, filter (remembered on this computer)
+  const V = MAPZ.view || (MAPZ.view = (() => { try { return JSON.parse(localStorage.getItem("reid.mapcView") || "null"); } catch { return null; } })() || {});
+  V.group = V.group || "region"; V.sort = V.sort || "code"; V.show = V.show || "all"; V.q = V.q || "";
+  const hue = c => { const m = /^#(..)(..)(..)$/.exec(c || ""); if (!m) return 999; const [r, g, b] = m.slice(1).map(x => parseInt(x, 16) / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (d < 0.08) return 400 + mx; const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return (h * 60 + 360) % 360; };
+  const colOf = a => D.get(a.fsa)?.color || null;
+  const q = V.q.trim().toUpperCase().replace(/\s/g, "");
+  let shown = areas.filter(a => (V.show === "all" || (V.show === "on" ? !!D.get(a.fsa) : !D.get(a.fsa)))
+    && (!q || a.fsa.startsWith(q.slice(0, 3)) || String(a.city || "").toUpperCase().replace(/\s/g, "").includes(q) || String(D.get(a.fsa)?.name || "").toUpperCase().replace(/\s/g, "").includes(q)));
+  const SORTS = { code: (a, b) => a.fsa.localeCompare(b.fsa), most: (a, b) => b.n - a.n || a.fsa.localeCompare(b.fsa), fewest: (a, b) => a.n - b.n || a.fsa.localeCompare(b.fsa),
+    town: (a, b) => String(a.city || "~").localeCompare(String(b.city || "~")) || a.fsa.localeCompare(b.fsa),
+    colour: (a, b) => (colOf(a) ? 0 : 1) - (colOf(b) ? 0 : 1) || hue(colOf(a)) - hue(colOf(b)) || String(colOf(a)).localeCompare(String(colOf(b))) || a.fsa.localeCompare(b.fsa),
+    nocolour: (a, b) => (colOf(a) ? 1 : 0) - (colOf(b) ? 1 : 0) || b.n - a.n };
+  shown.sort(SORTS[V.sort] || SORTS.code);
+  const groupKey = a => V.group === "region" ? a.fsa.slice(0, 2) + "…" : V.group === "town" ? (a.city || "Town not known") : V.group === "colour" ? (colOf(a) || "No colour yet") : "";
+  const byRegion = new Map(); shown.forEach(a => { const k = groupKey(a); if (!byRegion.has(k)) byRegion.set(k, []); byRegion.get(k).push(a); });
+  const gTotal = list => list.reduce((t, a) => t + a.n, 0);
+  const groupOrder = [...byRegion.entries()];
+  if (V.group === "town" || V.group === "colour") groupOrder.sort((x, y) => (V.sort === "code" || V.sort === "town" ? x[0].localeCompare(y[0]) : gTotal(y[1]) - gTotal(x[1])));
+  const coloured = areas.filter(a => D.get(a.fsa)).length;
   const row = (prefix, n, city) => { const z = D.get(prefix), on = !!z;
     return `<tr data-mz="${esc(prefix)}"><td><strong>${esc(prefix)}</strong></td><td>${esc(city || "")}</td><td class="r num">${n != null ? n.toLocaleString() : ""}</td>
       <td><label class="pb-check"><input type="checkbox" data-mz-on ${on ? "checked" : ""} ${ed ? "" : "disabled"}> Colour</label></td>
@@ -3947,12 +3971,29 @@ function renderMapColours(msg) {
       <span class="quiet">Fills in a different colour for each postal code area that doesn't have one yet (change any after), then press Save.</span>
       <form id="mz-add" class="mapc-add"><label>Add an area<input name="p" maxlength="6" placeholder="e.g. K2 or K2J"></label><button class="btn quiet-btn" type="submit">Add</button></form>
       <button class="link danger" type="button" id="mz-clear">Take all colours off</button></section>` : `<p class="quiet">Only people who dispatch can change the colours.</p>`}
-    ${custom.length ? `<section class="cl-tools"><strong>Bigger areas and others</strong><table class="mapc-t"><tbody>${custom.map(z => row(z.prefix, null, "")).join("")}</tbody></table></section>` : ""}
-    ${[...byRegion.entries()].map(([k, list]) => `<section class="cl-tools"><strong>${esc(k)}…</strong>
-      <table class="mapc-t"><thead><tr><th>Area</th><th>Town</th><th class="r">Addresses</th><th></th><th>Colour</th><th>Name on the map</th></tr></thead>
+    <section class="cl-tools mapc-view" id="mz-view">
+      <label>Search<input id="mz-q" value="${esc(V.q)}" placeholder="Postal code or town" autocomplete="off"></label>
+      <label>Group by<select id="mz-group">${[["region", "Region (K1, K2…)"], ["town", "Town"], ["colour", "Colour"], ["none", "No groups"]].map(([k, t]) => `<option value="${k}" ${V.group === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>Sort by<select id="mz-sort">${[["code", "Postal code A–Z"], ["most", "Most addresses first"], ["fewest", "Fewest addresses first"], ["town", "Town A–Z"], ["colour", "Colour (same colours together)"], ["nocolour", "No colour yet first"]].map(([k, t]) => `<option value="${k}" ${V.sort === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>Show<select id="mz-show">${[["all", "All areas"], ["off", "Only areas with no colour"], ["on", "Only areas with a colour"]].map(([k, t]) => `<option value="${k}" ${V.show === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <span class="quiet mapc-count">${shown.length} of ${areas.length} areas shown · ${coloured} coloured</span>
+      ${V.q || V.show !== "all" || V.group !== "region" || V.sort !== "code" ? `<button class="link" type="button" id="mz-reset">Reset</button>` : ""}
+    </section>
+    ${custom.length ? `<section class="cl-tools"><strong>Bigger areas and others</strong><table class="mapc-t"><colgroup><col style="width:70px"><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:70px"><col></colgroup><tbody>${custom.map(z => row(z.prefix, null, "")).join("")}</tbody></table></section>` : ""}
+    ${shown.length ? "" : `<div class="quiet">No areas match. <button class="link" type="button" id="mz-reset2">Show all areas</button></div>`}
+    ${groupOrder.map(([k, list]) => `<section class="cl-tools">${k ? `<strong>${V.group === "colour" && list[0] && colOf(list[0]) ? `<span class="dm-dot" style="display:inline-block;vertical-align:-2px;background:${esc(colOf(list[0]))}"></span> ` : ""}${esc(V.group === "colour" && k.startsWith("#") ? ([...new Set(list.map(a => D.get(a.fsa)?.name || a.city).filter(Boolean))].slice(0, 4).join(", ") || "Colour") : k)} <span class="quiet">${list.length} area${list.length === 1 ? "" : "s"} · ${gTotal(list).toLocaleString()} addresses</span></strong>` : ""}
+      <table class="mapc-t"><colgroup><col style="width:70px"><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:70px"><col></colgroup><thead><tr><th>Area</th><th>Town</th><th class="r">Addresses</th><th></th><th>Colour</th><th>Name on the map</th></tr></thead>
       <tbody>${list.map(a => row(a.fsa, a.n, a.city)).join("")}</tbody></table></section>`).join("")}
   </article>`;
   $("#main").scrollTop = top;
+  const saveV = () => { try { localStorage.setItem("reid.mapcView", JSON.stringify({ group: V.group, sort: V.sort, show: V.show })); } catch {} };
+  const qi = $("#mz-q"); let qt;
+  qi.addEventListener("input", () => { clearTimeout(qt); qt = setTimeout(() => { V.q = qi.value; const pos = qi.selectionStart; renderMapColours(msg);
+    const again = $("#mz-q"); again.focus(); try { again.setSelectionRange(pos, pos); } catch {} }, 200); });
+  qi.addEventListener("keydown", e => { if (e.key === "Escape" && qi.value) { e.stopPropagation(); V.q = ""; renderMapColours(msg); $("#mz-q").focus(); } });
+  [["#mz-group", "group"], ["#mz-sort", "sort"], ["#mz-show", "show"]].forEach(([sel, k]) => $(sel).addEventListener("change", e => { V[k] = e.target.value; saveV(); renderMapColours(msg); }));
+  const reset = () => { V.q = ""; V.group = "region"; V.sort = "code"; V.show = "all"; saveV(); renderMapColours(msg); };
+  $("#mz-reset")?.addEventListener("click", reset); $("#mz-reset2")?.addEventListener("click", reset);
   if (!ed) return;
   const readRow = tr => { const p = tr.dataset.mz, on = tr.querySelector("[data-mz-on]").checked;
     if (on) D.set(p, { prefix: p, color: tr.querySelector("[data-mz-color]").value, name: tr.querySelector("[data-mz-name]").value.trim() }); else D.delete(p);
