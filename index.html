@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.160636">
+<meta name="app-version" content="2026-10-17.162502">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -832,6 +832,8 @@
   .pb-newcost.big { display: flex; flex-direction: column; align-items: flex-start; white-space: normal; padding: 8px 10px; font-size: calc(14px * var(--fs, 1)); margin: 6px 0; }
   .pb-newtag { background: var(--blue-wash); color: var(--blue); }
   .pb-up { color: var(--red); }
+  tr.pb-grouprow td { background: var(--blue-wash); color: var(--blue); font-weight: 750; text-transform: uppercase; letter-spacing: .05em; font-size: calc(13px * var(--fs, 1)); padding: 8px 12px; }
+  .pb-grouphead { grid-column: 1 / -1; margin: 10px 0 0; color: var(--blue); font-size: calc(15px * var(--fs, 1)); text-transform: uppercase; letter-spacing: .05em; border-bottom: 2px solid var(--blue-wash); padding-bottom: 4px; }
   .ak-list { display: flex; flex-direction: column; gap: 12px; }
   .ak-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); box-shadow: var(--shadow-1, 0 1px 3px rgba(0,0,0,.06)); overflow: hidden; }
   .ak-card.open { border-color: var(--blue); }
@@ -4957,6 +4959,16 @@ function wireInvoiceEditor() {
 
 /* ---------- Price book ---------- */
 const PB_TYPES = [["all", "Everything"], ["service", "Services"], ["material", "Materials"], ["equipment", "Equipment"], ["fee", "Fees"], ["labour", "Labour"]];
+// Equipment groups, in the order the price book lists them (same as the database's _pb_equip_rank)
+const PB_EQ_GROUPS = [[9, /mini[- ]?split|ductless|single zone|multi[- ]?zone|cassette|wall mount|\bmpc\b|moovair/i, "Mini-splits"], [1, /furnace/i, "Furnaces"],
+  [2, /air condition|\ba\/?c\b/i, "Air conditioners"], [3, /heat pump/i, "Heat pumps"], [4, /coil/i, "Coils"],
+  [5, /water heater|water tank|hot water|tankless|boiler|\btank\b/i, "Water heaters and boilers"], [6, /humidif|dehumid/i, "Humidifiers"],
+  [7, /\bhrv\b|\berv\b|pureair|purifier|air clean|\buv\b|filter|media/i, "Air quality"], [8, /thermostat|t-?stat/i, "Thermostats"],
+  [10, /fireplace|insert/i, "Fireplaces"]];
+const pbEqGroup = n => { for (const [r, re, t] of PB_EQ_GROUPS) if (re.test(n || "")) return [r, t]; return [11, "Everything else"]; };
+const pbGroupHead = (rows, i, cols) => { if (PB.type !== "equipment") return ""; const g = pbEqGroup(rows[i].name)[1];
+  if (i && pbEqGroup(rows[i - 1].name)[1] === g) return "";
+  return cols ? `<tr class="pb-grouprow"><td colspan="${cols}">${esc(g)}</td></tr>` : `<h3 class="pb-grouphead">${esc(g)}</h3>`; };
 const PB_TYPE_NAME = { service: "Service", material: "Material", equipment: "Equipment", fee: "Fee", labour: "Labour", warranty: "Warranty", plan: "Plan", monitoring: "Monitoring" };
 const PB_FLAGS = [["", "All"], ["off_rule", "Off the markup rule"], ["member", "Member price"], ["kits", "Add-on kits"], ["no_picture", "No picture"], ["no_category", "No category"]];
 let PB = { q: "", type: "all", active: "true", sel: null, picked: new Set(), view: "list", cat: null, flag: "", open: new Set(), thumbs: new Map(), photos: new Map(), showPricing: false };
@@ -5159,7 +5171,7 @@ const pbCatOptions = (skip) => { const out = [];
 
 async function loadPricebook() {
   let { data, error } = await db.rpc("pb_list", { p_search: PB.q || null, p_type: PB.type, p_active: PB.active === "" ? null : PB.active === "true",
-    p_category: PB.cat, p_flag: PB.flag || null, p_limit: 500 });
+    p_category: PB.cat, p_flag: PB.flag || null, p_limit: PB.type === "equipment" ? 2000 : 500 });
   if (error && /function|schema/i.test(error.message))   // setup file 34 not run yet: the plain list still works
     ({ data, error } = await db.rpc("pb_list", { p_search: PB.q || null, p_type: PB.type, p_active: PB.active === "" ? null : PB.active === "true", p_limit: 500 }));
   if (!document.querySelector(".pb, .loading")) return;
@@ -5313,9 +5325,9 @@ function renderPricebook(msg) {
           <button class="link" type="button" id="pb-unpick">Clear</button></div>` : ""}
         <div class="dsp-wrap pb-wrap">
           <div class="staff-wrap" style="flex:1;min-width:0">${!rows.length ? `<div class="quiet" style="padding:24px 0">Nothing matches.</div>` : pics
-            ? `<div class="pb-grid">${rows.map(r => pbCard(r, edit)).join("")}</div>`
+            ? `<div class="pb-grid">${rows.map((r, i) => pbGroupHead(rows, i) + pbCard(r, edit)).join("")}</div>`
             : `<table class="calls-table pb-table"><thead><tr>${edit ? `<th></th>` : ""}<th>Item</th><th>Type</th><th class="r">Price</th><th class="r">Member</th>${seeCost() ? `<th class="r">Cost</th><th class="r">Margin</th>` : ""}<th class="r">Used (12 mo)</th></tr></thead><tbody>
-            ${rows.map(r => { const m = pbMargin(r), u = pbUnit(r.unit_of_measure); return `<tr class="po-row ${PB.sel === r.id ? "sel" : ""} ${r.active ? "" : "po-cx"}" tabindex="0" data-pb="${r.id}">
+            ${rows.map((r, i) => { const m = pbMargin(r), u = pbUnit(r.unit_of_measure); return `${pbGroupHead(rows, i, (edit ? 1 : 0) + 5 + (seeCost() ? 2 : 0))}<tr class="po-row ${PB.sel === r.id ? "sel" : ""} ${r.active ? "" : "po-cx"}" tabindex="0" data-pb="${r.id}">
               ${edit ? `<td class="pb-pick"><input type="checkbox" data-pb-pick="${r.id}" ${PB.picked.has(r.id) ? "checked" : ""} aria-label="Pick ${esc(pbName(r.name))}"></td>` : ""}
               <td><strong>${esc(pbName(r.name))}</strong>${r.kit_parts ? ` <span class="ow-tag">Add-on kit</span>` : ""}<div class="quiet">${esc(r.sku)}${r.supplier ? " · " + esc(r.supplier) : ""}${r.categories ? " · " + esc(r.categories) : ""}</div></td>
               <td>${esc(PB_TYPE_NAME[r.item_type] || r.item_type)}${r.taxable ? "" : ` <span class="ow-tag">No tax</span>`}</td>
