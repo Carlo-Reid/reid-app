@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.173032">
+<meta name="app-version" content="2026-10-17.173521">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -832,6 +832,9 @@
   .pb-newcost.big { display: flex; flex-direction: column; align-items: flex-start; white-space: normal; padding: 8px 10px; font-size: calc(14px * var(--fs, 1)); margin: 6px 0; }
   .pb-newtag { background: var(--blue-wash); color: var(--blue); }
   .pb-up { color: var(--red); }
+  .imp-box { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; } .imp-box h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); } .imp-box p { margin: 0; }
+  .imp-list { margin: 6px 0 0; padding-left: 20px; line-height: 1.6; } .imp-unread { color: var(--amber); }
+  .imp-box .staff-msg { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .pb-catchip { display: inline-block; background: var(--blue-wash); color: var(--blue); border-radius: 6px; padding: 2px 8px; margin: 0 4px 4px 0; font-size: calc(12.5px * var(--fs, 1)); font-weight: 650; line-height: 1.35; }
   .pb-catpar { font-weight: 500; opacity: .8; }
   .pb-catcell { min-width: 140px; max-width: 240px; }
@@ -5587,6 +5590,92 @@ function wireFormulas() {
       say(error ? "Not saved: " + rpcErr(error) : `${n} model${n === 1 ? "" : "s"} now priced by ${f.name}.`); });
   }, 250); });
 }
+
+// ---------- Import a supplier invoice (a PDF emailed from Boone): new costs and new items wait for approval ----------
+let PDFJS = null;
+const loadPdfJs = () => PDFJS || (PDFJS = new Promise((ok, no) => {
+  const s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+  s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; ok(window.pdfjsLib); };
+  s.onerror = () => { PDFJS = null; no(new Error("Couldn't load the PDF reader. Check the internet connection.")); }; document.head.append(s); }));
+function impBoxHtml() {
+  const r = PB.importResult;
+  return `<section class="cl-tools imp-box" id="imp-box"><h2>Import a supplier invoice</h2>
+    <p class="quiet">Pick the PDF invoices the supplier emailed you (several at once is fine). The app reads each line's code and what you really paid after the discount. New costs and new items wait for your OK below; nothing changes until you approve.</p>
+    <div class="pbi-form"><label>Supplier<input id="imp-sup" value="${esc(PB.importSup || "Boone")}" maxlength="60"></label>
+      <label class="btn quiet-btn pb-file">Pick PDF invoices<input type="file" id="imp-file" accept="application/pdf,.pdf" multiple></label>
+      <button class="link" type="button" id="imp-close">Close</button></div>
+    <div id="imp-out">${r || ""}</div></section>`;
+}
+// The lines of text on each page, top to bottom
+async function pdfLines(file) {
+  const pdfjs = await loadPdfJs(), doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise, out = [];
+  for (let n = 1; n <= doc.numPages; n++) {
+    const page = await doc.getPage(n), tc = await page.getTextContent(), rows = [];
+    for (const it of tc.items) { if (!it.str || !it.str.trim()) continue;
+      const x = it.transform[4], y = it.transform[5]; let row = rows.find(r => Math.abs(r.y - y) < 2.5);
+      if (!row) rows.push(row = { y, parts: [] }); row.parts.push({ x, s: it.str, w: it.width || 0 }); }
+    rows.sort((a, b) => b.y - a.y);
+    for (const r of rows) { r.parts.sort((a, b) => a.x - b.x); out.push(r.parts.map(p => p.s.trim()).join(" ").replace(/\s+/g, " ").trim()); }
+    out.push("\f");
+  }
+  return out;
+}
+// Boone sales orders: "008 070590B ... UN 12 12 0 3.12000 91 37.44"
+function parseSupplierLines(lines) {
+  const invoices = [], unread = []; let cur = null;
+  const qtyRe = /\b(UN|FT|EA|BX|PK|RL|PR|LB|CS|BG|M|ST|PC)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+([\d,]*\.\d{3,5})(?:\s+(\d{1,2}(?:\.\d+)?))?\s+(-?[\d,]+\.\d{2})(-?)/;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    const ord = ln.match(/Order Number\s*:?\s*([A-Z]?\d{5,7})/i), dt = ln.match(/Document Date\s*:?\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})/i);
+    if (ord && (!cur || cur.order !== ord[1])) { cur = invoices.find(x => x.order === ord[1]) || null; if (!cur) invoices.push(cur = { order: ord[1], date: null, lines: [] }); }
+    if (dt && cur && !cur.date) { const y = Number(dt[3]) < 100 ? 2000 + Number(dt[3]) : Number(dt[3]); cur.date = `${y}-${String(dt[1]).padStart(2, "0")}-${String(dt[2]).padStart(2, "0")}`; }
+    const m = ln.match(/^\s*0\d\d\s*\|?\s*([A-Z0-9][A-Z0-9\-./]{1,})\b\s*(.*)$/i);
+    if (!m || !cur) continue;
+    if (/^\d{3}$/.test(m[1])) continue;   // a shelf location, not a product
+    const code = m[1].toUpperCase(); let acc = m[2] || "", text = "", q = acc.match(qtyRe), used = i;
+    if (q) text = acc.slice(0, q.index);
+    else for (let k = 1; k <= 4; k++) { const t = lines[i + k] || ""; if (t === "\f" || /^\s*0\d\d\s*\|?\s*[A-Z0-9]/i.test(t)) break;
+      const mm = t.match(qtyRe); if (mm) { q = mm; used = i + k; text = acc + " " + t.slice(0, mm.index); break; } acc += " " + t; }
+    if (!q) text = acc;
+    if (!q) { unread.push(`${code} ${text}`.trim().slice(0, 80)); continue; }
+    if (q[8] === "-" || Number(q[7].replace(/,/g, "")) < 0 || Number(q[3]) < 0) continue;   // credits and returns
+    const unit = Number(q[5].replace(/,/g, "")), disc = q[6] ? Number(q[6]) : 0, net = Number(q[7].replace(/,/g, "")), shipped = Number(q[3]) || Number(q[2]);
+    let each = unit * (1 - disc / 100);
+    if (shipped > 0 && net > 0 && Math.abs(each * shipped - net) > Math.max(0.05, net * 0.02)) each = net / shipped;
+    if (q[1].toUpperCase() === "FT") for (const t of lines.slice(used + 1, used + 3)) { const r = t.match(/REF\s+([\d.]+)\s+UN/i); if (r && Number(r[1]) > 0) { each = net / Number(r[1]); break; } }
+    if (!(each >= 0)) { unread.push(code); continue; }
+    cur.lines.push({ code, description: text.replace(/\s+/g, " ").trim().slice(0, 200), cost: Math.round(each * 10000) / 10000 });
+  }
+  return { invoices: invoices.filter(x => x.lines.length), unread };
+}
+function wireImport() {
+  $("#imp-close")?.addEventListener("click", () => { PB.importOpen = false; PB.importResult = null; renderPricebook(); });
+  $("#imp-sup")?.addEventListener("change", e => { PB.importSup = e.target.value.trim(); });
+  $("#imp-file")?.addEventListener("change", async e => {
+    const files = [...e.target.files], out = $("#imp-out"), sup = ($("#imp-sup").value || "Boone").trim(); PB.importSup = sup;
+    if (!files.length) return; const rows = [], said = t => { out.innerHTML = `<div class="quiet">${t}</div>`; };
+    let totals = {};
+    for (const [n, f] of files.entries()) {
+      said(`Reading ${esc(f.name)} (${n + 1} of ${files.length})…`);
+      let parsed; try { parsed = parseSupplierLines(await pdfLines(f)); } catch (err) { rows.push(`<li><b>${esc(f.name)}</b>: couldn't read it (${esc(err.message)})</li>`); continue; }
+      if (!parsed.invoices.length) { rows.push(`<li><b>${esc(f.name)}</b>: no invoice lines found. ${parsed.unread.length ? "" : "If it's a scanned paper invoice, it can't be read here."}</li>`); continue; }
+      for (const inv of parsed.invoices) {
+        const { data, error } = await db.rpc("import_supplier_lines", { p_supplier: sup, p_ref: "order " + inv.order, p_date: inv.date || ymd(new Date()), p_lines: inv.lines });
+        if (error) { rows.push(`<li><b>${esc(f.name)}</b> order ${esc(inv.order)}: not imported (${esc(rpcErr(error))})</li>`); continue; }
+        const c = data.counts || {}; for (const [k, v] of Object.entries(c)) totals[k] = (totals[k] || 0) + v;
+        rows.push(`<li><b>Order ${esc(inv.order)}</b>${inv.date ? " · " + esc(fmtDate(inv.date)) : ""}: ${inv.lines.length} lines · ${c["added"] || 0} new costs · ${c["new item waiting"] || 0} new items · ${c["same"] || 0} unchanged${c["already there"] ? ` · ${c["already there"]} already imported` : ""}</li>`);
+      }
+      if (parsed.unread.length) rows.push(`<li class="imp-unread"><b>${esc(f.name)}</b>: couldn't read ${parsed.unread.length} line${parsed.unread.length > 1 ? "s" : ""}: ${parsed.unread.map(esc).join("; ")}</li>`);
+    }
+    await loadPbUpdates();
+    const waiting = (totals["added"] || 0) + (totals["new item waiting"] || 0);
+    PB.importResult = `<div class="staff-msg ${waiting ? "ok" : ""}">${waiting ? `${totals["added"] || 0} new costs and ${totals["new item waiting"] || 0} new items are waiting for your OK.` : "Nothing new: the costs match the price book."}
+      ${waiting ? `<button class="btn" type="button" id="imp-review">Review them</button>` : ""}</div><ul class="imp-list">${rows.join("")}</ul>`;
+    await loadPricebook();
+    $("#imp-box")?.scrollIntoView({ block: "start" });
+  });
+  $("#imp-review")?.addEventListener("click", () => { PB.review = true; PB.importOpen = false; PB.importResult = null; renderPbReview(); });
+}
 async function loadPbPricing() { const { data, error } = await db.rpc("pb_pricing"); PB.pricing = error ? null : data; }
 const pbCatPath = id => { const out = []; let c = PB.catBy?.get(id), n = 0; while (c && n++ < 20) { out.unshift(c.name); c = PB.catBy.get(c.parent_id); } return out.join(" › "); };
 const pbCatOptions = (skip) => { const out = [];
@@ -5730,9 +5819,11 @@ function renderPricebook(msg) {
     <div class="pos-head"><h1>Price book</h1><span>
       <button class="btn quiet-btn" type="button" id="pb-pricing-open" aria-expanded="${PB.showPricing}">Markup &amp; member prices</button>
       ${seeCost() ? `<button class="btn quiet-btn" type="button" id="pb-formulas">Pricing formulas</button>` : ""}
+      ${seeCost() && can("pricebook.edit") ? `<button class="btn quiet-btn" type="button" id="pb-import">Import supplier invoice</button>` : ""}
       <button class="btn quiet-btn" type="button" id="pb-print">Print book</button>
       ${edit ? `<button class="btn" type="button" id="pb-new">+ New item</button>` : ""}</span></div>
     <p class="lead">Services, parts and equipment with their prices. The items used most in the last year come first.</p>
+    ${PB.importOpen ? impBoxHtml() : ""}
     ${PB.upd?.size ? (() => { const nn = (PB.updRows || []).filter(u => u.kind === "new").length, nc = PB.upd.size - nn;
       return `<div class="pb-updbanner"><span>From supplier invoices: ${[nc ? `<strong>${nc} new cost${nc > 1 ? "s" : ""}</strong>` : "", nn ? `<strong>${nn} new item${nn > 1 ? "s" : ""}</strong>` : ""].filter(Boolean).join(" and ")} waiting for your OK.</span><button class="btn" type="button" id="pb-review">Review them</button></div>`; })() : ""}
     ${PB.showPricing ? pbPricingBox(edit) : ""}
@@ -5871,6 +5962,7 @@ function renderPricebook(msg) {
     const cur = PB.catBy.get(PB.cat); if (!cur) return;
     if (await saveCat(cur.id, cur.name, cur.parent_id, !cur.active)) { await loadPbCats(); renderPricebook(cur.active ? `Retired ${cur.name}. Its items keep it until you move them.` : `${cur.name} is back.`); }
   });
+  wireImport();
   $("#pb-review")?.addEventListener("click", () => { PB.review = true; renderPbReview(); });
   wireUpdButtons($("#main"));
   // items
@@ -5909,6 +6001,7 @@ function renderPricebook(msg) {
   $("#pb-bcat-out")?.addEventListener("click", () => bulkCat(false));
   $("#pb-print")?.addEventListener("click", () => openPrintBook());
   $("#pb-formulas")?.addEventListener("click", () => openFormulas());
+  $("#pb-import")?.addEventListener("click", () => { PB.importOpen = !PB.importOpen; renderPricebook(); $("#imp-box")?.scrollIntoView({ behavior: "smooth", block: "start" }); });
   $("#pb-new")?.addEventListener("click", () => { PB.sel = "new"; document.querySelectorAll(".po-row.sel, .pb-card.sel").forEach(x => x.classList.remove("sel")); showPbItem("new"); $("#pb-panel").scrollIntoView({ block: "nearest" }); });
   // markup rules and member prices
   $("#pb-pricing-open").addEventListener("click", () => { PB.showPricing = !PB.showPricing; renderPricebook(); });
