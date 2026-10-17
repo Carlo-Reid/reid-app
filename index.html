@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.193048">
+<meta name="app-version" content="2026-10-17.193628">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1699,6 +1699,8 @@
   .mapc-t input[type=color] { width: 44px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
   .mapc .cl-tools { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; overflow-x: auto; }
   .mapc-t { table-layout: fixed; min-width: 640px; } .mapc-t td:nth-child(1) { width: 70px; } .mapc-t td:nth-child(2) { width: 150px; } .mapc-t td:nth-child(3) { width: 90px; } .mapc-t td:nth-child(4) { width: 100px; } .mapc-t td:nth-child(5) { width: 70px; }
+  .mapc-tabs { display: flex; gap: 8px; margin: 0 0 12px; } .mapc-tabs .chip.on { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .hood-t td:nth-child(2) { color: var(--steel); }
   .mapc-view { flex-direction: row !important; flex-wrap: wrap; align-items: flex-end; gap: 10px 16px !important; position: sticky; top: 0; z-index: 3; }
   .mapc-view label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; }
   .mapc-view input, .mapc-view select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; }
@@ -3814,11 +3816,12 @@ function loadLeaflet() {
   });
   return LEAFLET;
 }
-const saveDspMap = () => { try { localStorage.setItem("reid.dispatchMap", JSON.stringify({ map: !!DSP.map, colorBy: DSP.colorBy || "zone", mapWait: !!DSP.mapWait })); } catch {} };
+const saveDspMap = () => { try { localStorage.setItem("reid.dispatchMap", JSON.stringify({ map: !!DSP.map, colorBy: DSP.colorBy || "hood", mapWait: !!DSP.mapWait, mapLines: !!DSP.mapLines })); } catch {} };
 try { Object.assign(DSP, JSON.parse(localStorage.getItem("reid.dispatchMap") || "{}")); } catch {}
 function dspTechColor(id) { const i = (BOOK.techs || []).findIndex(t => t.id === id); return i < 0 ? MAP_GREY : MAP_PALETTE[i % MAP_PALETTE.length]; }
 function dspMarkColor(r) {
   if (DSP.colorBy === "tech") return r.techs.length ? dspTechColor(r.techs[0].id) : MAP_GREY;
+  if ((DSP.colorBy || "hood") === "hood" && r.hood_id && MAPH.by?.get(r.hood_id)?.color) return MAPH.by.get(r.hood_id).color;
   return zoneOf(r.postal_code)?.color || MAP_GREY;
 }
 async function mountDspMap() {
@@ -3826,7 +3829,8 @@ async function mountDspMap() {
   if (!DSP.mapEl) {
     const el = DSP.mapEl = document.createElement("section"); el.className = "dsp-map";
     el.innerHTML = `<div class="dsp-map-bar"><strong>Map</strong>
-        <label>Colour by <select id="dm-by"><option value="zone">Postal code area</option><option value="tech">Tech</option></select></label>
+        <label>Colour by <select id="dm-by"><option value="hood">Neighbourhood</option><option value="zone">Postal code area</option><option value="tech">Tech</option></select></label>
+        <label class="pb-check"><input type="checkbox" id="dm-lines"> Neighbourhood outlines</label>
         <label class="pb-check"><input type="checkbox" id="dm-wait"> Show calls waiting for a day</label>
         ${can("calls.dispatch") || ME.role === "owner" ? `<button class="link" type="button" id="dm-setup">Map colours…</button>` : ""}
         <button class="link" type="button" id="dm-fit">Fit all calls</button>
@@ -3835,16 +3839,18 @@ async function mountDspMap() {
       <div class="dsp-map-body"><div class="dsp-map-canvas" id="dm-canvas"></div><div class="dsp-map-legend" id="dm-legend"></div></div>`;
     el.querySelector("#dm-by").addEventListener("change", e => { DSP.colorBy = e.target.value; saveDspMap(); drawDspMap(); });
     el.querySelector("#dm-wait").addEventListener("change", e => { DSP.mapWait = e.target.checked; saveDspMap(); drawDspMap(true); });
+    el.querySelector("#dm-lines").addEventListener("change", async e => { DSP.mapLines = e.target.checked; saveDspMap(); if (DSP.mapLines) await loadHoods(false, true); drawDspMap(); });
     el.querySelector("#dm-close").addEventListener("click", () => { DSP.map = false; saveDspMap(); renderDispatch(); });
     el.querySelector("#dm-fit").addEventListener("click", () => drawDspMap(true));
     el.querySelector("#dm-setup")?.addEventListener("click", () => openMapColours());
     el.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); DSP.map = false; saveDspMap(); renderDispatch(); } });
   }
-  DSP.mapEl.querySelector("#dm-by").value = DSP.colorBy || "zone";
+  DSP.mapEl.querySelector("#dm-by").value = DSP.colorBy || "hood";
+  DSP.mapEl.querySelector("#dm-lines").checked = !!DSP.mapLines;
   DSP.mapEl.querySelector("#dm-wait").checked = !!DSP.mapWait;
   slot.replaceWith(DSP.mapEl);
   let L;
-  try { [L] = await Promise.all([loadLeaflet(), loadMapZones()]); }
+  try { [L] = await Promise.all([loadLeaflet(), loadMapZones(), loadHoods(false, !!DSP.mapLines)]); }
   catch (e) { $("#dm-note").textContent = e.message; return; }
   if (!DSP.lmap) {
     DSP.lmap = L.map($("#dm-canvas"), { zoomControl: true }).setView([45.35, -75.75], 10);
@@ -3864,13 +3870,18 @@ function drawDspMap(fit) {
   if (!DSP.lmap || !window.L) return;
   const L = window.L, list = dspMapRows(), pts = [];
   DSP.mlayer.clearLayers();
+  if (DSP.mapLines && MAPH.shapes) {   // neighbourhood outlines, under the dots
+    MAPH.shapes.forEach(sh => { const h = MAPH.by?.get(sh.id) || {}, c = h.color || MAP_GREY;
+      L.geoJSON(sh.shape, { interactive: true, style: { color: c, weight: 1.2, opacity: 0.8, fillColor: c, fillOpacity: 0.1 } })
+        .bindTooltip(esc(h.name || ""), { sticky: true }).addTo(DSP.mlayer); });
+  }
   list.forEach(({ r, wait }) => {
     if (r.lat == null || r.lng == null) return;
     const sel = DSP.sel === r.visit_id, col = dspMarkColor(r);
     const m = L.circleMarker([Number(r.lat), Number(r.lng)], { radius: sel ? 13 : 9, color: sel ? "#000" : "#1d2733", weight: sel ? 3 : 1.5,
       fillColor: col, fillOpacity: wait ? 0.35 : 0.9, dashArray: wait ? "3 3" : null });
     const techs = r.techs.map(t => t.name).join(", ");
-    m.bindTooltip(`<b>${esc(r.customer_name)}</b><br>${wait ? "Waiting for a day" : esc(winText(r.arrival_start, r.arrival_end))}${techs ? " · " + esc(techs) : " · <i>no tech yet</i>"}<br>${esc(r.job_type)}<br>${esc([r.street, r.city].filter(Boolean).join(", "))} ${esc(r.postal_code || "")}`, { direction: "top" });
+    m.bindTooltip(`<b>${esc(r.customer_name)}</b><br>${wait ? "Waiting for a day" : esc(winText(r.arrival_start, r.arrival_end))}${techs ? " · " + esc(techs) : " · <i>no tech yet</i>"}<br>${esc(r.job_type)}<br>${esc([r.street, r.city].filter(Boolean).join(", "))} ${esc(r.postal_code || "")}${r.hood ? `<br><i>${esc(r.hood)}</i>` : ""}`, { direction: "top" });
     m.on("click", () => { DSP.sel = r.visit_id; document.querySelectorAll(".dc.sel").forEach(x => x.classList.remove("sel"));
       document.querySelectorAll(`.dc[data-visit="${r.visit_id}"]`).forEach(x => x.classList.add("sel")); renderDspPanel(); drawDspMap(); });
     m.addTo(DSP.mlayer); pts.push([Number(r.lat), Number(r.lng)]);
@@ -3881,12 +3892,14 @@ function drawDspMap(fit) {
   list.forEach(({ r }) => {
     let key, label, color;
     if (DSP.colorBy === "tech") { const t = r.techs[0]; key = t ? t.id : 0; label = t ? t.name : "No tech yet"; color = t ? dspTechColor(t.id) : MAP_GREY; }
-    else { const z = zoneOf(r.postal_code); key = z ? z.prefix : "?"; label = z ? `${z.prefix}${z.name ? " · " + z.name : ""}` : "No colour set"; color = z ? z.color : MAP_GREY; }
+    else if ((DSP.colorBy || "hood") === "hood" && r.hood_id) { const h = MAPH.by?.get(r.hood_id); key = "h" + r.hood_id; label = r.hood; color = h?.color || zoneOf(r.postal_code)?.color || MAP_GREY; }
+    else { const z = zoneOf(r.postal_code); key = z ? z.prefix : "?"; label = z ? `${z.prefix}${z.name ? " · " + z.name : ""}` : (DSP.colorBy || "hood") === "hood" ? `${pcKey(r.postal_code).slice(0, 3) || "?"} (no neighbourhood)` : "No colour set"; color = z ? z.color : MAP_GREY; }
     const g = groups.get(key) || { label, color, n: 0 }; g.n++; groups.set(key, g);
   });
   const missing = list.filter(({ r }) => r.lat == null).length;
-  $("#dm-legend").innerHTML = `<strong>${DSP.colorBy === "tech" ? "Techs" : "Postal areas"}</strong>${[...groups.values()].sort((a, b) => b.n - a.n).map(g =>
+  $("#dm-legend").innerHTML = `<strong>${DSP.colorBy === "tech" ? "Techs" : DSP.colorBy === "zone" ? "Postal areas" : "Neighbourhoods"}</strong>${[...groups.values()].sort((a, b) => b.n - a.n).map(g =>
       `<div class="dm-leg"><span class="dm-dot" style="background:${esc(g.color)}"></span>${esc(g.label)} <span class="quiet">${g.n}</span></div>`).join("") || `<div class="quiet">No calls.</div>`}
+    ${(DSP.colorBy || "hood") === "hood" && !(MAPH.list || []).length ? `<p class="quiet">Neighbourhoods aren't loaded yet. ${can("calls.dispatch") || ME.role === "owner" ? "Press Map colours… to load them." : "Ask the office to load them."}</p>` : ""}
     ${DSP.colorBy === "zone" && (MAPZ.zones || []).length === 0 ? `<p class="quiet">No colours yet. ${can("calls.dispatch") || ME.role === "owner" ? "Press Map colours… to pick a colour for each postal code area." : "Ask the office to set up the map colours."}</p>` : ""}`;
   const note = $("#dm-note"); if (note) note.textContent = missing ? `Finding ${missing} address${missing === 1 ? "" : "es"} on the map…` : "";
   if (missing) dspGeocode();
@@ -3916,7 +3929,10 @@ async function dspGeocode() {
       if (hit) {
         const lat = Number(hit.lat), lng = Number(hit.lon);
         await db.rpc("set_location_coords", { p_location: todo.location_id, p_lat: lat, p_lng: lng });
-        DSP.rows.concat(DSP.waiting).filter(r => r.location_id === todo.location_id).forEach(r => { r.lat = lat; r.lng = lng; });
+        if ((MAPH.list || []).length && !MAPH.shapes) await loadHoods(false, true);
+        const hid = MAPH.shapes ? hoodAt(lat, lng, MAPH.shapes) : null;
+        if (hid) await db.rpc("set_location_hoods", { p: [[todo.location_id, hid]] });
+        DSP.rows.concat(DSP.waiting).filter(r => r.location_id === todo.location_id).forEach(r => { r.lat = lat; r.lng = lng; if (hid) { r.hood_id = hid; r.hood = MAPH.by.get(hid)?.name; } });
       }
       drawDspMap();
     }
@@ -3924,14 +3940,161 @@ async function dspGeocode() {
     const left = dspMapRows().filter(x => x.r.lat == null).length; n.textContent = left ? `${left} address${left === 1 ? "" : "es"} couldn't be found on the map.` : ""; } }
 }
 
+/* ---------------- neighbourhoods: Barrhaven East, Chapman Mills, Half Moon Bay... ---------------- */
+const HOOD_URL = "https://maps.ottawa.ca/arcgis/rest/services/Neighbourhoods/MapServer/2/query?where=1%3D1&outFields=ONS_ID,NAME,ONS_REGION&returnGeometry=true&outSR=4326&geometryPrecision=5&maxAllowableOffset=0.00004&f=geojson";
+const MAPH = { list: null, shapes: null };
+async function loadHoods(force, shapes) {
+  if (MAPH.list && !force && (!shapes || MAPH.shapes)) return;
+  const { data, error } = await db.rpc("neighbourhood_list", { p_shapes: !!shapes });
+  if (error || !data) { MAPH.list = []; MAPH.err = error ? rpcErr(error) : ""; return; }
+  MAPH.info = data; MAPH.list = data.hoods; MAPH.by = new Map(data.hoods.map(h => [h.id, h]));
+  if (shapes) MAPH.shapes = data.hoods.filter(h => h.shape).map(h => ({ id: h.id, shape: h.shape, box: hoodBox(h.shape) }));
+}
+const hoodRings = g => !g ? [] : g.type === "Polygon" ? [g.coordinates] : g.type === "MultiPolygon" ? g.coordinates : [];
+function hoodBox(g) { let a = [999, 999, -999, -999]; hoodRings(g).forEach(poly => poly[0].forEach(([x, y]) => { a = [Math.min(a[0], x), Math.min(a[1], y), Math.max(a[2], x), Math.max(a[3], y)]; })); return a; }
+function inRing(x, y, r) { let inside = false; for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const [xi, yi] = r[i], [xj, yj] = r[j];
+  if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside; } return inside; }
+function hoodAt(lat, lng, shapes) {
+  for (const s of shapes || []) { const b = s.box; if (lng < b[0] || lng > b[2] || lat < b[1] || lat > b[3]) continue;
+    if (hoodRings(s.shape).some(poly => inRing(lng, lat, poly[0]) && !poly.slice(1).some(h => inRing(lng, lat, h)))) return s.id; }
+  return null;
+}
+// Work out every located address's neighbourhood, then fill in the rest from postal codes
+async function hoodAssignAll(say) {
+  await loadHoods(true, true);
+  let after = 0, done = 0, all = [];
+  for (;;) { const { data, error } = await db.rpc("located_addresses", { p_after: after, p_limit: 20000 });
+    if (error) throw new Error(rpcErr(error)); if (!data.length) break; all = all.concat(data); after = data[data.length - 1].id; if (data.length < 20000) break; }
+  const pairs = all.map(r => [r.id, hoodAt(Number(r.lat), Number(r.lng), MAPH.shapes)]);
+  for (let i = 0; i < pairs.length; i += 2500) {
+    const { error } = await db.rpc("set_location_hoods", { p: pairs.slice(i, i + 2500) }); if (error) throw new Error(rpcErr(error));
+    done = Math.min(i + 2500, pairs.length); say(`Matching addresses to neighbourhoods… ${done.toLocaleString()} of ${pairs.length.toLocaleString()}`);
+  }
+  say("Filling in addresses without a map spot from their postal code…");
+  const { error } = await db.rpc("fill_hoods_by_postal"); if (error) throw new Error(rpcErr(error));
+  await loadHoods(true);
+}
+// Neighbours (outlines that touch) get different colours
+function hoodAutoColours(list, keep) {
+  const box = new Map((MAPH.shapes || []).map(s => [s.id, s.box])), near = (a, b) => { const p = box.get(a), q = box.get(b); if (!p || !q) return false;
+    const pad = 0.002; return p[0] - pad <= q[2] && q[0] - pad <= p[2] && p[1] - pad <= q[3] && q[1] - pad <= p[3]; };
+  const out = new Map(keep);
+  [...list].sort((a, b) => b.n - a.n).forEach(h => { if (out.get(h.id)) return;
+    const used = new Set(list.filter(o => o.id !== h.id && out.get(o.id) && near(h.id, o.id)).map(o => out.get(o.id)));
+    out.set(h.id, MAP_PALETTE.find(c => !used.has(c)) || MAP_PALETTE[h.id % MAP_PALETTE.length]); });
+  return out;
+}
+const mapcTabs = () => `<div class="mapc-tabs" role="tablist">
+    <button type="button" role="tab" class="chip ${MAPZ.tab !== "postal" ? "on" : ""}" aria-pressed="${MAPZ.tab !== "postal"}" data-mapc-tab="hoods">Neighbourhoods</button>
+    <button type="button" role="tab" class="chip ${MAPZ.tab === "postal" ? "on" : ""}" aria-pressed="${MAPZ.tab === "postal"}" data-mapc-tab="postal">Postal code areas</button></div>`;
+function wireMapcTabs() { document.querySelectorAll("[data-mapc-tab]").forEach(b => b.addEventListener("click", () => {
+  MAPZ.tab = b.dataset.mapcTab; try { localStorage.setItem("reid.mapcTab", MAPZ.tab); } catch {} MAPZ.tab === "postal" ? renderMapColours() : renderHoodColours(); })); }
+function renderHoodColours(msg) {
+  const ed = MAPZ.can, top = $("#main").scrollTop, info = MAPH.info || {}, list = MAPH.list || [];
+  const D = MAPH.draft || (MAPH.draft = new Map(list.filter(h => h.color).map(h => [h.id, h.color])));
+  const V = MAPH.view || (MAPH.view = (() => { try { return JSON.parse(localStorage.getItem("reid.hoodView") || "null"); } catch { return null; } })() || {});
+  V.group = V.group || "region"; V.sort = V.sort || "name"; V.show = V.show || "all"; V.q = V.q || "";
+  const hue = c => { const m = /^#(..)(..)(..)$/.exec(c || ""); if (!m) return 999; const [r, g, b] = m.slice(1).map(x => parseInt(x, 16) / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (d < 0.08) return 400 + mx; const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return (h * 60 + 360) % 360; };
+  const q = V.q.trim().toLowerCase();
+  const shown = list.filter(h => (V.show === "all" || (V.show === "on" ? D.get(h.id) : !D.get(h.id)))
+      && (!q || h.name.toLowerCase().includes(q) || (h.fsas || []).some(f => f.toLowerCase().startsWith(q.replace(/\s/g, "").slice(0, 3)))))
+    .sort({ name: (a, b) => a.name.localeCompare(b.name), most: (a, b) => b.n - a.n, fewest: (a, b) => a.n - b.n,
+      postal: (a, b) => String((a.fsas || [])[0] || "~").localeCompare(String((b.fsas || [])[0] || "~")) || a.name.localeCompare(b.name),
+      colour: (a, b) => (D.get(a.id) ? 0 : 1) - (D.get(b.id) ? 0 : 1) || hue(D.get(a.id)) - hue(D.get(b.id)) || a.name.localeCompare(b.name),
+      nocolour: (a, b) => (D.get(a.id) ? 1 : 0) - (D.get(b.id) ? 1 : 0) || b.n - a.n }[V.sort] || ((a, b) => a.name.localeCompare(b.name)));
+  const gk = h => V.group === "region" ? (h.region || "Other") : V.group === "postal" ? ((h.fsas || [])[0] || "No addresses yet") : V.group === "colour" ? (D.get(h.id) || "No colour yet") : "";
+  const groups = new Map(); shown.forEach(h => { const k = gk(h); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(h); });
+  const gl = [...groups.entries()]; if (V.group !== "none") gl.sort((x, y) => V.sort === "most" ? y[1].reduce((t, h) => t + h.n, 0) - x[1].reduce((t, h) => t + h.n, 0) : x[0].localeCompare(y[0]));
+  const row = h => { const c = D.get(h.id);
+    return `<tr data-hd="${h.id}"><td><strong>${esc(h.name)}</strong></td><td>${esc((h.fsas || []).join(", "))}</td><td class="r num">${h.n.toLocaleString()}</td>
+      <td><label class="pb-check"><input type="checkbox" data-hd-on ${c ? "checked" : ""} ${ed ? "" : "disabled"}> Colour</label></td>
+      <td><input type="color" data-hd-color value="${esc(c || "#1f6fd1")}" ${ed && c ? "" : "disabled"} aria-label="Colour for ${esc(h.name)}"></td></tr>`; };
+  const pct = info.total ? Math.round(100 * info.located / info.total) : 0;
+  $("#main").innerHTML = `<article class="staff mapc">
+    <div class="pos-head"><h1>Map colours</h1>${ed && list.length ? `<span><button class="btn" type="button" id="hd-save">Save</button></span>` : ""}</div>
+    <p class="lead">Colour the dispatch map by neighbourhood (Barrhaven East, Chapman Mills, Half Moon Bay, Stittsville…) or by postal code area. Neighbourhoods come from the City of Ottawa; addresses outside Ottawa use their postal code area's colour.</p>
+    ${mapcTabs()}
+    ${msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"}" role="status" id="hd-msg">${esc(msg)}</div>` : `<div class="staff-msg" role="status" id="hd-msg"></div>`}
+    ${!list.length ? `<section class="cl-tools"><strong>Load the neighbourhoods</strong>
+        <p style="margin:0">This gets the City of Ottawa's neighbourhood outlines (about 115) and works out which neighbourhood each customer address is in. It takes about a minute and only needs doing once.</p>
+        ${ed ? `<div class="ak-connrow"><button class="btn" type="button" id="hd-load">Load Ottawa neighbourhoods</button></div>
+        <p class="quiet" style="margin:0">If it can't reach the city's map service, download the outlines as GeoJSON from <a href="https://open.ottawa.ca/datasets/ottawa::ottawa-neighbourhood-study-ons-neighbourhood-boundaries-gen-3/explore" target="_blank" rel="noopener">open.ottawa.ca</a> and pick the file here:
+          <input type="file" id="hd-file" accept=".geojson,.json,application/geo+json,application/json"></p>` : `<p class="quiet">Ask someone who dispatches to load them.</p>`}</section>` : `
+    <section class="cl-tools mapc-tools">
+      <span><b>${(info.located || 0).toLocaleString()}</b> of ${(info.total || 0).toLocaleString()} addresses (${pct}%) have a neighbourhood: ${(info.by_map || 0).toLocaleString()} from their map spot, the rest from their postal code.</span>
+      ${ed ? `<button class="btn quiet-btn" type="button" id="hd-auto">Give every neighbourhood a colour</button>
+      <span class="quiet">Neighbourhoods next to each other get different colours.</span>
+      <button class="link" type="button" id="hd-redo">Match addresses again</button>
+      <button class="link" type="button" id="hd-reload">Reload outlines from the city</button>
+      <button class="link danger" type="button" id="hd-clear">Take all colours off</button>` : ""}</section>
+    <section class="cl-tools mapc-view">
+      <label>Search<input id="hd-q" value="${esc(V.q)}" placeholder="Neighbourhood or postal code" autocomplete="off"></label>
+      <label>Group by<select id="hd-group">${[["region", "Part of the city"], ["postal", "Main postal code"], ["colour", "Colour"], ["none", "No groups"]].map(([k, t]) => `<option value="${k}" ${V.group === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>Sort by<select id="hd-sort">${[["name", "Name A–Z"], ["most", "Most addresses first"], ["fewest", "Fewest addresses first"], ["postal", "Postal code"], ["colour", "Colour (same colours together)"], ["nocolour", "No colour yet first"]].map(([k, t]) => `<option value="${k}" ${V.sort === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>Show<select id="hd-show">${[["all", "All neighbourhoods"], ["off", "Only ones with no colour"], ["on", "Only ones with a colour"]].map(([k, t]) => `<option value="${k}" ${V.show === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <span class="quiet mapc-count">${shown.length} of ${list.length} shown · ${list.filter(h => D.get(h.id)).length} coloured</span>
+      ${V.q || V.show !== "all" || V.group !== "region" || V.sort !== "name" ? `<button class="link" type="button" id="hd-reset">Reset</button>` : ""}
+    </section>
+    ${shown.length ? "" : `<div class="quiet">Nothing matches.</div>`}
+    ${gl.map(([k, l]) => `<section class="cl-tools">${k ? `<strong>${V.group === "colour" && k.startsWith("#") ? `<span class="dm-dot" style="display:inline-block;vertical-align:-2px;background:${esc(k)}"></span> ${esc(l.slice(0, 3).map(h => h.name).join(", "))}${l.length > 3 ? "…" : ""}` : esc(k)}
+        <span class="quiet">${l.length} neighbourhood${l.length === 1 ? "" : "s"} · ${l.reduce((t, h) => t + h.n, 0).toLocaleString()} addresses</span></strong>` : ""}
+      <table class="mapc-t hood-t"><colgroup><col><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:70px"></colgroup>
+        <thead><tr><th>Neighbourhood</th><th>Postal codes</th><th class="r">Addresses</th><th></th><th>Colour</th></tr></thead><tbody>${l.map(row).join("")}</tbody></table></section>`).join("")}`}
+  </article>`;
+  $("#main").scrollTop = top;
+  wireMapcTabs();
+  const say = (t, err) => { const m = $("#hd-msg"); if (m) { m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; } };
+  const saveV = () => { try { localStorage.setItem("reid.hoodView", JSON.stringify({ group: V.group, sort: V.sort, show: V.show })); } catch {} };
+  const qi = $("#hd-q"); let qt;
+  qi?.addEventListener("input", () => { clearTimeout(qt); qt = setTimeout(() => { V.q = qi.value; const pos = qi.selectionStart; renderHoodColours(msg); const a = $("#hd-q"); a.focus(); try { a.setSelectionRange(pos, pos); } catch {} }, 200); });
+  qi?.addEventListener("keydown", e => { if (e.key === "Escape" && qi.value) { e.stopPropagation(); V.q = ""; renderHoodColours(msg); $("#hd-q").focus(); } });
+  [["#hd-group", "group"], ["#hd-sort", "sort"], ["#hd-show", "show"]].forEach(([s, k]) => $(s)?.addEventListener("change", e => { V[k] = e.target.value; saveV(); renderHoodColours(msg); }));
+  $("#hd-reset")?.addEventListener("click", () => { V.q = ""; V.group = "region"; V.sort = "name"; V.show = "all"; saveV(); renderHoodColours(msg); });
+  if (!ed) return;
+  const busy = on => document.querySelectorAll(".mapc button, .mapc input, .mapc select").forEach(b => b.disabled = on);
+  const loadShapes = async gj => {
+    if (!gj || !Array.isArray(gj.features) || !gj.features.length) throw new Error("That doesn't look like the neighbourhood outlines (no shapes in it).");
+    const f0 = gj.features[0].geometry?.coordinates; const flat = JSON.stringify(f0 || []).match(/-?\d+\.\d+/g) || [];
+    if (flat.length && Math.abs(Number(flat[0])) > 180) throw new Error("The file's map positions aren't in latitude/longitude. Download it as GeoJSON.");
+    say(`Saving ${gj.features.length} neighbourhood outlines…`);
+    const { error } = await db.rpc("save_neighbourhood_shapes", { p: { features: gj.features.map(f => ({ geometry: f.geometry, properties: f.properties })) } });
+    if (error) throw new Error(rpcErr(error));
+    MAPH.shapes = null; await hoodAssignAll(say); MAPH.draft = null;
+  };
+  const run = async fn => { busy(true); try { await fn(); MAPH.draft = null; renderHoodColours(`Done. ${(MAPH.info.located || 0).toLocaleString()} addresses now have a neighbourhood.`); }
+    catch (e) { busy(false); say("Couldn't finish: " + e.message, true); } };
+  const fromCity = async () => { say("Getting the outlines from the City of Ottawa…");
+    let gj; try { const r = await fetch(HOOD_URL); gj = await r.json(); } catch { throw new Error("Couldn't reach the City of Ottawa's map service. Use the file option instead."); }
+    if (gj.error) throw new Error("The city's map service said: " + (gj.error.message || "error")); await loadShapes(gj); };
+  $("#hd-load")?.addEventListener("click", () => run(fromCity));
+  $("#hd-reload")?.addEventListener("click", () => run(fromCity));
+  $("#hd-file")?.addEventListener("change", e => { const f = e.target.files[0]; if (!f) return; run(async () => loadShapes(JSON.parse(await f.text()))); });
+  $("#hd-redo")?.addEventListener("click", () => run(() => hoodAssignAll(say)));
+  document.querySelectorAll("tr[data-hd]").forEach(tr => { const upd = () => { const id = Number(tr.dataset.hd), on = tr.querySelector("[data-hd-on]").checked;
+      if (on) D.set(id, tr.querySelector("[data-hd-color]").value); else D.delete(id); tr.querySelector("[data-hd-color]").disabled = !on; };
+    tr.addEventListener("input", upd); tr.addEventListener("change", upd); });
+  $("#hd-auto")?.addEventListener("click", async () => { if (!MAPH.shapes) await loadHoods(true, true);
+    MAPH.draft = hoodAutoColours(list, D); renderHoodColours("Colours filled in (neighbours get different colours). Change any you like, then press Save."); });
+  $("#hd-clear")?.addEventListener("click", e => { if (e.target.dataset.sure !== "1") { e.target.dataset.sure = "1"; e.target.textContent = "Sure? Take every colour off (then Save)"; return; }
+    D.clear(); renderHoodColours("All colours taken off. Press Save to keep it that way."); });
+  $("#hd-save")?.addEventListener("click", async () => {
+    const { error } = await db.rpc("save_hood_colors", { p: list.map(h => ({ id: h.id, color: D.get(h.id) || "" })) });
+    if (error) return say("Not saved: " + rpcErr(error), true);
+    await loadHoods(true); MAPH.draft = null; if (DSP.lmap) { DSP.hoodLayerFor = null; drawDspMap(); }
+    renderHoodColours("Saved. The dispatch map uses these colours now.");
+  });
+}
+
 /* ---------------- Map colours page: a colour for each postal code area ---------------- */
 async function openMapColours(msg) {
   setPage("map-colours", "dispatch", "Map colours");
-  $("#main").innerHTML = `<div class="loading">Loading the postal code areas…</div>`;
-  await loadMapZones(true);
+  $("#main").innerHTML = `<div class="loading">Loading the map colours…</div>`;
+  await Promise.all([loadMapZones(true), loadHoods(true)]);
   if (!document.querySelector(".loading, .mapc")) return;
-  MAPZ.draft = new Map((MAPZ.zones || []).map(z => [z.prefix, { ...z }]));
-  renderMapColours(msg);
+  MAPZ.draft = new Map((MAPZ.zones || []).map(z => [z.prefix, { ...z }])); MAPH.draft = null;
+  if (MAPZ.tab == null) try { MAPZ.tab = localStorage.getItem("reid.mapcTab") || "hoods"; } catch { MAPZ.tab = "hoods"; }
+  MAPZ.tab === "postal" ? renderMapColours(msg) : renderHoodColours(msg);
 }
 function renderMapColours(msg) {
   const ed = MAPZ.can, D = MAPZ.draft, top = $("#main").scrollTop;
@@ -3965,6 +4128,7 @@ function renderMapColours(msg) {
   $("#main").innerHTML = `<article class="staff mapc">
     <div class="pos-head"><h1>Map colours</h1>${ed ? `<span><button class="btn" type="button" id="mz-save">Save</button></span>` : ""}</div>
     <p class="lead">Pick a colour for each postal code area (the first 3 characters, like K2J). Calls on the dispatch map show in their area's colour, so you can see which calls are close together. You can also colour a bigger area with a shorter code, like K2 for all of K2…; the more exact code wins.</p>
+    ${mapcTabs()}
     ${msg ? `<div class="staff-msg ${/^Not/.test(msg) ? "err" : "ok"}" role="status">${esc(msg)}</div>` : ""}
     ${ed ? `<section class="cl-tools mapc-tools">
       <button class="btn quiet-btn" type="button" id="mz-auto">Give every area a colour</button>
@@ -3986,6 +4150,7 @@ function renderMapColours(msg) {
       <tbody>${list.map(a => row(a.fsa, a.n, a.city)).join("")}</tbody></table></section>`).join("")}
   </article>`;
   $("#main").scrollTop = top;
+  wireMapcTabs();
   const saveV = () => { try { localStorage.setItem("reid.mapcView", JSON.stringify({ group: V.group, sort: V.sort, show: V.show })); } catch {} };
   const qi = $("#mz-q"); let qt;
   qi.addEventListener("input", () => { clearTimeout(qt); qt = setTimeout(() => { V.q = qi.value; const pos = qi.selectionStart; renderMapColours(msg);
