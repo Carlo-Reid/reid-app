@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.141500">
+<meta name="app-version" content="2026-10-17.141723">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -834,6 +834,8 @@
   .ie-pay-row label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; margin: 0; }
   .ie-pay-row input[name=amt] { width: 140px; font-size: calc(18px * var(--fs, 1)); font-weight: 700; }
   .mc-inv { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ie-look { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .ie-look-sub { font-weight: 500; font-size: calc(12px * var(--fs, 1)); opacity: .8; }
   .ie-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--red); color: #fff; padding: 10px 16px; border-radius: 10px; z-index: 90; font-weight: 650; }
   .inv-note { margin-top: 16px; padding: 10px 14px; background: #F5F7FA; border-radius: 6px; white-space: pre-line; font-size: 14px; }
   .inv-sig { margin-top: 18px; } .inv-sig img { max-height: 80px; display: block; margin: 4px 0; }
@@ -4614,6 +4616,9 @@ function renderInvoiceEditor(msg) {
     <section class="cl-tools ie-lines-box">
       <div class="ie-steps">${["Add the work", "Finish", "Customer signs", "Payment"].map((x, n) => { const done = [!draft, !draft, !!I.signature, Number(I.balance) <= 0.004 && !draft][n];
         return `<span class="ie-step ${done ? "done" : ""}"><b>${done ? "✓" : n + 1}</b>${x}</span>`; }).join("")}</div>
+      ${I.looks?.length && I.can_edit && I.status !== "void" ? `<div class="ie-look"><span class="cl-label">Invoice look</span>
+        <div class="seg" role="group"><button type="button" data-ie-look="" aria-pressed="${!I.look_partner_id}">Reid Heating &amp; Cooling</button>${I.looks.map(l =>
+          `<button type="button" data-ie-look="${l.id}" aria-pressed="${I.look_partner_id === l.id}">${esc(l.name)} <span class="ie-look-sub">installed by Reid</span></button>`).join("")}</div></div>` : ""}
       <table class="ie-table"><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">HST</th><th class="r">Amount</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
         ${I.lines.length ? I.lines.map((l, n) => `<tr data-ie-line="${l.id}">
           <td>${edit ? `<textarea class="ie-desc" data-ie-f="description" rows="${Math.min(6, Math.max(1, Math.ceil((l.description || "").length / 70), (l.description || "").split("\n").length))}">${esc(l.description)}</textarea>`
@@ -4702,6 +4707,8 @@ function wireInvoiceEditor() {
     if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Take it off"; return; }
     call("inv_remove_payment", { p_payment: Number(b.dataset.ieUnpay) }, "Payment taken off."); }));
   $("#ie-view").addEventListener("click", () => openInvoice(I.id));
+  document.querySelectorAll("[data-ie-look]").forEach(b => b.addEventListener("click", () => call("inv_set_look", { p_invoice: I.id, p_partner: b.dataset.ieLook ? Number(b.dataset.ieLook) : null },
+    b.dataset.ieLook ? "The invoice now has the " + b.textContent.replace("installed by Reid", "").trim() + " look." : "The invoice now has the Reid look.")));
   $("#ie-cust")?.addEventListener("click", () => openCustomer(I.customer_id));
 }
 
@@ -6171,7 +6178,7 @@ async function openInvoice(id) {
   const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open");
   $("#inv-paper").innerHTML = `<div class="quiet" style="padding:40px">Opening invoice…</div>`;
   const [inv, co] = await Promise.all([
-    db.from("invoices").select("*, invoice_lines(*), payment_applications(amount, applied_at, payments(payment_number, method, received_on, reference)), jobs(job_number, summary, job_types(name), partners(name, branding_name, branding_logo_url, customer_pays_partner)), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id)), business_units(name)").eq("id", id).single(),
+    db.from("invoices").select("*, invoice_lines(*), payment_applications(amount, applied_at, payments(payment_number, method, received_on, reference)), jobs(job_number, summary, job_types(name), partners(name, branding_name, branding_logo_url, customer_pays_partner)), look_partner:partners!invoices_branding_partner_id_fkey(name, branding_name, branding_logo_url, customer_pays_partner), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id)), business_units(name)").eq("id", id).single(),
     COMPANY ? Promise.resolve({ data: COMPANY }) : db.from("company_settings").select("*").limit(1).maybeSingle()]);
   if (inv.error) { $("#inv-paper").innerHTML = `<div class="staff-msg err" style="padding:40px">Couldn't open this invoice: ${esc(inv.error.message)}</div>`; return; }
   COMPANY = co.data || { company_name: "Reid Heating & Cooling" };
@@ -6188,7 +6195,9 @@ async function openInvoice(id) {
   const tax = i.tax_total ?? lines.reduce((s, x) => s + Number(x.tax_amount || 0), 0);
   const total = i.total ?? subtotal + tax, paid = i.amount_paid ?? pays.reduce((s, x) => s + Number(x.amount || 0), 0);
   const balance = i.balance_due ?? total - paid;
-  const brand = i.jobs?.partners?.branding_logo_url || i.jobs?.partners?.branding_name ? i.jobs.partners : null;   // e.g. Costco jobs
+  // the look: Reid, or a store such as Costco (chosen on the invoice; older invoices follow the job's partner)
+  const jp = i.jobs?.partners?.branding_logo_url || i.jobs?.partners?.branding_name ? i.jobs.partners : null;
+  const brand = i.look === "reid" ? null : i.look === "store" && i.look_partner ? i.look_partner : jp;
   const coName = c.company_name || "Reid Heating & Cooling";
   $("#inv-paper").innerHTML = `
     <div class="inv-top">
@@ -6231,7 +6240,7 @@ async function openInvoice(id) {
       : can("invoices.adjust") ? `<span>Shouldn't this be owing?</span> ${["Paid monthly", "Paid elsewhere", "Written off"].map(r => `<button class="chip small" type="button" data-not-owed="${r}">${r}</button>`).join("")}
           <button class="chip small" type="button" data-not-owed="">Other…</button>` : ""}
       <span class="staff-msg" id="owed-msg" role="status"></span></div>` : ""}
-    ${brand && brand.customer_pays_partner && i.status !== "void" ? `<div class="inv-paystore"><strong>Please pay ${esc(money(total))} at ${esc(brand.branding_name || brand.name)}.</strong> Bring this invoice with you. The installation is booked once ${esc(brand.branding_name || brand.name)} lets us know it's paid.</div>` : ""}
+    ${brand && brand.customer_pays_partner && i.status !== "void" && Number(balance) > 0.004 ? `<div class="inv-paystore"><strong>Please pay ${esc(money(total))} at ${esc(brand.branding_name || brand.name)}.</strong> Bring this invoice with you. The installation is booked once ${esc(brand.branding_name || brand.name)} lets us know it's paid.</div>` : ""}
     ${i.notes ? `<div class="inv-note">${esc(i.notes)}</div>` : ""}
     ${i.signature_png ? `<div class="inv-sig"><div class="inv-label">Customer signature</div><img alt="Signature" src="data:image/png;base64,${i.signature_png}"><div class="inv-small">${esc(i.signer_name || "")} · ${fmtDate((i.signed_at || "").slice(0, 10))}</div></div>` : ""}
     ${!i.st_id && i.status !== "void" ? `<div class="no-print inv-edit-row"><button class="btn" type="button" data-inv-edit="${i.id}">${i.status === "draft" ? "Carry on with this invoice" : Number(balance) > 0.004 ? "Signature and payment" : "Open in the invoice screen"}</button></div>` : ""}
