@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.152330">
+<meta name="app-version" content="2026-10-17.155336">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -827,6 +827,13 @@
   .ie-foot { margin: 6px 0 40px; }
   .ie-topbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
   .ie-close { font-weight: 650; }
+  .pb-updbanner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; background: var(--amber-wash); border: 1px solid var(--amber); border-radius: var(--radius-m); padding: 10px 14px; margin-bottom: 12px; }
+  .pb-newcost { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; padding: 3px 6px; border: 1px solid var(--amber); background: var(--amber-wash); border-radius: 8px; font-size: calc(13px * var(--fs, 1)); white-space: nowrap; }
+  .pb-newcost.big { display: flex; flex-direction: column; align-items: flex-start; white-space: normal; padding: 8px 10px; font-size: calc(14px * var(--fs, 1)); margin: 6px 0; }
+  .pb-up { color: var(--red); } .pb-down { color: var(--green); }
+  .pb-newbtns { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+  .pb-newbtns button { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 1px 7px; font: inherit; font-weight: 700; cursor: pointer; }
+  .pb-newbtns .pb-ok { color: var(--green); border-color: var(--green); } .pb-newbtns .pb-no { color: var(--red); }
   tr.ie-kitline td { padding-top: 4px; padding-bottom: 4px; font-size: calc(14px * var(--fs, 1)); }
   tr.ie-kitline td:first-child { padding-left: 22px; }
   tr.ie-kitline .ie-desc { min-height: 30px; padding: 4px 8px; }
@@ -4939,7 +4946,7 @@ const pbHasMember = r => r.member_price != null && Number(r.member_price) !== Nu
 async function openPricebook() {
   setPage("pricebook", "pricebook");
   $("#main").innerHTML = `<div class="loading">Loading the price book…</div>`;
-  await Promise.all([loadSuppliers(), loadPbCats(), loadPbPricing()]);
+  await Promise.all([loadSuppliers(), loadPbCats(), loadPbPricing(), loadPbUpdates()]);
   await loadPricebook();
 }
 async function loadPbCats() {
@@ -4950,6 +4957,58 @@ async function loadPbCats() {
   for (const c of PB.catBy.values()) (c.parent_id && PB.catBy.has(c.parent_id) ? PB.catBy.get(c.parent_id).kids : PB.catTop).push(c);
   const tot = c => (c.total = Number(c.items) + c.kids.reduce((s, k) => s + tot(k), 0));
   PB.catTop.forEach(tot);
+}
+// New costs from supplier invoices waiting for approval, by item
+async function loadPbUpdates() {
+  PB.upd = new Map(); if (!seeCost()) return;
+  const { data, error } = await db.rpc("pb_cost_updates", { p_status: "waiting" });
+  if (!error) { PB.updRows = data; for (const u of data) PB.upd.set(u.item_id, u); }
+}
+const pbChg = (oldc, newc) => { const o = Number(oldc) || 0, n = Number(newc) || 0; if (!o) return ""; const pc = (n - o) / o * 100;
+  return `<b class="${pc > 0 ? "pb-up" : "pb-down"}">${pc > 0 ? "▲" : "▼"}${Math.abs(pc) < 10 ? Math.abs(pc).toFixed(1) : Math.round(Math.abs(pc))}%</b>`; };
+const pbNewCost = (r, big) => { const u = PB.upd?.get(r.id); if (!u) return "";
+  const ok = can("pricebook.edit");
+  return `<div class="pb-newcost ${big ? "big" : ""}" title="New cost from ${esc(u.supplier)} ${esc(u.doc_ref)}${u.doc_date ? ", " + esc(fmtDate(u.doc_date)) : ""}">
+    <span>New ${money(u.new_cost)} ${pbChg(r.unit_cost, u.new_cost)}</span>${big ? `<span class="quiet">${esc(u.supplier)} ${esc(u.doc_ref)}${u.doc_date ? " · " + esc(fmtDate(u.doc_date)) : ""}${u.description ? " · " + esc(u.description) : ""}</span>` : ""}
+    ${ok ? `<span class="pb-newbtns"><button type="button" class="pb-ok" data-upd-do="approve" data-upd="${u.id}" title="Approve the new cost">✓${big ? " Approve the cost" : ""}</button>${big && u.rule_price != null ? `<button type="button" class="pb-ok" data-upd-do="approve_price" data-upd="${u.id}">✓ Approve, and price ${money(u.rule_price)} by the markup rule</button>` : ""}<button type="button" class="pb-no" data-upd-do="dismiss" data-upd="${u.id}" title="Keep the old cost">✕${big ? " Keep the old cost" : ""}</button></span>` : ""}</div>`; };
+async function decideUpdates(ids, action) {
+  const { data, error } = await db.rpc("decide_cost_updates", { p_ids: ids, p_action: action });
+  if (error) { alertMsg("Not saved: " + rpcErr(error)); return; }
+  await loadPbUpdates();
+  if (PB.review) renderPbReview(`${data} ${action === "dismiss" ? "kept at the old cost" : "updated"}.`);
+  else { await loadPricebook(); if (PB.sel && PB.sel !== "new") showPbItem(PB.sel); }
+}
+function wireUpdButtons(root) {
+  root.querySelectorAll("[data-upd]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); decideUpdates([Number(b.dataset.upd)], b.dataset.updDo); }));
+}
+function renderPbReview(msg) {
+  const rows = PB.updRows || [], pick = PB.updPick || (PB.updPick = new Set()), ok = can("pricebook.edit");
+  $("#main").innerHTML = `<article class="staff pb">
+    <div class="pos-head"><h1>New costs to approve</h1><span><button class="btn quiet-btn" type="button" id="pbr-back">← Back to the price book</button></span></div>
+    <p class="lead">Costs from supplier invoices that are different from the price book. Approve to change the cost, or approve and set the price by your markup rule. Keep the old cost to dismiss.</p>
+    <section class="cl-tools">
+      <div class="ow-sortbar"><strong>${rows.length} waiting</strong>${rows.length && ok ? `<label class="pb-allpick"><input type="checkbox" id="pbr-all" ${pick.size === rows.length ? "checked" : ""}> Pick all</label>` : ""}
+        <span class="staff-msg ok" role="status">${msg ? esc(msg) : ""}</span></div>
+      ${ok && pick.size ? `<div class="pb-bulk"><strong>${pick.size} picked</strong>
+        <button class="btn" type="button" data-pbr="approve">Approve the new costs</button>
+        <button class="btn quiet-btn" type="button" data-pbr="approve_price">Approve, and set prices by the markup rule</button>
+        <button class="btn quiet-btn" type="button" data-pbr="dismiss">Keep the old costs</button>
+        <button class="link" type="button" id="pbr-clear">Clear</button></div>` : ""}
+      ${rows.length ? `<div class="staff-wrap"><table class="calls-table pb-table"><thead><tr>${ok ? "<th></th>" : ""}<th>Item</th><th>From</th><th class="r">Cost now</th><th class="r">New cost</th><th class="r">Price now</th><th class="r">Rule price</th>${ok ? "<th></th>" : ""}</tr></thead><tbody>
+        ${rows.map(u => `<tr>${ok ? `<td class="pb-pick"><input type="checkbox" data-pbr-pick="${u.id}" ${pick.has(u.id) ? "checked" : ""} aria-label="Pick ${esc(pbName(u.name))}"></td>` : ""}
+          <td><strong>${esc(pbName(u.name))}</strong><div class="quiet">${esc(u.sku)}${u.supplier_code && u.supplier_code !== u.sku ? " · " + esc(u.supplier) + " code " + esc(u.supplier_code) : ""}</div></td>
+          <td>${esc(u.supplier)} ${esc(u.doc_ref)}<div class="quiet">${u.doc_date ? esc(fmtDate(u.doc_date)) : ""}</div></td>
+          <td class="r num">${money(u.cost)}</td><td class="r num"><strong>${money(u.new_cost)}</strong> ${pbChg(u.cost, u.new_cost)}</td>
+          <td class="r num">${money(u.price)}</td><td class="r num">${u.rule_price != null ? money(u.rule_price) : "—"}</td>
+          ${ok ? `<td class="pb-newbtns"><button type="button" class="pb-ok" data-upd-do="approve" data-upd="${u.id}" title="Approve the new cost">✓</button><button type="button" class="pb-no" data-upd-do="dismiss" data-upd="${u.id}" title="Keep the old cost">✕</button></td>` : ""}</tr>`).join("")}
+      </tbody></table></div>` : `<div class="quiet" style="padding:20px 0">Nothing waiting. All caught up.</div>`}
+    </section></article>`;
+  $("#pbr-back").addEventListener("click", () => { PB.review = false; loadPricebook(); });
+  $("#pbr-all")?.addEventListener("change", e => { PB.updPick = e.target.checked ? new Set(rows.map(u => u.id)) : new Set(); renderPbReview(); });
+  $("#pbr-clear")?.addEventListener("click", () => { PB.updPick = new Set(); renderPbReview(); });
+  document.querySelectorAll("[data-pbr-pick]").forEach(cb => cb.addEventListener("change", () => { const id = Number(cb.dataset.pbrPick); cb.checked ? pick.add(id) : pick.delete(id); renderPbReview(); }));
+  document.querySelectorAll("[data-pbr]").forEach(b => b.addEventListener("click", () => { const ids = [...pick]; PB.updPick = new Set(); decideUpdates(ids, b.dataset.pbr); }));
+  wireUpdButtons($("#main"));
 }
 async function loadPbPricing() { const { data, error } = await db.rpc("pb_pricing"); PB.pricing = error ? null : data; }
 const pbCatPath = id => { const out = []; let c = PB.catBy?.get(id), n = 0; while (c && n++ < 20) { out.unshift(c.name); c = PB.catBy.get(c.parent_id); } return out.join(" › "); };
@@ -5003,7 +5062,7 @@ function pbCard(r, edit) {
       <div class="quiet">${esc(r.sku)} · ${esc(PB_TYPE_NAME[r.item_type] || r.item_type)}${r.active ? "" : " · retired"}</div>
       <div class="pb-cprice"><strong>${money(r.unit_price)}</strong>${u ? ` <span class="quiet">per ${esc(u)}</span>` : ""}${pbHasMember(r) ? `<span class="pb-mem">Member ${money(r.member_price)}</span>` : ""}</div>
       <dl class="pb-dl">
-        ${seeCost() ? `<dt>Cost</dt><dd>${money(r.unit_cost)}</dd>
+        ${seeCost() ? `<dt>Cost</dt><dd>${money(r.unit_cost)}${pbNewCost(r)}</dd>
         <dt>Margin</dt><dd class="${m != null && m < 20 ? "pb-low" : ""}">${m == null ? "—" : m + "%"}</dd>` : ""}
         ${pbOff(r) ? `<dt>Rule says</dt><dd class="pb-off">${money(r.rule_price)}</dd>` : ""}
         ${Number(r.est_labour_hours) ? `<dt>Hours</dt><dd>${Number(r.est_labour_hours)}</dd>` : ""}
@@ -5085,6 +5144,7 @@ function renderPricebook(msg) {
       <button class="btn quiet-btn" type="button" id="pb-pricing-open" aria-expanded="${PB.showPricing}">Markup &amp; member prices</button>
       ${edit ? `<button class="btn" type="button" id="pb-new">+ New item</button>` : ""}</span></div>
     <p class="lead">Services, parts and equipment with their prices. The items used most in the last year come first.</p>
+    ${PB.upd?.size ? `<div class="pb-updbanner"><span><strong>${PB.upd.size} new cost${PB.upd.size > 1 ? "s" : ""}</strong> from supplier invoices ${PB.upd.size > 1 ? "are" : "is"} waiting for your OK.</span><button class="btn" type="button" id="pb-review">Review them</button></div>` : ""}
     ${PB.showPricing ? pbPricingBox(edit) : ""}
     <form class="po-filters" id="pb-filters">
       <input type="search" id="pb-q" value="${esc(PB.q)}" placeholder="Name, code, maker, model or description" aria-label="Search the price book">
@@ -5119,7 +5179,7 @@ function renderPricebook(msg) {
               <td>${esc(PB_TYPE_NAME[r.item_type] || r.item_type)}${r.taxable ? "" : ` <span class="ow-tag">No tax</span>`}</td>
               <td class="r num"><strong>${money(r.unit_price)}</strong>${u ? `<div class="quiet">per ${esc(u)}</div>` : ""}${pbOff(r) ? `<div class="pb-off">rule ${money(r.rule_price)}</div>` : ""}</td>
               <td class="r num">${pbHasMember(r) ? money(r.member_price) : ""}</td>
-              ${seeCost() ? `<td class="r num">${money(r.unit_cost)}</td>
+              ${seeCost() ? `<td class="r num">${money(r.unit_cost)}${pbNewCost(r)}</td>
               <td class="r num ${m != null && m < 20 ? "pb-low" : ""}">${m == null ? "" : m + "%"}</td>` : ""}
               <td class="r num">${Number(r.used_12m) ? Number(r.used_12m).toLocaleString() : ""}</td></tr>`; }).join("")}
             </tbody></table>`}</div>
@@ -5165,6 +5225,8 @@ function renderPricebook(msg) {
     const cur = PB.catBy.get(PB.cat); if (!cur) return;
     if (await saveCat(cur.id, cur.name, cur.parent_id, !cur.active)) { await loadPbCats(); renderPricebook(cur.active ? `Retired ${cur.name}. Its items keep it until you move them.` : `${cur.name} is back.`); }
   });
+  $("#pb-review")?.addEventListener("click", () => { PB.review = true; renderPbReview(); });
+  wireUpdButtons($("#main"));
   // items
   document.querySelectorAll("[data-pb]").forEach(tr => {
     tr.addEventListener("click", e => { if (e.target.closest(".pb-pick")) return; PB.sel = Number(tr.dataset.pb);
@@ -5263,6 +5325,7 @@ function showPbItem(id) {
       <label>Description <span class="quiet">(shows on the invoice)</span><textarea name="description" rows="3" ${dis}>${esc(pbText(r.description))}</textarea></label>
       <div class="ins-two"><label>Price<input name="unit_price" inputmode="decimal" value="${f2(r.unit_price)}" ${dis}></label>
         ${seeCost() ? `<label>Our cost<input name="unit_cost" inputmode="decimal" value="${f2(r.unit_cost)}" ${dis}></label>` : `<input type="hidden" name="unit_cost" value="">`}</div>
+      ${seeCost() && r.id ? pbNewCost(r, true) : ""}
       <div class="pb-margin quiet" id="pb-margin"></div>
       <div class="pb-rulehint" id="pb-rulehint"></div>
       <label>Member price <span class="quiet">(plan customers; blank = ${PB.pricing && Number(PB.pricing.member_discount_pct) && PB.pricing.member_types.includes(r.item_type) ? Number(PB.pricing.member_discount_pct) + "% off" : "same as the price"})</span>
@@ -5285,6 +5348,7 @@ function showPbItem(id) {
       : `<span class="${pr > 0 && Math.abs(pr - rp) > rp * Number(PB.pricing.rule_tolerance_pct) / 100 ? "pb-off" : "quiet"}">The markup rule says ${money(rp)}.</span>${edit ? ` <button class="link" type="button" id="pb-userule">Use it</button>` : ""}`;
     $("#pb-userule")?.addEventListener("click", () => { f.unit_price.value = rp.toFixed(2); showM(); });
   };
+  wireUpdButtons($("#pb-panel"));
   showM(); ["unit_price", "unit_cost", "item_type"].forEach(k => f[k].addEventListener(k === "item_type" ? "change" : "input", showM));
   p.querySelector("[data-pb-close]").addEventListener("click", () => { PB.sel = null; p.classList.add("hidden"); document.querySelectorAll(".po-row.sel, .pb-card.sel").forEach(x => x.classList.remove("sel")); });
   f.addEventListener("submit", async e => {
