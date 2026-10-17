@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.180922">
+<meta name="app-version" content="2026-10-17.181830">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1675,6 +1675,17 @@
   .unsub { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; background: #f3f5f8; font-family: system-ui, sans-serif; }
   .unsub-card { background: #fff; color: #1d2733; max-width: 480px; padding: 28px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
   .unsub-card h1 { font-size: 22px; margin: 0 0 12px; }
+  .ak-closebar { display: flex; justify-content: flex-end; margin: -4px 0 -6px; }
+  .cm-sum { display: flex; flex-direction: column; gap: 8px; }
+  .cm-facts { display: flex; flex-wrap: wrap; gap: 6px 22px; }
+  .cm-note { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .cm-form { display: flex; flex-direction: column; gap: 12px; }
+  .cm-form-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .cm-form fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; margin: 0; }
+  .cm-form legend { font-weight: 700; padding: 0 4px; }
+  .cm-set label:first-child { grid-column: span 2; } .cm-set .pl-wide { grid-column: 1 / -1; }
+  .cm-h3 { font-size: calc(15px * var(--fs, 1)); margin: 16px 0 6px; }
+  .cm-sends { overflow-x: auto; } .cm-hist { margin-top: 10px; } .cm-hist div { margin: 3px 0; }
 </style>
 </head>
 <body>
@@ -1694,6 +1705,7 @@
       <p>Type your work email and press the button. An owner will see your request on the Staff page, set a new password and give it to you.</p>
       <button class="btn quiet-btn" type="button" id="forgot-send">Ask for a new password</button>
       <div class="forgot-msg" id="forgot-msg" role="status"></div>
+      <button class="link" type="button" id="forgot-x">Never mind</button>
     </div>
   </form>
 </div>
@@ -1882,6 +1894,7 @@ $("#signin-form").addEventListener("submit", async e => {
 });
 
 $("#forgot-link").addEventListener("click", () => { $("#forgot").classList.toggle("hidden"); $("#email").focus(); });
+$("#forgot-x").addEventListener("click", () => { $("#forgot").classList.add("hidden"); $("#email").focus(); });
 $("#forgot-send").addEventListener("click", async () => {
   const email = $("#email").value.trim(), m = $("#forgot-msg");
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { m.className = "forgot-msg err"; m.textContent = "Type your work email in the Email box first."; $("#email").focus(); return; }
@@ -2214,6 +2227,76 @@ function showSearchPage() {
 }
 $("#search-link").addEventListener("click", openSearchScreen);
 
+
+/* ---------------- Marketing box on the customer file ---------------- */
+const CM_KINDS = [["seasonal", "Seasonal reminders", "spring AC tune-ups, fall furnace check-ups, winter humidifier"], ["plans", "Plan emails", "renewals, joining a plan"], ["promos", "Promotions", "special offers"]];
+const CM_OFTEN = [["", "No limit"], ["14", "At most one every 2 weeks"], ["30", "At most one a month"], ["60", "At most one every 2 months"], ["90", "At most one every 3 months"], ["182", "At most one every 6 months"]];
+const CM_KIND_NAME = { season: "Season", plan: "Plan", promo: "Promotion" };
+async function loadCm(custId, msg) {
+  const { data, error } = await db.rpc("customer_marketing", { p_customer: custId });
+  if (!current || current.c.id !== custId) return;
+  current.mkt = error || !data ? { cust: custId, err: error ? rpcErr(error) : "Not available" } : { ...data, cust: custId };
+  current.mkt.msg = msg || "";
+  const box = $("#cm-box"); if (!box) return;
+  box.innerHTML = cmHtml(current.mkt); wireCm();
+}
+function cmHtml(m) {
+  if (m.err) return `<div class="quiet">${esc(m.err)}</div>`;
+  const on = !m.unsubscribed_at && !m.do_not_contact, sends = m.sends || [], kinds = CM_KINDS.filter(k => m[k[0]]);
+  const cnt = $("#cm-count"); if (cnt) cnt.textContent = sends.length ? `${sends.length} sent` : "";
+  const status = m.do_not_contact ? `<span class="status s-off">Do not contact</span> <span class="quiet">This customer is marked do not contact, so they never get marketing emails.</span>`
+    : m.unsubscribed_at ? `<span class="status s-off">Unsubscribed</span> <span class="quiet">since ${fmtDate(m.unsubscribed_at)}. They don't get marketing emails.</span>`
+    : !(m.emails || []).some(e => e.allowed) ? `<span class="status s-warn">No email for marketing</span> <span class="quiet">Add an email to their contacts to send them marketing.</span>`
+    : `<span class="status s-done">Getting marketing emails</span>`;
+  const often = CM_OFTEN.find(o => o[0] === String(m.min_days ?? "")) || [m.min_days, `At most one every ${m.min_days} days`];
+  const view = `<div class="cm-sum">
+      <div>${status}</div>
+      ${on ? `<div class="cm-facts"><span><b>Wants:</b> ${kinds.length === 3 ? "everything" : kinds.length ? kinds.map(k => esc(k[1].toLowerCase())).join(", ") : "nothing (all types turned off)"}</span>
+        <span><b>Email:</b> ${esc(m.email || ((m.emails || []).find(e => e.allowed) || {}).value || "none")}${m.email ? "" : ` <span class="quiet">(main)</span>`}</span>
+        <span><b>How often:</b> ${esc(often[1])}</span></div>` : ""}
+      ${m.note ? `<div class="cm-note">📝 ${esc(m.note)}</div>` : ""}
+      ${m.can_edit ? `<div><button class="btn quiet-btn" type="button" id="cm-edit">Change what they get</button></div>` : ""}
+    </div>`;
+  const form = m.editing ? `<form class="cm-form cl-tools" id="cm-form">
+      <div class="cm-form-head"><strong>Marketing choices for this customer</strong><button class="link" type="button" id="cm-x" aria-label="Close without saving">✕ Close</button></div>
+      <fieldset class="cm-radio"><legend>Marketing emails</legend>
+        <label class="pb-check"><input type="radio" name="sub" value="1" ${!m.unsubscribed_at ? "checked" : ""}> Send them marketing emails</label>
+        <label class="pb-check"><input type="radio" name="sub" value="0" ${m.unsubscribed_at ? "checked" : ""}> Unsubscribed: send none</label>
+        ${m.unsubscribed_at ? `<span class="quiet">Only turn them back on if the customer asked.</span>` : ""}</fieldset>
+      <fieldset><legend>What they want</legend>${CM_KINDS.map(([k, t, d]) => `<label class="pb-check"><input type="checkbox" name="${k}" ${m[k] ? "checked" : ""}> ${t} <span class="quiet">${d}</span></label>`).join("")}</fieldset>
+      <div class="pf-set cm-set">
+        <label>Send to<select name="email"><option value="">Their main email</option>${(m.emails || []).map(e => `<option value="${esc(e.value)}" ${e.value === m.email ? "selected" : ""} ${e.allowed ? "" : "disabled"}>${esc(e.value)}${e.allowed ? "" : " (marketing turned off on this contact)"}</option>`).join("")}</select></label>
+        <label>How often<select name="min_days">${CM_OFTEN.map(([v, t]) => `<option value="${v}" ${v === String(m.min_days ?? "") ? "selected" : ""}>${t}</option>`).join("")}${m.min_days && !CM_OFTEN.some(o => o[0] === String(m.min_days)) ? `<option value="${m.min_days}" selected>${esc(often[1])}</option>` : ""}</select></label>
+        <label class="pl-wide">Note about what they want<input name="note" maxlength="300" value="${esc(m.note || "")}" placeholder="e.g. only wants AC emails, French please, no calls"></label>
+      </div>
+      <div class="ak-connrow"><button class="btn" type="submit">Save</button><button class="btn quiet-btn" type="button" id="cm-cancel">Cancel</button></div>
+    </form>` : "";
+  const list = sends.length ? `<div class="cm-sends"><table><thead><tr><th>Sent</th><th>Campaign</th><th>Type</th><th>Subject</th><th></th></tr></thead><tbody>
+      ${sends.map((x, i) => `<tr class="${i >= 5 && !m.all ? "hidden" : ""}"><td>${fmtDate(x.sent_at)}</td><td>${esc(x.campaign)}</td><td>${esc(CM_KIND_NAME[x.kind] || x.kind)}</td><td>${esc(x.subject)}</td>
+        <td>${x.status === "sent" ? `<span class="status s-done">Sent</span>` : `<span class="status s-off" title="${esc(x.error || "")}">Failed</span>`}</td></tr>`).join("")}</tbody></table>
+      ${sends.length > 5 && !m.all ? `<button class="link" type="button" id="cm-all">Show all ${sends.length}</button>` : ""}</div>`
+    : `<div class="quiet">No marketing emails sent to them yet.</div>`;
+  const hist = (m.history || []).length ? `<details class="cm-hist"><summary>Changes to their choices (${m.history.length})</summary>
+      ${m.history.map(h => `<div><span class="quiet">${fmtDate(h.when)}${h.who ? " · " + esc(h.who) : ""}</span> ${esc(h.change)}</div>`).join("")}</details>` : "";
+  return `${m.msg ? `<div class="staff-msg ${/^Not/.test(m.msg) ? "err" : "ok"}" role="status">${esc(m.msg)}</div>` : ""}${m.editing ? form : view}<h3 class="cm-h3">Marketing emails sent to them</h3>${list}${hist}`;
+}
+function wireCm() {
+  const m = current?.mkt, box = $("#cm-box"); if (!m || !box) return;
+  const redraw = () => { box.innerHTML = cmHtml(m); wireCm(); };
+  $("#cm-edit")?.addEventListener("click", () => { m.editing = true; m.msg = ""; redraw(); $("#cm-form input, #cm-form select")?.focus(); });
+  const close = () => { m.editing = false; redraw(); };
+  $("#cm-x")?.addEventListener("click", close); $("#cm-cancel")?.addEventListener("click", close);
+  $("#cm-all")?.addEventListener("click", () => { m.all = true; redraw(); });
+  const f = $("#cm-form"); if (!f) return;
+  f.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); close(); } });
+  f.addEventListener("submit", async e => { e.preventDefault();
+    const p = { subscribed: f.sub.value === "1", seasonal: f.seasonal.checked, plans: f.plans.checked, promos: f.promos.checked,
+                email: f.email.value || null, min_days: f.min_days.value || null, note: f.note.value };
+    const { error } = await db.rpc("save_customer_marketing", { p_customer: m.cust, p });
+    if (error) { m.msg = "Not saved: " + rpcErr(error); return redraw(); }
+    loadCm(m.cust, "Saved. Marketing emails will follow these choices."); });
+}
+
 /* ---------------- marketing emails ---------------- */
 // Pick customers (plans, renewals, equipment, seasons, city), write or pick a ready-made email, test it, send it.
 // Each email goes through send-email (lands on the customer's file) and carries an unsubscribe link.
@@ -2357,12 +2440,13 @@ function mktEditor(c, ro) {
     </section>
     <section class="cl-tools mkt-send">
       ${ro ? `<div><b>Sent</b> ${fmtDate(c.sent_at)}: ${c.sent} sent${c.failed ? `, ${c.failed} failed` : ""}.</div>
-        <div class="ak-connrow"><button class="btn" type="button" id="mkt-copy">Use this email again</button></div>` : `
+        <div class="ak-connrow"><button class="btn" type="button" id="mkt-copy">Use this email again</button><button class="btn quiet-btn" type="button" id="mkt-close">Close</button></div>` : `
       <div class="ak-connrow">
         <button class="btn" type="submit" ${dis}>Save draft</button>
         <button class="btn quiet-btn" type="button" id="mkt-test" ${dis || !p ? "disabled" : ""}>Send me a test</button>
         <label class="mkt-max">Send at most <input name="max" inputmode="numeric" value="${MKT.max || 250}" ${MKT.sending ? "disabled" : ""}> now</label>
         ${MKT.sending ? `<button class="btn danger-btn" type="button" id="mkt-stop">Stop</button>` : `<button class="btn" type="button" id="mkt-send" ${!aud || !aud.count ? "disabled" : ""}>${c.sent ? "Keep sending" : "Send"}</button>`}
+        ${MKT.sending ? "" : `<button class="btn quiet-btn" type="button" id="mkt-close">Close</button>`}
         ${c.id && !c.sent && !MKT.sending ? `<button class="link danger" type="button" id="mkt-del">Delete draft</button>` : ""}
       </div>
       <p class="quiet" style="margin:0">Most mailboxes allow only a few hundred emails a day, so big lists go out in batches: send some today, then open this email tomorrow and press Keep sending. No one gets it twice. Keep this page open while it sends.</p>`}
@@ -2379,6 +2463,7 @@ function mktRead() {
     not_serviced_months: num(f.not_serviced_months.value), min_age_years: f.equipment.value ? num(f.min_age_years.value) : null,
     renew_days: f.who.value === "renewal" ? (num(f.renew_days.value) || 45) : null,
     plan_types: ["members", "renewal"].includes(f.who.value) ? [...f.querySelectorAll("[data-mkt-plan]:checked")].map(x => Number(x.dataset.mktPlan)) : [] };
+  c.audience.campaign_kind = c.kind;   // customers who turned this kind off on their file are left out
   Object.keys(c.audience).forEach(k => c.audience[k] == null && delete c.audience[k]);
   MKT.max = num(f.max?.value) || 250;
   return c;
@@ -2459,12 +2544,13 @@ function wireMktEditor() {
     if (e.target.name === "max" || e.target.name === "name") return mktRead();
     mktRead(); clearTimeout(MKT.ct); MKT.ct = setTimeout(mktCount, 400);
   });
-  f.addEventListener("change", e => { if (["who", "equipment", "recent_only"].includes(e.target.name) || e.target.dataset.mktPlan) { mktRead(); MKT.aud = null; mktRefresh(); mktCount(); } });
+  f.addEventListener("change", e => { if (["who", "equipment", "recent_only", "kind"].includes(e.target.name) || e.target.dataset.mktPlan) { mktRead(); MKT.aud = null; mktRefresh(); mktCount(); } });
   f.querySelectorAll("[data-mkt-field]").forEach(b => b.addEventListener("click", () => {
     const ta = f.body, at = ta.selectionStart ?? ta.value.length;
     ta.value = ta.value.slice(0, at) + b.dataset.mktField + ta.value.slice(ta.selectionEnd ?? at);
     ta.focus(); ta.setSelectionRange(at + b.dataset.mktField.length, at + b.dataset.mktField.length); mktRead(); later(); }));
   $("#mkt-test")?.addEventListener("click", () => mktSend(true));
+  $("#mkt-close")?.addEventListener("click", () => { MKT.cur = null; MKT.aud = null; MKT.prog = null; MKT.msg = ""; renderMarketing(); });
   $("#mkt-send")?.addEventListener("click", async e => {
     const n = Math.min(MKT.aud?.count || 0, MKT.max || 250);
     if (e.target.dataset.sure !== "1") { e.target.dataset.sure = "1"; e.target.textContent = `Sure? Send to ${n.toLocaleString()} customer${n === 1 ? "" : "s"} now`; return; }
@@ -2497,6 +2583,23 @@ async function showUnsubscribe(token) {
     ? "Sorry, that link didn't work. Reply to any of our emails and we'll take you off the list."
     : `${data.name ? esc(data.name) + ", you" : "You"}'re unsubscribed. You won't get any more marketing emails from us. You'll still hear from us about your own appointments and invoices.`;
 }
+
+
+/* ---------------- every pop-up and open panel can be closed: a Close button, and the Esc key ---------------- */
+document.addEventListener("click", e => { const b = e.target.closest("[data-ak-closecard]"); if (!b) return;
+  e.preventDefault(); b.closest(".ak-card")?.querySelector(".ak-head")?.click(); });
+function poWireClose(p) { p.querySelectorAll("[data-po-close]").forEach(b => b.addEventListener("click", () => { POP.sel = null; p.classList.add("hidden"); p.innerHTML = ""; document.querySelectorAll(".po-row.sel").forEach(x => x.classList.remove("sel")); })); }
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  if (document.querySelector(".file-viewer, .po-big")) return;                      // those close themselves
+  if (!$("#inv-view").classList.contains("hidden")) {                                // invoice: close the costing panel first, then the invoice
+    if (!$("#inv-cost").classList.contains("hidden")) { e.stopImmediatePropagation(); $("#inv-costbtn").click(); }
+    return; }
+  if (!$("#mail").classList.contains("hidden")) return $("#mail-close").click();
+  if (!$("#chat").classList.contains("hidden")) return $("#chat-close").click();
+  const card = document.activeElement?.closest?.(".ak-card.open") || (document.querySelectorAll(".ak-card.open").length === 1 ? document.querySelector(".ak-card.open") : null);
+  if (card && !document.activeElement.matches("input, textarea, select")) return card.querySelector(".ak-head")?.click();
+}, true);
 
 /* ---------------- back button on every page ---------------- */
 // NAV.stack holds the pages visited this session; the Back button returns to the one before.
@@ -2842,6 +2945,11 @@ function renderFile() {
         : `<div class="quiet">No plans.</div>`}
     </section>
 
+    <section class="block" data-tag="Section 4B">
+      <h2>Marketing <span class="count" id="cm-count"></span></h2>
+      <div id="cm-box" data-cust="${c.id}">${current.mkt && current.mkt.cust === c.id ? cmHtml(current.mkt) : `<div class="quiet">Loading…</div>`}</div>
+    </section>
+
     <section class="block" data-tag="Section 5">
       <h2>Job history <span class="count">${locJobs.length}${locJobs.length === 300 ? "+" : ""} ${locJobs.length === 1 ? "job" : "jobs"}</span></h2>
       ${locJobs.length ? jobsHtml(locJobs) : `<div class="quiet">No jobs at this address.</div>`}
@@ -2864,6 +2972,7 @@ function renderFile() {
   </article><nav class="file-nav" aria-label="Sections"></nav></div>`;
 
   document.querySelectorAll(".loc-tab").forEach(b => b.addEventListener("click", () => { current.loc = Number(b.dataset.loc); current.notesTab = null; renderFile(); }));
+  if (current.mkt && current.mkt.cust === c.id) wireCm(); else loadCm(c.id);
   document.querySelector("[data-edit-cust]")?.addEventListener("click", startEditCustomer);
   requestAnimationFrame(markStuckBar);
   document.querySelector("[data-add-task]")?.addEventListener("click", () => openAddTask(document.querySelector(".sec1a"), current.c.id, null));
@@ -3132,7 +3241,7 @@ function confirmDeleteNote(id, btn) {
   holder.querySelector("[data-no]").addEventListener("click", renderFile);
   holder.querySelector("[data-yes]").addEventListener("click", async () => {
     const { error } = await db.rpc("delete_note", { p_note_id: id });
-    if (error) { holder.innerHTML = `<span class="confirm">Not deleted: ${esc(error.message)}</span>`; return; }
+    if (error) { holder.innerHTML = `<span class="confirm">Not deleted: ${esc(error.message)} <button class="link" type="button" onclick="renderFile()">OK</button></span>`; return; }
     current.notes = current.notes.filter(x => x.id !== id);
     renderFile();
   });
@@ -4076,8 +4185,9 @@ function poShow(r) {   // big, easy to read out to the supplier
   const d = document.createElement("div"); d.className = "po-big"; d.setAttribute("role", "dialog");
   d.innerHTML = `<div class="po-big-box"><div class="quiet">PO number for ${esc(r.supplier)}</div><div class="po-big-num">${esc(r.po_number)}</div>
     <button class="btn" type="button">Done</button></div>`;
-  d.querySelector("button").addEventListener("click", () => d.remove()); d.addEventListener("click", e => { if (e.target === d) d.remove(); });
-  document.body.appendChild(d);
+  const k = e => { if (e.key === "Escape") close(); }, close = () => { d.remove(); document.removeEventListener("keydown", k); };
+  d.querySelector("button").addEventListener("click", close); d.addEventListener("click", e => { if (e.target === d) close(); });
+  document.addEventListener("keydown", k); document.body.appendChild(d); d.querySelector("button").focus();
 }
 function mcCard(c) {
   const open = MC.open === c.visit_id, done = ["completed", "needs_return", "cancelled"].includes(c.status);
@@ -4448,10 +4558,11 @@ function renderPOs(msg) {
 }
 async function showPO(id) {
   const p = $("#po-panel"); if (!p) return;
-  p.classList.remove("hidden"); p.innerHTML = `<div class="quiet">Loading…</div>`;
+  const closeHead = `<div class="dp-head"><span></span><button class="link" type="button" data-po-close>Close</button></div>`;
+  p.classList.remove("hidden"); p.innerHTML = closeHead + `<div class="quiet">Loading…</div>`; poWireClose(p);
   const { data: d, error } = await db.rpc("po_detail", { p_id: id });
   if (!$("#po-panel") || POP.sel !== id) return;
-  if (error || !d) { p.innerHTML = `<div class="staff-msg err">${esc(error ? rpcErr(error) : "Not found")}</div>`; return; }
+  if (error || !d) { p.innerHTML = closeHead + `<div class="staff-msg err">${esc(error ? rpcErr(error) : "Not found")}</div>`; poWireClose(p); return; }
   const lines = d.lines || [], linesTotal = lines.reduce((s, l) => s + Number(l.line_total || 0), 0), edit = can("po.create");
   p.innerHTML = `<div class="dp-head"><strong>PO ${esc(d.po_number)}</strong><button class="link" type="button" data-po-close>Close</button></div>
     <div>${poBadge(d.status)} ${d.from_st ? `<span class="quiet">from ServiceTitan</span>` : `<span class="quiet">made in the app</span>`}</div>
@@ -5519,7 +5630,7 @@ function renderAddonKits(msg) {
           <span class="ak-name"><span class="ak-ic" aria-hidden="true">${/furnace/i.test(k.name) ? "🔥" : /air cond|a\/c|\bac\b/i.test(k.name) ? "❄️" : "🧰"}</span>${esc(k.name.replace(/ add-on kit$/i, ""))} <span class="ak-list-word">list</span></span>
           <span class="ak-facts"><span><b>${k.parts}</b> parts</span>${k.parts_cost != null ? `<span><b>${money(k.parts_cost)}</b> cost</span>` : ""}<span>on <b>${k.equipment}</b> items</span><span class="ak-chev">${open ? "▾" : "▸"}</span></span>
         </button>
-        ${open ? `<div class="ak-body">
+        ${open ? `<div class="ak-body"><div class="ak-closebar"><button class="link" type="button" data-ak-closecard>✕ Close</button></div>
           <div class="seg" role="group"><button type="button" data-ak-tab="edit" aria-pressed="${AK.tab === "edit"}">Edit list</button><button type="button" data-ak-tab="equip" aria-pressed="${AK.tab === "equip"}">Show equipment</button></div>
           ${AK.tab === "edit" ? akPartsHtml(k, edit) : akEquipHtml(k, edit)}
         </div>` : ""}
@@ -5808,7 +5919,7 @@ function renderPbItemPage(msg) {
     if (!data) return say(box, `No customer ${esc(String(cid))}. Check the number on their file.`, true);
     const locs = data.locations || [];
     box.innerHTML = `${note ? `<div class="staff-msg ok">${note}</div>` : ""}
-      <div class="pbi-cust"><strong>${esc(data.name)}</strong> <button class="link" type="button" id="pbi-opencust">Open their file</button></div>
+      <div class="pbi-cust"><strong>${esc(data.name)}</strong> <button class="link" type="button" id="pbi-opencust">Open their file</button> <button class="link" type="button" onclick="this.closest('#pbi-yearly').innerHTML=''">✕ Close</button></div>
       ${locs.length ? `<form id="pbi-add" class="pbi-yform">
         ${locs.length > 1 ? `<fieldset><legend>Which home</legend>${locs.map((l, n) => `<label class="pb-check"><input type="radio" name="loc" value="${l.id}" ${n ? "" : "checked"}> ${esc(l.address || "Address " + (n + 1))}</label>`).join("")}</fieldset>`
           : `<input type="hidden" name="loc" value="${locs[0].id}"><div class="quiet">${esc(locs[0].address || "")}</div>`}
@@ -5866,7 +5977,7 @@ function renderFormulas(msg) {
           <span class="ak-name">${esc(f.name)}${f.description ? `<span class="pf-desc">${esc(f.description.split("|").slice(1).join("|").trim() || f.description)}</span>` : ""}</span>
           <span class="ak-facts"><span><b>${f.items}</b> models</span><span>GP <b>${pct(f.gp_pct)}</b></span>${g.avg != null ? `<span>actual ${pct(g.min)}–${pct(g.max)}</span>` : ""}${f.addon_name ? `<span>+ ${esc(pbName(f.addon_name))}</span>` : ""}<span class="ak-chev">${open ? "▾" : "▸"}</span></span>
         </button>
-        ${open ? `<div class="ak-body">${pfSettings(f, edit, tstats)}${pfItems(f, edit)}</div>` : ""}
+        ${open ? `<div class="ak-body"><div class="ak-closebar"><button class="link" type="button" data-ak-closecard>✕ Close</button></div>${pfSettings(f, edit, tstats)}${pfItems(f, edit)}</div>` : ""}
       </section>`; }).join("")}</div>`).join("") || `<div class="quiet">No pricing formulas yet.</div>`}
   </article>`;
   $("#main").scrollTop = top;
@@ -6108,7 +6219,7 @@ function renderPriceBooks(msg) {
           <span class="ak-facts"><span>${esc((lvl || [0, ""])[1].split(" (")[0])}${Number(b.adjust_pct) ? ` ${Number(b.adjust_pct) > 0 ? "+" : ""}${Number(b.adjust_pct)}%` : ""}</span>
             <span><b>${(b.categories || []).length || "All"}</b> ${(b.categories || []).length === 1 ? "category" : "categories"}</span><span><b>${b.people.length}</b> ${b.people.length === 1 ? "person" : "people"}</span><span class="ak-chev">${open ? "▾" : "▸"}</span></span>
         </button>
-        ${open ? `<form class="ak-body pbk-form" id="pbk-form">
+        ${open ? `<form class="ak-body pbk-form" id="pbk-form"><div class="ak-closebar"><button class="link" type="button" data-ak-closecard>✕ Close</button></div>
           <div class="pf-set">
             <label>Name<input name="name" value="${esc(b.name)}" maxlength="60" required></label>
             <label>Prices shown<select name="price_level">${PBB_LEVELS.map(([k, t]) => `<option value="${k}" ${k === b.price_level ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
@@ -6122,7 +6233,7 @@ function renderPriceBooks(msg) {
             <div><strong>Who uses this book</strong> <span class="quiet">(one book each; ticking someone moves them here)</span>
               <div class="pbk-people">${PBK.users.map(u => `<label class="pb-check"><input type="checkbox" data-pbk-user="${u.id}" ${u.price_book_id === b.id ? "checked" : ""}> ${esc(nm(u))} <span class="quiet">${esc(u.role || "")}${u.price_book_id && u.price_book_id !== b.id ? " · now on " + esc((PB.books.find(x => x.id === u.price_book_id) || {}).name || "") : ""}</span></label>`).join("")}</div></div>
           </div>
-          <div class="ak-connrow"><button class="btn" type="submit">Save</button><button class="btn quiet-btn" type="button" id="pbk-view">See this book</button>
+          <div class="ak-connrow"><button class="btn" type="submit">Save</button><button class="btn quiet-btn" type="button" data-ak-closecard>Cancel</button><button class="btn quiet-btn" type="button" id="pbk-view">See this book</button>
             <button class="link danger" type="button" id="pbk-del">Delete this book</button></div>
         </form>` : ""}
       </section>`; }).join("") || `<div class="quiet">No price books yet. Everyone sees the normal price book.</div>`}</div>
@@ -6885,6 +6996,8 @@ function wireJobs(li, taskId) {
     list.insertAdjacentHTML("beforeend", jobRow({ id: null, body: "" }, n, { list: "mine" }));
     const row = list.lastElementChild, input = row.querySelector(".tj-text");
     e.target.textContent = `+ Add Job ${n + 2}`;
+    row.insertAdjacentHTML("beforeend", `<button class="link tj-x" type="button" aria-label="Don't add this job">✕</button>`);
+    row.querySelector(".tj-x:last-child").addEventListener("mousedown", ev => { ev.preventDefault(); row.remove(); e.target.textContent = `+ Add Job ${n + 1}`; });
     input.focus();
     input.addEventListener("keydown", ev => { if (ev.key === "Enter") input.blur(); if (ev.key === "Escape") { row.remove(); e.target.textContent = `+ Add Job ${n + 1}`; } });
     input.addEventListener("change", async () => {
