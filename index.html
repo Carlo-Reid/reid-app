@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-18.161808">
+<meta name="app-version" content="2026-10-18.162647">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -245,6 +245,11 @@
   .pb-cats .pb-catfind input { min-width: 0; }
   .pb-cats .pb-cat-tools { flex-direction: column; align-items: flex-start; } .pb-cats .pb-catfind input { width: 100%; box-sizing: border-box; }
   .pb-cats .pb-catfind { width: 100%; } .pb-cats .pb-catres { max-width: 300px; }
+  .pie { max-width: 980px; } .pie-body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; align-items: start; }
+  .pie-stage { display: flex; align-items: center; justify-content: center; background: repeating-conic-gradient(#f1f3f5 0% 25%, #fff 0% 50%) 50% / 20px 20px; border-radius: 10px; min-height: 300px; padding: 10px; }
+  .pie-stage canvas { max-width: 100%; cursor: grab; touch-action: none; box-shadow: 0 2px 10px rgba(0,0,0,.15); } .pie-stage canvas:active { cursor: grabbing; }
+  .pie-tools { display: flex; flex-direction: column; gap: 12px; } .pie-tools label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; } .pie-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pbx-own { margin: 0 0 8px; } @media (max-width: 760px) { .pie-body { grid-template-columns: 1fr; } }
   .pb-gh-pick { display: contents; }
   .pb-gr-in { overflow: hidden; position: sticky; left: 12px; } .pb-wrap .pb-table { table-layout: auto; }
   .pb-dd-inline .pb-allpick { margin-left: 6px; font-size: 12.5px; text-transform: none; letter-spacing: 0; color: var(--ink); font-weight: 650; }
@@ -7991,8 +7996,58 @@ const coTextCss = st => [st.color && `color:${st.color}`, st.bold && "font-weigh
   st.shadow && "text-shadow:0 1px 2px rgba(0,0,0,.35)", st.caps && "text-transform:uppercase;letter-spacing:.03em"].filter(Boolean).join(";");
 const coHtml = x => { const t = coT(x), st = coS(x); return t.trim() ? `<span style="${esc(coTextCss(st))}">${esc(t)}</span>` : ""; };
 // a picture with 4 boxes on each side to fill in (features, specs, selling points)
-function openPictureBoxes(id) {
-  const r = PL.rows.find(x => x.id === id); if (!r) return;
+// Edit one photo: turn, flip, zoom in and move it (crop), lighter/darker, more/less contrast. onSave(canvas) returns an error message or nothing.
+function openImageEditor(src, onSave) {
+  if (!src) { alertMsg("The picture is still loading. Try again in a moment."); return; }
+  document.querySelector(".pie-wrap")?.remove();
+  const im = new Image(); im.src = src;
+  const S = { rot: 0, flip: false, zoom: 1, dx: 0, dy: 0, bri: 100, con: 100 };
+  const d = document.createElement("div"); d.className = "pbx-wrap pie-wrap"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Edit the picture");
+  d.innerHTML = `<div class="pbx pie"><div class="pbx-head"><strong>Edit the picture</strong><span class="quiet">Changes only this item's picture.</span>
+      <span class="pbx-btns"><button class="btn" type="button" id="pie-save">Save</button><button class="btn quiet-btn" type="button" id="pie-x">✕ Close</button></span></div>
+    <div class="staff-msg" id="pie-msg" role="status"></div>
+    <div class="pie-body"><div class="pie-stage"><canvas id="pie-c" title="Drag to move the picture when zoomed in"></canvas></div>
+      <div class="pie-tools">
+        <div class="pie-row"><button class="btn quiet-btn" type="button" data-pie="left">⟲ Turn left</button><button class="btn quiet-btn" type="button" data-pie="right">⟳ Turn right</button><button class="btn quiet-btn" type="button" data-pie="flip">⇋ Flip</button></div>
+        <label>Zoom (crop) <input type="range" id="pie-zoom" min="1" max="4" step="0.05" value="1"></label>
+        <label>Lighter / darker <input type="range" id="pie-bri" min="40" max="180" step="1" value="100"></label>
+        <label>Contrast <input type="range" id="pie-con" min="40" max="180" step="1" value="100"></label>
+        <p class="quiet">When zoomed in, drag the picture to choose what shows.</p>
+        <button class="link" type="button" id="pie-reset">Start over</button></div></div></div>`;
+  document.body.append(d);
+  const cv = d.querySelector("#pie-c"), x = cv.getContext("2d");
+  const draw = (out) => { const c = out || cv, g = c.getContext("2d"), turned = S.rot % 180 !== 0, w = turned ? im.naturalHeight : im.naturalWidth, h = turned ? im.naturalWidth : im.naturalHeight;
+    const sc = out ? Math.min(1, 1600 / Math.max(w, h)) : Math.min(560 / w, 420 / h);
+    c.width = Math.round(w * sc); c.height = Math.round(h * sc);
+    g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.save();
+    g.filter = `brightness(${S.bri}%) contrast(${S.con}%)`;
+    g.translate(c.width / 2 + S.dx * c.width, c.height / 2 + S.dy * c.height); g.scale(S.zoom * sc, S.zoom * sc); g.rotate(S.rot * Math.PI / 180); if (S.flip) g.scale(-1, 1);
+    g.drawImage(im, -im.naturalWidth / 2, -im.naturalHeight / 2); g.restore(); return c; };
+  const clamp = () => { const m = (S.zoom - 1) / 2; S.dx = Math.max(-m, Math.min(m, S.dx)); S.dy = Math.max(-m, Math.min(m, S.dy)); };
+  const go = () => { clamp(); draw(); };
+  im.complete ? go() : im.addEventListener("load", go);
+  d.querySelectorAll("[data-pie]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.pie; if (k === "left") S.rot = (S.rot + 270) % 360; else if (k === "right") S.rot = (S.rot + 90) % 360; else S.flip = !S.flip; go(); }));
+  d.querySelector("#pie-zoom").addEventListener("input", e => { S.zoom = Number(e.target.value); go(); });
+  d.querySelector("#pie-bri").addEventListener("input", e => { S.bri = Number(e.target.value); go(); });
+  d.querySelector("#pie-con").addEventListener("input", e => { S.con = Number(e.target.value); go(); });
+  d.querySelector("#pie-reset").addEventListener("click", () => { Object.assign(S, { rot: 0, flip: false, zoom: 1, dx: 0, dy: 0, bri: 100, con: 100 }); ["zoom", "bri", "con"].forEach(k => { d.querySelector("#pie-" + k).value = k === "zoom" ? 1 : 100; }); go(); });
+  let drag = null;
+  cv.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, dx: S.dx, dy: S.dy }; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener("pointermove", e => { if (!drag) return; S.dx = drag.dx + (e.clientX - drag.x) / cv.clientWidth; S.dy = drag.dy + (e.clientY - drag.y) / cv.clientHeight; go(); });
+  cv.addEventListener("pointerup", () => { drag = null; });
+  const close = () => d.remove();
+  d.querySelector("#pie-x").addEventListener("click", close);
+  d.addEventListener("click", e => { if (e.target === d) close(); });
+  d.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); close(); } });
+  d.querySelector("#pie-save").addEventListener("click", async () => { const m = d.querySelector("#pie-msg"), b = d.querySelector("#pie-save"); b.disabled = true; m.className = "staff-msg"; m.textContent = "Saving…";
+    try { const err = await onSave(draw(document.createElement("canvas"))); if (err) { m.className = "staff-msg err"; m.textContent = "Not saved: " + err; b.disabled = false; } else close(); }
+    catch (er) { m.className = "staff-msg err"; m.textContent = "Not saved: " + er.message; b.disabled = false; } });
+  d.querySelector("#pie-save").focus();
+}
+// opts (for one price book item): { title, sub, imgSrc, callouts, layout, onSave(vals, layout) }
+function openPictureBoxes(id, opts) {
+  const r = opts ? { series: opts.title, description: opts.sub, callouts: opts.callouts } : PL.rows.find(x => x.id === id); if (!r) return;
+  let lay = opts?.layout?.w || "M";
   closePictureBoxes();
   const edit = can("pricebook.edit");
   const B = Array.from({ length: 8 }, (_, i) => { const x = (r.callouts || [])[i] || ""; return { text: coT(x), style: { ...coS(x) } }; });
@@ -8021,6 +8076,7 @@ function openPictureBoxes(id) {
       <span class="pbx-row"><span class="pbx-tl">Border</span>${["", "#212529", "#e03131", "#f59f00", "#40c057", "#1971c2", "#9775fa"].map(c => `<button type="button" class="pbx-sw ${c ? "" : "pbx-none"}" data-border="${c}" style="${c ? `background:${c}` : ""}" aria-pressed="${(st().border || "") === c}" title="${c || "Normal border"}"></button>`).join("")}</span>
       <span class="pbx-row"><span class="pbx-tl">Looks</span>${PRESETS.map(([t, s2], i) => `<button type="button" class="pbx-pre" data-pre="${i}" style="${esc(coBoxCss(s2))};${esc(coTextCss(s2))}">${t}</button>`).join("")}</span>
       <span class="pbx-row"><span class="pbx-tl">Add</span>${EMOJI.map(e => `<button type="button" class="pbx-emo" data-emo="${e}">${e}</button>`).join("")}</span>
+      ${opts ? `<span class="pbx-row"><span class="pbx-tl">Box size</span>${[["S", "Narrow"], ["M", "Normal"], ["L", "Wide"], ["XL", "Extra wide"]].map(([k, t]) => `<button type="button" class="pbx-pre" data-boxw="${k}" aria-pressed="${lay === k}">${t}</button>`).join("")}<span class="quiet">how wide the boxes are next to the picture</span></span>` : ""}
       <span class="pbx-row"><button class="link" type="button" id="pbx-all">Use this look on all 8 boxes</button><button class="link" type="button" id="pbx-clear">Clear this box's look</button></span>
     </div>` : "";
   const d = document.createElement("div"); d.className = "pbx-wrap"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", r.series);
@@ -8031,8 +8087,9 @@ function openPictureBoxes(id) {
       <span class="pbx-btns">${edit ? `<button class="btn" type="button" id="pbx-save">Save</button>` : ""}<button class="btn quiet-btn" type="button" id="pbx-x">✕ Close</button></span></div>
     <div class="staff-msg" id="pbx-msg" role="status"></div>
     ${tools()}
-    <div class="pbx-grid"><div class="pbx-col">${[0, 1, 2, 3].map(box).join("")}</div>
-      <div class="pbx-img"><img alt="${esc(r.series)}" src="data:image/jpeg;base64,${r.image}"></div>
+    ${opts ? `<div class="pbx-own quiet">These boxes are for <b>${esc(r.series)}</b> only. The other models that share the picture keep theirs.</div>` : ""}
+    <div class="pbx-grid" ${opts && lay !== "M" ? `style="grid-template-columns:minmax(120px,${CO_BOXW[lay]}fr) minmax(0,1.6fr) minmax(120px,${CO_BOXW[lay]}fr)"` : ""}><div class="pbx-col">${[0, 1, 2, 3].map(box).join("")}</div>
+      <div class="pbx-img"><img alt="${esc(r.series)}" src="${opts ? esc(opts.imgSrc || "") : `data:image/jpeg;base64,${r.image}`}"></div>
       <div class="pbx-col">${[4, 5, 6, 7].map(box).join("")}</div></div></div>`;
     wire();
     if (pos) { const t = d.querySelector(`[data-pbx="${pos[0]}"]`); t?.focus(); try { t.setSelectionRange(pos[1], pos[2]); } catch {} }
@@ -8058,11 +8115,13 @@ function openPictureBoxes(id) {
     d.querySelector("#pbx-bg")?.addEventListener("change", e => setSt("bg", e.target.value));
     d.querySelector("#pbx-all")?.addEventListener("click", () => { const s2 = { ...st() }; B.forEach(x => { x.style = { ...s2 }; }); draw(); });
     d.querySelector("#pbx-clear")?.addEventListener("click", () => { B[cur].style = {}; draw(); });
+    d.querySelectorAll("[data-boxw]").forEach(b => b.addEventListener("click", () => { d.querySelectorAll("[data-pbx]").forEach(t => { B[Number(t.dataset.pbx)].text = t.value; }); lay = b.dataset.boxw; draw(); }));
     d.querySelector("#pbx-save")?.addEventListener("click", async () => {
       d.querySelectorAll("[data-pbx]").forEach(t => { B[Number(t.dataset.pbx)].text = t.value; });
       const vals = B.map(x => Object.keys(x.style).length ? { text: x.text.trim(), style: x.style } : x.text.trim());
-      const { error } = await db.rpc("save_picture_callouts", { p_id: id, p: vals });
       const m = d.querySelector("#pbx-msg");
+      if (opts) { const err = await opts.onSave(vals, { w: lay }); if (err) { m.className = "staff-msg err"; m.textContent = "Not saved: " + err; } else close(); return; }
+      const { error } = await db.rpc("save_picture_callouts", { p_id: id, p: vals });
       if (error) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
       r.callouts = vals; m.className = "staff-msg ok"; m.textContent = "Saved."; PB.calloutMap = null;
       renderPictureLibrary();
@@ -8215,7 +8274,7 @@ async function pbPastePicture(ids) {
 async function loadCallouts(force) {
   if (PB.calloutMap && !force) return PB.calloutMap;
   const { data } = await db.rpc("picture_callouts_map");
-  const m = new Map(); (data || []).forEach(x => { const c = Array.from({ length: 8 }, (_, i) => (x.callouts || [])[i] || ""); (x.items || []).forEach(id => m.set(Number(id), c)); });
+  const m = new Map(); (data || []).forEach(x => { const c = Array.from({ length: 8 }, (_, i) => (x.callouts || [])[i] || ""); c.layout = x.layout || null; c.own = !!x.own; (x.items || []).forEach(id => m.set(Number(id), c)); });
   PB.calloutMap = m; return m;
 }
 // a picture with its 8 boxes around it (4 left, 4 right); size: "sm" for small cards, "md" for side panels
@@ -8226,7 +8285,9 @@ const withBoxes = (co8, imgHtml, size) => { if (!co8) return imgHtml;
     return `<div class="cob cob-stack"><div class="cob-img">${imgHtml}</div><div class="cob-two"><div>${L.map(box).join("")}</div><div>${R.map(box).join("")}</div></div></div>`;
   }
   const col = a => `<div class="cob-col">${a.map(box).join("")}</div>`;
-  return `<div class="cob cob-${size || "md"}">${col(co8.slice(0, 4))}<div class="cob-img">${imgHtml}</div>${col(co8.slice(4, 8))}</div>`; };
+  const lw = co8.layout && CO_BOXW[co8.layout.w], gs = lw ? ` style="grid-template-columns:minmax(0,${lw}fr) minmax(0,1.3fr) minmax(0,${lw}fr)"` : "";
+  return `<div class="cob cob-${size || "md"}"${gs}>${col(co8.slice(0, 4))}<div class="cob-img">${imgHtml}</div>${col(co8.slice(4, 8))}</div>`; };
+const CO_BOXW = { S: 0.6, M: 1, L: 1.45, XL: 2 };   // how wide the boxes are next to the picture
 const calloutsOf = id => { const c = PB.calloutMap?.get(id); return c && c.some(x => coT(x).trim()) ? c : null; };
 const calloutList = id => { const c = calloutsOf(id); return c ? `<ul class="pb-co">${c.filter(x => coT(x).trim()).map(x => `<li>${coHtml(x)}</li>`).join("")}</ul>` : ""; };
 function pbCard(r, edit) {
@@ -8605,6 +8666,9 @@ function showPbItem(id) {
         <button class="btn quiet-btn" type="button" id="pb-pic-lib">🖼 From the picture page</button>
         ${r.has_picture ? `<button class="btn quiet-btn" type="button" id="pb-pic-copy" title="Copy this picture, then open another item and press Paste picture">📋 Copy picture</button>` : ""}
         ${PB.picClip && PB.picClip.id !== id ? `<button class="btn pb-paste-btn" type="button" id="pb-pic-paste" title="Put the copied picture on this item">📥 Paste picture from ${esc(PB.picClip.name)}</button>` : ""}
+        ${r.has_picture ? `<button class="btn quiet-btn" type="button" id="pb-img-edit">🎨 Edit the image (just this item)</button>
+          <button class="btn quiet-btn" type="button" id="pb-box-edit">✏️ Edit the 8 boxes (just this item)</button>
+          <button class="btn quiet-btn" type="button" id="pb-box-shared" ${calloutsOf(id)?.own ? "" : "hidden"}>↩ Use the shared boxes again</button>` : ""}
         ${r.has_picture ? `<button class="btn quiet-btn danger" type="button" id="pb-pic-off">Take the picture off</button>` : ""}</div></details><span class="staff-msg" id="pb-pic-msg" role="status"></span></div>` : ""}
       <div class="quiet">${Number(r.used_12m) ? `Used ${Number(r.used_12m).toLocaleString()} times in the last year, last on ${fmtDate(r.last_used)}` : "Not used in the last year"}</div>` : ""}
     <form class="po-upd" id="pb-form" autocomplete="off">
@@ -8678,7 +8742,8 @@ function showPbItem(id) {
   PB.callouts = PB.callouts || new Map();
   if (r.has_picture || calloutsOf(id)) db.rpc("pb_item_callouts", { p_item: id }).then(({ data }) => {
     const c = data && Array.isArray(data.callouts) ? Array.from({ length: 8 }, (_, i) => data.callouts[i] || "") : null;
-    if (c) PB.callouts.set(id, c); else PB.callouts.delete(id);
+    if (c) { c.layout = data.layout || null; c.own = !!data.own; PB.callouts.set(id, c); } else PB.callouts.delete(id);
+    const sh = document.getElementById("pb-box-shared"); if (sh) sh.hidden = !(c && c.own);
     if (PB.photos.has(id)) showPhoto(PB.photos.get(id)); });
   if (r.has_picture) {
     if (PB.photos.has(id)) showPhoto(PB.photos.get(id));
@@ -8704,10 +8769,31 @@ function showPbItem(id) {
   }));
   // the Picture menu closes after a choice (not on the first click of "Take the picture off", which asks first), or a click elsewhere
   document.querySelectorAll(".pb-picmenu").forEach(m => {
-    m.addEventListener("click", e => { if (e.target.closest(".pb-picmenu-list button") && !e.target.closest("#pb-pic-off")) setTimeout(() => m.open = false, 0); });
+    m.addEventListener("click", e => { if (e.target.closest(".pb-picmenu-list button") && !e.target.closest("#pb-pic-off, #pb-box-shared")) setTimeout(() => m.open = false, 0); });
     m.querySelector("#pb-file")?.addEventListener("change", () => { m.open = false; });
     m.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); m.open = false; } }); });
   if (!window.pbPicMenuOut) { window.pbPicMenuOut = true; document.addEventListener("click", e => document.querySelectorAll(".pb-picmenu[open]").forEach(m => { if (!m.contains(e.target)) m.open = false; })); }
+  // edit just this item: its own 8 boxes (and how wide they are), or the photo itself
+  const itemBoxes = () => PB.callouts?.get(id) || calloutsOf(id) || null;
+  const afterBoxes = async msg => { PB.calloutMap = null; await loadCallouts(true).catch(() => {}); PB.callouts?.delete(id);
+    if (PB.itemPage === id) { await openPbItemPage(id); const m = $("#pb-pic-msg"); if (m) { m.className = "staff-msg ok"; m.textContent = msg; } } else renderPricebook(msg); };
+  $("#pb-box-edit")?.addEventListener("click", () => { const c = itemBoxes();
+    openPictureBoxes(null, { title: pbName(r.name), sub: r.sku, imgSrc: PB.photos.get(id) || PB.thumbs.get(id) || "", callouts: c ? [...c] : [], layout: c?.layout,
+      onSave: async (vals, layout) => { const { error } = await db.rpc("save_pb_item_boxes", { p_item: id, p: vals, p_layout: layout }); if (error) return rpcErr(error);
+        afterBoxes("Saved this item's own boxes. The other models keep theirs."); } }); });
+  $("#pb-box-shared")?.addEventListener("click", async e => { const b = e.target;
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Go back to the shared boxes"; return; }
+    const { error } = await db.rpc("save_pb_item_boxes", { p_item: id, p: null, p_layout: {} }); if (error) { alertMsg("Not saved: " + rpcErr(error)); return; }
+    afterBoxes("This item uses the shared boxes again."); });
+  $("#pb-img-edit")?.addEventListener("click", () => openImageEditor(PB.photos.get(id) || PB.thumbs.get(id), async canvas => {
+    // the item's boxes come from the shared picture: keep a copy on this item so a new photo doesn't lose them
+    const c = itemBoxes(); if (c && !c.own && c.some(x => coT(x).trim())) { const { error } = await db.rpc("save_pb_item_boxes", { p_item: id, p: [...c], p_layout: c.layout || {} }); if (error) return rpcErr(error); }
+    const im = await new Promise((ok, no) => { const x = new Image(); x.onload = () => ok(x); x.onerror = () => no(new Error("Couldn't read the edited picture")); x.src = canvas.toDataURL("image/jpeg", 0.92); });
+    const th = pbShrink(im, 320), ph = pbShrink(im, 800);
+    const { error } = await db.rpc("set_pb_picture", { p_id: id, p_thumb: th, p_photo: ph }); if (error) return rpcErr(error);
+    PB.thumbs.set(id, "data:image/jpeg;base64," + th); PB.photos.set(id, "data:image/jpeg;base64," + ph); r.has_picture = true;
+    afterBoxes("Picture saved for this item only.");
+  }));
   // copy this item's picture, then paste it on others (one at a time here, or on all picked items from the bar at the top)
   $("#pb-pic-copy")?.addEventListener("click", () => { PB.picClip = { id, name: pbName(r.name).slice(0, 40) };
     const m = $("#pb-pic-msg"); if (m) { m.className = "staff-msg ok"; m.textContent = "Copied. Open another item and press Paste picture, or tick several items in the list and press Paste picture on them."; } });
