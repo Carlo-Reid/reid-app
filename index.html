@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-17.220647">
+<meta name="app-version" content="2026-10-17.220950">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -4717,16 +4717,25 @@ const MAPC = { list: null, by: new Map() };
 async function loadComms(force) {
   if (MAPC.list && !force) return;
   const { data, error } = await db.rpc("community_list");
-  if (error || !data) { MAPC.list = []; MAPC.by = new Map(); MAPC.err = error ? rpcErr(error) : ""; return; }
-  MAPC.info = data; MAPC.list = data.communities; MAPC.by = new Map(MAPC.list.map(c => [c.id, c]));
+  if (error || !data) { MAPC.list = []; MAPC.by = new Map(); MAPC.info = {}; MAPC.err = error ? ((error.code === "PGRST202" || /could not find the function|does not exist/i.test(error.message || "")) ? "setup" : rpcErr(error)) : ""; return; }
+  MAPC.err = ""; MAPC.info = data; MAPC.list = data.communities; MAPC.by = new Map(MAPC.list.map(c => [c.id, c]));
 }
-const OVERPASS = "https://overpass-api.de/api/interpreter";
+// OpenStreetMap's look-up servers: if one is busy, the next one is tried
+const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 async function commFindAll(say) {
-  say("Looking up communities on OpenStreetMap (Ottawa area)…");
-  const q = `[out:json][timeout:60];(node["place"~"^(neighbourhood|suburb|quarter|hamlet|village|locality|isolated_dwelling)$"]["name"](44.95,-76.45,45.6,-75.15););out body;`;
-  let j;
-  try { const r = await fetch(OVERPASS, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" } }); j = await r.json(); }
-  catch { throw new Error("Couldn't reach OpenStreetMap. Try again in a minute."); }
+  const q = `[out:json][timeout:90];(node["place"~"^(neighbourhood|suburb|quarter|hamlet|village|locality|isolated_dwelling)$"]["name"](44.95,-76.45,45.6,-75.15););out body;`;
+  let j = null, why = [];
+  for (let n = 0; n < OVERPASS.length && !j; n++) {
+    const host = new URL(OVERPASS[n]).host, t0 = Date.now(), ac = new AbortController(), kill = setTimeout(() => ac.abort(), 100000);
+    const tick = setInterval(() => say(`Looking up communities on OpenStreetMap (server ${n + 1} of ${OVERPASS.length})… ${Math.round((Date.now() - t0) / 1000)} sec. This can take up to a minute.`), 1000);
+    say(`Looking up communities on OpenStreetMap (server ${n + 1} of ${OVERPASS.length})…`);
+    try { const r = await fetch(OVERPASS[n], { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: ac.signal });
+      if (!r.ok) throw new Error(r.status === 429 ? "too busy" : r.status === 504 ? "timed out" : "error " + r.status);
+      const x = await r.json(); if (!(x.elements || []).length) throw new Error("sent nothing back"); j = x; }
+    catch (e) { why.push(`${host}: ${e.name === "AbortError" ? "took too long" : /fetch|network/i.test(e.message) ? "couldn't connect" : e.message}`); }
+    finally { clearTimeout(kill); clearInterval(tick); }
+  }
+  if (!j) throw new Error("OpenStreetMap's servers didn't answer (" + why.join("; ") + "). Wait a few minutes and press Find communities again.");
   const pts = (j.elements || []).filter(e => e.tags && e.tags.name).map(e => ({ osm_id: e.id, name: e.tags["name:en"] || e.tags.name, kind: e.tags.place, lat: e.lat, lng: e.lon }));
   if (!pts.length) throw new Error("OpenStreetMap didn't send any communities back.");
   say(`Saving ${pts.length} communities…`);
@@ -4752,7 +4761,7 @@ async function commAssignAll(say) {
 function renderCommColours(msg) {
   const ed = MAPZ.can, top = $("#main").scrollTop, info = MAPC.info || {}, list = (MAPC.list || []);
   const D = MAPC.draft || (MAPC.draft = new Map(list.map(c => [c.id, { color: c.color || "", name: c.name, hidden: !!c.hidden }])));
-  const V = MAPC.view || (MAPC.view = { sort: "most", show: "used", q: "", group: "hood" });
+  const V = MAPC.view || (MAPC.view = { sort: "most", show: list.some(c => c.n > 0) ? "used" : "all", q: "", group: "hood" });
   const q = (V.q || "").trim().toLowerCase();
   const shown = list.filter(c => (V.show === "all" || (V.show === "used" ? c.n > 0 : V.show === "on" ? D.get(c.id)?.color : V.show === "hidden" ? D.get(c.id)?.hidden : !D.get(c.id)?.color))
       && (!q || c.name.toLowerCase().includes(q) || String(c.hood || "").toLowerCase().includes(q) || (c.fsas || []).some(f => f.toLowerCase().startsWith(q.slice(0, 3)))))
@@ -4772,7 +4781,9 @@ function renderCommColours(msg) {
     <p class="lead">Communities are the smaller places inside neighbourhoods, like Half Moon Bay, Chapman Mills, Stonebridge and Longfields. They come from OpenStreetMap; each address gets the community it's closest to.</p>
     ${mapcTabs()}
     <div class="staff-msg ${msg && /^Not|Couldn/.test(msg) ? "err" : msg ? "ok" : ""}" role="status" id="cm-msg">${esc(msg || "")}</div>
-    ${!list.length ? `<section class="cl-tools"><strong>Find the communities</strong><p style="margin:0">Looks up every community, village and neighbourhood name in the Ottawa area on OpenStreetMap and matches each customer address to the closest one. It takes about a minute.</p>
+    ${MAPC.err === "setup" ? `<section class="cl-tools"><strong>One step first</strong><p style="margin:0">The database part for communities isn't set up yet. Close LOAD JOB FILES, double-click <b>RUN SETUP NOW.bat</b> in the app\\setup folder, wait for it to finish, then come back here and press Find communities.</p></section>`
+    : MAPC.err ? `<div class="staff-msg err">Couldn't load the communities: ${esc(MAPC.err)}</div>`
+    : !list.length ? `<section class="cl-tools"><strong>Find the communities</strong><p style="margin:0">Looks up every community, village and neighbourhood name in the Ottawa area on OpenStreetMap and matches each customer address to the closest one. It takes about a minute.</p>
       ${ed ? `<div class="ak-connrow"><button class="btn" type="button" id="cm-find">Find communities</button></div>` : `<p class="quiet">Ask someone who dispatches to do this.</p>`}</section>` : `
     <section class="cl-tools mapc-tools"><span><b>${(info.located || 0).toLocaleString()}</b> of ${(info.total || 0).toLocaleString()} addresses (${pct}%) have a community. ${list.length} communities found, ${list.filter(c => c.n).length} with customers.</span>
       ${ed ? `<button class="btn quiet-btn" type="button" id="cm-auto">Give every community a colour</button><span class="quiet">Communities close to each other get different colours.</span>
