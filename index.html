@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-18.150223">
+<meta name="app-version" content="2026-10-18.150853">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -7434,6 +7434,10 @@ function pbpShowPicks() {
   const n = $("#pbp-count"); if (n) n.textContent = `${PBP.picked.size} picked`;
   const m = $("#pbp-make"); if (m) m.disabled = !PBP.picked.size;
 }
+// run fn over every item, n at a time; results come back in the same order
+async function inBatches(list, n, fn) { const out = new Array(list.length); let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, list.length) }, async () => { while (next < list.length) { const i = next++; out[i] = await fn(list[i], i); } }));
+  return out; }
 async function makePrintBook() {
   const msg = t => { const m = $("#pbp-msg"); if (m) { m.className = "staff-msg"; m.textContent = t; } };
   PBP.title = $("#pbp-title").value.trim() || "Price Book"; pbpSave();
@@ -7442,10 +7446,14 @@ async function makePrintBook() {
   const tops = order.filter(id => PBP.picked.has(id) && !PBP.picked.has(PB.catBy.get(id).parent_id));
   if (!tops.length) return msg("Pick at least one category.");
   const sections = [], allIds = new Set();
+  // every section's items are fetched at the same time (4 at once), then put in order
+  let got = 0; msg(`Gathering the items (0 of ${tops.length} sections)…`);
+  const fetchOne = async t => { const args = { p_search: null, p_type: "all", p_active: true, p_category: t, p_flag: null, p_limit: 3000 };
+    const r = PBP.book != null && PBP.book !== "" ? await db.rpc("pb_list_for", { p_book: Number(PBP.book), ...args }) : await db.rpc("pb_list", args);
+    msg(`Gathering the items (${++got} of ${tops.length} sections)…`); return r; };
+  const results = await inBatches(tops, 4, fetchOne);
   for (const [n, t] of tops.entries()) {
-    msg(`Gathering ${PB.catBy.get(t).name} (${n + 1} of ${tops.length})…`);
-    const args = { p_search: null, p_type: "all", p_active: true, p_category: t, p_flag: null, p_limit: 3000 };
-    const { data, error } = PBP.book != null && PBP.book !== "" ? await db.rpc("pb_list_for", { p_book: Number(PBP.book), ...args }) : await db.rpc("pb_list", args);
+    const { data, error } = results[n];
     if (error) return msg("Couldn't load the items: " + rpcErr(error));
     const sub = [], inSub = id => { const out = []; const w = c => { out.push(c.id); c.kids.forEach(w); }; w(PB.catBy.get(id)); return out; };
     const subtree = inSub(t).filter(id => id === t || PBP.picked.has(id)), rank = new Map(subtree.map((id, i) => [id, i]));
@@ -7465,12 +7473,12 @@ async function makePrintBook() {
   if (!allIds.size) return msg("Nothing to print: those categories have no priced items.");
   // pictures
   const pics = new Map(), want = [...allIds].filter(id => sections.some(s => s.groups.some(g => g.items.some(r => r.id === id && r.has_picture))));
-  for (let i = 0; i < want.length; i += 100) {
-    msg(`Getting pictures… ${Math.min(i + 100, want.length)} of ${want.length}`);
-    const { data } = await db.rpc("pb_pictures", { p_ids: want.slice(i, i + 100) });
-    (data || []).forEach(p => pics.set(p.item_id, "data:image/jpeg;base64," + p.thumb));
-  }
-  await loadCallouts(true).catch(() => {});
+  const chunks = []; for (let i = 0; i < want.length; i += 100) chunks.push(want.slice(i, i + 100));
+  let gotPics = 0; msg(`Getting pictures… 0 of ${want.length}`);
+  const boxesReady = loadCallouts(true).catch(() => {});
+  await inBatches(chunks, 3, async ids => { const { data } = await db.rpc("pb_pictures", { p_ids: ids });
+    (data || []).forEach(p => pics.set(p.item_id, "data:image/jpeg;base64," + p.thumb)); gotPics += ids.length; msg(`Getting pictures… ${gotPics} of ${want.length}`); });
+  await boxesReady;
   const c = COMPANY || {}, co = c.company_name || "Reid Heating & Cooling", o = PBP.opt;
   const today = new Date().toLocaleDateString("en-CA", { year: "numeric", month: "long", day: "numeric" });
   const contact = [c.phone && phoneFmt(c.phone), c.email, c.website && c.website.replace(/^https?:\/\//, "")].filter(Boolean);
