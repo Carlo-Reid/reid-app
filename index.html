@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-17.210409">
+<meta name="app-version" content="2026-10-17.211718">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1656,6 +1656,12 @@
   .pbk-cat { display: inline-flex; gap: 6px; align-items: center; margin: 2px 0; font-weight: 600; }
   .pbk-people { display: flex; flex-direction: column; gap: 4px; max-height: 380px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-top: 6px; }
   .pl-open { cursor: zoom-in; padding: 0; width: 100%; font: inherit; } .pl-open:hover { border-color: var(--blue); } .pl-boxes { font-size: calc(12.5px * var(--fs, 1)); }
+  .plp-wrap { position: fixed; inset: 0; z-index: 75; background: rgba(15, 20, 25, .6); display: grid; place-items: center; padding: 16px; }
+  .plp { background: var(--panel); border-radius: 12px; padding: 16px 18px; width: min(1000px, 100%); max-height: calc(100vh - 32px); overflow: auto; box-shadow: 0 20px 50px rgba(0,0,0,.35); }
+  .plp #plp-q { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font: inherit; min-width: 220px; }
+  .plp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 10px; }
+  .plp-item { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px; border: 2px solid var(--line); border-radius: 10px; background: #fff; color: #111; cursor: pointer; font: inherit; }
+  .plp-item:hover, .plp-item:focus-visible { border-color: var(--blue); } .plp-item img { width: 100%; height: 120px; object-fit: contain; }
   .pbx-wrap { position: fixed; inset: 0; z-index: 75; background: rgba(15, 20, 25, .6); display: grid; place-items: center; padding: 16px; overflow: auto; }
   .pbx { background: var(--panel); border-radius: 12px; padding: 16px 18px; width: min(1200px, 100%); max-height: calc(100vh - 32px); overflow: auto; box-shadow: 0 20px 50px rgba(0,0,0,.35); }
   .pbx-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 8px; } .pbx-head strong { font-size: calc(22px * var(--fs, 1)); }
@@ -2823,7 +2829,7 @@ function setPage(hash, kind, label) {
   document.body.dataset.page = kind || "";
   document.body.classList.toggle("pbp-open", hash === "print-book");
   if (hash !== "map-colours") document.querySelector(".cp-clip")?.remove();
-  document.querySelector(".pbx-wrap")?.remove();
+  document.querySelector(".pbx-wrap")?.remove(); document.querySelector(".plp-wrap")?.remove();
   if (hash !== "dispatch") document.body.classList.remove("dsp-mapmode");
   document.querySelectorAll(".side-nav-list button").forEach(b => b.classList.toggle("cur", b.dataset.page === kind));
   setTimeout(showLastCust, 0);
@@ -7389,6 +7395,26 @@ function renderPictureLibrary(msg) {
 }
 
 
+
+// pick a picture from the Equipment pictures page (a pop-up grid with search)
+async function pickLibraryPicture(onPick) {
+  document.querySelector(".plp-wrap")?.remove();
+  const d = document.createElement("div"); d.className = "plp-wrap"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Pick a picture");
+  d.innerHTML = `<div class="plp"><div class="pbx-head"><strong>Pick a picture</strong><input id="plp-q" placeholder="Search series or category" autocomplete="off">
+      <span class="pbx-btns"><button class="btn quiet-btn" type="button" id="plp-x">✕ Close</button></span></div><div class="plp-grid"><div class="quiet">Loading the pictures…</div></div></div>`;
+  document.body.append(d);
+  const close = () => d.remove();
+  d.querySelector("#plp-x").addEventListener("click", close);
+  d.addEventListener("click", e => { if (e.target === d) close(); });
+  d.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); close(); } });
+  if (!PL.rows) { const { data, error } = await db.rpc("picture_library_list"); if (error) { d.querySelector(".plp-grid").innerHTML = `<div class="staff-msg err">${esc(rpcErr(error))}</div>`; return; } PL.rows = data || []; }
+  const draw = q => { q = (q || "").toLowerCase();
+    const list = PL.rows.filter(x => !q || (x.series + " " + (x.category || "") + " " + (x.description || "")).toLowerCase().includes(q));
+    d.querySelector(".plp-grid").innerHTML = list.map(x => `<button type="button" class="plp-item" data-plp="${x.id}"><img alt="" src="data:image/jpeg;base64,${x.image}"><b>${esc(x.series)}</b><span class="quiet">${esc(x.category || "")}</span></button>`).join("")
+      || `<div class="quiet">No pictures match. Add pictures on the Equipment pictures page.</div>`;
+    d.querySelectorAll("[data-plp]").forEach(b => b.addEventListener("click", () => { const x = PL.rows.find(y => y.id === Number(b.dataset.plp)); close(); onPick(x); })); };
+  draw(""); const qi = d.querySelector("#plp-q"); qi.addEventListener("input", () => draw(qi.value)); qi.focus();
+}
 // a picture with 4 boxes on each side to fill in (features, specs, selling points)
 function openPictureBoxes(id) {
   const r = PL.rows.find(x => x.id === id); if (!r) return;
@@ -7883,7 +7909,9 @@ function showPbItem(id) {
   const f2 = v => v === "" || v == null ? "" : Number(v).toFixed(2);
   p.innerHTML = `<div class="dp-head"><strong>${nw ? "New item" : esc(pbName(r.name))}</strong><button class="link" type="button" data-pb-close>Close</button></div>
     ${!nw ? `<div class="pb-photo" id="pb-photo">${r.has_picture ? `<span class="quiet">Loading picture…</span>` : `<span class="pb-nopic">No picture</span>`}</div>
-      ${edit ? `<div class="pb-photo-btns"><label class="btn quiet-btn pb-file">${r.has_picture ? "Change picture" : "Add a picture"}<input type="file" accept="image/*" id="pb-file"></label>
+      ${edit ? `<div class="pb-photo-btns"><span class="quiet">${r.has_picture ? "Change picture:" : "Add a picture:"}</span>
+        <label class="btn quiet-btn pb-file">💻 From my computer<input type="file" accept="image/*" id="pb-file"></label>
+        <button class="btn quiet-btn" type="button" id="pb-pic-lib">🖼 From the picture page</button>
         ${r.has_picture ? `<button class="link danger" type="button" id="pb-pic-off">Take the picture off</button>` : ""}<span class="staff-msg" id="pb-pic-msg" role="status"></span></div>` : ""}
       <div class="quiet">${Number(r.used_12m) ? `Used ${Number(r.used_12m).toLocaleString()} times in the last year, last on ${fmtDate(r.last_used)}` : "Not used in the last year"}</div>` : ""}
     <form class="po-upd" id="pb-form" autocomplete="off">
@@ -7953,6 +7981,13 @@ function showPbItem(id) {
       renderPricebook("Picture saved.");
     } catch (err) { m.className = "staff-msg err"; m.textContent = "Not saved: " + err.message; }
   });
+  $("#pb-pic-lib")?.addEventListener("click", () => pickLibraryPicture(async lib => {
+    const m = $("#pb-pic-msg"); if (m) { m.className = "staff-msg"; m.textContent = "Saving the picture…"; }
+    const { error } = await db.rpc("use_library_picture_on", { p_item: id, p_lib: lib.id });
+    if (error) { if (m) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); } return; }
+    const src = "data:image/jpeg;base64," + lib.image; PB.thumbs.set(id, src); PB.photos.set(id, src); r.has_picture = true;
+    renderPricebook("Picture saved (" + lib.series + ").");
+  }));
   $("#pb-pic-off")?.addEventListener("click", async e => {
     const b = e.target; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Take it off"; return; }
     const { error } = await db.rpc("set_pb_picture", { p_id: id, p_thumb: null, p_photo: null });
