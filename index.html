@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-18.143655">
+<meta name="app-version" content="2026-10-18.144529">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -206,6 +206,7 @@
   .pb-cat:hover .pb-cat-pw, .pb-cat-pw:focus, .pb-cat-pw.sure { opacity: 1; } .pb-cat-pw.off { color: #2b8a3e; }
   .pb-cat-pw.sure { background: #c92a2a; color: #fff; font-size: 12px; font-weight: 700; padding: 2px 6px; } .pb-cat-pw.off.sure { background: #2b8a3e; }
   .pb-order { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; font-size: 13px; }
+  .pb-paste-btn { background: #fff3bf; color: #5c3c00; border: 1px solid #e0b100; }
   .pb-grip { cursor: grab; color: var(--muted, #8a94a0); font-size: 13px; padding: 0 2px 0 0; user-select: none; }
   .pb-cat[draggable="true"]:hover .pb-grip { color: var(--ink); }
   .pb-cat.pb-dragging { opacity: .45; }
@@ -8070,6 +8071,16 @@ function pbCatTree(edit) {
 }
 
 
+async function pbPastePicture(ids) {
+  const c = PB.picClip; if (!c) return;
+  const { data, error } = await db.rpc("copy_pb_picture", { p_from: c.id, p_to: ids });
+  if (error) return renderPricebook("Not saved: " + rpcErr(error));
+  ids.forEach(i => { PB.thumbs.delete(i); PB.photos.delete(i); PB.callouts?.delete(i); const row = (PB.rows || []).find(x => x.id === i); if (row) row.has_picture = true; });
+  PB.calloutMap = null; await loadCallouts(true).catch(() => {});
+  const msg = `Picture from ${c.name} put on ${data} item${data === 1 ? "" : "s"}.`;
+  if (ids.length === 1 && PB.itemPage === ids[0]) return openPbItemPage(ids[0]).then(() => { const m = $("#pb-pic-msg"); if (m) { m.className = "staff-msg ok"; m.textContent = msg; } });
+  renderPricebook(msg);
+}
 // the 8 boxes from the Equipment pictures page, for every model of each series (item id → 8 texts)
 async function loadCallouts(force) {
   if (PB.calloutMap && !force) return PB.calloutMap;
@@ -8214,6 +8225,7 @@ function renderPricebook(msg) {
           <span>Move to <select id="pb-btype"><option value="">Pick…</option>${PB_TYPES.slice(1).map(([k, t]) => `<option value="${k}">${t}</option>`).join("")}</select>
             <button class="btn quiet-btn" type="button" id="pb-bmove">Move</button></span>
           <button class="btn quiet-btn ${PB.active === "false" ? "" : "danger"}" type="button" id="pb-retpick">${PB.active === "false" ? "Bring them back" : "Retire them"}</button>
+          ${PB.picClip ? `<button class="btn pb-paste-btn" type="button" id="pb-bpaste">📥 Paste picture from ${esc(PB.picClip.name)} on them</button>` : ""}
           <button class="link" type="button" id="pb-unpick">Clear</button></div>` : ""}
         <div class="dsp-wrap pb-wrap">
           <div class="staff-wrap" style="flex:1;min-width:0">${!rows.length ? `<div class="quiet" style="padding:24px 0">Nothing matches.</div>` : pics
@@ -8258,7 +8270,7 @@ function renderPricebook(msg) {
   document.querySelectorAll("[data-pb-tw]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.pbTw); PB.open.has(id) ? PB.open.delete(id) : PB.open.add(id); renderPricebook(); }));
   document.querySelectorAll("[data-pb-cat]").forEach(b => b.addEventListener("click", () => {
     const id = b.dataset.pbCat ? Number(b.dataset.pbCat) : null;
-    PB.cat = id; PB.catForm = null; if (id) PB.open.add(id);
+    PB.cat = id; PB.catForm = null;   // picking a category doesn't open it; use the ▸ arrow to see what's inside
     if (id && !matchMedia("(min-width: 900px)").matches) PB.catsOpen = false;
     reload();
   }));
@@ -8301,7 +8313,7 @@ function renderPricebook(msg) {
       res.querySelectorAll("[data-pb-catgo]").forEach(b => b.addEventListener("mousedown", e => { e.preventDefault(); go(Number(b.dataset.pbCatgo)); }));
     };
     const go = id => { PB.cat = id; PB.catForm = null; let c = PB.catBy.get(id); while (c && c.parent_id) { PB.open.add(c.parent_id); c = PB.catBy.get(c.parent_id); }
-      PB.open.add(id); q.value = ""; res.classList.add("hidden"); PB.sel = null; loadPricebook().then(() => document.querySelector(".pb-cat.cur")?.scrollIntoView({ block: "nearest" })); };
+      q.value = ""; res.classList.add("hidden"); PB.sel = null; loadPricebook().then(() => document.querySelector(".pb-cat.cur")?.scrollIntoView({ block: "nearest" })); };
     q?.addEventListener("input", show);
     q?.addEventListener("keydown", e => {
       if (!hits.length) return;
@@ -8339,6 +8351,7 @@ function renderPricebook(msg) {
     await loadPbCats(); await loadPricebook();
     renderPricebook(`${cur.active ? "Deactivated" : "Reactivated"} ${cur.name}${data.categories > 1 ? ` and ${data.categories - 1} sub-categories` : ""}, with ${data.items} item${data.items === 1 ? "" : "s"}.${cur.active ? " Old invoices keep them. To see them, pick Retired at the top, or Show deactivated categories." : ""}`);
   }));
+  $("#pb-bpaste")?.addEventListener("click", () => pbPastePicture([...PB.picked]));
   $("#pb-bmove")?.addEventListener("click", async () => {
     const t = $("#pb-btype").value; if (!t) return renderPricebook("Pick where to move them first.");
     const { data, error } = await db.rpc("pb_set_items_type", { p_ids: [...PB.picked], p_type: t });
@@ -8454,6 +8467,8 @@ function showPbItem(id) {
       ${edit ? `<div class="pb-photo-btns"><span class="quiet">${r.has_picture ? "Change picture:" : "Add a picture:"}</span>
         <label class="btn quiet-btn pb-file">💻 From my computer<input type="file" accept="image/*" id="pb-file"></label>
         <button class="btn quiet-btn" type="button" id="pb-pic-lib">🖼 From the picture page</button>
+        ${r.has_picture ? `<button class="btn quiet-btn" type="button" id="pb-pic-copy" title="Copy this picture, then open another item and press Paste picture">📋 Copy picture</button>` : ""}
+        ${PB.picClip && PB.picClip.id !== id ? `<button class="btn pb-paste-btn" type="button" id="pb-pic-paste" title="Put the copied picture on this item">📥 Paste picture from ${esc(PB.picClip.name)}</button>` : ""}
         ${r.has_picture ? `<button class="link danger" type="button" id="pb-pic-off">Take the picture off</button>` : ""}<span class="staff-msg" id="pb-pic-msg" role="status"></span></div>` : ""}
       <div class="quiet">${Number(r.used_12m) ? `Used ${Number(r.used_12m).toLocaleString()} times in the last year, last on ${fmtDate(r.last_used)}` : "Not used in the last year"}</div>` : ""}
     <form class="po-upd" id="pb-form" autocomplete="off">
@@ -8540,6 +8555,10 @@ function showPbItem(id) {
     const src = "data:image/jpeg;base64," + lib.image; PB.thumbs.set(id, src); PB.photos.set(id, src); r.has_picture = true;
     renderPricebook("Picture saved (" + lib.series + ").");
   }));
+  // copy this item's picture, then paste it on others (one at a time here, or on all picked items from the bar at the top)
+  $("#pb-pic-copy")?.addEventListener("click", () => { PB.picClip = { id, name: pbName(r.name).slice(0, 40) };
+    const m = $("#pb-pic-msg"); if (m) { m.className = "staff-msg ok"; m.textContent = "Copied. Open another item and press Paste picture, or tick several items in the list and press Paste picture on them."; } });
+  $("#pb-pic-paste")?.addEventListener("click", () => pbPastePicture([id]));
   $("#pb-pic-off")?.addEventListener("click", async e => {
     const b = e.target; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Take it off"; return; }
     const { error } = await db.rpc("set_pb_picture", { p_id: id, p_thumb: null, p_photo: null });
