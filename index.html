@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-18.145127">
+<meta name="app-version" content="2026-10-18.150223">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -7358,12 +7358,21 @@ const pbpSave = () => { try { localStorage.setItem("pbpPrefs", JSON.stringify({ 
 async function openPrintBook() {
   setPage("print-book", "pricebook", "Print book");
   if (!PB.cats) { $("#main").innerHTML = `<div class="loading">Loading the categories…</div>`; await loadPbCats(); }
-  if (!PB.books) await loadPbBooks();
+  await loadPbBooks().catch(() => {});   // always fresh, so changes to a price book show here straight away
   if (!COMPANY) { const { data } = await db.from("company_settings").select("*").limit(1).maybeSingle(); COMPANY = data || { company_name: "Reid Heating & Cooling" }; }
   PBP.picked = new Set([...PBP.picked].filter(id => PB.catBy.has(id)));
+  pbpSyncBook();
   // the ML297V category (made Oct 17) goes in the book once; untick it any time after
   try { if (!localStorage.getItem("pbpAddedML297V")) { const c = (PB.cats || []).find(x => /^ml297v$/i.test(x.name)); if (c) { PBP.picked.add(c.id); pbpSave(); localStorage.setItem("pbpAddedML297V", "1"); } } } catch (e) {}
   renderPrintBook();
+}
+// a price book picked for the Print book brings its own categories (whatever is ticked for that book right now)
+function pbpSyncBook() {
+  const b = (PB.books || []).find(x => String(x.id) === String(PBP.book ?? ""));
+  if (!b || !(b.categories || []).length) return false;
+  const next = new Set(b.categories.map(Number).filter(id => PB.catBy.has(id)));
+  if (next.size !== PBP.picked.size || [...next].some(id => !PBP.picked.has(id))) PBP.built = null;   // the book changed: make it again
+  PBP.picked = next; pbpSave(); return true;
 }
 function pbpTree() {
   const node = c => {
@@ -7401,7 +7410,8 @@ function renderPrintBook(msg) {
   pbpWireTree();
   $("#pbp-none").addEventListener("click", () => { PBP.picked.clear(); pbpSave(); pbpShowPicks(); });
   document.querySelectorAll("[data-pbp-opt]").forEach(cb => cb.addEventListener("change", () => { PBP.opt[cb.dataset.pbpOpt] = cb.checked; pbpSave(); }));
-  $("#pbp-book")?.addEventListener("change", e => { PBP.book = e.target.value; PBP.built = null; renderPrintBook(); });
+  $("#pbp-book")?.addEventListener("change", e => { PBP.book = e.target.value; PBP.built = null; const b = (PB.books || []).find(x => String(x.id) === String(PBP.book));
+    renderPrintBook(pbpSyncBook() ? `Ticked ${b.name}'s ${PBP.picked.size} categories. Untick any you don't want in this print.` : b ? `${b.name} shows every category; tick the ones you want.` : ""); });
   $("#pbp-title").addEventListener("change", e => { PBP.title = e.target.value.trim() || "Price Book"; pbpSave(); });
   $("#pbp-make").addEventListener("click", makePrintBook);
   $("#pbp-print")?.addEventListener("click", () => window.print());
