@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.195651">
+<meta name="app-version" content="2026-10-17.200050">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1693,6 +1693,9 @@
   .sec1a.zoned .zb-edit { color: #111; text-decoration: underline; }
   .sec1a.zoned .zb-tips { background: rgba(255,255,255,.85); color: #111; border-color: transparent; }
   .sec1a.zoned .pencil { background: rgba(255,255,255,.85); }
+  .zb-link { background: none; border: 0; padding: 0; font: inherit; font-weight: 700; color: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+  .zb-link:hover { text-decoration: underline; }
+  tr.mz-focus td { box-shadow: inset 0 0 0 2px var(--blue); }
   .zone-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 4px; font-size: calc(14px * var(--fs, 1)); }
   .zone-bar .dm-dot { width: 13px; height: 13px; }
   .zb-place { font-weight: 700; } .zb-tips { background: var(--paper); border: 1px solid var(--line); border-radius: 999px; padding: 1px 10px; }
@@ -4016,11 +4019,12 @@ function isDark(hex) { const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.
 function zoneBar(l) {
   if (!l) return "";
   const z = zoneOf2(l), h = l.neighbourhood_id && MAPH.by ? MAPH.by.get(l.neighbourhood_id) : null, pz = zoneOf(l.postal_code), fsa = pcKey(l.postal_code).slice(0, 3);
-  const bits = [l.city ? townName(l.city) : "", h ? h.name : "", pz && pz.name && (!h || pz.name !== h.name) ? pz.name : "", fsa].filter(Boolean)
-    .filter((x, i, a) => a.findIndex(y => y.toLowerCase() === x.toLowerCase()) === i);
+  const bits = [[l.city ? townName(l.city) : "", "towns", townKey(l.city)], [h ? h.name : "", "hoods", h ? h.name : ""],
+      [pz && pz.name && (!h || pz.name !== h.name) ? pz.name : "", "postal", pz ? pz.prefix : ""], [fsa, "postal", fsa]].filter(b => b[0])
+    .filter((x, i, a) => a.findIndex(y => y[0].toLowerCase() === x[0].toLowerCase()) === i);
   const editing = current?.tipsEdit === l.id;
   return `<div class="zone-bar" data-zone-loc="${l.id}">
-    <span class="zb-place">${bits.map(esc).join(" · ")}</span>
+    <span class="zb-place">${bits.map(([t, tab, q]) => `<button class="zb-link" type="button" data-zb-tab="${tab}" data-zb-q="${esc(q)}" title="Pick the map colour for ${esc(t)}">${esc(t)}</button>`).join(" · ")}</span>
     ${editing ? `<form class="zb-form" id="zb-form"><input name="t" maxlength="500" value="${esc(l.find_tips || "")}" placeholder="e.g. middle house, green door, yellow garage" aria-label="Details to find the house">
         <button class="btn" type="submit">Save</button><button class="btn quiet-btn" type="button" id="zb-x">Cancel</button></form>`
       : `${l.find_tips ? `<span class="zb-tips">🏠 ${esc(l.find_tips)}</span>` : ""}<button class="link zb-edit" type="button" id="zb-edit">${l.find_tips ? "Change" : "+ Add details (green door, middle house…)"}</button>`}
@@ -4028,6 +4032,7 @@ function zoneBar(l) {
 }
 function wireZoneBar(l) {
   if (!l) return;
+  document.querySelectorAll("[data-zb-tab]").forEach(b => b.addEventListener("click", () => openMapColours("", { tab: b.dataset.zbTab, q: b.dataset.zbQ })));
   $("#zb-edit")?.addEventListener("click", () => { current.tipsEdit = l.id; redrawKeepingPlace(); const i = $("#zb-form input"); i?.focus(); i?.setSelectionRange(i.value.length, i.value.length); });
   const close = () => { current.tipsEdit = null; redrawKeepingPlace(); };
   $("#zb-x")?.addEventListener("click", close);
@@ -4216,14 +4221,28 @@ document.addEventListener("click", e => {
 document.addEventListener("keydown", e => { if (e.key === "Escape" && MAPZ.clip && document.querySelector(".cp-clip")) { MAPZ.clip = null; cpShowClip(); } });
 
 /* ---------------- Map colours page: a colour for each postal code area ---------------- */
-async function openMapColours(msg) {
+async function openMapColours(msg, go) {
   setPage("map-colours", "dispatch", "Map colours");
   $("#main").innerHTML = `<div class="loading">Loading the map colours…</div>`;
   await Promise.all([loadMapZones(true), loadHoods(true), loadTowns(true)]);
   if (!document.querySelector(".loading, .mapc")) return;
   MAPZ.draft = new Map((MAPZ.zones || []).map(z => [z.prefix, { ...z }])); MAPH.draft = null; MAPT.draft = null;
   if (MAPZ.tab == null) try { MAPZ.tab = localStorage.getItem("reid.mapcTab") || "hoods"; } catch { MAPZ.tab = "hoods"; }
+  if (go && go.tab) {   // opened from a customer file: that town / neighbourhood / postal area, ready to colour
+    MAPZ.tab = go.tab; const q = go.q || "";
+    if (go.tab === "towns") { MAPT.view = { ...(MAPT.view || { sort: "most", group: "none" }), q, show: "all" }; }
+    else if (go.tab === "hoods") { MAPH.view = { ...(MAPH.view || {}), q, show: "all" }; }
+    else { MAPZ.view = { ...(MAPZ.view || {}), q, show: "all" }; }
+    MAPZ.focus = { tab: go.tab, q: q.toLowerCase() };
+  }
   mapcRender(msg);
+  if (MAPZ.focus) { const f = MAPZ.focus; MAPZ.focus = null;
+    const tr = f.tab === "towns" ? document.querySelector(`tr[data-tw="${CSS.escape(f.q)}"]`) : f.tab === "postal" ? document.querySelector(`tr[data-mz="${CSS.escape(f.q.toUpperCase())}"]`)
+      : [...document.querySelectorAll("tr[data-hd]")].find(r => r.querySelector("strong")?.textContent.toLowerCase() === f.q);
+    if (tr) { tr.scrollIntoView({ block: "center" }); tr.classList.add("cp-flash", "mz-focus"); setTimeout(() => tr.classList.remove("cp-flash"), 1500);
+      const on = tr.querySelector("[data-mz-on], [data-hd-on], [data-tw-on]"), col = tr.querySelector("input[type=color]");
+      if (on && !on.disabled && !on.checked) { on.checked = true; tr.dispatchEvent(new Event("change")); col.disabled = false; tr.querySelector("[data-mz-name]")?.removeAttribute("disabled"); }
+      if (col && !col.disabled) col.focus(); } }
 }
 function renderMapColours(msg) {
   const ed = MAPZ.can, D = MAPZ.draft, top = $("#main").scrollTop;
