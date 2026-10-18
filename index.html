@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.204556">
+<meta name="app-version" content="2026-10-17.204754">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1776,6 +1776,8 @@
   .zb-form .btn { padding: 4px 12px; }
   .sec1a.stuck .zb-edit { display: none; }
   .zone-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 3px 10px 3px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); font-size: calc(14px * var(--fs, 1)); }
+  .dsp-hrs { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; } .dsp-hrs select { padding: 3px 4px; border-radius: 6px; border: 1px solid rgba(255,255,255,.5); font: inherit; background: var(--panel); color: var(--ink); }
+  .dsp-hrs-reset { color: #fff !important; text-decoration: underline; }
   .dsp-cby { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; } .dsp-cby select { padding: 4px 6px; border-radius: 6px; border: 1px solid rgba(255,255,255,.5); font: inherit; background: var(--panel); color: var(--ink); }
   .dsp-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: calc(13.5px * var(--fs, 1)); }
   .dsp-leg { display: inline-flex; align-items: center; gap: 6px; } .dsp-leg b { color: var(--steel); font-weight: 600; }
@@ -3985,7 +3987,7 @@ function loadLeaflet() {
   });
   return LEAFLET;
 }
-const saveDspMap = () => { try { localStorage.setItem("reid.dispatchMap", JSON.stringify({ map: !!DSP.map, colorBy: DSP.colorBy || "hood", mapWait: !!DSP.mapWait, mapLines: !!DSP.mapLines, ov: DSP.ov || "auto", ovWarn: DSP.ovWarn !== false })); } catch {} };
+const saveDspMap = () => { try { localStorage.setItem("reid.dispatchMap", JSON.stringify({ map: !!DSP.map, colorBy: DSP.colorBy || "hood", mapWait: !!DSP.mapWait, mapLines: !!DSP.mapLines, ov: DSP.ov || "auto", ovWarn: DSP.ovWarn !== false, h0: DSP.h0, h1: DSP.h1, mapFill: !!DSP.mapFill })); } catch {} };
 try { Object.assign(DSP, JSON.parse(localStorage.getItem("reid.dispatchMap") || "{}")); } catch {}
 function dspTechColor(id) { const i = (BOOK.techs || []).findIndex(t => t.id === id); return i < 0 ? MAP_GREY : MAP_PALETTE[i % MAP_PALETTE.length]; }
 function dspMarkColor(r) { return dspKey(r).color; }
@@ -3996,6 +3998,7 @@ async function mountDspMap() {
     el.innerHTML = `<div class="dsp-map-bar"><strong>Map</strong>
         <label>Colour by <select id="dm-by">${DSP_BY.map(([k, t]) => `<option value="${k}">${t}</option>`).join("")}</select></label>
         <label class="pb-check"><input type="checkbox" id="dm-lines"> Neighbourhood outlines</label>
+        <label class="pb-check"><input type="checkbox" id="dm-fill"> Colour in the areas</label>
         <label class="pb-check"><input type="checkbox" id="dm-wait"> Show calls waiting for a day</label>
         ${can("calls.dispatch") || ME.role === "owner" ? `<button class="link" type="button" id="dm-setup">Map colours…</button>` : ""}
         <button class="link" type="button" id="dm-fit">Fit all calls</button>
@@ -4005,6 +4008,8 @@ async function mountDspMap() {
     el.querySelector("#dm-by").addEventListener("change", e => { DSP.colorBy = e.target.value; saveDspMap();
       if (DSP.page === "map" && DSP.mp && DSP.mp.same !== false) DSP.mp.group = DSP.colorBy; renderDispatch(); });
     el.querySelector("#dm-wait").addEventListener("change", e => { DSP.mapWait = e.target.checked; saveDspMap(); drawDspMap(true); });
+    el.querySelector("#dm-fill").addEventListener("change", async e => { DSP.mapFill = e.target.checked; if (DSP.mapFill && !DSP.mapLines) { DSP.mapLines = true; el.querySelector("#dm-lines").checked = true; }
+      saveDspMap(); await loadHoods(false, true); drawDspMap(); });
     el.querySelector("#dm-lines").addEventListener("change", async e => { DSP.mapLines = e.target.checked; saveDspMap(); if (DSP.mapLines) await loadHoods(false, true); drawDspMap(); });
     el.querySelector("#dm-close").addEventListener("click", () => { DSP.map = false; saveDspMap(); renderDispatch(); });
     el.querySelector("#dm-fit").addEventListener("click", () => drawDspMap(true));
@@ -4013,6 +4018,7 @@ async function mountDspMap() {
   }
   DSP.mapEl.querySelector("#dm-by").value = DSP.colorBy || "hood";
   DSP.mapEl.querySelector("#dm-lines").checked = !!DSP.mapLines;
+  DSP.mapEl.querySelector("#dm-fill").checked = !!DSP.mapFill;
   DSP.mapEl.querySelector("#dm-wait").checked = !!DSP.mapWait;
   slot.replaceWith(DSP.mapEl);
   let L;
@@ -4038,7 +4044,7 @@ function drawDspMap(fit) {
   DSP.mlayer.clearLayers();
   if (DSP.mapLines && MAPH.shapes) {   // neighbourhood outlines, under the dots
     MAPH.shapes.forEach(sh => { const h = MAPH.by?.get(sh.id) || {}, c = h.color || MAP_GREY;
-      L.geoJSON(sh.shape, { interactive: true, style: { color: c, weight: 1.2, opacity: 0.8, fillColor: c, fillOpacity: 0.1 } })
+      L.geoJSON(sh.shape, { interactive: true, style: { color: DSP.mapFill ? "#ffffff" : c, weight: DSP.mapFill ? 1 : 1.2, opacity: 0.9, fillColor: c, fillOpacity: DSP.mapFill ? (h.color ? 0.45 : 0.08) : 0.1 } })
         .bindTooltip(esc(h.name || ""), { sticky: true }).addTo(DSP.mlayer); });
   }
   list.forEach(({ r, wait }) => {
@@ -4770,10 +4776,9 @@ function dspCard(r, from) {
 // The timeline: hours across the top; each call sits under its arrival time and spans its arrival window.
 const hourOf = iso => { const d = new Date(iso); return d.getHours() + d.getMinutes() / 60; };
 function dspTimeline(rows, techs, none, colOf, mins, isToday) {
-  let h0 = 7, h1 = 19;
-  rows.forEach(r => { if (r.arrival_start) { h0 = Math.min(h0, Math.floor(hourOf(r.arrival_start)));
-    h1 = Math.max(h1, Math.ceil(r.arrival_end ? hourOf(r.arrival_end) : hourOf(r.arrival_start) + 1)); } });
-  h1 = Math.min(Math.max(h1, h0 + 4), 24);
+  // the hours shown: 8 am to 6 pm unless changed (DSP.h0 / DSP.h1); calls outside sit at the edge
+  let h0 = Number.isFinite(DSP.h0) ? DSP.h0 : 8, h1 = Number.isFinite(DSP.h1) ? DSP.h1 : 18;
+  if (h1 <= h0) h1 = Math.min(24, h0 + 1);
   const span = h1 - h0, pct = h => ((h - h0) / span * 100).toFixed(3) + "%";
   const hours = Array.from({ length: span }, (_, i) => h0 + i);
   const label = h => (h % 12 || 12) + (h < 12 ? " am" : " pm");
@@ -4795,7 +4800,8 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
   };
   const row = (id, name, sub, list, extra = "") => {
     const timed = list.filter(r => r.arrival_start).map(r => {
-      const a = hourOf(r.arrival_start), z = Math.max(a + 0.75, r.arrival_end ? hourOf(r.arrival_end) : a + (r.duration || 60) / 60);
+      let a = hourOf(r.arrival_start), z = Math.max(a + 0.75, r.arrival_end ? hourOf(r.arrival_end) : a + (r.duration || 60) / 60);
+      if (z <= h0 + 0.01) { a = h0; z = h0 + 0.75; } else if (a >= h1 - 0.01) { a = h1 - 0.75; z = h1; }   // outside the hours shown: at the edge
       return { r, a, z }; }).sort((x, y) => x.a - y.a);
     const anyTime = list.filter(r => !r.arrival_start);
     // groups of calls whose times overlap
@@ -4947,6 +4953,9 @@ function renderDispatch() {
       <div class="dsp-sum quiet">${callsWord(rows.length)}${none.length ? ` · <span class="owe">${none.length} without a tech</span>` : ""}${cancelled ? ` · ${cancelled} cancelled` : ""}
         <label class="dsp-all"><input type="checkbox" id="dsp-all" ${DSP.all ? "checked" : ""}> Show every tech</label>
         <button class="btn ${DSP.map ? "" : "quiet-btn"} dsp-mapbtn" type="button" id="dsp-map" aria-pressed="${!!DSP.map}">🗺 ${DSP.map ? "Hide map" : "Map"}</button>
+        <label class="dsp-hrs">Hours <select id="dsp-h0">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === (Number.isFinite(DSP.h0) ? DSP.h0 : 8) ? "selected" : ""}>${(h % 12 || 12) + (h < 12 ? " am" : " pm")}</option>`).join("")}</select>
+          to <select id="dsp-h1">${Array.from({ length: 24 }, (_, i) => i + 1).map(h => `<option value="${h}" ${h === (Number.isFinite(DSP.h1) ? DSP.h1 : 18) ? "selected" : ""}>${h === 24 ? "midnight" : (h % 12 || 12) + (h < 12 || h === 24 ? " am" : " pm")}</option>`).join("")}</select>
+          ${(Number.isFinite(DSP.h0) && DSP.h0 !== 8) || (Number.isFinite(DSP.h1) && DSP.h1 !== 18) ? `<button class="link dsp-hrs-reset" type="button" id="dsp-hrs-reset">8–6</button>` : ""}</label>
         <span class="dsp-ov" role="group" aria-label="Calls at the same time">Overlaps:
           ${[["auto", "Auto", "Up to 3 calls at once share the row as thin cards; 4 or more stack"], ["thin", "Thin", "Overlapping calls share the row as thinner cards"], ["stack", "Stack", "Overlapping calls stack with a +count; click to see them"], ["summary", "One card", "Overlapping calls become one card: 3 calls · 8–11 am"], ["expand", "Original", "The original board: the row gets taller for every call that overlaps"]].map(([k, t, tip]) =>
             `<button type="button" data-ov="${k}" aria-pressed="${(DSP.ov || "auto") === k}" title="${tip}">${t}</button>`).join("")}
@@ -4971,6 +4980,9 @@ function renderDispatch() {
   $("#dsp-all").addEventListener("change", e => { DSP.all = e.target.checked; saveDsp(); renderDispatch(); });
   $("#dsp-map").addEventListener("click", () => { DSP.map = !DSP.map; saveDspMap(); renderDispatch(); });
   $("#dsp-menu")?.addEventListener("click", () => { DSP.map = false; saveDspMap(); renderDispatch(); });
+  $("#dsp-h0")?.addEventListener("change", e => { DSP.h0 = Number(e.target.value); if ((DSP.h1 ?? 18) <= DSP.h0) DSP.h1 = Math.min(24, DSP.h0 + 1); saveDspMap(); renderDispatch(); });
+  $("#dsp-h1")?.addEventListener("change", e => { DSP.h1 = Number(e.target.value); if ((DSP.h0 ?? 8) >= DSP.h1) DSP.h0 = Math.max(0, DSP.h1 - 1); saveDspMap(); renderDispatch(); });
+  $("#dsp-hrs-reset")?.addEventListener("click", () => { DSP.h0 = 8; DSP.h1 = 18; saveDspMap(); renderDispatch(); });
   document.querySelectorAll("[data-ov]").forEach(b => b.addEventListener("click", () => { DSP.ov = b.dataset.ov; saveDspMap(); renderDispatch(); }));
   $("[data-ov-warn]")?.addEventListener("click", () => { DSP.ovWarn = DSP.ovWarn === false; saveDspMap(); renderDispatch(); });
   document.querySelectorAll(".dc-pile").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); openPile(b); }));
