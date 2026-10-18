@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.201131">
+<meta name="app-version" content="2026-10-17.201258">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1774,6 +1774,10 @@
   .dsp-map-body { display: grid; grid-template-columns: minmax(0, 1fr) 220px; height: 440px; } @media (max-width: 800px) { .dsp-map-body { grid-template-columns: 1fr; height: auto; } .dsp-map-canvas { height: 360px; } }
   .dsp-map-canvas { height: 100%; min-height: 300px; z-index: 0; }
   .dsp-map-legend { overflow: auto; padding: 10px 12px; border-left: 1px solid var(--line); font-size: calc(13.5px * var(--fs, 1)); }
+  .dm-cp { margin-left: auto; white-space: nowrap; font-size: calc(12.5px * var(--fs, 1)); }
+  .dm-clip { background: var(--ink); color: var(--paper); border-radius: 8px; padding: 6px 8px; margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .dm-clip .link { color: inherit; text-decoration: underline; }
+  .dm-sel { border: 1px solid var(--blue); border-radius: 8px; padding: 6px 8px; margin-bottom: 10px; }
   .dm-leg { display: flex; align-items: center; gap: 8px; margin: 4px 0; } .dm-dot { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0,0,0,.4); flex: none; }
   .mapc-t { width: 100%; border-collapse: collapse; } .mapc-t td, .mapc-t th { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; }
   .mapc-t input[data-mz-name] { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; width: 100%; max-width: 260px; box-sizing: border-box; }
@@ -3992,13 +3996,20 @@ function drawDspMap(fit) {
   const groups = new Map();
   list.forEach(({ r }) => {
     const { key, label, color } = dspKey(r);
-    const g = groups.get(key) || { label, color, n: 0 }; g.n++; groups.set(key, g);
+    const g = groups.get(key) || { key, label, color, n: 0 }; g.n++; groups.set(key, g);
   });
   const missing = list.filter(({ r }) => r.lat == null).length;
-  $("#dm-legend").innerHTML = `<strong>${DSP_BY_TITLE[DSP.colorBy || "hood"] || "Calls"}</strong>${[...groups.values()].sort((a, b) => b.n - a.n).map(g =>
-      `<div class="dm-leg"><span class="dm-dot" style="background:${esc(g.color)}"></span>${esc(g.label)} <span class="quiet">${g.n}</span></div>`).join("") || `<div class="quiet">No calls.</div>`}
+  const canPaint = (can("calls.dispatch") || ME.role === "owner") && ["hood", "zone", "town"].includes(DSP.colorBy || "hood");
+  const selR = DSP.sel ? list.find(x => x.r.visit_id === DSP.sel)?.r : null, selK = selR ? dspKey(selR) : null;
+  const cpBtns = k => canPaint && mapPaintTarget(k.key) ? `<span class="dm-cp">${k.color !== MAP_GREY ? `<button class="link" type="button" data-dm-copy="${esc(k.color)}" title="Copy this colour">Copy</button>` : ""}${MAPZ.clip ? ` <button class="link" type="button" data-dm-paste="${esc(k.key)}" title="Give this zone the copied colour (saved everywhere)">Paste</button>` : ""}</span>` : "";
+  $("#dm-legend").innerHTML = `${MAPZ.clip ? `<div class="dm-clip"><span class="dm-dot" style="background:${esc(MAPZ.clip)}"></span> Colour copied. Press Paste on a zone to give it this colour. <button class="link" type="button" id="dm-clip-x">✕ Done</button></div>` : ""}
+    ${selK ? `<div class="dm-sel"><span class="quiet">Selected call:</span> <b>${esc(selR.customer_name)}</b><div class="dm-leg"><span class="dm-dot" style="background:${esc(selK.color)}"></span>${esc(selK.label)} ${cpBtns(selK)}</div></div>` : ""}
+    <strong>${DSP_BY_TITLE[DSP.colorBy || "hood"] || "Calls"}</strong>${[...groups.values()].sort((a, b) => b.n - a.n).map(g =>
+      `<div class="dm-leg"><span class="dm-dot" style="background:${esc(g.color)}"></span>${esc(g.label)} <span class="quiet">${g.n}</span> ${cpBtns(g)}</div>`).join("") || `<div class="quiet">No calls.</div>`}
+    ${canPaint ? "" : (can("calls.dispatch") || ME.role === "owner") ? `<p class="quiet">Colour by Neighbourhood, Town or Postal code area to copy and paste zone colours here.</p>` : ""}
     ${(DSP.colorBy || "hood") === "hood" && !(MAPH.list || []).length ? `<p class="quiet">Neighbourhoods aren't loaded yet. ${can("calls.dispatch") || ME.role === "owner" ? "Press Map colours… to load them." : "Ask the office to load them."}</p>` : ""}
     ${DSP.colorBy === "zone" && (MAPZ.zones || []).length === 0 ? `<p class="quiet">No colours yet. ${can("calls.dispatch") || ME.role === "owner" ? "Press Map colours… to pick a colour for each postal code area." : "Ask the office to set up the map colours."}</p>` : ""}`;
+  wireMapPaint();
   const note = $("#dm-note"); if (note) note.textContent = missing ? `Finding ${missing} address${missing === 1 ? "" : "es"} on the map…` : "";
   if (missing) dspGeocode();
 }
@@ -4424,6 +4435,35 @@ function dspKey(r, by) {
   if (by === "priority") return { key: "r" + r.priority, label: { emergency: "Emergency", high: "High", normal: "Normal", low: "Low" }[r.priority] || r.priority, color: PRIO_COL[r.priority] || MAP_GREY };
   if (by === "unit") return { key: "u" + (r.business_unit || ""), label: r.business_unit || "No business unit", color: r.business_unit ? hashCol(r.business_unit) : MAP_GREY };
   return { key: "", label: "", color: MAP_GREY };
+}
+
+
+/* copy a zone's colour on the live map and paste it on another zone: saved for good, so the board, the map,
+   customer files and the Map colours page all change */
+function mapPaintTarget(key) {
+  const t = key[0], v = key.slice(1);
+  if (t === "h" && /^\d+$/.test(v)) return { kind: "hood", id: Number(v) };
+  if ((t === "z" || t === "p") && /^[A-Z][0-9][A-Z]?$/.test(v)) return { kind: "postal", prefix: v };
+  if (t === "t" && v) return { kind: "town", key: v };
+  return null;
+}
+async function mapPaint(key, color) {
+  const tg = mapPaintTarget(key); if (!tg) return;
+  let error;
+  if (tg.kind === "hood") ({ error } = await db.rpc("save_hood_colors", { p: [{ id: tg.id, color }] }));
+  else if (tg.kind === "town") ({ error } = await db.rpc("save_town_colours", { p: [{ key: tg.key, color }] }));
+  else { const z = (MAPZ.zones || []).find(x => x.prefix === tg.prefix);
+    ({ error } = await db.rpc("save_postal_zones", { p: [{ prefix: tg.prefix, name: z?.name || "", color }] })); }
+  if (error) { dspToast("Not saved: " + rpcErr(error)); return; }
+  await Promise.all([loadMapZones(true), loadHoods(true, !!MAPH.shapes), loadTowns(true)]);
+  MAPZ.draft = null; MAPH.draft = null; MAPT.draft = null;
+  renderDispatch();
+}
+function wireMapPaint() {
+  const lg = $("#dm-legend"); if (!lg) return;
+  lg.querySelectorAll("[data-dm-copy]").forEach(b => b.addEventListener("click", () => { MAPZ.clip = b.dataset.dmCopy; drawDspMap(); }));
+  lg.querySelectorAll("[data-dm-paste]").forEach(b => b.addEventListener("click", () => mapPaint(b.dataset.dmPaste, MAPZ.clip)));
+  $("#dm-clip-x")?.addEventListener("click", () => { MAPZ.clip = null; drawDspMap(); });
 }
 
 /* ---------------- Dispatch map page: the day's calls listed on the left, a big map on the right ---------------- */
