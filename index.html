@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-17.222833">
+<meta name="app-version" content="2026-10-17.223121">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -200,6 +200,7 @@
   body[data-page="search"] #search-page { display: block; }
   body[data-page="search"] #main { display: none; }
   .side-spacer { flex: 1; }
+  .zb-small { font-size: .82em; opacity: .8; font-weight: 500; } .zb-small .zb-link { font-weight: 500; }
   .ti-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(410px, 1fr)); gap: 8px 18px; margin: 8px 0 12px; }
   .ti-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
   .ti-prev { width: 32px; height: 32px; border-radius: 6px; flex: none; } .ti-name { flex: 1; font-weight: 650; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -4282,17 +4283,35 @@ function zoneOf2(l) {
 function isDark(hex) { const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || ""); if (!m) return false;
   const [r, g, b] = m.slice(1).map(x => { const c = parseInt(x, 16) / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.22; }
+// the address's town: what it says, or for plain "Ottawa" the old town most of its postal area writes (K2J -> Nepean)
+function placeTown(l) {
+  const t = townName(String(l.city || "").replace(/[\s,]*(on|ont|ontario)\.?$/i, "")).trim(), pc = pcKey(l.postal_code);
+  if (t && t.toLowerCase() !== "ottawa") return t;
+  return (MAPC.ptowns || {})[pc.slice(0, 4)] || (MAPC.ptowns || {})[pc.slice(0, 3)] || t;
+}
+// the bigger area a small community is part of (Half Moon Bay -> Barrhaven): the closest "suburb" place within 5 km
+function commArea(cm) {
+  if (!cm || cm.lat == null || ["suburb", "town", "city"].includes(cm.kind)) return null;
+  const A = MAPC.areaOf || (MAPC.areaOf = new Map()); if (A.has(cm.id)) return A.get(cm.id);
+  const la = Number(cm.lat), lo = Number(cm.lng), cx = Math.cos(la * Math.PI / 180); let best = null, bd = 25;
+  for (const c of MAPC.list || []) { if (c.kind !== "suburb" || c.lat == null || c.id === cm.id) continue;
+    const dy = (Number(c.lat) - la) * 110.57, dx = (Number(c.lng) - lo) * 111.32 * cx, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = c; } }
+  A.set(cm.id, best); return best;
+}
 // Section 1A: the zone bar (colour + town · neighbourhood · postal area + "how to find it" details)
 function zoneBar(l) {
   if (!l) return "";
   const z = zoneOf2(l), h = l.neighbourhood_id && MAPH.by ? MAPH.by.get(l.neighbourhood_id) : null, pz = zoneOf(l.postal_code), fsa = pcKey(l.postal_code).slice(0, 3);
   const cm = l.community_id && MAPC.by ? MAPC.by.get(l.community_id) : null;
-  const bits = [[l.city ? townName(l.city) : "", "towns", townKey(l.city)], [h ? h.name : "", "hoods", h ? h.name : ""], [cm ? cm.name : "", "comms", cm ? cm.name : ""],
-      [pz && pz.name && (!h || pz.name !== h.name) ? pz.name : "", "postal", pz ? pz.prefix : ""], [fsa, "postal", fsa]].filter(b => b[0])
-    .filter((x, i, a) => a.findIndex(y => y[0].toLowerCase() === x[0].toLowerCase()) === i);
+  // Town · area · community (Nepean · Barrhaven · Half Moon Bay), then the smaller print: city neighbourhood and postal area
+  const town = placeTown(l), ar = commArea(cm);
+  const uniq = a => a.filter(b => b[0]).filter((x, i, arr) => arr.findIndex(y => y[0].toLowerCase() === x[0].toLowerCase()) === i);
+  const bits = uniq([[town, "towns", townKey(town)], [ar ? ar.name : "", "comms", ar ? ar.name : ""], [cm ? cm.name : "", "comms", cm ? cm.name : ""], [!cm && h ? h.name : "", "hoods", h ? h.name : ""]]);
+  const small = uniq([[cm && h ? h.name : "", "hoods", h ? h.name : ""], [pz && pz.name && (!h || pz.name !== h.name) ? pz.name : "", "postal", pz ? pz.prefix : ""], [fsa, "postal", fsa]])
+    .filter(b => !bits.some(x => x[0].toLowerCase() === b[0].toLowerCase()));
   const editing = current?.tipsEdit === l.id;
   return `<div class="zone-bar" data-zone-loc="${l.id}">
-    <span class="zb-place">${bits.map(([t, tab, q]) => `<button class="zb-link" type="button" data-zb-tab="${tab}" data-zb-q="${esc(q)}" title="Pick the map colour for ${esc(t)}">${esc(t)}</button>`).join(" · ")}</span>
+    <span class="zb-place">${bits.map(([t, tab, q]) => `<button class="zb-link" type="button" data-zb-tab="${tab}" data-zb-q="${esc(q)}" title="Pick the map colour for ${esc(t)}">${esc(t)}</button>`).join(" · ")}${small.length ? `<span class="zb-small"> (${small.map(([t, tab, q]) => `<button class="zb-link" type="button" data-zb-tab="${tab}" data-zb-q="${esc(q)}" title="Pick the map colour for ${esc(t)}">${esc(t)}</button>`).join(" · ")})</span>` : ""}</span>
     ${editing ? `<form class="zb-form" id="zb-form"><input name="t" maxlength="500" value="${esc(l.find_tips || "")}" placeholder="e.g. middle house, green door, yellow garage" aria-label="Details to find the house">
         <button class="btn" type="submit">Save</button><button class="btn quiet-btn" type="button" id="zb-x">Cancel</button></form>`
       : `${l.find_tips ? `<span class="zb-tips">🏠 ${esc(l.find_tips)}</span>` : ""}<button class="link zb-edit" type="button" id="zb-edit">${l.find_tips ? "Change" : "+ Add details (green door, middle house…)"}</button>`}
@@ -4718,7 +4737,7 @@ async function loadComms(force) {
   if (MAPC.list && !force) return;
   const { data, error } = await db.rpc("community_list");
   if (error || !data) { MAPC.list = []; MAPC.by = new Map(); MAPC.info = {}; MAPC.err = error ? ((error.code === "PGRST202" || /could not find the function|does not exist/i.test(error.message || "")) ? "setup" : rpcErr(error)) : ""; return; }
-  MAPC.err = ""; MAPC.info = data; MAPC.list = data.communities; MAPC.by = new Map(MAPC.list.map(c => [c.id, c]));
+  MAPC.err = ""; MAPC.info = data; MAPC.ptowns = data.ptowns || {}; MAPC.areaOf = new Map(); MAPC.list = data.communities; MAPC.by = new Map(MAPC.list.map(c => [c.id, c]));
 }
 // OpenStreetMap's look-up servers: if one is busy, the next one is tried
 const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
@@ -4747,13 +4766,13 @@ async function commAssignAll(say) {
   await loadComms(true);
   if (MAPC.err) throw new Error(MAPC.err === "setup" ? "Run RUN SETUP NOW.bat first." : "Couldn't load the communities: " + MAPC.err);
   if (!MAPC.list.length) throw new Error("No communities yet. Press Find communities first.");
-  const C = MAPC.list.filter(c => !c.hidden && c.lat != null && c.kind !== "town").map(c => ({ id: c.id, lat: Number(c.lat), lng: Number(c.lng) }));
+  const C = MAPC.list.filter(c => !c.hidden && c.lat != null && c.kind !== "town").map(c => ({ id: c.id, lat: Number(c.lat), lng: Number(c.lng), big: c.kind === "suburb" }));
   let after = 0, all = [];
   for (;;) { const { data, error } = await db.rpc("located_addresses_any", { p_after: after, p_limit: 20000 }); if (error) throw new Error(rpcErr(error));
     if (!data.length) break; all = all.concat(data); after = data[data.length - 1].id; if (data.length < 20000) break; }
-  const pairs = all.map(a => { const la = Number(a.lat), lo = Number(a.lng), cx = Math.cos(la * Math.PI / 180); let best = null, bd = 25;   // within 5 km; farther ones go by postal code / town
-    for (const c of C) { const dy = (c.lat - la) * 110.57, dx = (c.lng - lo) * 111.32 * cx, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = c.id; } }
-    return [a.id, best]; });
+  const pairs = all.map(a => { const la = Number(a.lat), lo = Number(a.lng), cx = Math.cos(la * Math.PI / 180); let best = null, bd = 25, small = null, sd = 6.25;   // a small place (Half Moon Bay) within 2.5 km, else any place within 5 km; farther ones go by postal code / town
+    for (const c of C) { const dy = (c.lat - la) * 110.57, dx = (c.lng - lo) * 111.32 * cx, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = c.id; } if (!c.big && d < sd) { sd = d; small = c.id; } }
+    return [a.id, small || best]; });
   for (let i = 0; i < pairs.length; i += 2500) { const { error } = await db.rpc("set_location_communities", { p: pairs.slice(i, i + 2500) }); if (error) throw new Error(rpcErr(error));
     say(`Matching addresses to communities… ${Math.min(i + 2500, pairs.length).toLocaleString()} of ${pairs.length.toLocaleString()}`); }
   let done = 0;
