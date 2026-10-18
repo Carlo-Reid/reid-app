@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.200050">
+<meta name="app-version" content="2026-10-17.200618">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1753,7 +1753,9 @@
   .mapc-t input[type=color] { width: 44px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
   .mapc .cl-tools { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; overflow-x: auto; }
   .mapc-t { table-layout: fixed; min-width: 700px; }
-  .cp-cell { white-space: nowrap; } .cp-cell .link[disabled] { opacity: .35; cursor: default; }
+  .cp-cell { white-space: nowrap; }
+  .shade-btn { width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; font-weight: 800; line-height: 1; cursor: pointer; margin-right: 2px; }
+  .shade-btn:hover { border-color: var(--blue); } .cp-cell .link[disabled] { opacity: .35; cursor: default; }
   .cp-clip { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 40; background: var(--ink); color: var(--paper); padding: 8px 14px; border-radius: 999px; display: flex; gap: 10px; align-items: center; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
   .cp-clip .dm-dot { width: 18px; height: 18px; } .cp-clip button { color: inherit; text-decoration: underline; background: none; border: 0; font: inherit; cursor: pointer; }
   tr.cp-flash td { background: color-mix(in srgb, var(--green, #2e7d32) 18%, transparent); transition: background .3s; }
@@ -4004,12 +4006,15 @@ async function dspGeocode() {
 
 
 // The map zone an address is in: its neighbourhood (with that colour, or its postal area's) or its postal code area
+// An address's zone colour: exactly what its dot shows on the dispatch map (same "Colour by" choice);
+// when the map is coloured by something that isn't a place (tech, job type…), the neighbourhood / postal / town colour
 function zoneOf2(l) {
-  const h = l.neighbourhood_id && MAPH.by ? MAPH.by.get(l.neighbourhood_id) : null, z = zoneOf(l.postal_code), t = MAPT.by?.get(townKey(l.city));
-  if (h) return { name: h.name, color: h.color || z?.color || t?.color || null };
-  if (z) return { name: z.name ? `${z.name} (${z.prefix})` : z.prefix, color: z.color || t?.color || null };
-  if (t?.color) return { name: townName(l.city), color: t.color };
-  return null;
+  if (!l || (!l.city && !l.postal_code && !l.neighbourhood_id)) return null;
+  const h = l.neighbourhood_id && MAPH.by ? MAPH.by.get(l.neighbourhood_id) : null;
+  const r = { hood_id: l.neighbourhood_id || null, hood: h?.name || null, city: l.city, postal_code: l.postal_code, techs: [] };
+  const by = ["hood", "town", "zone"].includes(DSP.colorBy || "hood") ? (DSP.colorBy || "hood") : "hood";
+  const k = dspKey(r, by);
+  return { name: k.label, color: k.color && k.color !== MAP_GREY ? k.color : null };
 }
 // is a colour dark enough that white writing reads better on it?
 function isDark(hex) { const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || ""); if (!m) return false;
@@ -4119,7 +4124,7 @@ function renderHoodColours(msg) {
   const row = h => { const c = D.get(h.id);
     return `<tr data-hd="${h.id}"><td><strong>${esc(h.name)}</strong></td><td>${esc((h.fsas || []).join(", "))}</td><td class="r num">${h.n.toLocaleString()}</td>
       <td><label class="pb-check"><input type="checkbox" data-hd-on ${c ? "checked" : ""} ${ed ? "" : "disabled"}> Colour</label></td>
-      <td><input type="color" data-hd-color value="${esc(c || "#1f6fd1")}" ${ed && c ? "" : "disabled"} aria-label="Colour for ${esc(h.name)}"></td><td class="cp-cell">${ed ? `<button class="link" type="button" data-cp-copy title="Copy this colour">Copy</button> <button class="link" type="button" data-cp-paste title="Paste the copied colour here" ${MAPZ.clip ? "" : "disabled"}>Paste</button>` : ""}</td></tr>`; };
+      <td><input type="color" data-hd-color value="${esc(c || "#1f6fd1")}" ${ed && c ? "" : "disabled"} aria-label="Colour for ${esc(h.name)}"></td><td class="cp-cell">${ed ? `<button class="shade-btn" type="button" data-shade="-1" title="Darker" aria-label="Darker">−</button><button class="shade-btn" type="button" data-shade="1" title="Lighter" aria-label="Lighter">+</button> <button class="link" type="button" data-cp-copy title="Copy this colour">Copy</button> <button class="link" type="button" data-cp-paste title="Paste the copied colour here" ${MAPZ.clip ? "" : "disabled"}>Paste</button>` : ""}</td></tr>`; };
   const pct = info.total ? Math.round(100 * info.located / info.total) : 0;
   $("#main").innerHTML = `<article class="staff mapc">
     <div class="pos-head"><h1>Map colours</h1>${ed && list.length ? `<span><button class="btn" type="button" id="hd-save">Save</button></span>` : ""}</div>
@@ -4149,7 +4154,7 @@ function renderHoodColours(msg) {
     ${shown.length ? "" : `<div class="quiet">Nothing matches.</div>`}
     ${gl.map(([k, l]) => `<section class="cl-tools">${k ? `<strong>${V.group === "colour" && k.startsWith("#") ? `<span class="dm-dot" style="display:inline-block;vertical-align:-2px;background:${esc(k)}"></span> ${esc(l.slice(0, 3).map(h => h.name).join(", "))}${l.length > 3 ? "…" : ""}` : esc(k)}
         <span class="quiet">${l.length} neighbourhood${l.length === 1 ? "" : "s"} · ${l.reduce((t, h) => t + h.n, 0).toLocaleString()} addresses</span></strong>` : ""}
-      <table class="mapc-t hood-t"><colgroup><col><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:60px"><col style="width:110px"></colgroup>
+      <table class="mapc-t hood-t"><colgroup><col><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:60px"><col style="width:170px"></colgroup>
         <thead><tr><th>Neighbourhood</th><th>Postal codes</th><th class="r">Addresses</th><th></th><th>Colour</th><th></th></tr></thead><tbody>${l.map(row).join("")}</tbody></table></section>`).join("")}`}
   </article>`;
   $("#main").scrollTop = top;
@@ -4196,6 +4201,27 @@ function renderHoodColours(msg) {
   });
 }
 
+
+
+/* − / + on each colour: darker or lighter */
+function shadeHex(hex, step) {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || ""); if (!m) return hex;
+  let [r, g, b] = m.slice(1).map(x => parseInt(x, 16) / 255);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b); let h = 0, sat = 0, l = (mx + mn) / 2;
+  if (mx !== mn) { const d = mx - mn; sat = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; h /= 6; }
+  l = Math.min(0.95, Math.max(0.05, l + step * 0.08));
+  const f = (p, q, t) => { t = (t + 1) % 1; return t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p; };
+  const q = l < 0.5 ? l * (1 + sat) : l + sat - l * sat, p = 2 * l - q;
+  [r, g, b] = sat ? [f(p, q, h + 1 / 3), f(p, q, h), f(p, q, h - 1 / 3)] : [l, l, l];
+  return "#" + [r, g, b].map(x => Math.round(x * 255).toString(16).padStart(2, "0")).join("");
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-shade]"); if (!b || !b.closest(".mapc")) return;
+  const tr = b.closest("tr"), on = tr.querySelector("[data-mz-on], [data-hd-on], [data-tw-on]"), col = tr.querySelector("input[type=color]");
+  if (!on.checked) { on.checked = true; col.disabled = false; tr.querySelector("[data-mz-name]")?.removeAttribute("disabled"); }
+  col.value = shadeHex(col.value, Number(b.dataset.shade)); tr.dispatchEvent(new Event("change"));
+});
 
 /* copy a colour from one area / neighbourhood and paste it on others */
 function cpShowClip() {
@@ -4272,7 +4298,7 @@ function renderMapColours(msg) {
     return `<tr data-mz="${esc(prefix)}"><td><strong>${esc(prefix)}</strong></td><td>${esc(city || "")}</td><td class="r num">${n != null ? n.toLocaleString() : ""}</td>
       <td><label class="pb-check"><input type="checkbox" data-mz-on ${on ? "checked" : ""} ${ed ? "" : "disabled"}> Colour</label></td>
       <td><input type="color" data-mz-color value="${esc(on ? z.color : "#1f6fd1")}" ${ed && on ? "" : "disabled"} aria-label="Colour for ${esc(prefix)}"></td>
-      <td class="cp-cell">${ed ? `<button class="link" type="button" data-cp-copy title="Copy this colour">Copy</button> <button class="link" type="button" data-cp-paste title="Paste the copied colour here" ${MAPZ.clip ? "" : "disabled"}>Paste</button>` : ""}</td>
+      <td class="cp-cell">${ed ? `<button class="shade-btn" type="button" data-shade="-1" title="Darker" aria-label="Darker">−</button><button class="shade-btn" type="button" data-shade="1" title="Lighter" aria-label="Lighter">+</button> <button class="link" type="button" data-cp-copy title="Copy this colour">Copy</button> <button class="link" type="button" data-cp-paste title="Paste the copied colour here" ${MAPZ.clip ? "" : "disabled"}>Paste</button>` : ""}</td>
       <td><input data-mz-name maxlength="60" value="${esc(z?.name || "")}" placeholder="${esc(city || "Name (optional)")}" ${ed && on ? "" : "disabled"}></td></tr>`; };
   $("#main").innerHTML = `<article class="staff mapc">
     <div class="pos-head"><h1>Map colours</h1>${ed ? `<span><button class="btn" type="button" id="mz-save">Save</button></span>` : ""}</div>
@@ -4292,10 +4318,10 @@ function renderMapColours(msg) {
       <span class="quiet mapc-count">${shown.length} of ${areas.length} areas shown · ${coloured} coloured</span>
       ${V.q || V.show !== "all" || V.group !== "region" || V.sort !== "code" ? `<button class="link" type="button" id="mz-reset">Reset</button>` : ""}
     </section>
-    ${custom.length ? `<section class="cl-tools"><strong>Bigger areas and others</strong><table class="mapc-t"><colgroup><col style="width:70px"><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:60px"><col style="width:110px"><col></colgroup><tbody>${custom.map(z => row(z.prefix, null, "")).join("")}</tbody></table></section>` : ""}
+    ${custom.length ? `<section class="cl-tools"><strong>Bigger areas and others</strong><table class="mapc-t"><colgroup><col style="width:70px"><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:60px"><col style="width:170px"><col></colgroup><tbody>${custom.map(z => row(z.prefix, null, "")).join("")}</tbody></table></section>` : ""}
     ${shown.length ? "" : `<div class="quiet">No areas match. <button class="link" type="button" id="mz-reset2">Show all areas</button></div>`}
     ${groupOrder.map(([k, list]) => `<section class="cl-tools">${k ? `<strong>${V.group === "colour" && list[0] && colOf(list[0]) ? `<span class="dm-dot" style="display:inline-block;vertical-align:-2px;background:${esc(colOf(list[0]))}"></span> ` : ""}${esc(V.group === "colour" && k.startsWith("#") ? ([...new Set(list.map(a => D.get(a.fsa)?.name || a.city).filter(Boolean))].slice(0, 4).join(", ") || "Colour") : k)} <span class="quiet">${list.length} area${list.length === 1 ? "" : "s"} · ${gTotal(list).toLocaleString()} addresses</span></strong>` : ""}
-      <table class="mapc-t"><colgroup><col style="width:70px"><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:60px"><col style="width:110px"><col></colgroup><thead><tr><th>Area</th><th>Town</th><th class="r">Addresses</th><th></th><th>Colour</th><th></th><th>Name on the map</th></tr></thead>
+      <table class="mapc-t"><colgroup><col style="width:70px"><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:60px"><col style="width:170px"><col></colgroup><thead><tr><th>Area</th><th>Town</th><th class="r">Addresses</th><th></th><th>Colour</th><th></th><th>Name on the map</th></tr></thead>
       <tbody>${list.map(a => row(a.fsa, a.n, a.city)).join("")}</tbody></table></section>`).join("")}
   </article>`;
   $("#main").scrollTop = top;
@@ -4457,7 +4483,7 @@ function renderTownColours(msg) {
     return `<tr data-tw="${esc(t.key)}"><td><strong>${esc(t.name)}</strong></td><td>${esc((t.fsas || []).join(", "))}</td><td class="r num">${t.n.toLocaleString()}</td>
       <td><label class="pb-check"><input type="checkbox" data-tw-on ${c ? "checked" : ""} ${ed ? "" : "disabled"}> Colour</label></td>
       <td><input type="color" data-tw-color value="${esc(c || hashCol(t.key))}" ${ed && c ? "" : "disabled"} aria-label="Colour for ${esc(t.name)}"></td>
-      <td class="cp-cell">${ed ? `<button class="link" type="button" data-cp-copy>Copy</button> <button class="link" type="button" data-cp-paste ${MAPZ.clip ? "" : "disabled"}>Paste</button>` : ""}</td></tr>`; };
+      <td class="cp-cell">${ed ? `<button class="shade-btn" type="button" data-shade="-1" title="Darker" aria-label="Darker">−</button><button class="shade-btn" type="button" data-shade="1" title="Lighter" aria-label="Lighter">+</button> <button class="link" type="button" data-cp-copy>Copy</button> <button class="link" type="button" data-cp-paste ${MAPZ.clip ? "" : "disabled"}>Paste</button>` : ""}</td></tr>`; };
   $("#main").innerHTML = `<article class="staff mapc">
     <div class="pos-head"><h1>Map colours</h1>${ed ? `<span><button class="btn" type="button" id="tw-save">Save</button></span>` : ""}</div>
     <p class="lead">Colour the dispatch map by town: Nepean, Ottawa, Kanata, Orleans… Towns without a colour get an automatic one on the map until you pick one.</p>
@@ -4474,7 +4500,7 @@ function renderTownColours(msg) {
       <span class="quiet mapc-count">${shown.length} of ${list.length} towns shown · ${list.filter(t => D.get(t.key)).length} coloured</span>
     </section>
     ${[...groups.entries()].map(([k, l]) => `<section class="cl-tools">${k ? `<strong>${k.startsWith("#") ? `<span class="dm-dot" style="display:inline-block;vertical-align:-2px;background:${esc(k)}"></span> ${esc(l.slice(0, 3).map(t => t.name).join(", "))}` : esc(k)} <span class="quiet">${l.length} towns</span></strong>` : ""}
-      <table class="mapc-t"><colgroup><col><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:60px"><col style="width:110px"></colgroup>
+      <table class="mapc-t"><colgroup><col><col style="width:150px"><col style="width:90px"><col style="width:100px"><col style="width:60px"><col style="width:170px"></colgroup>
       <thead><tr><th>Town</th><th>Postal codes</th><th class="r">Addresses</th><th></th><th>Colour</th><th></th></tr></thead><tbody>${l.map(row).join("")}</tbody></table></section>`).join("") || `<div class="quiet">Nothing matches.</div>`}
   </article>`;
   $("#main").scrollTop = top;
