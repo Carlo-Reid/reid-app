@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-17.223743">
+<meta name="app-version" content="2026-10-17.224135">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -200,6 +200,10 @@
   body[data-page="search"] #search-page { display: block; }
   body[data-page="search"] #main { display: none; }
   .side-spacer { flex: 1; }
+  .pb-grip { cursor: grab; color: var(--muted, #8a94a0); font-size: 13px; padding: 0 2px 0 0; user-select: none; }
+  .pb-cat[draggable="true"]:hover .pb-grip { color: var(--ink); }
+  .pb-cat.pb-dragging { opacity: .45; }
+  .pb-cat.pb-drop-before { box-shadow: inset 0 3px 0 #1f6fd1; } .pb-cat.pb-drop-after { box-shadow: inset 0 -3px 0 #1f6fd1; }
   .zb-small { font-size: .82em; opacity: .8; font-weight: 500; } .zb-small .zb-link { font-weight: 500; }
   .ti-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(410px, 1fr)); gap: 8px 18px; margin: 8px 0 12px; }
   .ti-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
@@ -7931,7 +7935,7 @@ function pbCatTree(edit) {
   const node = (c, d) => {
     if (!c.active && PB.cat !== c.id && !PB.showRetiredCats) return "";
     const kids = c.kids.filter(k => k.active || PB.cat === k.id || PB.showRetiredCats), open = PB.open.has(c.id);
-    return `<li><div class="pb-cat ${PB.cat === c.id ? "cur" : ""} ${c.active ? "" : "pb-cat-old"}">${kids.length
+    return `<li><div class="pb-cat ${PB.cat === c.id ? "cur" : ""} ${c.active ? "" : "pb-cat-old"}" ${edit ? `draggable="true" data-pb-drag="${c.id}" title="Drag up or down to change the order"` : ""}>${edit ? `<span class="pb-grip" aria-hidden="true">⠿</span>` : ""}${kids.length
         ? `<button class="pb-tw" type="button" data-pb-tw="${c.id}" aria-expanded="${open}" aria-label="${open ? "Close" : "Open"} ${esc(c.name)}">${open ? "▾" : "▸"}</button>` : `<span class="pb-tw"></span>`}
       <button class="pb-catbtn" type="button" data-pb-cat="${c.id}">${esc(c.name)}${c.total ? ` <span class="quiet">${c.total}</span>` : ""}</button></div>
       ${open && kids.length ? `<ul>${kids.map(k => node(k, d + 1)).join("")}</ul>` : ""}</li>`;
@@ -7946,7 +7950,7 @@ function pbCatTree(edit) {
           ${f.mode === "rename" ? `<label>Inside<select name="par"><option value="">Top level (not inside another)</option>${pbCatOptions(cur?.id)}</select></label>` : ""}
           <span><button class="btn" type="submit">Save</button> <button class="link" type="button" id="pb-catcancel">Cancel</button></span><span class="staff-msg err" id="pb-catmsg" role="status"></span></form>`
         : `<button class="link" type="button" data-pb-catnew="">+ New category</button>${cur ? `<button class="link" type="button" data-pb-catnew="${cur.id}">+ New one inside ${esc(cur.name)}</button>` : ""}
-          ${cur ? `<button class="link" type="button" id="pb-catren">Edit (name or where it sits)</button><button class="link" type="button" id="pb-catret">${cur.active ? "Retire" : "Bring back"}</button><button class="link danger" type="button" id="pb-catretall">${cur.active ? "Retire with all its items" : "Bring back with all its items"}</button>` : ""}
+          ${cur ? `<button class="link" type="button" data-pb-move="-1" title="Move ${esc(cur.name)} up">↑ Up</button><button class="link" type="button" data-pb-move="1" title="Move ${esc(cur.name)} down">↓ Down</button><button class="link" type="button" id="pb-catren">Edit (name or where it sits)</button><button class="link" type="button" id="pb-catret">${cur.active ? "Retire" : "Bring back"}</button><button class="link danger" type="button" id="pb-catretall">${cur.active ? "Retire with all its items" : "Bring back with all its items"}</button>` : ""}
           <button class="link" type="button" id="pb-catold">${PB.showRetiredCats ? "Hide" : "Show"} retired</button>`}</div>` : ""}
     ${PB.cats.length ? `<ul class="pb-tree"><li><div class="pb-cat ${PB.cat == null ? "cur" : ""}"><span class="pb-tw"></span><button class="pb-catbtn" type="button" data-pb-cat="">All categories</button></div></li>
       ${PB.catTop.map(c => node(c, 0)).join("")}</ul>` : `<p class="quiet">No categories yet.</p>`}
@@ -8154,6 +8158,30 @@ function renderPricebook(msg) {
     reload();
   }));
   $("#pb-catold")?.addEventListener("click", () => { PB.showRetiredCats = !PB.showRetiredCats; renderPricebook(); });
+  // change the order: drag a category up or down among the ones next to it (or ↑ Up / ↓ Down)
+  const sibsOf = id => { const c = PB.catBy.get(id); return c.parent_id && PB.catBy.has(c.parent_id) ? PB.catBy.get(c.parent_id).kids : PB.catTop; };
+  const saveOrder = async (sibs, movedName) => {
+    sibs.forEach((c, i) => { c.sort_order = (i + 1) * 10; const raw = PB.cats.find(x => x.id === c.id); if (raw) raw.sort_order = c.sort_order; });
+    renderPricebook();
+    const { error } = await db.rpc("set_pb_category_order", { p_ids: sibs.map(c => c.id) });
+    if (error) { alertMsg("Order not saved: " + rpcErr(error)); await loadPbCats(); renderPricebook(); }
+    else if (movedName) alertMsg(`Moved ${movedName}. The Print book uses this order too.`);
+  };
+  const moveTo = (id, targetId, after) => { if (id === targetId) return; const sibs = sibsOf(id); if (!sibs.some(c => c.id === targetId)) { alertMsg("Drag it next to a category in the same group. To put it inside another category, use Edit (where it sits)."); return; }
+    const me = sibs.find(c => c.id === id); sibs.splice(sibs.indexOf(me), 1); sibs.splice(sibs.findIndex(c => c.id === targetId) + (after ? 1 : 0), 0, me); saveOrder(sibs, me.name); };
+  document.querySelectorAll("[data-pb-move]").forEach(b => b.addEventListener("click", () => { const id = PB.cat, sibs = sibsOf(id), vis = sibs.filter(c => c.active || PB.showRetiredCats || c.id === id), i = vis.findIndex(c => c.id === id), j = i + Number(b.dataset.pbMove);
+    if (j < 0 || j >= vis.length) return; moveTo(id, vis[j].id, Number(b.dataset.pbMove) > 0); }));
+  let dragId = null;
+  document.querySelectorAll("[data-pb-drag]").forEach(d => {
+    d.addEventListener("dragstart", e => { dragId = Number(d.dataset.pbDrag); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", String(dragId)); } catch {} d.classList.add("pb-dragging"); });
+    d.addEventListener("dragend", () => { dragId = null; document.querySelectorAll(".pb-dragging, .pb-drop-before, .pb-drop-after").forEach(x => x.classList.remove("pb-dragging", "pb-drop-before", "pb-drop-after")); });
+    d.addEventListener("dragover", e => { if (dragId == null) return; const t = Number(d.dataset.pbDrag); if (t === dragId || !sibsOf(dragId).some(c => c.id === t)) return;
+      e.preventDefault(); const r = d.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+      d.classList.toggle("pb-drop-after", after); d.classList.toggle("pb-drop-before", !after); });
+    d.addEventListener("dragleave", () => d.classList.remove("pb-drop-before", "pb-drop-after"));
+    d.addEventListener("drop", e => { e.preventDefault(); const after = d.classList.contains("pb-drop-after"), t = Number(d.dataset.pbDrag), id = dragId;
+      d.classList.remove("pb-drop-before", "pb-drop-after"); if (id != null) moveTo(id, t, after); });
+  });
   // find a category by typing
   { const q = $("#pb-catq"), res = $("#pb-catres"); let hits = [], pick = 0;
     const show = () => {
