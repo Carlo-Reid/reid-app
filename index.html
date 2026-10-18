@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-17.225720">
+<meta name="app-version" content="2026-10-18.133801">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -205,6 +205,7 @@
   .pb-cat-pw { margin-left: auto; border: 0; background: none; color: #c92a2a; font-size: 14px; padding: 0 6px; cursor: pointer; opacity: 0; border-radius: 6px; white-space: nowrap; }
   .pb-cat:hover .pb-cat-pw, .pb-cat-pw:focus, .pb-cat-pw.sure { opacity: 1; } .pb-cat-pw.off { color: #2b8a3e; }
   .pb-cat-pw.sure { background: #c92a2a; color: #fff; font-size: 12px; font-weight: 700; padding: 2px 6px; } .pb-cat-pw.off.sure { background: #2b8a3e; }
+  .pb-order { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; font-size: 13px; }
   .pb-grip { cursor: grab; color: var(--muted, #8a94a0); font-size: 13px; padding: 0 2px 0 0; user-select: none; }
   .pb-cat[draggable="true"]:hover .pb-grip { color: var(--ink); }
   .pb-cat.pb-dragging { opacity: .45; }
@@ -7106,13 +7107,30 @@ const PB_EQ_GROUPS = [[9, /mini[- ]?split|ductless|single zone|multi[- ]?zone|ca
   [7, /\bhrv\b|\berv\b|pureair|purifier|air clean|\buv\b|filter|media/i, "Air quality"], [8, /thermostat|t-?stat/i, "Thermostats"],
   [10, /fireplace|insert/i, "Fireplaces"]];
 const pbEqGroup = n => { for (const [r, re, t] of PB_EQ_GROUPS) if (re.test(n || "")) return [r, t]; return [11, "Everything else"]; };
-const pbGroupHead = (rows, i, cols) => { if (PB.type !== "equipment") return ""; const g = pbEqGroup(rows[i].name)[1];
+// PB 8 follows the order of the categories in PB 6: each item sits under the first category it's in (top to bottom),
+// most-used first inside each category. "Most used" puts everything back in one list.
+function pbCatOrdered(rows) {
+  if (PB.order === "used" || !(PB.catTop || []).length) return rows;
+  const rank = new Map(); let n = 0; const walk = c => { rank.set(c.id, n++); c.kids.forEach(walk); };
+  if (PB.cat && PB.catBy.has(PB.cat)) walk(PB.catBy.get(PB.cat)); else PB.catTop.forEach(walk);
+  rows.forEach((r, i) => { r._i = i; const ids = (r.category_ids || []).filter(id => rank.has(id)).sort((a, b) => rank.get(a) - rank.get(b)); r._home = ids.length ? ids[0] : null; });
+  return [...rows].sort((a, b) => (a._home == null ? 1e9 : rank.get(a._home)) - (b._home == null ? 1e9 : rank.get(b._home)) || a._i - b._i);
+}
+const pbHomeName = id => { if (id == null) return "Not in a category here"; const full = pbCatPath(id), base = PB.cat && id !== PB.cat ? pbCatPath(PB.cat) + " › " : "";
+  return base && full.startsWith(base) ? full.slice(base.length) : full; };
+const pbGroupHead = (rows, i, cols) => {
+  if (PB.order !== "used" && (PB.catTop || []).length && "_home" in rows[i]) {
+    if (i && rows[i - 1]._home === rows[i]._home) return "";
+    let k = i; while (k < rows.length && rows[k]._home === rows[i]._home) k++;
+    const t = `${esc(pbHomeName(rows[i]._home))} <span class="quiet">${k - i}</span>`;
+    return cols ? `<tr class="pb-grouprow"><td colspan="${cols}">${t}</td></tr>` : `<h3 class="pb-grouphead">${t}</h3>`; }
+  if (PB.type !== "equipment") return ""; const g = pbEqGroup(rows[i].name)[1];
   if (i && pbEqGroup(rows[i - 1].name)[1] === g) return "";
   return cols ? `<tr class="pb-grouprow"><td colspan="${cols}">${esc(g)}</td></tr>` : `<h3 class="pb-grouphead">${esc(g)}</h3>`; };
 const PB_TYPE_NAME = { service: "Service", material: "Material", equipment: "Equipment", fee: "Fee", labour: "Labour", warranty: "Warranty", plan: "Plan", monitoring: "Monitoring" };
 const PB_FLAGS = [["", "All"], ["off_rule", "Off the markup rule"], ["member", "Member price"], ["kits", "Add-on kits"], ["no_picture", "No picture"], ["no_category", "No category"]];
 let PB = { q: "", type: "all", active: "true", sel: null, picked: new Set(), view: "list", cat: null, flag: "", open: new Set(), thumbs: new Map(), photos: new Map(), showPricing: false };
-try { PB.view = localStorage.getItem("pb_view") === "pics" ? "pics" : "list"; } catch (e) {}
+try { PB.view = localStorage.getItem("pb_view") === "pics" ? "pics" : "list"; PB.order = localStorage.getItem("pb_order") === "used" ? "used" : "cat"; } catch (e) {}
 const pbMargin = r => Number(r.unit_price) > 0 ? Math.round((1 - Number(r.unit_cost) / Number(r.unit_price)) * 100) : null;
 const pbUnit = u => !u || ["each", "1", "ea"].includes(u.trim().toLowerCase()) ? "" : u.trim();
 const pbName = n => String(n || "").replace(/\\CR/gi, " · ").replace(/\s{2,}/g, " ");
@@ -8138,7 +8156,7 @@ function renderPricebook(msg) {
   PB.itemPage = null;
   PB.catScroll = document.querySelector(".pb-cats")?.scrollTop ?? PB.catScroll ?? 0;
   const typed = PB.qFocus ? $("#pb-q")?.value : null;
-  const rows = PB.rows || [], total = rows.length ? Number(rows[0].total_count) : 0, edit = can("pricebook.edit"), top = $("#main").scrollTop;
+  const rows = pbCatOrdered(PB.rows || []), total = rows.length ? Number(rows[0].total_count) : 0, edit = can("pricebook.edit"), top = $("#main").scrollTop;
   const pics = PB.view === "pics", catName = PB.cat ? pbCatPath(PB.cat) : "";
   $("#main").innerHTML = `<article class="staff pb">
     <div class="pos-head"><h1>Price book</h1><span>
@@ -8149,7 +8167,7 @@ function renderPricebook(msg) {
       ${can("pricebook.edit") && can("staff.manage") ? `<button class="btn quiet-btn" type="button" id="pb-books">Price books</button>` : ""}
       <button class="btn quiet-btn" type="button" id="pb-print">Print book</button>
       ${edit ? `<button class="btn" type="button" id="pb-new">+ New item</button>` : ""}</span></div>
-    <p class="lead">Services, parts and equipment with their prices. The items used most in the last year come first.</p>
+    <p class="lead">Services, parts and equipment with their prices, in the same order as the categories on the left (most used first inside each).</p>
     ${(PB.books || []).length && can("pricebook.edit") ? `<div class="pbb-view"><label>Show the price book as <select id="pb-viewas"><option value="">Normal (everything, sell prices)</option>
         ${PB.books.map(b => `<option value="${b.id}" ${String(PB.viewBook ?? "") === String(b.id) ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>
         ${PB.viewBook != null ? `<span class="pbb-tag">Showing ${esc((PB.books.find(b => b.id === PB.viewBook) || {}).name || "")}: its items and prices</span>` : ""}</div>`
@@ -8172,6 +8190,7 @@ function renderPricebook(msg) {
       ${pbCatTree(edit)}
       <div class="pb-main">
         <div class="ow-sortbar"><strong>${total.toLocaleString()} ${total === 1 ? "item" : "items"}${catName ? ` in ${esc(catName)}` : ""}</strong>${total > rows.length ? `<span class="quiet">showing the first ${rows.length}: search to narrow it down</span>` : ""}
+          <span class="pb-order" role="group" aria-label="Order">Order ${[["cat", "Category order"], ["used", "Most used"]].map(([k, t]) => `<button class="chip small" type="button" data-pb-order="${k}" aria-pressed="${(PB.order || "cat") === k}" title="${k === "cat" ? "Same order as the categories on the left (drag them there to change it)" : "The items used most in the last year first"}">${t}</button>`).join("")}</span>
           ${edit && rows.length ? `<label class="pb-allpick"><input type="checkbox" id="pb-all" ${PB.picked.size && PB.picked.size === rows.length ? "checked" : ""}> Pick all shown</label>` : ""}
           <span class="staff-msg ok" role="status">${msg ? esc(msg) : ""}</span></div>
         ${edit && PB.picked.size ? `<div class="pb-bulk">
@@ -8218,6 +8237,7 @@ function renderPricebook(msg) {
   document.querySelectorAll("[data-pb-type]").forEach(b => b.addEventListener("click", () => { PB.type = b.dataset.pbType; reload(); }));
   document.querySelectorAll("[data-pb-active]").forEach(b => b.addEventListener("click", () => { PB.active = b.dataset.pbActive; reload(); }));
   document.querySelectorAll("[data-pb-flag]").forEach(b => b.addEventListener("click", () => { if (b.dataset.pbFlag === "kits") return openAddonKits(); PB.flag = b.dataset.pbFlag; reload(); }));
+  document.querySelectorAll("[data-pb-order]").forEach(b => b.addEventListener("click", () => { PB.order = b.dataset.pbOrder; try { localStorage.setItem("pb_order", PB.order); } catch (e) {} renderPricebook(); }));
   document.querySelectorAll("[data-pb-view]").forEach(b => b.addEventListener("click", () => { PB.view = b.dataset.pbView; try { localStorage.setItem("pb_view", PB.view); } catch (e) {} renderPricebook(); }));
   // categories
   $(".pb-cats").addEventListener("toggle", e => { PB.catsOpen = e.target.open; });
