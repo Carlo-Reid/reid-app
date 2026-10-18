@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-<meta name="app-version" content="2026-10-17.204943">
+<meta name="app-version" content="2026-10-17.205317">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1330,7 +1330,10 @@
   @media (max-width: 860px) { .dsp { padding: 14px 12px 32px; } .dcol { flex-basis: 78vw; max-height: none; } }
   /* timeline: hours across the top, one row per tech, each call under its arrival time */
   .dsp-board { --name-w: 150px; --any-w: 150px; --lane-h: 62px; overflow-x: auto; display: block !important; padding-bottom: 6px; }
-  .tl-head, .tl-row { display: grid !important; grid-template-columns: var(--name-w) var(--any-w) minmax(900px, 1fr); }
+  .tl-head, .tl-row { display: grid !important; grid-template-columns: var(--name-w) var(--any-w) var(--track-w, minmax(900px, 1fr)); width: max-content; min-width: 100%; }
+  .tl-any, .tl-any-head { position: sticky !important; left: var(--name-w); z-index: 2; background: inherit; }
+  .tl-head .tl-any-head { background: var(--paper); left: var(--name-w) !important; position: sticky !important; z-index: 3; } .tl-head .tl-corner { z-index: 4; }
+  .tl-row > .tl-any { background: var(--panel); } .tl-row.none > .tl-any { background: color-mix(in srgb, var(--red) 5%, var(--panel)); }
   .tl-head { position: sticky; top: 0; z-index: 4; background: var(--paper); border-bottom: 2px solid var(--box-edge, var(--line)); }
   .tl-corner, .tl-any-head { font-size: calc(12px * var(--fs, 1)); font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--steel); padding: 8px 10px; position: sticky; left: 0; background: var(--paper); z-index: 2; }
   .tl-any-head { position: static; }
@@ -4775,9 +4778,8 @@ function dspCard(r, from) {
 // The timeline: hours across the top; each call sits under its arrival time and spans its arrival window.
 const hourOf = iso => { const d = new Date(iso); return d.getHours() + d.getMinutes() / 60; };
 function dspTimeline(rows, techs, none, colOf, mins, isToday) {
-  // the hours shown: 8 am to 6 pm unless changed (DSP.h0 / DSP.h1); calls outside sit at the edge
-  let h0 = Number.isFinite(DSP.h0) ? DSP.h0 : 8, h1 = Number.isFinite(DSP.h1) ? DSP.h1 : 18;
-  if (h1 <= h0) h1 = Math.min(24, h0 + 1);
+  // the whole day is on the board; the screen is sized to show 7 am – 6 pm (DSP.h0 / DSP.h1) and you scroll for the rest
+  const h0 = 0, h1 = 24;
   const span = h1 - h0, pct = h => ((h - h0) / span * 100).toFixed(3) + "%";
   const hours = Array.from({ length: span }, (_, i) => h0 + i);
   const label = h => (h % 12 || 12) + (h < 12 ? " am" : " pm");
@@ -4893,6 +4895,25 @@ async function drawTechRoute(L) {
   wireRouteX();
 }
 function wireRouteX() { $("#dm-route-x")?.addEventListener("click", () => { DSP.techSel = null; renderDispatch(); }); }
+
+// size the timeline so the chosen hours (7 am – 6 pm) fill the screen, and start there; scroll sideways for the rest of the day
+function dspFitHours(keep) {
+  const bd = $("#dsp-board"); if (!bd) return;
+  const a = Number.isFinite(DSP.h0) ? DSP.h0 : 7, z = Number.isFinite(DSP.h1) && DSP.h1 > a ? DSP.h1 : Math.max(a + 1, 18);
+  const cs = getComputedStyle(bd), fixed = parseFloat(cs.getPropertyValue("--name-w")) + parseFloat(cs.getPropertyValue("--any-w"));
+  const vis = Math.max(300, bd.clientWidth - fixed - 4), track = Math.round(vis * 24 / (z - a));
+  bd.style.setProperty("--track-w", track + "px");
+  const key = DSP.date + ":" + a + "-" + z;
+  if (DSP.fitFor !== key) { DSP.fitFor = key; bd.scrollLeft = Math.round(track * a / 24); } else bd.scrollLeft = keep;
+  if (!DSP.fitObs && window.ResizeObserver) {
+    let w = bd.clientWidth;
+    DSP.fitObs = new ResizeObserver(() => { const b2 = $("#dsp-board"); if (!b2 || Math.abs(b2.clientWidth - w) < 4) return; w = b2.clientWidth;
+      const a2 = Number.isFinite(DSP.h0) ? DSP.h0 : 7, z2 = Number.isFinite(DSP.h1) && DSP.h1 > a2 ? DSP.h1 : 18, c2 = getComputedStyle(b2);
+      const t2 = Math.round(Math.max(300, w - parseFloat(c2.getPropertyValue("--name-w")) - parseFloat(c2.getPropertyValue("--any-w")) - 4) * 24 / (z2 - a2));
+      b2.style.setProperty("--track-w", t2 + "px"); b2.scrollLeft = Math.round(t2 * a2 / 24); });
+  }
+  if (DSP.fitObs) { DSP.fitObs.disconnect(); DSP.fitObs.observe(bd); }
+}
 // a stack / summary card opens a small list of its calls (click one for its details, or drag it to another tech)
 function openPile(btn) {
   closePile();
@@ -4952,9 +4973,9 @@ function renderDispatch() {
       <div class="dsp-sum quiet">${callsWord(rows.length)}${none.length ? ` · <span class="owe">${none.length} without a tech</span>` : ""}${cancelled ? ` · ${cancelled} cancelled` : ""}
         <label class="dsp-all"><input type="checkbox" id="dsp-all" ${DSP.all ? "checked" : ""}> Show every tech</label>
         <button class="btn ${DSP.map ? "" : "quiet-btn"} dsp-mapbtn" type="button" id="dsp-map" aria-pressed="${!!DSP.map}">🗺 ${DSP.map ? "Hide map" : "Map"}</button>
-        <label class="dsp-hrs">Hours <select id="dsp-h0">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === (Number.isFinite(DSP.h0) ? DSP.h0 : 8) ? "selected" : ""}>${(h % 12 || 12) + (h < 12 ? " am" : " pm")}</option>`).join("")}</select>
+        <label class="dsp-hrs" title="The board fits these hours on screen; scroll sideways to see earlier or later">Fit <select id="dsp-h0">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === (Number.isFinite(DSP.h0) ? DSP.h0 : 7) ? "selected" : ""}>${(h % 12 || 12) + (h < 12 ? " am" : " pm")}</option>`).join("")}</select>
           to <select id="dsp-h1">${Array.from({ length: 24 }, (_, i) => i + 1).map(h => `<option value="${h}" ${h === (Number.isFinite(DSP.h1) ? DSP.h1 : 18) ? "selected" : ""}>${h === 24 ? "midnight" : (h % 12 || 12) + (h < 12 || h === 24 ? " am" : " pm")}</option>`).join("")}</select>
-          ${(Number.isFinite(DSP.h0) && DSP.h0 !== 8) || (Number.isFinite(DSP.h1) && DSP.h1 !== 18) ? `<button class="link dsp-hrs-reset" type="button" id="dsp-hrs-reset">8–6</button>` : ""}</label>
+          ${(Number.isFinite(DSP.h0) && DSP.h0 !== 7) || (Number.isFinite(DSP.h1) && DSP.h1 !== 18) ? `<button class="link dsp-hrs-reset" type="button" id="dsp-hrs-reset">7–6</button>` : ""}</label>
         <span class="dsp-ov" role="group" aria-label="Calls at the same time">Overlaps:
           ${[["auto", "Auto", "Up to 3 calls at once share the row as thin cards; 4 or more stack"], ["thin", "Thin", "Overlapping calls share the row as thinner cards"], ["stack", "Stack", "Overlapping calls stack with a +count; click to see them"], ["summary", "One card", "Overlapping calls become one card: 3 calls · 8–11 am"], ["expand", "Original", "The original board: the row gets taller for every call that overlaps"]].map(([k, t, tip]) =>
             `<button type="button" data-ov="${k}" aria-pressed="${(DSP.ov || "auto") === k}" title="${tip}">${t}</button>`).join("")}
@@ -4971,7 +4992,7 @@ function renderDispatch() {
       <aside class="dsp-panel ${DSP.sel ? "" : "hidden"}" id="dsp-panel" aria-label="Call details"></aside>
     </div>
   ${DSP.map ? `</div><div id="dsp-map-slot"></div>` : ""}</article>`;
-  $("#dsp-board").scrollLeft = scroll;
+  dspFitHours(scroll);
   if (DSP.sel && dspCall(DSP.sel)) renderDspPanel(); else DSP.sel = null;
   document.querySelectorAll("[data-dday]").forEach(b => b.addEventListener("click", () => { DSP.date = ymd(addDays(new Date(DSP.date + "T12:00:00"), Number(b.dataset.dday))); DSP.sel = null; loadDispatch(); }));
   $("[data-dtoday]")?.addEventListener("click", () => { DSP.date = ymd(new Date()); DSP.sel = null; loadDispatch(); });
@@ -4979,9 +5000,9 @@ function renderDispatch() {
   $("#dsp-all").addEventListener("change", e => { DSP.all = e.target.checked; saveDsp(); renderDispatch(); });
   $("#dsp-map").addEventListener("click", () => { DSP.map = !DSP.map; saveDspMap(); renderDispatch(); });
   $("#dsp-menu")?.addEventListener("click", () => { DSP.map = false; saveDspMap(); renderDispatch(); });
-  $("#dsp-h0")?.addEventListener("change", e => { DSP.h0 = Number(e.target.value); if ((DSP.h1 ?? 18) <= DSP.h0) DSP.h1 = Math.min(24, DSP.h0 + 1); saveDspMap(); renderDispatch(); });
-  $("#dsp-h1")?.addEventListener("change", e => { DSP.h1 = Number(e.target.value); if ((DSP.h0 ?? 8) >= DSP.h1) DSP.h0 = Math.max(0, DSP.h1 - 1); saveDspMap(); renderDispatch(); });
-  $("#dsp-hrs-reset")?.addEventListener("click", () => { DSP.h0 = 8; DSP.h1 = 18; saveDspMap(); renderDispatch(); });
+  $("#dsp-h0")?.addEventListener("change", e => { DSP.h0 = Number(e.target.value); if ((DSP.h1 ?? 18) <= DSP.h0) DSP.h1 = Math.min(24, DSP.h0 + 1); DSP.fitFor = null; saveDspMap(); renderDispatch(); });
+  $("#dsp-h1")?.addEventListener("change", e => { DSP.h1 = Number(e.target.value); if ((DSP.h0 ?? 7) >= DSP.h1) DSP.h0 = Math.max(0, DSP.h1 - 1); DSP.fitFor = null; saveDspMap(); renderDispatch(); });
+  $("#dsp-hrs-reset")?.addEventListener("click", () => { DSP.h0 = 7; DSP.h1 = 18; DSP.fitFor = null; saveDspMap(); renderDispatch(); });
   document.querySelectorAll("[data-ov]").forEach(b => b.addEventListener("click", () => { DSP.ov = b.dataset.ov; saveDspMap(); renderDispatch(); }));
   $("[data-ov-warn]")?.addEventListener("click", () => { DSP.ovWarn = DSP.ovWarn === false; saveDspMap(); renderDispatch(); });
   document.querySelectorAll(".dc-pile").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); openPile(b); }));
