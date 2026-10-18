@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-17.221753">
+<meta name="app-version" content="2026-10-17.222432">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -4184,7 +4184,7 @@ function drawDspMap(fit) {
   }
   if (DSP.mapCNames && MAPC.list) {   // community names on the map
     const z = DSP.lmap.getZoom(), b = DSP.lmap.getBounds().pad(0.2), used = new Set(list.map(x => x.r.community_id));
-    MAPC.list.filter(c => !c.hidden && (z >= 13 || used.has(c.id)) && b.contains([Number(c.lat), Number(c.lng)])).slice(0, 250).forEach(c =>
+    MAPC.list.filter(c => !c.hidden && c.lat != null && (z >= 13 || used.has(c.id)) && b.contains([Number(c.lat), Number(c.lng)])).slice(0, 250).forEach(c =>
       L.marker([Number(c.lat), Number(c.lng)], { interactive: false, icon: L.divIcon({ className: "cm-label", html: `<span style="border-color:${esc(c.color || hashCol("c" + c.name))}">${esc(c.name)}</span>`, iconSize: [0, 0] }) }).addTo(DSP.mlayer));
     if (!DSP.cnZoomHook) { DSP.cnZoomHook = true; DSP.lmap.on("zoomend moveend", () => { if (DSP.mapCNames) drawDspMap(); }); }
   }
@@ -4742,22 +4742,25 @@ async function commFindAll(say) {
   for (let i = 0; i < pts.length; i += 500) { const { error } = await db.rpc("save_communities", { p: pts.slice(i, i + 500) }); if (error) throw new Error(rpcErr(error)); }
   await commAssignAll(say);
 }
-// every located address gets its closest community (within 3 km), then the rest by postal code
+// every located address gets its closest community (within 5 km), then the rest by postal code, postal area or town
 async function commAssignAll(say) {
   await loadComms(true);
   if (MAPC.err) throw new Error(MAPC.err === "setup" ? "Run RUN SETUP NOW.bat first." : "Couldn't load the communities: " + MAPC.err);
   if (!MAPC.list.length) throw new Error("No communities yet. Press Find communities first.");
-  const C = MAPC.list.filter(c => !c.hidden).map(c => ({ id: c.id, lat: Number(c.lat), lng: Number(c.lng) }));
+  const C = MAPC.list.filter(c => !c.hidden && c.lat != null && c.kind !== "town").map(c => ({ id: c.id, lat: Number(c.lat), lng: Number(c.lng) }));
   let after = 0, all = [];
   for (;;) { const { data, error } = await db.rpc("located_addresses_any", { p_after: after, p_limit: 20000 }); if (error) throw new Error(rpcErr(error));
     if (!data.length) break; all = all.concat(data); after = data[data.length - 1].id; if (data.length < 20000) break; }
-  const pairs = all.map(a => { const la = Number(a.lat), lo = Number(a.lng), cx = Math.cos(la * Math.PI / 180); let best = null, bd = 9;
+  const pairs = all.map(a => { const la = Number(a.lat), lo = Number(a.lng), cx = Math.cos(la * Math.PI / 180); let best = null, bd = 25;   // within 5 km; farther ones go by postal code / town
     for (const c of C) { const dy = (c.lat - la) * 110.57, dx = (c.lng - lo) * 111.32 * cx, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = c.id; } }
     return [a.id, best]; });
   for (let i = 0; i < pairs.length; i += 2500) { const { error } = await db.rpc("set_location_communities", { p: pairs.slice(i, i + 2500) }); if (error) throw new Error(rpcErr(error));
     say(`Matching addresses to communities… ${Math.min(i + 2500, pairs.length).toLocaleString()} of ${pairs.length.toLocaleString()}`); }
-  say("Filling in addresses without a map spot from their postal code…");
-  const { error } = await db.rpc("fill_communities_by_postal"); if (error) throw new Error(rpcErr(error));
+  let done = 0;
+  for (let k = 0; k < 40; k++) {
+    say(`Filling in addresses without a map spot (by postal code, then town)… ${done.toLocaleString()} so far`);
+    const { data, error } = await db.rpc("fill_communities_by_postal", { p_limit: 6000 }); if (error) throw new Error(rpcErr(error));
+    done += data || 0; if ((data || 0) < 6000) break; }
   await loadComms(true);
 }
 function renderCommColours(msg) {
@@ -4771,7 +4774,7 @@ function renderCommColours(msg) {
       postal: (a, b) => String((a.fsas || [])[0] || "~").localeCompare(String((b.fsas || [])[0] || "~")), nocolour: (a, b) => (D.get(a.id)?.color ? 1 : 0) - (D.get(b.id)?.color ? 1 : 0) || b.n - a.n }[V.sort] || ((a, b) => b.n - a.n));
   const groups = new Map(); shown.forEach(c => { const k = V.group === "hood" ? (c.hood || "No neighbourhood") : V.group === "postal" ? (((c.fsas || [])[0]) || "No addresses") : ""; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); });
   const row = c => { const d = D.get(c.id), col = d.color;
-    return `<tr data-cm="${c.id}" class="${d.hidden ? "cm-hidden" : ""}"><td><input data-cm-name value="${esc(d.name)}" maxlength="80" ${ed ? "" : "disabled"} aria-label="Name"></td>
+    return `<tr data-cm="${c.id}" class="${d.hidden ? "cm-hidden" : ""}"><td><input data-cm-name value="${esc(d.name)}" maxlength="80" ${ed ? "" : "disabled"} aria-label="Name">${c.kind === "town" ? ` <span class="quiet" title="Not on OpenStreetMap as a community, so the whole town is used">whole town</span>` : ""}</td>
       <td>${esc((c.fsas || []).join(", "))}</td><td class="r num">${c.n.toLocaleString()}</td>
       <td><label class="pb-check"><input type="checkbox" data-cm-on ${col ? "checked" : ""} ${ed ? "" : "disabled"}> Colour</label></td>
       <td><input type="color" data-cm-color value="${esc(col || hashCol("c" + c.name))}" ${ed && col ? "" : "disabled"}></td>
@@ -4817,10 +4820,11 @@ function renderCommColours(msg) {
       tr.querySelector("[data-cm-color]").disabled = !on; tr.classList.toggle("cm-hidden", d.hidden); };
     tr.addEventListener("input", upd); tr.addEventListener("change", upd); });
   $("#cm-auto")?.addEventListener("click", () => {   // close communities (under 2.5 km) get different colours
-    const pts = list.filter(c => c.n && !D.get(c.id).hidden).sort((a, b) => b.n - a.n);
+    const pts = list.filter(c => c.n && !D.get(c.id).hidden && c.lat != null).sort((a, b) => b.n - a.n);
     pts.forEach(c => { if (D.get(c.id).color) return; const cx = Math.cos(Number(c.lat) * Math.PI / 180);
       const used = new Set(pts.filter(o => o.id !== c.id && D.get(o.id).color && Math.hypot((o.lat - c.lat) * 110.57, (o.lng - c.lng) * 111.32 * cx) < 2.5).map(o => D.get(o.id).color));
       D.get(c.id).color = MAP_PALETTE.find(x => !used.has(x)) || MAP_PALETTE[c.id % MAP_PALETTE.length]; });
+    list.filter(c => c.n && c.lat == null && !D.get(c.id).hidden && !D.get(c.id).color).forEach(c => D.get(c.id).color = MAP_PALETTE[c.id % MAP_PALETTE.length]);
     renderCommColours("Colours filled in (communities close to each other get different colours). Change any, then press Save."); });
   $("#cm-save")?.addEventListener("click", async () => {
     const p = list.map(c => { const d = D.get(c.id); return { id: c.id, color: d.color || "", name: d.name, hidden: d.hidden }; });
