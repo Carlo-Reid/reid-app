@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.121347">
+<meta name="app-version" content="2026-10-19.131041">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1100,6 +1100,11 @@
   .pb-newtag { background: var(--blue-wash); color: var(--blue); }
   .pb-up { color: var(--red); }
   .imp-box { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; } .imp-box h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); } .imp-box p { margin: 0; }
+  .pb-mail-pill { background: #8a5a00; color: #fff; border: 1px solid #f59f00; border-radius: 999px; padding: 2px 12px; font-size: 12px; font-weight: 700; cursor: pointer; text-transform: none; letter-spacing: 0; white-space: nowrap; }
+  .pb-mail-busy { background: #343a40; border-color: #495057; cursor: default; }
+  .sm-box h3 { margin: 6px 0; font-size: 15px; } .sm-box h3 .quiet { font-weight: 500; font-size: 12px; }
+  .sm-t td { vertical-align: top; text-align: left; } .sm-t .sm-sup { max-width: 130px; font-size: 13px; padding: 2px 4px; } .sm-acts { white-space: nowrap; }
+  .sm-st { font-weight: 700; } .sm-ok { color: #2b8a3e; } .sm-warn { color: #c92a2a; }
   .imp-list { margin: 6px 0 0; padding-left: 20px; line-height: 1.6; } .imp-unread { color: var(--amber); }
   .imp-box .staff-msg { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .pb-catchip { display: inline-block; background: var(--blue-wash); color: var(--blue); border-radius: 6px; padding: 2px 8px; margin: 0 4px 4px 0; font-size: calc(12.5px * var(--fs, 1)); font-weight: 650; line-height: 1.35; }
@@ -7785,6 +7790,7 @@ async function openPricebook() {
   await loadPbBooks();
   await Promise.all([loadSuppliers(), loadPbCats(), loadPbPricing(), loadPbUpdates()]);
   await loadPricebook();
+  supMailRun().catch(() => { MAIL.busy = false; });
 }
 async function loadPbCats() {
   let { data, error } = PB.viewBook != null ? await db.rpc("pb_categories_for", { p_book: PB.viewBook }) : await db.rpc("pb_categories");
@@ -8344,11 +8350,11 @@ const loadPdfJs = () => PDFJS || (PDFJS = new Promise((ok, no) => {
 function impBoxHtml() {
   const r = PB.importResult;
   return `<section class="cl-tools imp-box" id="imp-box"><h2>Import a supplier invoice</h2>
-    <p class="quiet">Pick the PDF invoices the supplier emailed you (several at once is fine). The app reads each line's code and what you really paid after the discount. New costs and new items wait for your OK below; nothing changes until you approve.</p>
+    <p class="quiet">Invoices forwarded to <b>supplierpo@hsginc.ca</b> are read by themselves (see Supplier mail below). Or pick the PDF invoices the supplier emailed you (several at once is fine). The app reads each line's code and what you really paid after the discount. New costs and new items wait for your OK below; nothing changes until you approve.</p>
     <div class="pbi-form"><label>Supplier<input id="imp-sup" value="${esc(PB.importSup || "Boone")}" maxlength="60"></label>
       <label class="btn quiet-btn pb-file">Pick PDF invoices<input type="file" id="imp-file" accept="application/pdf,.pdf" multiple></label>
       <button class="link" type="button" id="imp-close">Close</button></div>
-    <div id="imp-out">${r || ""}</div></section>`;
+    <div id="imp-out">${r || ""}</div><div id="imp-mail">${supMailHtml()}</div></section>`;
 }
 // The lines of text on each page, top to bottom
 async function pdfLines(file) {
@@ -8419,6 +8425,157 @@ function wireImport() {
     $("#imp-box")?.scrollIntoView({ block: "start" });
   });
   $("#imp-review")?.addEventListener("click", () => { PB.review = true; PB.importOpen = false; PB.importResult = null; renderPbReview(); });
+  if ($("#imp-mail")) { if (MAIL.data) supMailShow(); else supMailLoad().then(() => supMailShow()); }
+}
+
+// ---------- Supplier invoices by email (supplierpo@hsginc.ca): read the saved attachments and send them to the approvals ----------
+const libOnce = (key, src, test) => window[key] || (window[key] = new Promise((ok, no) => {
+  if (test()) return ok(test()); const s = document.createElement("script"); s.src = src;
+  s.onload = () => ok(test()); s.onerror = () => { window[key] = null; no(new Error("Couldn't load the reader. Check the internet connection.")); }; document.head.append(s); }));
+const loadXlsx = () => libOnce("_xlsxP", "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js", () => window.XLSX);
+const loadJszip = () => libOnce("_jszipP", "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js", () => window.JSZip);
+// any invoice file -> its rows of cells (and plain lines of text)
+async function invoiceRows(blob, name) {
+  const ext = (String(name || "").toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || "";
+  if (ext === "pdf") { const lines = await pdfLines(blob); return { kind: "pdf", lines, rows: lines.filter(l => l !== "\f").map(l => l.split(" ")) }; }
+  if (["xlsx", "xlsm", "xls", "csv"].includes(ext)) {
+    const X = await loadXlsx(), wb = X.read(await blob.arrayBuffer(), { type: "array", cellDates: true }), rows = [];
+    for (const sn of wb.SheetNames) for (const r of X.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: "" })) {
+      const cells = r.map(c => c instanceof Date ? c.toISOString().slice(0, 10) : String(c ?? "").trim()); if (cells.some(Boolean)) rows.push(cells); }
+    return { kind: "sheet", rows, lines: rows.map(r => r.filter(Boolean).join(" ")) };
+  }
+  if (ext === "docx") {
+    const Z = await loadJszip(), zip = await Z.loadAsync(await blob.arrayBuffer()), xml = await zip.file("word/document.xml")?.async("string");
+    if (!xml) throw new Error("this Word file is empty");
+    const doc = new DOMParser().parseFromString(xml, "application/xml"), W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main", rows = [];
+    const text = el => [...el.getElementsByTagNameNS(W, "t")].map(t => t.textContent).join("").trim();
+    for (const el of doc.getElementsByTagNameNS(W, "body")[0]?.children || []) {
+      if (el.localName === "tbl") for (const tr of el.getElementsByTagNameNS(W, "tr")) rows.push([...tr.getElementsByTagNameNS(W, "tc")].map(text));
+      else if (el.localName === "p") { const t = text(el); if (t) rows.push([t]); }
+    }
+    return { kind: "word", rows, lines: rows.map(r => r.filter(Boolean).join(" ")) };
+  }
+  if (ext === "doc") throw new Error("old Word (.doc) files can't be read here — ask the supplier for a PDF, or open it and save it as .docx");
+  throw new Error("this kind of file can't be read");
+}
+const invNum = v => { const s = String(v ?? "").replace(/[$\s]/g, "").replace(/,(?=\d{3}\b)/g, ""); return /^-?\d*\.?\d+$/.test(s) ? Number(s) : null; };
+function invoiceRefDate(lines) {
+  const all = lines.join("\n");
+  const ref = (all.match(/\b(?:invoice|inv|order|sales order|document)\s*(?:#|no\.?|number|num)?\s*[:#]?\s*([A-Z]{0,4}-?\d[\w-]{2,})/i) || [])[1] || null;
+  let date = null, m;
+  if ((m = all.match(/\b(20\d\d)-(\d\d)-(\d\d)\b/))) date = `${m[1]}-${m[2]}-${m[3]}`;
+  else if ((m = all.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/))) { const y = Number(m[3]) < 100 ? 2000 + Number(m[3]) : Number(m[3]); date = `${y}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`; }
+  else if ((m = all.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2}),?\s+(20\d\d)\b/i))) { const d = new Date(`${m[1]} ${m[2]} ${m[3]}`); if (!isNaN(d)) date = ymd(d); }
+  return { ref, date };
+}
+// invoices in any layout: rows with a part number we know; the price is what one really cost (total ÷ qty when both are there)
+async function parseGenericInvoice(rows, supplier) {
+  const toks = rows.map(r => [...new Set(r.flatMap(c => [c, ...String(c).split(/\s+/)]).map(t => String(t).trim().replace(/^[#(]+|[):,]+$/g, "")).filter(t => t.length >= 3 && t.length <= 40 && /\d/.test(t) && !/^\$?[\d,]*\.\d+$/.test(t)))]);
+  const { data, error } = await db.rpc("supplier_rows_match", { p_supplier: supplier, p_rows: toks });
+  if (error) throw new Error(rpcErr(error));
+  const out = [], unread = [];
+  // a header row ("Qty … Price … Total") tells which column is which
+  let hc = null;
+  for (const r of rows) { const low = r.map(c => String(c).toLowerCase().trim());
+    const qi = low.findIndex(c => /^(qty|quantity|qte|shipped|ship|shp|ordered|ord)\b/.test(c)), pi = low.findIndex(c => /(unit\s*price|price|each|net\s*price|unit\s*cost|cost)\b/.test(c) && !/total|ext/.test(c)),
+          ti = low.findIndex(c => /^(total|amount|ext|extended|extension|line total|net amount)\b/.test(c));
+    if (r.length > 2 && (pi >= 0 || ti >= 0) && qi >= 0) { hc = { qi, pi, ti }; break; } }
+  for (const m of data || []) {
+    const r = rows[m.row], code = String(m.code).toUpperCase();
+    let cost = null;
+    if (hc && r.length > 2) { const q = invNum(r[hc.qi]), pr = hc.pi >= 0 ? invNum(r[hc.pi]) : null, tt = hc.ti >= 0 ? invNum(r[hc.ti]) : null;
+      if (q > 0 && tt != null && tt >= 0 && (pr == null || tt <= pr * q * 1.0001 + 0.01)) cost = tt / q; else if (pr != null) cost = pr; }
+    if (cost == null) {   // qty, price each, line total in that order, where price × qty = total
+      const nums = r.flatMap(c => String(c).split(/\s+/)).filter(w => w && w.toUpperCase() !== code).map(invNum).filter(n => n != null && n >= 0);
+      outer: for (let i = 0; i < nums.length; i++) { const q = nums[i]; if (!(Number.isInteger(q) && q > 0 && q <= 10000)) continue;
+        for (let j = i + 1; j < nums.length; j++) for (let k = j + 1; k < nums.length; k++) { const each = nums[j], tot = nums[k];
+          if (each > 0 && Math.abs(each * q - tot) <= Math.max(0.02, tot * 0.005)) { cost = each; break outer; }
+          if (each > 0 && tot > 0 && q > 1 && tot < each * q && tot > each * q * 0.4 && k === nums.length - 1) { cost = tot / q; break outer; } } }
+      if (cost == null) { const money = r.flatMap(c => String(c).split(/\s+/)).filter(w => /\.\d{2,5}$/.test(w.replace(/[$,]/g, ""))).map(invNum).filter(n => n != null && n > 0);
+        if (money.length === 1) cost = money[0]; }
+    }
+    const desc = r.map(String).filter(c => /[a-z]{3,}/i.test(c) && c.toUpperCase() !== code).sort((a, b) => b.length - a.length)[0] || "";
+    if (cost == null || !(cost >= 0)) { unread.push(m.code); continue; }
+    out.push({ code: m.code, item_sku: m.sku, description: desc.slice(0, 200), cost: Math.round(cost * 10000) / 10000, new_ok: false });
+  }
+  return { lines: out, unread };
+}
+const MAIL = { busy: false, data: null };
+async function supMailLoad() { if (!(seeCost() && can("pricebook.edit"))) return null; const { data, error } = await db.rpc("supplier_mail_list", { p_limit: 80 }); MAIL.data = error ? null : data; return MAIL.data; }
+async function supMailRead(row, supplierPick) {
+  const f = await db.rpc("supplier_mail_file", { p_id: row.id });
+  if (f.error || !f.data) throw new Error(f.error ? rpcErr(f.error) : "the file is missing");
+  const bin = atob(f.data.b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const blob = new Blob([bytes], { type: f.data.mime || "application/octet-stream" }); blob.name = f.data.name;
+  const doc = await invoiceRows(blob, f.data.name);
+  let sup = supplierPick || row.supplier;
+  if (!sup) { const g = await db.rpc("supplier_guess", { p_text: doc.lines.slice(0, 80).join(" ") }); sup = g.data || null; }
+  if (!sup) return { status: "needs_supplier", result: { note: "Pick the supplier, then press Read it" } };
+  const totals = {}, refs = []; let unread = [];
+  const add = (c) => { for (const [k, v] of Object.entries(c || {})) totals[k] = (totals[k] || 0) + v; };
+  const boone = doc.kind === "pdf" ? parseSupplierLines(doc.lines) : { invoices: [] };
+  if (boone.invoices.length) {
+    for (const inv of boone.invoices) {
+      const { data, error } = await db.rpc("import_supplier_lines", { p_supplier: sup, p_ref: "order " + inv.order, p_date: inv.date || ymd(new Date(row.received || Date.now())), p_lines: inv.lines });
+      if (error) throw new Error(rpcErr(error)); add(data.counts); refs.push("order " + inv.order); }
+    unread = boone.unread;
+  } else {
+    const g = await parseGenericInvoice(doc.rows, sup), rd = invoiceRefDate(doc.lines); unread = g.unread;
+    if (g.lines.length) {
+      const ref = rd.ref ? "invoice " + rd.ref : "email " + fmtDate(row.received || new Date().toISOString()) + " " + (row.file || "");
+      const { data, error } = await db.rpc("import_supplier_lines", { p_supplier: sup, p_ref: ref.slice(0, 80), p_date: rd.date || ymd(new Date(row.received || Date.now())), p_lines: g.lines });
+      if (error) throw new Error(rpcErr(error)); add(data.counts); refs.push(ref);
+    }
+  }
+  const n = (totals["added"] || 0) + (totals["new item waiting"] || 0), any = Object.values(totals).reduce((a, b) => a + b, 0);
+  return { supplier: sup, status: n ? "imported" : any ? "nothing" : "unread",
+    result: { counts: totals, refs, unread: unread.slice(0, 30), note: any ? "" : "No lines with a part number we know were found" } };
+}
+async function supMailRun(force) {
+  if (MAIL.busy) return; const d = await supMailLoad(); if (!d) return;
+  const todo = (d.rows || []).filter(r => r.status === "new");
+  if (!todo.length) { if (force) supMailShow(); return; }
+  MAIL.busy = true; supMailShow(`Reading ${todo.length} supplier email${todo.length > 1 ? "s" : ""}…`);
+  for (const r of todo) {
+    let res; try { res = await supMailRead(r); } catch (e) { res = { status: "error", result: { note: e.message } }; }
+    await db.rpc("supplier_mail_set", { p_id: r.id, p_status: res.status, p_supplier: res.supplier || null, p_result: res.result });
+  }
+  MAIL.busy = false; await supMailLoad(); await loadPbUpdates();
+  if (document.querySelector(".pb") && !PB.review) renderPricebook(); else supMailShow();
+}
+const MAIL_ST = { new: ["waiting", ""], imported: ["sent to approvals", "ok"], nothing: ["no changes", ""], unread: ["couldn't read", "warn"], needs_supplier: ["pick the supplier", "warn"], ignored: ["ignored", ""], error: ["problem", "warn"], no_file: ["no file attached", ""] };
+function supMailHtml(msg) {
+  const d = MAIL.data; if (!d) return "";
+  const ago = d.last_check ? Math.round((Date.now() - new Date(d.last_check)) / 60000) : null;
+  const sups = [...new Set((SUPPLIERS || []).map(s => (String(s.name).match(/^\s*([A-Za-z][A-Za-z&'-]+)/) || [])[1]).filter(Boolean))].sort();
+  return `<section class="sm-box" id="sm-box"><h3>📧 Supplier mail <span class="quiet">supplierpo@hsginc.ca · ${d.last_check ? `checked ${ago < 1 ? "just now" : ago < 60 ? ago + " min ago" : fmtDate(d.last_check)}` : "not checked yet"}</span></h3>
+    ${d.last_error ? `<div class="staff-msg err">${esc(d.last_error)}</div>` : ""}${msg ? `<div class="staff-msg">${esc(msg)}</div>` : ""}
+    ${!(d.rows || []).length ? `<p class="quiet">No emails yet. Forward supplier invoices (PDF, Excel or Word) to supplierpo@hsginc.ca; they show up here within about 10 minutes.</p>` :
+    `<table class="calls-table sm-t"><thead><tr><th>Received</th><th>Email</th><th>Supplier</th><th>What happened</th><th></th></tr></thead><tbody>${d.rows.map(r => { const st = MAIL_ST[r.status] || [r.status, ""], c = (r.result || {}).counts || {};
+      return `<tr data-sm="${r.id}"><td class="num">${r.received ? fmtDate(r.received) : ""}</td>
+        <td><b>${esc(r.subject || "(no subject)")}</b><div class="quiet">${esc(r.from || "")}${r.file ? ` · ${esc(r.file)}` : ""}</div></td>
+        <td>${r.file ? `<select class="sm-sup" aria-label="Supplier"><option value="">?</option>${sups.map(s => `<option ${String(r.supplier || "").toLowerCase() === s.toLowerCase() ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>` : ""}</td>
+        <td><span class="sm-st sm-${st[1]}">${st[0]}</span>${c.added || c["new item waiting"] ? ` <span class="quiet">${c.added || 0} new costs · ${c["new item waiting"] || 0} new items</span>` : ""}${c.same ? ` <span class="quiet">· ${c.same} same</span>` : ""}${c["already there"] ? ` <span class="quiet">· ${c["already there"]} already in</span>` : ""}
+          ${(r.result || {}).note ? `<div class="quiet">${esc(r.result.note)}</div>` : ""}${((r.result || {}).unread || []).length ? `<div class="quiet">Not read: ${esc(r.result.unread.join(", "))}</div>` : ""}</td>
+        <td class="sm-acts">${r.file ? `<button class="link" type="button" data-sm-open>Open</button> · <button class="link" type="button" data-sm-read>Read it${r.status === "new" ? "" : " again"}</button>${["new", "unread", "needs_supplier", "error"].includes(r.status) ? ` · <button class="link" type="button" data-sm-ignore>Ignore</button>` : ""}` : ""}</td></tr>`; }).join("")}</tbody></table>`}</section>`;
+}
+function supMailShow(msg) {
+  const host = document.getElementById("imp-mail"); if (!host) return;
+  host.innerHTML = supMailHtml(msg);
+  host.querySelectorAll("[data-sm]").forEach(tr => { const id = Number(tr.dataset.sm), row = (MAIL.data.rows || []).find(x => x.id === id);
+    tr.querySelector("[data-sm-open]")?.addEventListener("click", async () => { const w = window.open("", "_blank"); const f = await db.rpc("supplier_mail_file", { p_id: id });
+      if (!f.data) { w?.close(); alertMsg("Couldn't open the file."); return; }
+      const bin = atob(f.data.b64), b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([b], { type: f.data.mime || "application/octet-stream" }));
+      if (/pdf/i.test(f.data.mime || "") || /\.pdf$/i.test(f.data.name)) { if (w) w.location = url; } else { w?.close(); const a = document.createElement("a"); a.href = url; a.download = f.data.name || "invoice"; a.click(); } });
+    tr.querySelector("[data-sm-read]")?.addEventListener("click", async e => { e.target.disabled = true; const sup = tr.querySelector(".sm-sup")?.value || null;
+      supMailShow(`Reading ${row.file || "the email"}…`);
+      let res; try { res = await supMailRead({ ...row, supplier: sup || row.supplier }, sup); } catch (er) { res = { status: "error", result: { note: er.message } }; }
+      await db.rpc("supplier_mail_set", { p_id: id, p_status: res.status, p_supplier: res.supplier || sup, p_result: res.result });
+      await supMailLoad(); await loadPbUpdates(); renderPricebook(); });
+    tr.querySelector("[data-sm-ignore]")?.addEventListener("click", async () => { await db.rpc("supplier_mail_set", { p_id: id, p_status: "ignored" }); await supMailLoad(); supMailShow(); renderPricebook(); });
+    tr.querySelector(".sm-sup")?.addEventListener("change", e => { row.supplier = e.target.value || null; });
+  });
 }
 
 // ---------- Equipment pictures: one photo per series, put on its models ----------
@@ -9121,8 +9278,10 @@ function renderPricebook(msg) {
   wireImport();
   // supplier-invoice updates waiting: a small dark green button in the black bar at the top (only when there are some)
   { const pba = document.getElementById("page-bar-act"), nn = (PB.updRows || []).filter(u => u.kind === "new").length, nc = (PB.upd?.size || 0) - nn;
-    if (pba) { pba.innerHTML = `<span class="pb-info" tabindex="0" title="Services, parts and equipment with their prices, in the same order as the categories on the left (most used first inside each)." aria-label="About this page">ⓘ</span>` + (nc || nn ? `<button type="button" class="pb-upd-pill" id="pb-review" title="New costs and items from supplier invoices, waiting for your OK">${[nc ? `${nc} price change${nc > 1 ? "s" : ""} to approve` : "", nn ? `${nn} new item${nn > 1 ? "s" : ""} to add` : ""].filter(Boolean).join(" · ")} ›</button>` : "") + niBtn() + `<span class="pb-bar-tools ${PB.toolsOpen ? "open" : ""}">${toolsHtml}</span>`;
-      pba.querySelector("#pb-review")?.addEventListener("click", () => { PB.review = true; renderPbReview(); }); } }
+    if (pba) { pba.innerHTML = `<span class="pb-info" tabindex="0" title="Services, parts and equipment with their prices, in the same order as the categories on the left (most used first inside each)." aria-label="About this page">ⓘ</span>` + (nc || nn ? `<button type="button" class="pb-upd-pill" id="pb-review" title="New costs and items from supplier invoices, waiting for your OK">${[nc ? `${nc} price change${nc > 1 ? "s" : ""} to approve` : "", nn ? `${nn} new item${nn > 1 ? "s" : ""} to add` : ""].filter(Boolean).join(" · ")} ›</button>` : "")
+      + (MAIL.busy ? `<span class="pb-mail-pill pb-mail-busy">📧 reading supplier mail…</span>` : MAIL.data && MAIL.data.needs_look ? `<button type="button" class="pb-mail-pill" id="pb-mail-open" title="Supplier emails the app couldn't finish by itself">📧 ${MAIL.data.needs_look} supplier email${MAIL.data.needs_look > 1 ? "s" : ""} need${MAIL.data.needs_look > 1 ? "" : "s"} a look</button>` : "") + niBtn() + `<span class="pb-bar-tools ${PB.toolsOpen ? "open" : ""}">${toolsHtml}</span>`;
+      pba.querySelector("#pb-review")?.addEventListener("click", () => { PB.review = true; renderPbReview(); });
+      pba.querySelector("#pb-mail-open")?.addEventListener("click", () => { PB.importOpen = true; renderPricebook(); $("#imp-mail")?.scrollIntoView({ behavior: "smooth", block: "start" }); }); } }
   wireUpdButtons($("#main"));
   // items
   document.querySelectorAll("[data-pb]").forEach(tr => {
