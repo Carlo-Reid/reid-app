@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.163902">
+<meta name="app-version" content="2026-10-19.164515">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1108,6 +1108,13 @@
   .pb-up { color: var(--red); }
   .imp-box { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; } .imp-box h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); } .imp-box p { margin: 0; }
   .ow-dates + .cl-tools .cl-row-2 { border-top: 0 !important; padding-top: 0 !important; margin-top: 0 !important; }
+  .ow-booktag { background: #e7f5ff; color: #1864ab; text-transform: capitalize; } .ow-scope-booked strong { color: #1864ab; }
+  .ow-scopes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
+  .ow-scope { text-align: left; border: 2px solid #ced4da; background: #fff; border-radius: 10px; padding: 8px 12px; cursor: pointer; font: inherit; color: var(--ink); display: flex; flex-direction: column; gap: 1px; }
+  .ow-scope span { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #495057; } .ow-scope strong { font-size: 20px; } .ow-scope em { font-style: normal; font-size: 12.5px; color: #6b7785; }
+  .ow-scope:hover { border-color: #1f6fd1; } .ow-scope[aria-pressed="true"] { border-color: #1f6fd1; background: #e7f5ff; box-shadow: 0 0 0 2px rgba(31,111,209,.25); }
+  .ow-scope-paid strong { color: #2b8a3e; } .ow-scope-owing strong { color: #c92a2a; }
+  .ow-paidtag { background: #ebfbee; color: #2b8a3e; } .ow-owetag { background: #fff5f5; color: #c92a2a; }
   .ow-dates .cl-row { flex-wrap: nowrap; align-items: flex-start; justify-content: space-between; }
   .ow-when { width: 445px; flex: none; } .ow-when .ow-nav { min-height: 42px; flex-wrap: nowrap; gap: 6px; } .ow-when .ow-nav input[type=date] { width: 150px; }
   .ow-dates .seg { flex-wrap: nowrap; }
@@ -6111,8 +6118,8 @@ try { Object.assign(OW, JSON.parse(localStorage.getItem("reid.owing") || "{}"));
 OW.sort = OW.sort || "date_desc"; OW.group = OW.group || "none";
 OW.period = OW.period || "all"; OW.anchor = ymd(new Date());
 OW.to = OW.to || ymd(new Date()); OW.from = OW.from || ymd(addDays(new Date(), -30));
-OW.jtype = OW.jtype || "all"; OW.paid = OW.paid || "all";
-const saveOw = () => { try { localStorage.setItem("reid.owing", JSON.stringify({ sort: OW.sort, group: OW.group, period: OW.period, from: OW.from, to: OW.to, jtype: OW.jtype, paid: OW.paid })); } catch {} };
+OW.jtype = OW.jtype || "all"; OW.paid = OW.paid || "all"; OW.scope = OW.scope || "owing";
+const saveOw = () => { try { localStorage.setItem("reid.owing", JSON.stringify({ sort: OW.sort, group: OW.group, period: OW.period, from: OW.from, to: OW.to, jtype: OW.jtype, paid: OW.paid, scope: OW.scope })); } catch {} };
 const OW_JTYPE = [["all", "All job types"], ["install", "Installs"], ["service", "Service"], ["security", "Security"], ["maintenance", "Maintenance"], ["warranty", "Warranty"], ["other", "Other"], ["none", "No job"]];
 const OW_PAID = [["all", "Paid or not"], ["none", "Nothing paid yet"], ["part", "Part paid"]];
 // "View by": the day, week (Monday to Sunday), month or year that OW.anchor falls in
@@ -6149,9 +6156,21 @@ const owPick = x => {
   if (OW.jtype !== "all") { const n = String(x.job_type || ""), c = x.job_class !== undefined ? x.job_class || null   // (before setup 95: guess from the job type's name)
       : !n ? null : /install/i.test(n) ? "install" : /secur|alarm/i.test(n) ? "security" : /maint|tune/i.test(n) ? "maintenance" : /warrant/i.test(n) ? "warranty" : /service|repair|no heat|no cool/i.test(n) ? "service" : "other";
     if (OW.jtype === "none" ? x.job_type != null : OW.jtype === "other" ? (c == null || ["install", "service", "security", "maintenance", "warranty"].includes(c)) : c !== OW.jtype) return false; }
+  if (x._paidOff || x._booked) return true;
   if (OW.paid === "none" && Number(x.paid || 0) > 0.004) return false;
   if (OW.paid === "part" && !(Number(x.paid || 0) > 0.004)) return false;
   return true; };
+// paid-off invoices for the dates picked (loaded when the dates or "Which invoices" change)
+const owPaidKey = () => { const r = owRange(); return (r ? ymd(r[0]) + "|" + ymd(r[1]) : "all") + "|" + OW.kind; };
+async function loadOwPaid(key) {
+  const r = owRange(), args = { p_from: r ? ymd(r[0]) : null, p_to: r ? ymd(r[1]) : null };
+  const [{ data, error }, bk] = await Promise.all([db.rpc("paid_invoices", { ...args, p_kind: OW.kind }), db.rpc("booked_jobs", args)]);
+  if (OW.paidKey !== key) return;
+  OW.bookedData = bk.error ? { error: /PGRST202|could not find the function/i.test(bk.error.message || "") ? "Run RUN SETUP.bat to see booked jobs here." : rpcErr(bk.error) }
+    : { n: bk.data.n, total: Number(bk.data.total), rows: (bk.data.rows || []).map(x => ({ ...x, _booked: true, balance: 0 })) };
+  OW.paidData = error ? { error: /PGRST202|could not find the function/i.test(error.message || "") ? "Run RUN SETUP.bat to see paid invoices here." : rpcErr(error) } : { n: data.n, total: Number(data.total), rows: (data.rows || []).map(x => ({ ...x, _paidOff: true })) };
+  if (document.querySelector(".owing")) renderOwing();
+}
 const owInPeriod = rows => { const r = owRange(); rows = rows.filter(owPick); if (!r) return rows; const a = ymd(r[0]), b = ymd(r[1]); return rows.filter(x => x.invoice_date >= a && x.invoice_date <= b); };
 const OW_SORT = [["date_desc", "Newest first"], ["date_asc", "Oldest first"], ["amt_desc", "Biggest amount"], ["amt_asc", "Smallest amount"], ["cust", "Customer A–Z"], ["city", "City"]];
 const OW_GROUP = [["none", "No groups"], ["age", "How old"], ["month", "Month"], ["year", "Year"], ["customer", "Customer"], ["job", "Job type"], ["city", "City"], ["tag", "Kind (needs a look, plan sale, monthly)"]];
@@ -6202,8 +6221,15 @@ async function loadOwing() {
 function renderOwing(msg) {
   // the counts and the list follow the "View by" period
   OW.counts = {}; OW_SHOW.forEach(([k]) => { const d = owInPeriod(OW.all?.[k] || []); OW.counts[k] = { n: d.length, sum: d.reduce((s, r) => s + Number(r.balance), 0) }; });
-  OW.rows = owInPeriod(OW.all?.[OW.show] || []);
-  const top = $("#main").scrollTop, rows = OW.rows, total = rows.reduce((s, r) => s + Number(r.balance), 0);
+  { const k = owPaidKey(); if (OW.paidKey !== k) { OW.paidKey = k; OW.paidData = null; loadOwPaid(k); } }
+  const BD = OW.bookedData, bookRows = BD && BD.rows ? BD.rows.filter(owPick) : [];
+  const bookN = BD && BD.rows ? (OW.jtype === "all" ? BD.n : bookRows.length) : null, bookSum = BD && BD.rows ? (OW.jtype === "all" ? BD.total : bookRows.reduce((t, r) => t + Number(r.total), 0)) : null;
+  const PD = OW.paidData, paidRows = PD && PD.rows ? PD.rows.filter(owPick) : [];
+  const paidN = PD && PD.rows ? (OW.jtype === "all" ? PD.n : paidRows.length) : null, paidSum = PD && PD.rows ? (OW.jtype === "all" ? PD.total : paidRows.reduce((t, r) => t + Number(r.total), 0)) : null;
+  const owingAll = OW_SHOW.flatMap(([k]) => owInPeriod(OW.all?.[k] || []).map(r => ({ ...r, _show: k })));
+  const scope = OW.scope;
+  OW.rows = scope === "owing" ? owInPeriod(OW.all?.[OW.show] || []) : scope === "paid" ? paidRows : scope === "booked" ? bookRows : owingAll.concat(paidRows);
+  const top = $("#main").scrollTop, rows = OW.rows, total = rows.reduce((s, r) => s + Number(scope === "owing" ? r.balance : r.total), 0);
   const done = OW.show !== "todo", C = OW.counts, n = k => C[k]?.n || 0, m = k => C[k]?.sum || 0;
   const seg = (list, cur, attr) => `<div class="seg" role="group">${list.map(([k, txt]) => `<button type="button" aria-pressed="${cur === k}" ${attr}="${k}">${txt}</button>`).join("")}</div>`;
   const tile = (k, cls, label) => `<button type="button" class="cl-stat ${cls}" data-ow-show="${k}" aria-pressed="${OW.show === k}">
@@ -6226,6 +6252,14 @@ function renderOwing(msg) {
             <button class="ow-step" type="button" data-ow-step="1" aria-label="Forward one">›</button>
             <input type="date" id="ow-jump" value="${OW.anchor}" aria-label="Go to a date"><button class="link" type="button" id="ow-today">Today</button>`}</div></div>
       </div>
+      <div class="ow-scopes" role="group" aria-label="Which invoices to list">
+        ${[["all", "All invoices", paidN == null ? null : paidN + owingAll.length, paidSum == null ? null : paidSum + owingAll.reduce((t, r) => t + Number(r.total), 0), "invoiced"],
+           ["paid", "Paid invoices", paidN, paidSum, "invoiced"],
+           ["owing", "Not paid invoices", n("todo") + n("checked"), m("todo") + m("checked"), "owing"],
+           ["booked", "Booked jobs", bookN, bookSum, "expected"]].map(([k, label, cnt, amt, what]) => { const src = k === "booked" ? BD : PD;
+          return `<button type="button" class="ow-scope ow-scope-${k}" data-ow-scope="${k}" aria-pressed="${scope === k}"><span>${label}</span>
+            <strong>${amt == null ? "…" : money(amt)}</strong><em>${cnt == null ? (src && src.error ? esc(src.error) : "loading…") : `${Number(cnt).toLocaleString()} ${k === "booked" ? (cnt === 1 ? "job" : "jobs") : cnt === 1 ? "invoice" : "invoices"} · ${what}`}</em></button>`; }).join("")}
+      </div>
     </section>
     <section class="cl-tools" aria-label="Choose the invoices">
       <div class="cl-row cl-row-2">
@@ -6239,23 +6273,23 @@ function renderOwing(msg) {
         ${OW.group !== "none" ? `<button class="link ow-foldbtn" type="button" id="ow-fold">${OW.folded ? "Open all groups" : "Close all groups"}</button>` : ""}
       </div>
     </section>
-    <div class="cl-stats">
+    ${scope !== "owing" ? "" : `<div class="cl-stats">
       ${tile("todo", "s-booked", "Still to check")}
       ${tile("checked", "s-owe", "Checked, still owing")}
       ${tile("not_owed", "s-cx", "Marked not owed")}
-    </div>
-    <div class="ow-listhead"><strong>${OW_SHOW.find(s => s[0] === OW.show)[1]}: ${rows.length.toLocaleString()} ${rows.length === 1 ? "invoice" : "invoices"} · ${money(total)}</strong>
+    </div>`}
+    <div class="ow-listhead"><strong>${scope === "owing" ? OW_SHOW.find(s => s[0] === OW.show)[1] : scope === "paid" ? "Paid" : scope === "booked" ? "Booked jobs" : "All invoices"}: ${rows.length.toLocaleString()} ${scope === "booked" ? (rows.length === 1 ? "job" : "jobs") : rows.length === 1 ? "invoice" : "invoices"} · ${money(total)}${scope === "booked" ? " expected" : ""}</strong>
       <span class="quiet">${esc(owRangeLabel())}</span>
-      ${(OW.all?.[OW.show] || []).length >= 2000 ? `<span class="staff-msg err">Showing the first 2,000.</span>` : ""}<span class="staff-msg ok" id="ow-msg" role="status">${msg ? esc(msg) : ""}</span></div>
-    ${OW.kind === "all" && OW.show === "todo" && rows.some(r => r.over_total) ? `<div class="approve-banner"><div><strong>${rows.filter(r => r.over_total).length} invoices show more owing than the invoice itself</strong>
+      ${(scope === "owing" ? (OW.all?.[OW.show] || []).length >= 2000 : PD && PD.n > (PD.rows || []).length) ? `<span class="staff-msg err">Listing the newest 2,000${scope === "owing" ? "" : " paid invoices; pick dates to see the rest"}.</span>` : ""}<span class="staff-msg ok" id="ow-msg" role="status">${msg ? esc(msg) : ""}</span></div>
+    ${scope === "owing" && OW.kind === "all" && OW.show === "todo" && rows.some(r => r.over_total) ? `<div class="approve-banner"><div><strong>${rows.filter(r => r.over_total).length} invoices show more owing than the invoice itself</strong>
         (${money(rows.filter(r => r.over_total).reduce((s, r) => s + Number(r.balance) - Number(r.total), 0))} extra). ServiceTitan recorded a negative payment on them, usually a refund or a reversed payment. Check these first.</div>
         <button class="btn" type="button" data-ow-kind="over">Show them</button></div>` : ""}
-    ${OW.kind === "over" ? `<p class="quiet ow-help">These show more owing than the invoice total because ServiceTitan recorded a negative payment (the "paid" amount under each). Open each one: if the customer really owes it, press <b>Still owing</b>; if it was a refund or a mistake, mark it with the reason.</p>` : ""}
+    ${scope === "owing" && OW.kind === "over" ? `<p class="quiet ow-help">These show more owing than the invoice total because ServiceTitan recorded a negative payment (the "paid" amount under each). Open each one: if the customer really owes it, press <b>Still owing</b>; if it was a refund or a mistake, mark it with the reason.</p>` : ""}
     ${rows.length ? (() => { const list = owSorted(rows), sums = {};
       list.forEach(r => { if (r._g) { const s = sums[r._g[0]] ||= { n: 0, t: 0 }; s.n++; s.t += r.balance; } });
       let last = null;
       const th = (k, t, cls = "") => { const on = OW.sort.startsWith(k) || OW.sort === k; return `<th class="${cls}"><button class="th-sort ${on ? "on" : ""}" type="button" data-ow-th="${k}">${t}${on ? (OW.sort.endsWith("asc") || k === "cust" || k === "city" ? " ▲" : " ▼") : ""}</button></th>`; };
-      return `<div class="staff-wrap"><table class="calls-table owing-table"><thead><tr>${th("date", "Date")}<th>Invoice</th>${th("cust", "Customer")}<th>Job</th>${th("amt", "Owing", "r")}<th>${done ? "Marked" : "Mark it"}</th></tr></thead><tbody>
+      return `<div class="staff-wrap"><table class="calls-table owing-table"><thead><tr>${th("date", "Date")}<th>${scope === "booked" ? "Job" : "Invoice"}</th>${th("cust", "Customer")}<th>Job</th>${th("amt", scope === "owing" ? "Owing" : scope === "booked" ? "Expected" : "Total", "r")}<th>${scope !== "owing" ? "Status" : done ? "Marked" : "Mark it"}</th></tr></thead><tbody>
       ${list.map(r => { let head = "";
         if (r._g && r._g[0] !== last) { last = r._g[0]; const s = sums[last], shut = (OW.closed || []).includes(last);
           head = `<tr class="ow-group" data-ow-g="${esc(last)}"><td colspan="6"><button type="button" class="ow-g-btn" aria-expanded="${!shut}">${shut ? "▸" : "▾"} ${esc(r._g[1])}</button>
@@ -6263,21 +6297,24 @@ function renderOwing(msg) {
         if (r._g && (OW.closed || []).includes(r._g[0])) return head;
         return head + `<tr data-inv="${r.invoice_id}">
         <td class="num">${fmtDate(r.invoice_date)}</td>
-        <td><button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button>
+        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button>`}
           ${r.over_total ? `<div><span class="ow-tag odd" title="ServiceTitan shows ${esc(money(r.paid))} paid on this invoice, so it shows more owing than the invoice total. Usually a refund or a reversed payment.">Owing more than total</span></div>` : ""}
           ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}</td>
         <td><button class="link" type="button" data-ow-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${esc(r.job_type || "")}</td>
-        <td class="r num"><strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>${r.over_total ? `<div class="ow-odd-note">paid ${money(r.paid)}</div>` : ""}</td>
-        <td class="ow-act">${OW.show === "todo" ? `${["Paid monthly", "Paid elsewhere", "Written off"].map(x => `<button class="chip small" type="button" data-ow-not="${x}">${x}</button>`).join("")}
+        <td class="r num">${scope !== "owing" ? `<strong>${money(r.total)}</strong>` : `<strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>${r.over_total ? `<div class="ow-odd-note">paid ${money(r.paid)}</div>` : ""}`}</td>
+        <td class="ow-act">${scope !== "owing" ? (r._booked ? `<span class="ow-tag ow-booktag">${esc((r.job_status || "").replace("_", " "))}</span>${r.from_estimate ? ` <span class="quiet">from the estimate</span>` : ""}` : r._paidOff ? `<span class="ow-tag ow-paidtag">Paid</span>`
+            : r._show === "not_owed" ? `<span class="quiet">Not owed: ${esc(r.not_owed_reason || "")}</span>` : `<span class="ow-tag ow-owetag">Owing ${money(r.balance)}</span>${r._show === "checked" ? ` <span class="quiet">checked</span>` : ""}`)
+          : OW.show === "todo" ? `${["Paid monthly", "Paid elsewhere", "Written off"].map(x => `<button class="chip small" type="button" data-ow-not="${x}">${x}</button>`).join("")}
             <button class="chip small" type="button" data-ow-not="">Other…</button>
             <button class="chip small ow-still" type="button" data-ow-still>Still owing</button>`
           : OW.show === "checked" ? `<span class="quiet">Still owing · ${esc(r.checked_by || "")} ${r.checked_at ? esc(fmtDate(r.checked_at.slice(0, 10))) : ""}</span> <button class="link" type="button" data-ow-undo-check>Undo</button>`
           : `<span>${esc(r.not_owed_reason)}</span> <span class="quiet">· ${esc(r.marked_by || "")}</span> <button class="link" type="button" data-ow-undo-not>Undo</button>`}</td>
-      </tr>`; }).join("")}</tbody></table></div>`; })() : `<div class="quiet" style="padding:24px 0">${OW.show === "todo" ? "Nothing left to check here." : "None yet."}</div>`}
+      </tr>`; }).join("")}</tbody></table></div>`; })() : `<div class="quiet" style="padding:24px 0">${scope !== "owing" ? ((scope === "booked" ? BD : PD) ? (scope === "booked" ? "No booked jobs for these dates." : "No invoices for these dates.") : "Loading…") : OW.show === "todo" ? "Nothing left to check here." : "None yet."}</div>`}
   </article>`;
   $("#main").scrollTop = top;
   document.querySelectorAll("[data-ow-show]").forEach(b => b.addEventListener("click", () => { OW.show = b.dataset.owShow; OW.closed = []; renderOwing(); }));
+  document.querySelectorAll("[data-ow-scope]").forEach(b => b.addEventListener("click", () => { OW.scope = b.dataset.owScope; OW.closed = []; saveOw(); renderOwing(); }));
   document.querySelectorAll("[data-ow-period]").forEach(b => b.addEventListener("click", () => { OW.period = b.dataset.owPeriod; OW.closed = []; saveOw(); renderOwing(); }));
   document.querySelectorAll("[data-ow-step]").forEach(b => b.addEventListener("click", () => { owStep(Number(b.dataset.owStep)); renderOwing(); }));
   $("#ow-today")?.addEventListener("click", () => { OW.anchor = ymd(new Date()); renderOwing(); });
