@@ -71,6 +71,10 @@ def ocr_pdf(data):
     with tempfile.TemporaryDirectory() as d:
         src = os.path.join(d, "in.pdf")
         open(src, "wb").write(data)
+        if shutil.which("pdftotext"):   # it has real words after all: nothing to read off pictures
+            t = subprocess.run(["pdftotext", "-l", "3", src, "-"], capture_output=True, timeout=60).stdout.decode("utf-8", "replace")
+            if len(re.sub(r"\s", "", t)) >= 40:
+                return ""
         subprocess.run(["pdftoppm", "-r", "300", "-gray", "-png", "-l", "8", src, os.path.join(d, "p")], capture_output=True, timeout=180)
         pages = []
         for f in sorted(x for x in os.listdir(d) if x.startswith("p") and x.endswith(".png")):
@@ -93,8 +97,11 @@ def read_scans(cur):
         if text is None:
             say("Couldn't read the scanned invoices this time (the reading tool didn't install).")
             return 0
-        cur.execute("UPDATE supplier_mail SET ocr_text = %s, status = 'new', result = NULL WHERE id = %s", (text[:200000], mid))
-        n += 1
+        if text:
+            cur.execute("UPDATE supplier_mail SET ocr_text = %s, status = 'new', result = NULL WHERE id = %s", (text[:200000], mid))
+            n += 1
+        else:
+            cur.execute("UPDATE supplier_mail SET ocr_text = '' WHERE id = %s", (mid,))
     return n
 
 

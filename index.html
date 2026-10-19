@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.141756">
+<meta name="app-version" content="2026-10-19.145246">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1104,6 +1104,8 @@
   .pb-mail-busy { background: #343a40; border-color: #495057; cursor: default; }
   .sm-box h3 { margin: 6px 0; font-size: 15px; } .sm-box h3 .quiet { font-weight: 500; font-size: 12px; }
   .sm-t td { vertical-align: top; text-align: left; } .sm-t .sm-sup { max-width: 130px; font-size: 13px; padding: 2px 4px; } .sm-acts { white-space: nowrap; }
+  .sm-unk { border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 4px; display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; }
+  .sm-unk-acts { white-space: nowrap; font-size: 13px; } .sm-unk-find { flex-basis: 100%; } .sm-unk-find input { width: 100%; max-width: 420px; font-size: 14px; padding: 5px 8px; }
   .sm-st { font-weight: 700; } .sm-ok { color: #2b8a3e; } .sm-warn { color: #c92a2a; }
   .imp-list { margin: 6px 0 0; padding-left: 20px; line-height: 1.6; } .imp-unread { color: var(--amber); }
   .imp-box .staff-msg { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
@@ -8486,27 +8488,46 @@ async function parseGenericInvoice(rows, supplier, cells) {
     const qi = low.findIndex(c => /^(qty|quantity|qte|shipped|ship|shp|ordered|ord)\b/.test(c)), pi = low.findIndex(c => /(unit\s*price|price|each|net\s*price|unit\s*cost|cost)\b/.test(c) && !/total|ext/.test(c)),
           ti = low.findIndex(c => /^(total|amount|ext|extended|extension|line total|net amount)\b/.test(c));
     if (r.length > 2 && (pi >= 0 || ti >= 0) && qi >= 0) { hc = { qi, pi, ti }; break; } }
-  for (const m of data || []) {
-    const r = rows[m.row], code = String(m.code).toUpperCase();
+  const lineCost = (r, code) => {
     let cost = null;
     if (hc && r.length > 2) { const q = invNum(r[hc.qi]), pr = hc.pi >= 0 ? invNum(r[hc.pi]) : null, tt = hc.ti >= 0 ? invNum(r[hc.ti]) : null;
       if (q > 0 && tt != null && tt >= 0 && (pr == null || tt <= pr * q * 1.0001 + 0.01)) cost = tt / q; else if (pr != null) cost = pr; }
     if (cost == null) {   // qty, price each, line total in that order, where price × qty = total
-      const nums = r.flatMap(c => String(c).split(/\s+/)).filter(w => w && w.toUpperCase() !== code).map(invNum).filter(n => n != null && n >= 0);
+      const ws = r.flatMap(c => String(c).split(/\s+/)).filter(w => w && w.toUpperCase() !== code), nums = [], dec = [];
+      for (const w of ws) { const n = invNum(w); if (n != null && n >= 0) { nums.push(n); dec.push(cells || /\.\d/.test(w)); } }
       outer: for (let i = 0; i < nums.length; i++) { const q = nums[i]; if (!(Number.isInteger(q) && q > 0 && q <= 10000)) continue;
-        for (let j = i + 1; j < nums.length; j++) for (let k = j + 1; k < nums.length; k++) { const each = nums[j], tot = nums[k];
+        for (let j = i + 1; j < nums.length; j++) for (let k = j + 1; k < nums.length; k++) { const each = nums[j], tot = nums[k]; if (!dec[j] || !dec[k]) continue;
           if (each > 0 && Math.abs(each * q - tot) <= Math.max(0.02, tot * 0.005)) { cost = each; break outer; }
           if (each > 0 && tot > 0 && q > 1 && tot < each * q && tot > each * q * 0.4 && k === nums.length - 1) { cost = tot / q; break outer; } } }
       if (cost == null) { const money = r.flatMap(c => String(c).split(/\s+/)).filter(w => /\.\d{2,5}$/.test(w.replace(/[$,]/g, ""))).map(invNum).filter(n => n != null && n > 0);
         if (money.length === 1) cost = money[0]; }
     }
-    const desc = r.map(String).filter(c => /[a-z]{3,}/i.test(c) && c.toUpperCase() !== code).sort((a, b) => b.length - a.length)[0] || "";
+    return cost; };
+  const descOf = (ri, code) => { const r = rows[ri], own = r.flatMap(c => String(c).split(/\s+/)).filter(w => /[a-z]{3,}/i.test(w) && w.toUpperCase() !== code && !/^(net|each|ea)$/i.test(w));
+    const cellDesc = r.map(String).filter(c => /[a-z]{3,}/i.test(c) && c.toUpperCase() !== code && c.includes(" ")).sort((a, b) => b.length - a.length)[0];
+    if (cellDesc) return cellDesc; if (own.length >= 2) return own.join(" ");
+    const nx = (rows[ri + 1] || []).join(" "); return /[a-z]{3,}/i.test(nx) && !/\d+\.\d{2}\b/.test(nx) && !skipRow.test(nx) ? nx : own.join(" "); };
+  const skipRow = /\b(sub-?total|total|tax|hst|gst|pst|freight|shipping|handling|invoice|customer|phone|fax|page|date|terms|balance|discount|deposit|payment|remit|account|transit)\b/i;
+  const partOf = r => { const ws = (r || []).flatMap(c => String(c).split(/\s+/)).map(t => t.replace(/^[#(|\[]+|[):,|\]]+$/g, ""));
+    const i = ws.findIndex(partish); return i >= 0 && i <= 2 && /[A-Z]/i.test(ws[i]) || (i === 0 && /^\d{4,}$/.test(ws[i])) ? ws[i] : null; };
+  const matchedRows = new Set((data || []).map(m => m.row));
+  for (const m of data || []) {
+    const r = rows[m.row], code = String(m.code).toUpperCase();
+    const cost = lineCost(r, code);
+    const desc = descOf(m.row, code) || "";
     if (cost == null || !(cost >= 0)) { unread.push(m.code); continue; }
     if (out.some(x => x.item_sku === m.sku)) continue;   // the same line again (e.g. the ship ticket page)
     const first = r.flatMap(c => String(c).split(/\s+/)).map(t => t.replace(/^[#(|\[]+|[):,|\]]+$/g, "")).find(partish);
     out.push({ code: first && first.toUpperCase() !== code ? first : m.code, item_sku: m.sku, description: desc.slice(0, 200), cost: Math.round(cost * 10000) / 10000, new_ok: false });
   }
-  return { lines: out, unread };
+  // lines that look like products we don't know yet (a part number, a quantity and a price)
+  const unknown = [];
+  rows.forEach((r, i) => { if (matchedRows.has(i)) return; const txt = r.join(" "); if (skipRow.test(txt)) return;
+    const code = partOf(r); if (!code || unknown.some(u => u.code === code)) return;
+    const c = lineCost(r, code.toUpperCase()); if (c == null || !(c > 0)) return;
+    if (!r.flatMap(x => String(x).split(/\s+/)).some(w => { const n = invNum(w); return n != null && Number.isInteger(n) && n > 0 && n < 10000 && w.toUpperCase() !== code.toUpperCase(); })) return;
+    unknown.push({ code, description: descOf(i, code.toUpperCase()).slice(0, 200), cost: Math.round(c * 10000) / 10000 }); });
+  return { lines: out, unread, unknown: unknown.slice(0, 40) };
 }
 const MAIL = { busy: false, data: null };
 async function supMailLoad() { if (!(seeCost() && can("pricebook.edit"))) return null; const { data, error } = await db.rpc("supplier_mail_list", { p_limit: 80 }); MAIL.data = error ? null : data; return MAIL.data; }
@@ -8524,7 +8545,7 @@ async function supMailRead(row, supplierPick) {
   let sup = supplierPick || row.supplier;
   if (!sup) { const g = await db.rpc("supplier_guess", { p_text: doc.lines.slice(0, 25).join(" ") }); sup = g.data || null; }
   if (!sup) return { status: "needs_supplier", result: { note: "Pick the supplier, then press Read it" } };
-  const totals = {}, refs = []; let unread = [];
+  const totals = {}, refs = []; let unread = [], unknown = [], refUsed = null, dateUsed = null;
   const add = (c) => { for (const [k, v] of Object.entries(c || {})) totals[k] = (totals[k] || 0) + v; };
   const boone = doc.kind === "pdf" ? parseSupplierLines(doc.lines) : { invoices: [] };
   if (boone.invoices.length) {
@@ -8533,16 +8554,18 @@ async function supMailRead(row, supplierPick) {
       if (error) throw new Error(rpcErr(error)); add(data.counts); refs.push("order " + inv.order); }
     unread = boone.unread;
   } else {
-    const g = await parseGenericInvoice(doc.rows, sup, doc.kind === "sheet" || doc.kind === "word"), rd = invoiceRefDate(doc.lines); unread = g.unread;
+    const g = await parseGenericInvoice(doc.rows, sup, doc.kind === "sheet" || doc.kind === "word"), rd = invoiceRefDate(doc.lines); unread = g.unread; unknown = g.unknown || [];
+    const ref = rd.ref ? "invoice " + rd.ref : "email " + fmtDate(row.received || new Date().toISOString()) + " " + (row.file || "");
+    refUsed = ref.slice(0, 80); dateUsed = rd.date || ymd(new Date(row.received || Date.now()));
     if (g.lines.length) {
-      const ref = rd.ref ? "invoice " + rd.ref : "email " + fmtDate(row.received || new Date().toISOString()) + " " + (row.file || "");
       const { data, error } = await db.rpc("import_supplier_lines", { p_supplier: sup, p_ref: ref.slice(0, 80), p_date: rd.date || ymd(new Date(row.received || Date.now())), p_lines: g.lines });
       if (error) throw new Error(rpcErr(error)); add(data.counts); refs.push(ref);
     }
   }
   const n = (totals["added"] || 0) + (totals["new item waiting"] || 0), any = Object.values(totals).reduce((a, b) => a + b, 0);
   return { supplier: sup, status: n ? "imported" : any ? "nothing" : "unread",
-    result: { counts: totals, refs, unread: unread.slice(0, 30), note: any ? "" : "No lines with a part number we know were found" } };
+    result: { counts: totals, refs, unread: unread.slice(0, 30), unknown, ref: refUsed, date: dateUsed,
+      note: any ? "" : unknown.length ? `${unknown.length} line${unknown.length > 1 ? "s" : ""} with a part number this app doesn't know yet: match ${unknown.length > 1 ? "each" : "it"} to a price book item once (or add it as a new item), and next time it's automatic.` : "No lines with a part number we know were found" } };
 }
 async function supMailRun(force) {
   if (MAIL.busy) return; const d = await supMailLoad(); if (!d) return;
@@ -8564,12 +8587,15 @@ function supMailHtml(msg) {
   return `<section class="sm-box" id="sm-box"><h3>📧 Supplier mail <span class="quiet">supplierpo@hsginc.ca · ${d.last_check ? `checked ${ago < 1 ? "just now" : ago < 60 ? ago + " min ago" : fmtDate(d.last_check)}` : "not checked yet"}</span></h3>
     ${d.last_error ? `<div class="staff-msg err">${esc(d.last_error)}</div>` : ""}${msg ? `<div class="staff-msg">${esc(msg)}</div>` : ""}
     ${!(d.rows || []).length ? `<p class="quiet">No emails yet. Forward supplier invoices (PDF, Excel or Word) to supplierpo@hsginc.ca; they show up here within about 10 minutes.</p>` :
-    `<table class="calls-table sm-t"><thead><tr><th>Received</th><th>Email</th><th>Supplier</th><th>What happened</th><th></th></tr></thead><tbody>${d.rows.map(r => { const st = MAIL_ST[r.status] || [r.status, ""], c = (r.result || {}).counts || {};
+    `<table class="calls-table sm-t"><thead><tr><th>Received</th><th>Email</th><th>Supplier</th><th>What happened</th><th></th></tr></thead><tbody>${d.rows.map(r => { const st = r.status === "unread" && ((r.result || {}).unknown || []).some(u => !u.done) ? ["needs matching", "warn"] : MAIL_ST[r.status] || [r.status, ""], c = (r.result || {}).counts || {};
       return `<tr data-sm="${r.id}"><td class="num">${r.received ? fmtDate(r.received) : ""}</td>
         <td><b>${esc(r.subject || "(no subject)")}</b><div class="quiet">${esc(r.from || "")}${r.file ? ` · ${esc(r.file)}` : ""}</div></td>
         <td>${r.file ? `<select class="sm-sup" aria-label="Supplier"><option value="">?</option>${sups.map(s => `<option ${String(r.supplier || "").toLowerCase() === s.toLowerCase() ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>` : ""}</td>
         <td><span class="sm-st sm-${st[1]}">${st[0]}</span>${c.added || c["new item waiting"] ? ` <span class="quiet">${c.added || 0} new costs · ${c["new item waiting"] || 0} new items</span>` : ""}${c.same ? ` <span class="quiet">· ${c.same} same</span>` : ""}${c["already there"] ? ` <span class="quiet">· ${c["already there"]} already in</span>` : ""}
-          ${(r.result || {}).note ? `<div class="quiet">${esc(r.result.note)}</div>` : ""}${((r.result || {}).unread || []).length ? `<div class="quiet">Not read: ${esc(r.result.unread.join(", "))}</div>` : ""}</td>
+          ${(r.result || {}).note ? `<div class="quiet">${esc(r.result.note)}</div>` : ""}
+          ${((r.result || {}).unknown || []).filter(u => !u.done).map((u, ui) => `<div class="sm-unk" data-sm-unk="${ui}"><span><b>${esc(u.code)}</b> ${esc(u.description || "")} <span class="quiet">${money(u.cost)}</span></span>
+            <span class="sm-unk-acts"><button class="link" type="button" data-sm-match>Match to an item</button> · <button class="link" type="button" data-sm-new>Add as new item</button></span>
+            <div class="sm-unk-find hidden"><input placeholder="Type the item's name, code or model" autocomplete="off"><div class="stk-found"></div></div></div>`).join("")}${((r.result || {}).unread || []).length ? `<div class="quiet">Not read: ${esc(r.result.unread.join(", "))}</div>` : ""}</td>
         <td class="sm-acts">${r.file ? `<button class="link" type="button" data-sm-open>Open</button> · <button class="link" type="button" data-sm-read>Read it${r.status === "new" ? "" : " again"}</button>${["new", "unread", "needs_supplier", "error"].includes(r.status) ? ` · <button class="link" type="button" data-sm-ignore>Ignore</button>` : ""}` : ""}</td></tr>`; }).join("")}</tbody></table>`}</section>`;
 }
 function supMailShow(msg) {
@@ -8588,6 +8614,32 @@ function supMailShow(msg) {
       await supMailLoad(); await loadPbUpdates(); renderPricebook(); });
     tr.querySelector("[data-sm-ignore]")?.addEventListener("click", async () => { await db.rpc("supplier_mail_set", { p_id: id, p_status: "ignored" }); await supMailLoad(); supMailShow(); renderPricebook(); });
     tr.querySelector(".sm-sup")?.addEventListener("change", e => { row.supplier = e.target.value || null; });
+    const reread = async (note) => { const sup = tr.querySelector(".sm-sup")?.value || row.supplier; supMailShow(note || "Reading it again…");
+      let res; try { res = await supMailRead({ ...row, supplier: sup }, sup); } catch (er) { res = { status: "error", result: { note: er.message } }; }
+      const keep = (row.result || {}).unknown || [], done = keep.filter(u => u.done).map(u => u.code);
+      if (res.result && res.result.unknown) res.result.unknown = res.result.unknown.map(u => done.includes(u.code) ? { ...u, done: true } : u);
+      if (res.result && res.result.unknown && !res.result.unknown.some(u => !u.done) && res.status === "unread") res.status = "nothing";
+      await db.rpc("supplier_mail_set", { p_id: id, p_status: res.status, p_supplier: res.supplier || sup, p_result: res.result });
+      await supMailLoad(); await loadPbUpdates(); renderPricebook(); };
+    tr.querySelectorAll("[data-sm-unk]").forEach(box => { const u = ((row.result || {}).unknown || []).filter(x => !x.done)[Number(box.dataset.smUnk)]; if (!u) return;
+      const find = box.querySelector(".sm-unk-find"), inp = find.querySelector("input"), out = find.querySelector(".stk-found"); let t;
+      box.querySelector("[data-sm-match]").addEventListener("click", () => { find.classList.toggle("hidden"); inp.value = (u.description || "").split(/\s+/).slice(0, 3).join(" "); inp.focus(); inp.dispatchEvent(new Event("input")); });
+      inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(async () => { const q = inp.value.trim(); if (q.length < 2) { out.innerHTML = ""; return; }
+        const { data } = await db.rpc("stock_find", { p_q: q }); if (inp.value.trim() !== q) return;
+        out.innerHTML = (data || []).length ? data.map(x => `<button type="button" class="stk-pick" data-pick="${x.id}"><b>${esc(x.name)}</b> <span class="quiet">${esc([x.model, x.code].filter(Boolean).join(" · "))}</span></button>`).join("") : `<span class="quiet">Nothing found. Try fewer words.</span>`;
+        out.querySelectorAll("[data-pick]").forEach(b => b.addEventListener("click", async () => { const sup = tr.querySelector(".sm-sup")?.value || row.supplier;
+          if (!sup) { alertMsg("Pick the supplier first."); return; }
+          const { error } = await db.rpc("link_supplier_code", { p_supplier: sup, p_code: u.code, p_item: Number(b.dataset.pick) });
+          if (error) { alertMsg("Not saved: " + rpcErr(error)); return; }
+          await reread(`Remembered ${u.code} for ${b.querySelector("b").textContent}. Reading it again…`); })); }, 250); });
+      box.querySelector("[data-sm-new]").addEventListener("click", async () => { const sup = tr.querySelector(".sm-sup")?.value || row.supplier;
+        if (!sup) { alertMsg("Pick the supplier first."); return; }
+        const r0 = row.result || {}, { data, error } = await db.rpc("import_supplier_lines", { p_supplier: sup, p_ref: r0.ref || ("email " + fmtDate(row.received || new Date().toISOString())), p_date: r0.date || ymd(new Date()), p_lines: [{ code: u.code, description: u.description, cost: u.cost }] });
+        if (error) { alertMsg("Not added: " + rpcErr(error)); return; }
+        u.done = true; const c = { ...(r0.counts || {}) }; for (const [k, v] of Object.entries(data.counts || {})) c[k] = (c[k] || 0) + v;
+        const left = (r0.unknown || []).filter(x => !x.done).length;
+        await db.rpc("supplier_mail_set", { p_id: id, p_status: (c.added || c["new item waiting"]) ? "imported" : left ? "unread" : "nothing", p_supplier: sup, p_result: { ...r0, counts: c, note: left ? r0.note : "" } });
+        await supMailLoad(); await loadPbUpdates(); renderPricebook(); }); });
   });
 }
 
