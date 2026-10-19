@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.175335">
+<meta name="app-version" content="2026-10-19.180607">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1243,6 +1243,9 @@
   .btn.ie-danger { background: var(--red) !important; color: #fff !important; }
   .ie-look { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
   .ie-billto { margin: 10px 0; }
+  .ie-tank { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line, #c9d0d8); display: grid; gap: 8px; }
+  .ie-tank-sum { margin: 0; }
+  .pp-sps .seg { margin-bottom: 8px; }
   .pp-addform { margin-top: 12px; padding: 14px; border: 1px solid var(--line, #d9dee5); border-radius: 10px; background: var(--soft, #f5f7fa); display: grid; gap: 10px; }
   .pp-addform h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); }
   .pp-add-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 14px; }
@@ -7307,8 +7310,11 @@ async function loadPartners() {
   if (!PP.stores.some(x => x.id === PP.store)) PP.store = PP.stores[0]?.id ?? null;
   if (PP.stores.find(x => x.id === PP.store)?.pays_us) PP.view = "pay";   // Vista: payments only
   if (!PP.store) { $("#main").innerHTML = `<div class="empty"><div><h2>No stores set up</h2>No partner where the customer pays the store.</div></div>`; return; }
-  const [l, pays] = await Promise.all([db.rpc("partner_ledger", { p_partner: PP.store, p_show: PP.show, p_from: null, p_to: null }), db.rpc("partner_payments", { p_partner: PP.store }),
+  const vis = !!PP.stores.find(x => x.id === PP.store)?.pays_us;
+  const [l, pays, sps] = await Promise.all([db.rpc("partner_ledger", { p_partner: PP.store, p_show: PP.show, p_from: null, p_to: null }), db.rpc("partner_payments", { p_partner: PP.store }),
+    vis ? db.rpc("partner_supplier_pays", { p_partner: PP.store, p_show: PP.spAll ? "all" : "open" }) : null,
     PP.view === "jobs" ? loadPartnerJobs() : null]);
+  PP.sps = sps && !sps.error ? sps.data || [] : null;
   if (l.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the list</h2>${esc(rpcErr(l.error))}</div></div>`; return; }
   PP.rows = l.data; PP.pays = pays.data || [];
   PP.picked = new Set([...PP.picked].filter(id => PP.rows.some(r => r.invoice_id === id)));
@@ -7316,6 +7322,8 @@ async function loadPartners() {
 }
 function renderPartners(msg) {
   const st = PP.stores.find(x => x.id === PP.store), edit = canPartnerPay(), top = $("#main").scrollTop, vis = !!st.pays_us;
+  const oldPp = $("#main").querySelector("article.pp"), keepH = oldPp && PP._drawn === PP.store ? Math.max(oldPp.offsetHeight, parseFloat(oldPp.style.minHeight) || 0) : 0;   // same partner: don't let the page shrink under you
+  PP._drawn = PP.store;
   const q = PP.q.toLowerCase(), rows = (PP.rows || []).filter(r => !q || [r.customer_name, r.invoice_number, r.reference, r.street, r.city].some(x => (x || "").toLowerCase().includes(q)));
   const sum = k => rows.reduce((s, r) => s + Number(r[k] || 0), 0);
   const seg = (list, cur, attr) => `<div class="seg" role="group">${list.map(([k, txt]) => `<button type="button" aria-pressed="${cur === k}" ${attr}="${k}">${txt}</button>`).join("")}</div>`;
@@ -7373,14 +7381,15 @@ function renderPartners(msg) {
         <button class="btn quiet-btn" type="button" id="pp-settle">${PP.show === "paid" ? "Undo settled" : "Mark settled"}</button>
         <button class="link" type="button" id="pp-unpick">Clear</button></div>`; })() : ""}
     ${PP.pay ? ppPayForm(st) : ""}
-    ${rows.length ? `<div class="staff-wrap"><table class="calls-table pp-table"><thead><tr>${edit ? "<th></th>" : ""}<th>Date</th><th>Invoice</th><th>Customer</th><th class="r">Sale</th>${vis ? `<th>Account / contract #</th><th>Approval #</th><th>Ready to send?</th>` : `<th>Cut</th><th class="r">Card fee</th><th class="r">We get</th>`}<th class="r">Received</th><th class="r">Still owed</th>${vis ? "" : `<th>${esc(st.name)} #</th>`}</tr></thead><tbody>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table pp-table"><thead><tr>${edit ? "<th></th>" : ""}<th>Date</th><th>Invoice</th><th>Customer</th><th class="r">Sale</th>${vis ? `<th class="r">Tank paid to supplier</th><th>Account / contract #</th><th>Approval #</th><th>Ready to send?</th>` : `<th>Cut</th><th class="r">Card fee</th><th class="r">We get</th>`}<th class="r">Received</th><th class="r">Still owed</th>${vis ? "" : `<th>${esc(st.name)} #</th>`}</tr></thead><tbody>
       ${rows.map(r => { const [lab, cls] = PP_STATUS[r.status] || ["", ""]; return `<tr data-pp="${r.invoice_id}" class="${PP.picked.has(r.invoice_id) ? "pp-sel" : ""}">
         ${edit ? `<td class="pb-pick"><input type="checkbox" data-pp-pick="${r.invoice_id}" ${PP.picked.has(r.invoice_id) ? "checked" : ""} aria-label="Pick invoice ${esc(r.invoice_number)}"></td>` : ""}
         <td class="num">${fmtDate(r.invoice_date)}</td>
         <td><button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><div><span class="pp-badge ${cls}">${lab}${r.settled && Number(r.still_due) === 0 && Number(r.received) < Number(r.expected) - 0.01 ? " (settled)" : ""}</span></div></td>
         <td><button class="link" type="button" data-pp-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}${r.job_type ? " · " + esc(r.job_type) : ""}</div></td>
         <td class="r num"><strong>${money(r.total)}</strong></td>
-        ${vis ? `<td>${edit ? `<input class="pp-in pp-ref" data-pp-acct value="${esc(r.account || "")}" placeholder="add" aria-label="${esc(st.name)} account or contract #">` : esc(r.account || "")}</td>
+        ${vis ? `<td class="r num">${r.supplier_name ? `${money(r.supplier_amount)}<div class="quiet">${esc(r.supplier_name)}</div><div class="quiet">${esc((SP_STEPS.find(x => x[0] === r.supplier_status) || ["", ""])[1].replace("the partner", st.name).replace("Partner", st.name))}</div>` : `<span class="quiet">–</span>`}</td>
+        <td>${edit ? `<input class="pp-in pp-ref" data-pp-acct value="${esc(r.account || "")}" placeholder="add" aria-label="${esc(st.name)} account or contract #">` : esc(r.account || "")}</td>
         <td>${edit ? `<input class="pp-in pp-ref" data-pp-appr value="${esc(r.approval || "")}" placeholder="add" aria-label="${esc(st.name)} approval #">` : esc(r.approval || "")}</td>
         <td>${(r.missing || []).length ? `<span class="pp-badge pp-wait">Needs ${esc(r.missing.join(", "))}</span>` : `<span class="pp-badge pp-paid">✓ Ready</span>`}</td>` : `<td class="pp-cut">${edit ? [15, 20].map(p => `<button class="chip small" type="button" data-pp-cut="${p}" aria-pressed="${Number(r.cut_pct) === p}">${p}%</button>`).join("") : Number(r.cut_pct) + "%"}
           ${![15, 20].includes(Number(r.cut_pct)) ? `<span class="quiet">${Number(r.cut_pct)}%</span>` : ""}<div class="quiet num">${money(r.cut_amount)}</div></td>
@@ -7390,6 +7399,15 @@ function renderPartners(msg) {
         <td class="r num"><strong class="${Number(r.still_due) > 0 ? "pp-due" : ""}">${money(r.still_due)}</strong></td>
         ${vis ? "" : `<td>${edit ? `<input class="pp-in pp-ref" data-pp-ref value="${esc(r.reference || "")}" placeholder="add" aria-label="${esc(st.name)} number">` : esc(r.reference || "")}</td>`}
       </tr>`; }).join("")}</tbody></table></div>` : `<div class="quiet" style="padding:24px 0">${PP.show === "waiting" ? `${esc(st.name)} doesn't owe anything right now.` : "Nothing here."}</div>`}
+    ${vis && PP.sps ? `<section class="block pp-pays pp-sps"><h2>Tanks ${esc(st.name)} pays our suppliers for <span class="count">${PP.sps.length}</span></h2>
+      <div class="seg" role="group"><button type="button" data-pp-spall="0" aria-pressed="${!PP.spAll}">Not on the statement yet</button><button type="button" data-pp-spall="1" aria-pressed="${!!PP.spAll}">All</button></div>
+      ${PP.sps.length ? `<table class="calls-table"><thead><tr><th>Invoice</th><th>Customer</th><th>Supplier</th><th class="r">Amount</th><th>Where it's at</th></tr></thead><tbody>
+        ${PP.sps.map(x => `<tr data-sp="${x.id}"><td><button class="link" type="button" data-invoice="${x.invoice_id}">${esc(x.invoice_number || "")}</button><div class="quiet">${fmtDate(x.invoice_date)}</div></td>
+          <td><button class="link" type="button" data-pp-cust="${x.customer_id}">${esc(x.customer_name || "")}</button></td><td>${esc(x.supplier)}</td><td class="r num"><strong>${money(x.amount)}</strong></td>
+          <td><div class="seg" role="group">${SP_STEPS.map(([v, t]) => `<button type="button" data-pp-sstat="${v}" aria-pressed="${x.status === v}" ${edit ? "" : "disabled"}>${esc(t.replace("the partner", st.name).replace("Partner", st.name))}</button>`).join("")}</div>
+            ${x.paid_on ? `<div class="quiet">paid ${fmtDate(x.paid_on)}${x.reference ? " · " + esc(x.reference) : ""}</div>` : ""}</td></tr>`).join("")}</tbody></table>`
+        : `<p class="quiet">${PP.spAll ? "None yet." : "Nothing waiting. Every tank payment shows on the supplier's statement."} Pick "${esc(st.name)} pays me the labour, pays my supplier for the tank" on an invoice to add one.</p>`}
+    </section>` : ""}
     <section class="block pp-pays"><h2>Payments received from ${esc(st.name)} <span class="count">${PP.pays.length}</span></h2>
       ${PP.pays.length ? `<table class="calls-table"><thead><tr><th>Received</th><th class="r">Amount</th><th>Reference</th><th>Invoices</th><th>Entered by</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
         ${PP.pays.map(p => `<tr><td class="num">${fmtDate(p.received_on)}</td><td class="r num"><strong>${money(p.amount)}</strong></td><td>${esc(p.reference || "")}${p.notes ? `<div class="quiet">${esc(p.notes)}</div>` : ""}</td>
@@ -7398,6 +7416,7 @@ function renderPartners(msg) {
         : `<p class="quiet">None recorded in the app yet. Payments ServiceTitan already had are counted in "Received".</p>`}
     </section>`}
   </article>`;
+  { const a = $("#main").querySelector("article.pp"); if (a && keepH) a.style.minHeight = keepH + "px"; }
   $("#main").scrollTop = top;
   wirePartners(st, rows);
   if (PP.view === "jobs") wirePartnerJobs(st);
@@ -7477,6 +7496,12 @@ function wirePartners(st, rows) {
     if (error) return say("Not saved: " + rpcErr(error));
     await loadPartners(); renderPartners(`Saved ${st.name}'s rules.`);
   });
+  document.querySelectorAll("[data-pp-spall]").forEach(b => b.addEventListener("click", () => { if (b.getAttribute("aria-pressed") === "true") return;
+    PP.spAll = b.dataset.ppSpall === "1"; keepSpot(`[data-pp-spall="${b.dataset.ppSpall}"]`, $("#main"), loadPartners); }));
+  document.querySelectorAll("[data-pp-sstat]").forEach(b => b.addEventListener("click", () => { if (b.getAttribute("aria-pressed") === "true") return;
+    const id = Number(b.closest("tr").dataset.sp), v = b.dataset.ppSstat;
+    keepSpot(".pp-sps h2", $("#main"), async () => { const { error } = await db.rpc("supplier_pay_set", { p_id: id, p_status: v });
+      if (error) return say("Not saved: " + rpcErr(error)); await loadPartners(); }); }));
   const terms = async (ids, p, m) => {
     const { error } = await db.rpc("save_partner_terms", { p_invoice_ids: ids, p });
     if (error) return say("Not saved: " + rpcErr(error));
@@ -7844,7 +7869,7 @@ async function openInvoiceEditor(id, msg) {
   if (location.hash !== "#invoice-edit=" + id) setPage("invoice-edit=" + id, "invoice", "invoice");
   if (!document.querySelector(".ie")) $("#main").innerHTML = `<div class="loading">Opening the invoice…</div>`;
   const [{ data, error }, cost, bill] = await Promise.all([db.rpc("inv_editor", { p_invoice: id }), db.rpc("inv_costing", { p_invoice: id }), db.rpc("inv_bill_info", { p_invoice: id })]);
-  if (data) { data.cost = cost.error ? null : cost.data; data.bill = bill.error ? null : bill.data; }
+  if (data) { data.cost = cost.error ? null : cost.data; data.bill = bill.error || !bill.data ? null : { ...bill.data, invoice_id: id }; }
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the invoice</h2>${esc(error ? rpcErr(error) : "It no longer exists")}</div></div>`; return; }
   IE = { ...(IE?.id === id ? IE : {}), ...data, id };
   nameCurrentPage("invoice " + data.number);
@@ -7924,20 +7949,41 @@ function wireCosting(root, I, call, reload) {
 // Bill to the customer, or to a partner who pays us (Vista). Used on the invoice screen ("ie") and when viewing an invoice ("iv").
 function billToHtml(B, k) {
   if (!B || !(B.options || []).length && !B.partner) return "";
+  const invId = B.invoice_id;
   const P = B.partner, dis = B.can_change ? "" : "disabled", miss = B.missing || [];
   const rule = (ok, txt) => `<li class="${ok ? "ok" : "no"}"><b>${ok ? "✓" : "✗"}</b>${txt}</li>`;
   return `<div class="ie-billto no-print"><div class="ie-look"><span class="cl-label">Bill to</span>
       <div class="seg" role="group"><button type="button" data-${k}-bill="" aria-pressed="${!P}" ${dis}>The customer</button>${(B.options || []).map(o =>
         `<button type="button" data-${k}-bill="${o.id}" aria-pressed="${P?.id === o.id}" ${dis}>${esc(o.name)} <span class="ie-look-sub">pays us</span></button>`).join("")}</div></div>
     ${P ? `<div class="ie-billp">
-      <p>${esc(P.name)} pays this invoice in full (no cut). It's off the customer's balance and shows under ${esc(P.name)} on the Partners page until ${esc(P.name)} pays.</p>
+      <p>${B.supplier_pay ? `${esc(P.name)} pays you the labour and pays ${esc(B.supplier_pay.supplier)} for the tank.` : `${esc(P.name)} pays this invoice in full (no cut).`} It's off the customer's balance and shows under ${esc(P.name)} on the Partners page until ${esc(P.name)} pays.</p>
       <div class="ie-billf">
         <label>${esc(P.name)} account or contract #<input data-${k}-ref="acct" value="${esc(B.account || "")}" maxlength="80" ${dis} placeholder="${P.needs_account ? "needed" : ""}"></label>
         <label>${esc(P.name)} approval / authorization #<input data-${k}-ref="appr" value="${esc(B.approval || "")}" maxlength="80" ${dis} placeholder="${P.needs_approval ? "needed" : ""}"></label>
       </div>
       <ul class="ie-rules">${P.needs_signature ? rule(B.signed, "Customer signature") : ""}${P.needs_account ? rule(!!(B.account || "").trim(), "Account or contract #") : ""}${P.needs_approval ? rule(!!(B.approval || "").trim(), "Approval #") : ""}
         <li class="sum ${miss.length ? "no" : "ok"}">${miss.length ? `Not ready to send to ${esc(P.name)} yet` : `Ready to send to ${esc(P.name)}`}</li></ul>
+      ${tankHtml(B, k, invId)}
     </div>` : ""}</div>`;
+}
+// Who pays for the tank: the partner pays us everything, or pays us the labour and pays our supplier for the tank
+const TANK_OPEN = new Set();   // invoices where "pays the supplier" was picked but no supplier saved yet
+const SP_STEPS = [["submitted", "Waiting for the partner to pay the supplier"], ["paid_to_supplier", "Partner paid the supplier"], ["confirmed_on_statement", "Shows on the supplier's statement"]];
+function tankHtml(B, k, invId) {
+  const P = B.partner, sp = B.supplier_pay, dis = B.can_change ? "" : "disabled", split = !!sp || TANK_OPEN.has(invId);
+  if (!("supplier_pay" in B)) return "";   // setup 99 not run yet
+  const amt = sp ? Number(sp.amount) : Number(B.tank_guess || 0), total = Number(B.total || 0);
+  return `<div class="ie-tank" data-sp="${sp ? sp.id : ""}"><div class="ie-look"><span class="cl-label">Who pays for the tank</span>
+      <div class="seg" role="group"><button type="button" data-${k}-tank="all" aria-pressed="${!split}" ${dis}>${esc(P.name)} pays me everything</button><button type="button" data-${k}-tank="sup" aria-pressed="${split}" ${dis}>${esc(P.name)} pays me the labour, pays my supplier for the tank</button></div></div>
+    ${split ? `<div class="ie-billf">
+        <label>Supplier ${esc(P.name)} pays<select data-${k}-sup ${dis}><option value="">Pick the supplier…</option>${(B.suppliers || []).map(x => `<option value="${x.id}" ${sp?.supplier_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
+        <label>Amount for the tank<input data-${k}-amt inputmode="decimal" value="${amt > 0 ? amt.toFixed(2) : ""}" placeholder="e.g. 650.00" ${dis}></label>
+      </div>
+      <p class="ie-tank-sum">${sp ? `${esc(P.name)} pays you <b>${money(total - amt)}</b> · ${esc(P.name)} pays ${esc(sp.supplier)} <b>${money(amt)}</b> for the tank`
+        : `<span class="quiet">Pick the supplier to save it.${B.tank_guess != null && Number(B.tank_guess) > 0 ? ` The amount is the tank's cost on this invoice; change it if ${esc(P.name)} pays the supplier a different amount.` : ""}</span>`}</p>
+      ${sp ? `<div class="ie-look"><span class="cl-label">Tank payment</span><div class="seg" role="group">${SP_STEPS.map(([v, t]) => `<button type="button" data-${k}-sstat="${v}" aria-pressed="${sp.status === v}" ${dis}>${t.replace("the partner", esc(P.name)).replace("Partner", esc(P.name))}</button>`).join("")}</div>
+        ${sp.paid_on ? `<span class="quiet">paid ${fmtDate(sp.paid_on)}${sp.reference ? " · " + esc(sp.reference) : ""}</span>` : ""}</div>` : ""}` : ""}
+  </div>`;
 }
 // Keep what was clicked in the same spot on the screen after the page is redrawn
 async function keepSpot(sel, scroller, fn) {
@@ -7946,7 +7992,22 @@ async function keepSpot(sel, scroller, fn) {
   const b = document.querySelector(sel);
   if (y0 != null && b && scroller) scroller.scrollTop += b.getBoundingClientRect().top - y0;
 }
-function wireBillTo(root, k, invId, call, scroller) {
+function wireBillTo(root, k, invId, call, scroller, redraw) {
+  root.querySelectorAll(`[data-${k}-tank]`).forEach(b => b.addEventListener("click", () => {
+    if (b.getAttribute("aria-pressed") === "true") return;
+    if (b.dataset[k + "Tank"] === "sup") { TANK_OPEN.add(invId); keepSpot(`[data-${k}-tank="sup"]`, scroller, redraw); return; }
+    TANK_OPEN.delete(invId);
+    keepSpot(`[data-${k}-tank="all"]`, scroller, async () => { if (root.querySelector(`[data-${k}-sstat]`)) await call("inv_set_supplier_pay", { p_invoice: invId, p_supplier: null, p_amount: null }, "The partner pays you everything again."); else await redraw(); });
+  }));
+  const saveTank = el => { const sup = root.querySelector(`[data-${k}-sup]`).value, a = String(root.querySelector(`[data-${k}-amt]`).value).replace(/[$,\s]/g, "");
+    if (!sup || a === "" || !isFinite(Number(a))) return;
+    keepSpot(el, scroller, () => call("inv_set_supplier_pay", { p_invoice: invId, p_supplier: Number(sup), p_amount: Number(a) }, "Saved: the partner pays the supplier for the tank.")); };
+  root.querySelector(`[data-${k}-sup]`)?.addEventListener("change", () => saveTank(`[data-${k}-sup]`));
+  root.querySelector(`[data-${k}-amt]`)?.addEventListener("change", () => saveTank(`[data-${k}-amt]`));
+  root.querySelectorAll(`[data-${k}-sstat]`).forEach(b => b.addEventListener("click", () => {
+    if (b.getAttribute("aria-pressed") === "true") return;
+    keepSpot(`[data-${k}-sstat="${b.dataset[k + "Sstat"]}"]`, scroller, () => call("supplier_pay_set", { p_id: Number(b.closest(".ie-tank").dataset.sp), p_status: b.dataset[k + "Sstat"] }, "Tank payment updated."));
+  }));
   root.querySelectorAll(`[data-${k}-bill]`).forEach(b => b.addEventListener("click", () => {
     if (b.getAttribute("aria-pressed") === "true") return;
     const v = b.dataset[k + "Bill"];
@@ -8110,7 +8171,7 @@ function wireInvoiceEditor() {
   document.querySelectorAll("[data-ie-look]").forEach(b => b.addEventListener("click", () => call("inv_set_look", { p_invoice: I.id, p_partner: b.dataset.ieLook ? Number(b.dataset.ieLook) : null },
     b.dataset.ieLook ? "The invoice now has the " + b.textContent.replace("installed by Reid", "").trim() + " look." : "The invoice now has the Reid look.")));
   $("#ie-cust")?.addEventListener("click", () => openCustomer(I.customer_id));
-  wireBillTo(document, "ie", I.id, call, $("#main"));
+  wireBillTo(document, "ie", I.id, call, $("#main"), () => renderInvoiceEditor());
 }
 
 /* ---------- Price book ---------- */
@@ -11270,7 +11331,7 @@ async function openInvoice(id, keep) {
     db.from("invoices").select("*, invoice_lines(id, sequence, line_type, description, quantity, unit_price, taxable, line_total, tax_amount, no_charge, regular_price, hidden), payment_applications(amount, applied_at, payments(payment_number, method, received_on, reference)), jobs(job_number, summary, job_types(name), partners(name, branding_name, branding_logo_url, customer_pays_partner)), look_partner:partners!invoices_branding_partner_id_fkey(name, branding_name, branding_logo_url, customer_pays_partner), bill_partner:partners!invoices_bill_to_partner_id_fkey(name, street, city, province, postal_code, phone, billing_email, bill_to_ok), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id)), business_units(name)").eq("id", id).single(),
     COMPANY ? Promise.resolve({ data: COMPANY }) : db.from("company_settings").select("*").limit(1).maybeSingle(),
     officeInv() ? db.rpc("invoice_looks") : Promise.resolve({ data: [] }),
-    officeInv() ? db.rpc("inv_bill_info", { p_invoice: id }) : Promise.resolve({ data: null })]);
+    officeInv() ? db.rpc("inv_bill_info", { p_invoice: id }).then(r => (r.data && (r.data.invoice_id = id), r)) : Promise.resolve({ data: null })]);
   if (inv.error) { $("#inv-paper").innerHTML = `<div class="staff-msg err" style="padding:40px">Couldn't open this invoice: ${esc(inv.error.message)}</div>`; return; }
   COMPANY = co.data || { company_name: "Reid Heating & Cooling" };
   const i = inv.data, c = COMPANY, l = i.locations || {}, cust = i.customers || {};
@@ -11329,7 +11390,8 @@ async function openInvoice(id, keep) {
         <tr><td>HST</td><td class="r num">${money(tax)}</td></tr>
         <tr class="inv-total"><td>Total</td><td class="r num">${money(total)}</td></tr>
         ${paid ? `<tr><td>Paid</td><td class="r num">−${money(paid)}</td></tr>` : ""}
-        <tr class="inv-balance"><td>${bp ? "Balance owing by " + esc(bp.name) : "Balance owing"}</td><td class="r num">${i.not_owed_reason && balance > 0.004 ? `<s>${money(balance)}</s> ${money(0)}` : money(balance)}</td></tr>
+        ${bp && billR.data?.supplier_pay ? `<tr><td>Tank paid by ${esc(bp.name)} to ${esc(billR.data.supplier_pay.supplier)}</td><td class="r num">−${money(billR.data.supplier_pay.amount)}</td></tr>` : ""}
+        <tr class="inv-balance"><td>${bp ? "Balance owing by " + esc(bp.name) : "Balance owing"}</td><td class="r num">${i.not_owed_reason && balance > 0.004 ? `<s>${money(balance)}</s> ${money(0)}` : money(bp && billR.data?.supplier_pay ? Math.max(balance - Number(billR.data.supplier_pay.amount), 0) : balance)}</td></tr>
       </table>
     </div>
     ${balance > 0.004 && i.status !== "void" && !brand?.customer_pays_partner && !bp ? `<div class="inv-owed no-print">${i.not_owed_reason
@@ -11366,7 +11428,7 @@ async function openInvoice(id, keep) {
     const e2 = $("#bill-msg"); if (e2) { e2.className = "staff-msg ok"; e2.textContent = m; }
     if (current?.c?.id === i.customer_id && document.querySelector(".file")) openCustomer(i.customer_id);
     if (document.querySelector(".owing")) loadOwing();
-  }, $("#inv-view"));
+  }, $("#inv-view"), () => openInvoice(i.id, true));
   document.querySelector("[data-inv-edit]")?.addEventListener("click", e => { const id = Number(e.currentTarget.dataset.invEdit); closeInvoice(); openInvoiceEditor(id); });
   const setOwed = async reason => {
     const m = $("#owed-msg"); if (m) { m.className = "staff-msg"; m.textContent = "Saving…"; }
