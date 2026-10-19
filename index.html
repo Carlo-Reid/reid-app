@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.171953">
+<meta name="app-version" content="2026-10-19.173532">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1235,6 +1235,17 @@
   .ie-cancel-f input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; }
   .btn.ie-danger { background: var(--red) !important; color: #fff !important; }
   .ie-look { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .ie-billto { margin: 10px 0; }
+  .ie-billp { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line, #d9dee5); border-radius: 10px; background: var(--soft, #f5f7fa); }
+  .ie-billp p { margin: 0 0 8px; }
+  .ie-billf { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+  .ie-billf label { display: flex; flex-direction: column; gap: 3px; font-size: calc(12.5px * var(--fs, 1)); font-weight: 600; flex: 1 1 200px; }
+  .ie-billf input { font: inherit; font-weight: 400; padding: 6px 8px; border: 1px solid var(--line, #c9d0d8); border-radius: 6px; }
+  .ie-rules { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: calc(13px * var(--fs, 1)); }
+  .ie-rules li b { display: inline-block; width: 1.2em; }
+  .ie-rules li.ok { color: #2E7D4F; } .ie-rules li.no { color: #B23B2E; }
+  .ie-rules li.sum { font-weight: 700; flex-basis: 100%; }
+  .inv-billref { font-size: calc(12px * var(--fs, 1)); color: #555; }
   .ie-look-sub { font-weight: 500; font-size: calc(12px * var(--fs, 1)); opacity: .8; }
   .ie-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--red); color: #fff; padding: 10px 16px; border-radius: 10px; z-index: 90; font-weight: 650; }
   .inv-note { margin-top: 16px; padding: 10px 14px; background: #F5F7FA; border-radius: 6px; white-space: pre-line; font-size: 14px; }
@@ -7237,6 +7248,7 @@ async function loadPartners() {
   if (s.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load partner payments</h2>${esc(rpcErr(s.error))}</div></div>`; return; }
   PP.stores = s.data;
   if (!PP.stores.some(x => x.id === PP.store)) PP.store = PP.stores[0]?.id ?? null;
+  if (PP.stores.find(x => x.id === PP.store)?.pays_us) PP.view = "pay";   // Vista: payments only
   if (!PP.store) { $("#main").innerHTML = `<div class="empty"><div><h2>No stores set up</h2>No partner where the customer pays the store.</div></div>`; return; }
   const [l, pays] = await Promise.all([db.rpc("partner_ledger", { p_partner: PP.store, p_show: PP.show, p_from: null, p_to: null }), db.rpc("partner_payments", { p_partner: PP.store }),
     PP.view === "jobs" ? loadPartnerJobs() : null]);
@@ -7246,7 +7258,7 @@ async function loadPartners() {
   renderPartners();
 }
 function renderPartners(msg) {
-  const st = PP.stores.find(x => x.id === PP.store), edit = canPartnerPay(), top = $("#main").scrollTop;
+  const st = PP.stores.find(x => x.id === PP.store), edit = canPartnerPay(), top = $("#main").scrollTop, vis = !!st.pays_us;
   const q = PP.q.toLowerCase(), rows = (PP.rows || []).filter(r => !q || [r.customer_name, r.invoice_number, r.reference, r.street, r.city].some(x => (x || "").toLowerCase().includes(q)));
   const sum = k => rows.reduce((s, r) => s + Number(r[k] || 0), 0);
   const seg = (list, cur, attr) => `<div class="seg" role="group">${list.map(([k, txt]) => `<button type="button" aria-pressed="${cur === k}" ${attr}="${k}">${txt}</button>`).join("")}</div>`;
@@ -7255,17 +7267,18 @@ function renderPartners(msg) {
     <header class="cl-hero">
       <div class="cl-hero-text"><span class="cl-eyebrow">Partner pay</span><h1>${esc(st.name)}</h1>
         <p>${PP.view === "jobs" ? `Follow each ${esc(st.name)} lead through the portal: accepted, booked, estimate, sold, paid, installed, submitted. Fill in and sign ${esc(st.name)}'s form on the iPad.`
+          : vis ? `We bill ${esc(st.name)}. ${esc(st.name)} pays us the full amount, no cut. Each invoice needs the signature, account # and approval #.`
           : `The customer pays ${esc(st.name)}. ${esc(st.name)} pays us what's left after its cut and the gift card fee. Record each payment here to see what's still owed.`}</p></div>
       <div class="cl-hero-range"><span>${esc(st.name)} still owes us</span><strong class="ow-hero-amt">${money(st.still_owed)}</strong><em>${Number(st.invoices).toLocaleString()} invoices waiting</em></div>
     </header>
     <section class="cl-tools">
       <div class="cl-row">
-        <div class="cl-group"><span class="cl-label">Store</span>${seg(PP.stores.map(x => [String(x.id), `${esc(x.name)}${Number(x.invoices) ? ` <span class="pp-n">${x.invoices}</span>` : ""}`]), String(PP.store), "data-pp-store")}</div>
-        <div class="cl-group"><span class="cl-label">Page</span>${seg([["jobs", "Jobs"], ["pay", "Payments"]], PP.view, "data-pp-view")}</div>
+        <div class="cl-group"><span class="cl-label">Partner</span>${seg(PP.stores.map(x => [String(x.id), `${esc(x.name)}${Number(x.invoices) ? ` <span class="pp-n">${x.invoices}</span>` : ""}`]), String(PP.store), "data-pp-store")}</div>
+        ${vis ? "" : `<div class="cl-group"><span class="cl-label">Page</span>${seg([["jobs", "Jobs"], ["pay", "Payments"]], PP.view, "data-pp-view")}</div>`}
         <div class="cl-group"><span class="cl-label">Show</span>${PP.view === "jobs" ? seg(PJ_SHOW, PP.jshow, "data-pj-show") : seg(PP_SHOW, PP.show, "data-pp-show")}</div>
         <label class="cl-group pp-search"><span class="cl-label">Find</span><input type="search" id="pp-q" value="${esc(PP.q)}" placeholder="Customer, invoice or ${esc(st.name)} number"></label>
       </div>
-      ${PP.view === "jobs" ? "" : `<form class="cl-row cl-row-2 pp-defaults" id="pp-defaults">
+      ${PP.view === "jobs" || vis ? "" : `<form class="cl-row cl-row-2 pp-defaults" id="pp-defaults">
         <div class="cl-group"><span class="cl-label">${esc(st.name)}'s usual terms</span>
           <div class="pp-def-in"><label>Cut <input name="cut" inputmode="decimal" value="${Number(st.default_cut_pct ?? 15)}" ${edit ? "" : "disabled"}> %</label>
             <label>Gift card fee $ <input name="card" inputmode="decimal" value="${Number(st.default_card_fee ?? 0).toFixed(2)}" ${edit ? "" : "disabled"}></label>
@@ -7274,7 +7287,8 @@ function renderPartners(msg) {
     </section>
     ${PP.view === "jobs" ? partnerJobsHtml(st) : `<div class="cl-stats">
       ${tile("s-all", "Sales", sum("total"), `${rows.length.toLocaleString()} invoices`)}
-      ${tile("s-cx", `${esc(st.name)}'s cut + card fees`, sum("cut_amount") + sum("card_fee"))}
+      ${vis ? tile("s-cx", "Not ready to send", rows.filter(r => (r.missing || []).length).reduce((s, r) => s + Number(r.still_due || 0), 0), `${rows.filter(r => (r.missing || []).length).length} invoices missing something`)
+        : tile("s-cx", `${esc(st.name)}'s cut + card fees`, sum("cut_amount") + sum("card_fee"))}
       ${tile("s-booked", "We should get", sum("expected"))}
       ${tile("s-done", "Received", sum("received"))}
       ${tile("s-owe", "Still owed", sum("still_due"))}
@@ -7285,25 +7299,27 @@ function renderPartners(msg) {
     ${edit && PP.picked.size ? (() => { const pk = rows.filter(r => PP.picked.has(r.invoice_id)), due = pk.reduce((s, r) => s + Number(r.still_due), 0);
       return `<div class="pb-bulk pp-bulk"><strong>${PP.picked.size} picked · ${money(due)} still owed</strong>
         <button class="btn" type="button" id="pp-pay">Record a payment from ${esc(st.name)}</button>
-        <span>Cut <button class="chip small" type="button" data-pp-bcut="15">15%</button><button class="chip small" type="button" data-pp-bcut="20">20%</button></span>
-        <span>Card fee $<input id="pp-bcard" inputmode="decimal" placeholder="0.00"><button class="btn quiet-btn" type="button" id="pp-bcard-go">Set</button></span>
+        ${vis ? "" : `<span>Cut <button class="chip small" type="button" data-pp-bcut="15">15%</button><button class="chip small" type="button" data-pp-bcut="20">20%</button></span>
+        <span>Card fee $<input id="pp-bcard" inputmode="decimal" placeholder="0.00"><button class="btn quiet-btn" type="button" id="pp-bcard-go">Set</button></span>`}
         <button class="btn quiet-btn" type="button" id="pp-settle">${PP.show === "paid" ? "Undo settled" : "Mark settled"}</button>
         <button class="link" type="button" id="pp-unpick">Clear</button></div>`; })() : ""}
     ${PP.pay ? ppPayForm(st) : ""}
-    ${rows.length ? `<div class="staff-wrap"><table class="calls-table pp-table"><thead><tr>${edit ? "<th></th>" : ""}<th>Date</th><th>Invoice</th><th>Customer</th><th class="r">Sale</th><th>Cut</th><th class="r">Card fee</th><th class="r">We get</th><th class="r">Received</th><th class="r">Still owed</th><th>${esc(st.name)} #</th></tr></thead><tbody>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table pp-table"><thead><tr>${edit ? "<th></th>" : ""}<th>Date</th><th>Invoice</th><th>Customer</th><th class="r">Sale</th>${vis ? `<th>Account / contract #</th><th>Approval #</th><th>Ready to send?</th>` : `<th>Cut</th><th class="r">Card fee</th><th class="r">We get</th>`}<th class="r">Received</th><th class="r">Still owed</th>${vis ? "" : `<th>${esc(st.name)} #</th>`}</tr></thead><tbody>
       ${rows.map(r => { const [lab, cls] = PP_STATUS[r.status] || ["", ""]; return `<tr data-pp="${r.invoice_id}" class="${PP.picked.has(r.invoice_id) ? "pp-sel" : ""}">
         ${edit ? `<td class="pb-pick"><input type="checkbox" data-pp-pick="${r.invoice_id}" ${PP.picked.has(r.invoice_id) ? "checked" : ""} aria-label="Pick invoice ${esc(r.invoice_number)}"></td>` : ""}
         <td class="num">${fmtDate(r.invoice_date)}</td>
         <td><button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><div><span class="pp-badge ${cls}">${lab}${r.settled && Number(r.still_due) === 0 && Number(r.received) < Number(r.expected) - 0.01 ? " (settled)" : ""}</span></div></td>
         <td><button class="link" type="button" data-pp-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}${r.job_type ? " · " + esc(r.job_type) : ""}</div></td>
         <td class="r num"><strong>${money(r.total)}</strong></td>
-        <td class="pp-cut">${edit ? [15, 20].map(p => `<button class="chip small" type="button" data-pp-cut="${p}" aria-pressed="${Number(r.cut_pct) === p}">${p}%</button>`).join("") : Number(r.cut_pct) + "%"}
+        ${vis ? `<td>${edit ? `<input class="pp-in pp-ref" data-pp-acct value="${esc(r.account || "")}" placeholder="add" aria-label="${esc(st.name)} account or contract #">` : esc(r.account || "")}</td>
+        <td>${edit ? `<input class="pp-in pp-ref" data-pp-appr value="${esc(r.approval || "")}" placeholder="add" aria-label="${esc(st.name)} approval #">` : esc(r.approval || "")}</td>
+        <td>${(r.missing || []).length ? `<span class="pp-badge pp-wait">Needs ${esc(r.missing.join(", "))}</span>` : `<span class="pp-badge pp-paid">✓ Ready</span>`}</td>` : `<td class="pp-cut">${edit ? [15, 20].map(p => `<button class="chip small" type="button" data-pp-cut="${p}" aria-pressed="${Number(r.cut_pct) === p}">${p}%</button>`).join("") : Number(r.cut_pct) + "%"}
           ${![15, 20].includes(Number(r.cut_pct)) ? `<span class="quiet">${Number(r.cut_pct)}%</span>` : ""}<div class="quiet num">${money(r.cut_amount)}</div></td>
         <td class="r">${edit ? `<input class="pp-in num" data-pp-card value="${Number(r.card_fee).toFixed(2)}" inputmode="decimal" aria-label="Card fee">` : money(r.card_fee)}</td>
-        <td class="r num">${money(r.expected)}</td>
+        <td class="r num">${money(r.expected)}</td>`}
         <td class="r num">${Number(r.received) ? money(r.received) : `<span class="quiet">–</span>`}</td>
         <td class="r num"><strong class="${Number(r.still_due) > 0 ? "pp-due" : ""}">${money(r.still_due)}</strong></td>
-        <td>${edit ? `<input class="pp-in pp-ref" data-pp-ref value="${esc(r.reference || "")}" placeholder="add" aria-label="${esc(st.name)} number">` : esc(r.reference || "")}</td>
+        ${vis ? "" : `<td>${edit ? `<input class="pp-in pp-ref" data-pp-ref value="${esc(r.reference || "")}" placeholder="add" aria-label="${esc(st.name)} number">` : esc(r.reference || "")}</td>`}
       </tr>`; }).join("")}</tbody></table></div>` : `<div class="quiet" style="padding:24px 0">${PP.show === "waiting" ? `${esc(st.name)} doesn't owe anything right now.` : "Nothing here."}</div>`}
     <section class="block pp-pays"><h2>Payments received from ${esc(st.name)} <span class="count">${PP.pays.length}</span></h2>
       ${PP.pays.length ? `<table class="calls-table"><thead><tr><th>Received</th><th class="r">Amount</th><th>Reference</th><th>Invoices</th><th>Entered by</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
@@ -7335,7 +7351,8 @@ function ppPayForm(st) {
 }
 function wirePartners(st, rows) {
   const say = m => renderPartners(m);
-  document.querySelectorAll("[data-pp-store]").forEach(b => b.addEventListener("click", () => { PP.store = Number(b.dataset.ppStore); PP.picked = new Set(); PP.pay = null; savePp(); loadPartners(); }));
+  document.querySelectorAll("[data-pp-store]").forEach(b => b.addEventListener("click", () => { PP.store = Number(b.dataset.ppStore); PP.picked = new Set(); PP.pay = null; savePp();
+    keepSpot(`[data-pp-store="${b.dataset.ppStore}"]`, $("#main"), loadPartners); }));
   document.querySelectorAll("[data-pp-show]").forEach(b => b.addEventListener("click", () => { PP.show = b.dataset.ppShow; PP.picked = new Set(); PP.pay = null; savePp(); loadPartners(); }));
   document.querySelectorAll("[data-pp-view]").forEach(b => b.addEventListener("click", () => { PP.view = b.dataset.ppView; PP.picked = new Set(); savePp(); loadPartners(); }));
   document.querySelectorAll("[data-pj-show]").forEach(b => b.addEventListener("click", () => { PP.jshow = b.dataset.pjShow; savePp(); loadPartners(); }));
@@ -7360,6 +7377,13 @@ function wirePartners(st, rows) {
     terms([Number(i.closest("tr").dataset.pp)], { card_fee: v });
   }));
   document.querySelectorAll("[data-pp-ref]").forEach(i => i.addEventListener("change", () => terms([Number(i.closest("tr").dataset.pp)], { reference: i.value })));
+  document.querySelectorAll("[data-pp-acct], [data-pp-appr]").forEach(i => i.addEventListener("change", async () => {
+    const tr = i.closest("tr"), id = Number(tr.dataset.pp), r = rows.find(x => x.invoice_id === id);
+    const acct = tr.querySelector("[data-pp-acct]").value, appr = tr.querySelector("[data-pp-appr]").value;
+    const { error } = await db.rpc("inv_set_partner_refs", { p_invoice: id, p_account: acct, p_approval: appr });
+    if (error) return say("Not saved: " + rpcErr(error));
+    await loadPartners(); renderPartners(`Saved the ${st.name} numbers on invoice ${r?.invoice_number || ""}.`);
+  }));
   document.querySelectorAll("[data-pp-pick]").forEach(cb => cb.addEventListener("change", () => { const id = Number(cb.dataset.ppPick); cb.checked ? PP.picked.add(id) : PP.picked.delete(id); PP.pay = null; renderPartners(); }));
   $("#pp-all")?.addEventListener("change", e => { PP.picked = e.target.checked ? new Set(rows.map(r => r.invoice_id)) : new Set(); PP.pay = null; renderPartners(); });
   $("#pp-unpick")?.addEventListener("click", () => { PP.picked = new Set(); PP.pay = null; renderPartners(); });
@@ -7708,8 +7732,8 @@ const alertMsg = m => { const t = document.createElement("div"); t.className = "
 async function openInvoiceEditor(id, msg) {
   if (location.hash !== "#invoice-edit=" + id) setPage("invoice-edit=" + id, "invoice", "invoice");
   if (!document.querySelector(".ie")) $("#main").innerHTML = `<div class="loading">Opening the invoice…</div>`;
-  const [{ data, error }, cost] = await Promise.all([db.rpc("inv_editor", { p_invoice: id }), db.rpc("inv_costing", { p_invoice: id })]);
-  if (data) data.cost = cost.error ? null : cost.data;
+  const [{ data, error }, cost, bill] = await Promise.all([db.rpc("inv_editor", { p_invoice: id }), db.rpc("inv_costing", { p_invoice: id }), db.rpc("inv_bill_info", { p_invoice: id })]);
+  if (data) { data.cost = cost.error ? null : cost.data; data.bill = bill.error ? null : bill.data; }
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the invoice</h2>${esc(error ? rpcErr(error) : "It no longer exists")}</div></div>`; return; }
   IE = { ...(IE?.id === id ? IE : {}), ...data, id };
   nameCurrentPage("invoice " + data.number);
@@ -7786,6 +7810,43 @@ function wireCosting(root, I, call, reload) {
     call("inv_set_line_cost", { p_line: Number(el.dataset.costLine), p_cost: v }, "Saved.");
   }));
 }
+// Bill to the customer, or to a partner who pays us (Vista). Used on the invoice screen ("ie") and when viewing an invoice ("iv").
+function billToHtml(B, k) {
+  if (!B || !(B.options || []).length && !B.partner) return "";
+  const P = B.partner, dis = B.can_change ? "" : "disabled", miss = B.missing || [];
+  const rule = (ok, txt) => `<li class="${ok ? "ok" : "no"}"><b>${ok ? "✓" : "✗"}</b>${txt}</li>`;
+  return `<div class="ie-billto no-print"><div class="ie-look"><span class="cl-label">Bill to</span>
+      <div class="seg" role="group"><button type="button" data-${k}-bill="" aria-pressed="${!P}" ${dis}>The customer</button>${(B.options || []).map(o =>
+        `<button type="button" data-${k}-bill="${o.id}" aria-pressed="${P?.id === o.id}" ${dis}>${esc(o.name)} <span class="ie-look-sub">pays us</span></button>`).join("")}</div></div>
+    ${P ? `<div class="ie-billp">
+      <p>${esc(P.name)} pays this invoice in full (no cut). It's off the customer's balance and shows under ${esc(P.name)} on the Partners page until ${esc(P.name)} pays.</p>
+      <div class="ie-billf">
+        <label>${esc(P.name)} account or contract #<input data-${k}-ref="acct" value="${esc(B.account || "")}" maxlength="80" ${dis} placeholder="${P.needs_account ? "needed" : ""}"></label>
+        <label>${esc(P.name)} approval / authorization #<input data-${k}-ref="appr" value="${esc(B.approval || "")}" maxlength="80" ${dis} placeholder="${P.needs_approval ? "needed" : ""}"></label>
+      </div>
+      <ul class="ie-rules">${P.needs_signature ? rule(B.signed, "Customer signature") : ""}${P.needs_account ? rule(!!(B.account || "").trim(), "Account or contract #") : ""}${P.needs_approval ? rule(!!(B.approval || "").trim(), "Approval #") : ""}
+        <li class="sum ${miss.length ? "no" : "ok"}">${miss.length ? `Not ready to send to ${esc(P.name)} yet` : `Ready to send to ${esc(P.name)}`}</li></ul>
+    </div>` : ""}</div>`;
+}
+// Keep what was clicked in the same spot on the screen after the page is redrawn
+async function keepSpot(sel, scroller, fn) {
+  const a = document.querySelector(sel), y0 = a ? a.getBoundingClientRect().top : null;
+  await fn();
+  const b = document.querySelector(sel);
+  if (y0 != null && b && scroller) scroller.scrollTop += b.getBoundingClientRect().top - y0;
+}
+function wireBillTo(root, k, invId, call, scroller) {
+  root.querySelectorAll(`[data-${k}-bill]`).forEach(b => b.addEventListener("click", () => {
+    if (b.getAttribute("aria-pressed") === "true") return;
+    const v = b.dataset[k + "Bill"];
+    keepSpot(`[data-${k}-bill="${v}"]`, scroller, () => call("inv_set_bill_to", { p_invoice: invId, p_partner: v ? Number(v) : null },
+      v ? `Billed to ${b.textContent.replace("pays us", "").trim()}.` : "Billed to the customer again."));
+  }));
+  root.querySelectorAll(`[data-${k}-ref]`).forEach(i => i.addEventListener("change", () => {
+    const g = f => root.querySelector(`[data-${k}-ref="${f}"]`).value;
+    keepSpot(`[data-${k}-ref="${i.dataset[k + "Ref"]}"]`, scroller, () => call("inv_set_partner_refs", { p_invoice: invId, p_account: g("acct"), p_approval: g("appr") }, "Saved."));
+  }));
+}
 function renderInvoiceEditor(msg) {
   const kids = l => IE.lines.filter(x => x.kit_parent === l.id);
   const I = IE, draft = I.status === "draft", edit = I.can_edit && draft, top = $("#main").scrollTop;
@@ -7805,6 +7866,7 @@ function renderInvoiceEditor(msg) {
       ${I.looks?.length && I.can_look ? `<div class="ie-look"><span class="cl-label">Invoice look</span>
         <div class="seg" role="group"><button type="button" data-ie-look="" aria-pressed="${!I.look_partner_id}">Reid Heating &amp; Cooling</button>${I.looks.map(l =>
           `<button type="button" data-ie-look="${l.id}" aria-pressed="${I.look_partner_id === l.id}">${esc(l.name)} <span class="ie-look-sub">installed by Reid</span></button>`).join("")}</div></div>` : ""}
+      ${billToHtml(I.bill, "ie")}
       <table class="ie-table"><thead><tr><th>Description</th><th class="r">Qty</th>${seeCost() ? `<th class="r">Cost</th>` : ""}<th class="r">Price</th><th class="r">HST</th><th class="r">Amount</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
         ${I.lines.length ? I.lines.map((l, n) => `<tr data-ie-line="${l.id}" class="${l.hidden ? "ie-hid" : ""} ${l.kit_parent ? "ie-kitline" : ""}" ${l.kit_parent && !IE.kitOpen?.has(l.kit_parent) && I.lines.some(x => x.id === l.kit_parent) ? "hidden" : ""}>
           <td>${l.kit_parent ? `<div class="ie-kitof">Add-on kit</div><div>${esc(pbName(l.description))}</div>` : edit ? `<textarea class="ie-desc" data-ie-f="description" rows="${Math.min(6, Math.max(1, Math.ceil((l.description || "").length / 70), (l.description || "").split("\n").length))}">${esc(l.description)}</textarea>`
@@ -7937,6 +7999,7 @@ function wireInvoiceEditor() {
   document.querySelectorAll("[data-ie-look]").forEach(b => b.addEventListener("click", () => call("inv_set_look", { p_invoice: I.id, p_partner: b.dataset.ieLook ? Number(b.dataset.ieLook) : null },
     b.dataset.ieLook ? "The invoice now has the " + b.textContent.replace("installed by Reid", "").trim() + " look." : "The invoice now has the Reid look.")));
   $("#ie-cust")?.addEventListener("click", () => openCustomer(I.customer_id));
+  wireBillTo(document, "ie", I.id, call, $("#main"));
 }
 
 /* ---------- Price book ---------- */
@@ -11089,13 +11152,14 @@ async function showInvoiceCosting(inv, msg) {
   box.querySelector("[data-invcost-close]").addEventListener("click", () => { INV_COST_OPEN = false; try { sessionStorage.setItem("invCostOpen", "0"); } catch (e) {} showInvoiceCosting(inv); });
 }
 const officeInv = () => can("invoices.adjust") || ["owner", "admin", "accounting"].includes(ME.role);
-async function openInvoice(id) {
+async function openInvoice(id, keep) {
   const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open");
-  $("#inv-paper").innerHTML = `<div class="quiet" style="padding:40px">Opening invoice…</div>`;
-  const [inv, co, looksR] = await Promise.all([
-    db.from("invoices").select("*, invoice_lines(id, sequence, line_type, description, quantity, unit_price, taxable, line_total, tax_amount, no_charge, regular_price, hidden), payment_applications(amount, applied_at, payments(payment_number, method, received_on, reference)), jobs(job_number, summary, job_types(name), partners(name, branding_name, branding_logo_url, customer_pays_partner)), look_partner:partners!invoices_branding_partner_id_fkey(name, branding_name, branding_logo_url, customer_pays_partner), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id)), business_units(name)").eq("id", id).single(),
+  if (!keep) $("#inv-paper").innerHTML = `<div class="quiet" style="padding:40px">Opening invoice…</div>`;
+  const [inv, co, looksR, billR] = await Promise.all([
+    db.from("invoices").select("*, invoice_lines(id, sequence, line_type, description, quantity, unit_price, taxable, line_total, tax_amount, no_charge, regular_price, hidden), payment_applications(amount, applied_at, payments(payment_number, method, received_on, reference)), jobs(job_number, summary, job_types(name), partners(name, branding_name, branding_logo_url, customer_pays_partner)), look_partner:partners!invoices_branding_partner_id_fkey(name, branding_name, branding_logo_url, customer_pays_partner), bill_partner:partners!invoices_bill_to_partner_id_fkey(name, street, city, province, postal_code, phone, billing_email, bill_to_ok), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id)), business_units(name)").eq("id", id).single(),
     COMPANY ? Promise.resolve({ data: COMPANY }) : db.from("company_settings").select("*").limit(1).maybeSingle(),
-    officeInv() ? db.rpc("invoice_looks") : Promise.resolve({ data: [] })]);
+    officeInv() ? db.rpc("invoice_looks") : Promise.resolve({ data: [] }),
+    officeInv() ? db.rpc("inv_bill_info", { p_invoice: id }) : Promise.resolve({ data: null })]);
   if (inv.error) { $("#inv-paper").innerHTML = `<div class="staff-msg err" style="padding:40px">Couldn't open this invoice: ${esc(inv.error.message)}</div>`; return; }
   COMPANY = co.data || { company_name: "Reid Heating & Cooling" };
   const i = inv.data, c = COMPANY, l = i.locations || {}, cust = i.customers || {};
@@ -11115,6 +11179,8 @@ async function openInvoice(id) {
   const jp = i.jobs?.partners?.branding_logo_url || i.jobs?.partners?.branding_name ? i.jobs.partners : null;
   const brand = i.look === "reid" ? null : i.look === "store" && i.look_partner ? i.look_partner : jp;
   const coName = c.company_name || "Reid Heating & Cooling";
+  const bp = i.bill_partner?.bill_to_ok ? i.bill_partner : null;   // billed to a partner who pays us (Vista)
+  const bpAddr = bp ? [bp.street, [bp.city, bp.province, bp.postal_code].filter(Boolean).join(", ")].filter(Boolean) : [];
   $("#inv-paper").innerHTML = `
     <div class="inv-top">
       <div>${brand ? `<div class="inv-brand">${brand.branding_logo_url ? `<img src="${esc(brand.branding_logo_url)}" alt="${esc(brand.branding_name || brand.name)}">` : `<div class="inv-co">${esc(brand.branding_name || brand.name)}</div>`}</div>
@@ -11127,10 +11193,14 @@ async function openInvoice(id) {
         ${i.jobs?.job_number ? `<tr><td>Job #</td><td>${esc(i.jobs.job_number)}</td></tr>` : ""}
         ${i.po_number ? `<tr><td>PO #</td><td>${esc(i.po_number)}</td></tr>` : ""}
         ${i.claim_number ? `<tr><td>Claim #</td><td>${esc(i.claim_number)}</td></tr>` : ""}
+        ${i.partner_account ? `<tr><td>${bp ? esc(bp.name.split(" ")[0]) + " account #" : "Account #"}</td><td>${esc(i.partner_account)}</td></tr>` : ""}
+        ${i.authorization_number ? `<tr><td>${bp ? esc(bp.name.split(" ")[0]) + " approval #" : "Approval #"}</td><td>${esc(i.authorization_number)}</td></tr>` : ""}
       </table></div>
     </div>
     <div class="inv-parties">
-      <div><div class="inv-label">Bill to</div><strong>${esc(cust.display_name || "")}</strong>${phone ? "<br>" + esc(phoneFmt(phone)) : ""}${email ? "<br>" + esc(email) : ""}</div>
+      ${bp ? `<div><div class="inv-label">Bill to</div><strong>${esc(bp.name)}</strong>${bpAddr.length ? "<br>" + bpAddr.map(esc).join("<br>") : ""}${bp.phone ? "<br>" + esc(phoneFmt(bp.phone)) : ""}${bp.billing_email ? "<br>" + esc(bp.billing_email) : ""}
+        <div class="inv-billref">Customer: <strong>${esc(cust.display_name || "")}</strong>${phone ? " · " + esc(phoneFmt(phone)) : ""}</div></div>`
+      : `<div><div class="inv-label">Bill to</div><strong>${esc(cust.display_name || "")}</strong>${phone ? "<br>" + esc(phoneFmt(phone)) : ""}${email ? "<br>" + esc(email) : ""}</div>`}
       <div><div class="inv-label">Service address</div>${addr.map(esc).join("<br>") || "—"}</div>
       <div><div class="inv-label">Work</div>${esc(i.jobs?.job_types?.name || "")}${i.business_units?.name ? `<br><span class="inv-small">${esc(i.business_units.name)}</span>` : ""}</div>
     </div>
@@ -11148,10 +11218,10 @@ async function openInvoice(id) {
         <tr><td>HST</td><td class="r num">${money(tax)}</td></tr>
         <tr class="inv-total"><td>Total</td><td class="r num">${money(total)}</td></tr>
         ${paid ? `<tr><td>Paid</td><td class="r num">−${money(paid)}</td></tr>` : ""}
-        <tr class="inv-balance"><td>Balance owing</td><td class="r num">${i.not_owed_reason && balance > 0.004 ? `<s>${money(balance)}</s> ${money(0)}` : money(balance)}</td></tr>
+        <tr class="inv-balance"><td>${bp ? "Balance owing by " + esc(bp.name) : "Balance owing"}</td><td class="r num">${i.not_owed_reason && balance > 0.004 ? `<s>${money(balance)}</s> ${money(0)}` : money(balance)}</td></tr>
       </table>
     </div>
-    ${balance > 0.004 && i.status !== "void" && !brand?.customer_pays_partner ? `<div class="inv-owed no-print">${i.not_owed_reason
+    ${balance > 0.004 && i.status !== "void" && !brand?.customer_pays_partner && !bp ? `<div class="inv-owed no-print">${i.not_owed_reason
       ? `<strong>Not owed:</strong> ${esc(i.not_owed_reason)}. It doesn't count toward what the customer owes.${can("invoices.adjust") ? ` <button class="link" type="button" data-owed-undo>Count it as owing again</button>` : ""}`
       : can("invoices.adjust") ? `<span>Shouldn't this be owing?</span> ${["Paid monthly", "Paid elsewhere", "Written off"].map(r => `<button class="chip small" type="button" data-not-owed="${r}">${r}</button>`).join("")}
           <button class="chip small" type="button" data-not-owed="">Other…</button>` : ""}
@@ -11165,6 +11235,7 @@ async function openInvoice(id) {
         `<button type="button" data-inv-from="${x.id}" aria-pressed="${!!brand && (brand.name === x.name || brand.branding_name === x.name)}">${esc(x.name)}</button>`).join("")}</div>
       <span class="quiet">Fix it if it was labelled wrong. A store invoice is paid through the store (Partners page) and isn't owed by the customer.</span>
       <span class="staff-msg" id="from-msg" role="status"></span></div>` : ""}
+    ${officeInv() && i.status !== "void" && billR.data ? `<div class="inv-from no-print">${billToHtml(billR.data, "iv")}<span class="staff-msg" id="bill-msg" role="status"></span></div>` : ""}
     ${!i.st_id && i.status !== "void" ? `<div class="no-print inv-edit-row"><button class="btn" type="button" data-inv-edit="${i.id}">${i.status === "draft" ? "Carry on with this invoice" : Number(balance) > 0.004 ? "Signature and payment" : "Open in the invoice screen"}</button></div>` : ""}
     <div class="inv-thanks">${brand ? `Thank you for choosing ${esc(brand.branding_name || brand.name)}. Installed by ${esc(coName)}.` : `Thank you for choosing ${esc(coName)}.`}</div>`;
   document.querySelectorAll("[data-inv-from]").forEach(b => b.addEventListener("click", async () => {
@@ -11172,10 +11243,19 @@ async function openInvoice(id) {
     const m = $("#from-msg"); m.className = "staff-msg"; m.textContent = "Saving…";
     const { error } = await db.rpc("inv_set_look", { p_invoice: i.id, p_partner: b.dataset.invFrom ? Number(b.dataset.invFrom) : null });
     if (error) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
-    await openInvoice(i.id);
+    await openInvoice(i.id, true);
     if (current?.c?.id === i.customer_id && document.querySelector(".file")) openCustomer(i.customer_id);
     if (document.querySelector(".owing")) loadOwing();
   }));
+  wireBillTo($("#inv-paper"), "iv", i.id, async (fn, args, m) => {
+    const el = $("#bill-msg"); if (el) { el.className = "staff-msg"; el.textContent = "Saving…"; }
+    const sc = $("#inv-view").scrollTop, { error } = await db.rpc(fn, args);
+    if (error) { if (el) { el.className = "staff-msg err"; el.textContent = "Not saved: " + rpcErr(error); } return; }
+    await openInvoice(i.id, true); $("#inv-view").scrollTop = sc;
+    const e2 = $("#bill-msg"); if (e2) { e2.className = "staff-msg ok"; e2.textContent = m; }
+    if (current?.c?.id === i.customer_id && document.querySelector(".file")) openCustomer(i.customer_id);
+    if (document.querySelector(".owing")) loadOwing();
+  }, $("#inv-view"));
   document.querySelector("[data-inv-edit]")?.addEventListener("click", e => { const id = Number(e.currentTarget.dataset.invEdit); closeInvoice(); openInvoiceEditor(id); });
   const setOwed = async reason => {
     const m = $("#owed-msg"); if (m) { m.className = "staff-msg"; m.textContent = "Saving…"; }
