@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.131041">
+<meta name="app-version" content="2026-10-19.141756">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -8458,10 +8458,14 @@ async function invoiceRows(blob, name) {
   if (ext === "doc") throw new Error("old Word (.doc) files can't be read here — ask the supplier for a PDF, or open it and save it as .docx");
   throw new Error("this kind of file can't be read");
 }
-const invNum = v => { const s = String(v ?? "").replace(/[$\s]/g, "").replace(/,(?=\d{3}\b)/g, ""); return /^-?\d*\.?\d+$/.test(s) ? Number(s) : null; };
+const invNum = v => { let s = String(v ?? "").replace(/[$\s]/g, "").replace(/,(?=\d{3}\b)/g, "").replace(/\/?(ea|each|pc|pcs|un|ft)$/i, "");
+  if (/^[lI|]$/.test(s)) s = "1"; return /^-?\d*\.?\d+$/.test(s) ? Number(s) : null; };
 function invoiceRefDate(lines) {
   const all = lines.join("\n");
-  const ref = (all.match(/\b(?:invoice|inv|order|sales order|document)\s*(?:#|no\.?|number|num)?\s*[:#]?\s*([A-Z]{0,4}-?\d[\w-]{2,})/i) || [])[1] || null;
+  let ref = (all.match(/\b(?:invoice|inv|order|sales order|document)\s*(?:#|no\.?|number|num)?\s*[:#]?\s*([A-Z]{0,4}-?\d[\w-]{2,})/i) || [])[1] || null;
+  if (!ref) { const i = lines.findIndex(l => /\b(invoice|order)\s*(number|no\.?|#)/i.test(l)); if (i >= 0) {
+    const t = String(lines[i + 1] || "").split(/\s+/).map(w => w.replace(/^\$(?=\d)/, "S")).filter(w => /\d{5,}/.test(w.replace(/\D/g, "")) && !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(w)); if (t.length) ref = t[t.length - 1]; } }
+  if (!ref) for (const l of lines.slice(0, 12)) { const w = String(l).split(/\s+/).map(x => x.replace(/^\$(?=\d)/, "S")).find(x => /^[A-Z]{0,2}\d{6,}([.-]\d{1,3})?$/.test(x)); if (w) { ref = w; break; } }
   let date = null, m;
   if ((m = all.match(/\b(20\d\d)-(\d\d)-(\d\d)\b/))) date = `${m[1]}-${m[2]}-${m[3]}`;
   else if ((m = all.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/))) { const y = Number(m[3]) < 100 ? 2000 + Number(m[3]) : Number(m[3]); date = `${y}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`; }
@@ -8469,14 +8473,16 @@ function invoiceRefDate(lines) {
   return { ref, date };
 }
 // invoices in any layout: rows with a part number we know; the price is what one really cost (total ÷ qty when both are there)
-async function parseGenericInvoice(rows, supplier) {
-  const toks = rows.map(r => [...new Set(r.flatMap(c => [c, ...String(c).split(/\s+/)]).map(t => String(t).trim().replace(/^[#(]+|[):,]+$/g, "")).filter(t => t.length >= 3 && t.length <= 40 && /\d/.test(t) && !/^\$?[\d,]*\.\d+$/.test(t)))]);
+async function parseGenericInvoice(rows, supplier, cells) {
+  const partish = t => t.length >= 3 && t.length <= 40 && /\d/.test(t) && !/^\$?[\d,]*\.\d+(\/\w+)?$/.test(t) && !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(t) && !/^[\dlI]{1,3}(ea|pc|pcs)$/i.test(t);
+  const toks = rows.map(r => [...new Set(r.flatMap(c => [c, ...String(c).split(/\s+/)]).map(t => String(t).trim().replace(/^[#(|\[]+|[):,|\]]+$/g, ""))
+    .flatMap(t => /^[Il|][A-Z0-9]{3,}$/.test(t) && /\d/.test(t) ? [t, t.slice(1)] : [t]).filter(partish))]);
   const { data, error } = await db.rpc("supplier_rows_match", { p_supplier: supplier, p_rows: toks });
   if (error) throw new Error(rpcErr(error));
   const out = [], unread = [];
   // a header row ("Qty … Price … Total") tells which column is which
   let hc = null;
-  for (const r of rows) { const low = r.map(c => String(c).toLowerCase().trim());
+  if (cells) for (const r of rows) { const low = r.map(c => String(c).toLowerCase().trim());
     const qi = low.findIndex(c => /^(qty|quantity|qte|shipped|ship|shp|ordered|ord)\b/.test(c)), pi = low.findIndex(c => /(unit\s*price|price|each|net\s*price|unit\s*cost|cost)\b/.test(c) && !/total|ext/.test(c)),
           ti = low.findIndex(c => /^(total|amount|ext|extended|extension|line total|net amount)\b/.test(c));
     if (r.length > 2 && (pi >= 0 || ti >= 0) && qi >= 0) { hc = { qi, pi, ti }; break; } }
@@ -8496,7 +8502,9 @@ async function parseGenericInvoice(rows, supplier) {
     }
     const desc = r.map(String).filter(c => /[a-z]{3,}/i.test(c) && c.toUpperCase() !== code).sort((a, b) => b.length - a.length)[0] || "";
     if (cost == null || !(cost >= 0)) { unread.push(m.code); continue; }
-    out.push({ code: m.code, item_sku: m.sku, description: desc.slice(0, 200), cost: Math.round(cost * 10000) / 10000, new_ok: false });
+    if (out.some(x => x.item_sku === m.sku)) continue;   // the same line again (e.g. the ship ticket page)
+    const first = r.flatMap(c => String(c).split(/\s+/)).map(t => t.replace(/^[#(|\[]+|[):,|\]]+$/g, "")).find(partish);
+    out.push({ code: first && first.toUpperCase() !== code ? first : m.code, item_sku: m.sku, description: desc.slice(0, 200), cost: Math.round(cost * 10000) / 10000, new_ok: false });
   }
   return { lines: out, unread };
 }
@@ -8507,9 +8515,14 @@ async function supMailRead(row, supplierPick) {
   if (f.error || !f.data) throw new Error(f.error ? rpcErr(f.error) : "the file is missing");
   const bin = atob(f.data.b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const blob = new Blob([bytes], { type: f.data.mime || "application/octet-stream" }); blob.name = f.data.name;
-  const doc = await invoiceRows(blob, f.data.name);
+  let doc = await invoiceRows(blob, f.data.name);
+  if (doc.kind === "pdf" && doc.lines.filter(l => l !== "\f" && l.trim()).length < 3) {
+    if (!f.data.ocr) return { status: "unread", result: { note: "This is a scanned copy. Its words are read at the next mailbox check (about 10 minutes), then it's read again by itself." } };
+    const ls = f.data.ocr.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+    doc = { kind: "ocr", lines: ls, rows: ls.map(l => l.split(" ")) };
+  }
   let sup = supplierPick || row.supplier;
-  if (!sup) { const g = await db.rpc("supplier_guess", { p_text: doc.lines.slice(0, 80).join(" ") }); sup = g.data || null; }
+  if (!sup) { const g = await db.rpc("supplier_guess", { p_text: doc.lines.slice(0, 25).join(" ") }); sup = g.data || null; }
   if (!sup) return { status: "needs_supplier", result: { note: "Pick the supplier, then press Read it" } };
   const totals = {}, refs = []; let unread = [];
   const add = (c) => { for (const [k, v] of Object.entries(c || {})) totals[k] = (totals[k] || 0) + v; };
@@ -8520,7 +8533,7 @@ async function supMailRead(row, supplierPick) {
       if (error) throw new Error(rpcErr(error)); add(data.counts); refs.push("order " + inv.order); }
     unread = boone.unread;
   } else {
-    const g = await parseGenericInvoice(doc.rows, sup), rd = invoiceRefDate(doc.lines); unread = g.unread;
+    const g = await parseGenericInvoice(doc.rows, sup, doc.kind === "sheet" || doc.kind === "word"), rd = invoiceRefDate(doc.lines); unread = g.unread;
     if (g.lines.length) {
       const ref = rd.ref ? "invoice " + rd.ref : "email " + fmtDate(row.received || new Date().toISOString()) + " " + (row.file || "");
       const { data, error } = await db.rpc("import_supplier_lines", { p_supplier: sup, p_ref: ref.slice(0, 80), p_date: rd.date || ymd(new Date(row.received || Date.now())), p_lines: g.lines });

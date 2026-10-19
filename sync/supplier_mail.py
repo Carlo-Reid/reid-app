@@ -5,7 +5,7 @@ Runs on GitHub every 10 minutes (.github/workflows/supplier-mail.yml). The mailb
 secrets (IMAP_HOST, IMAP_USER, IMAP_PASS, optional IMAP_PORT), never from the code. It only reads the mailbox:
 nothing is deleted, moved or marked as read. The run log never shows who wrote or what's in an email.
 """
-import os, sys, ssl, time, imaplib, email, hashlib, re, datetime
+import os, sys, ssl, time, imaplib, email, hashlib, re, datetime, shutil, subprocess, tempfile
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
 
@@ -58,6 +58,44 @@ def files_of(msg):
             continue
         out.append((name[:200], part.get_content_type(), data))
     return out
+
+
+def ocr_pdf(data):
+    """The words on a scanned PDF (a photocopier scan has pictures, not text), page by page."""
+    if not (shutil.which("pdftoppm") and shutil.which("tesseract")):
+        if QUIET:   # on GitHub: add the two tools (about half a minute, only when a scanned invoice comes in)
+            env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+            subprocess.run("sudo apt-get update -qq >/dev/null 2>&1; sudo apt-get install -y -qq tesseract-ocr poppler-utils >/dev/null 2>&1", shell=True, env=env)
+        if not (shutil.which("pdftoppm") and shutil.which("tesseract")):
+            return None
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "in.pdf")
+        open(src, "wb").write(data)
+        subprocess.run(["pdftoppm", "-r", "300", "-gray", "-png", "-l", "8", src, os.path.join(d, "p")], capture_output=True, timeout=180)
+        pages = []
+        for f in sorted(x for x in os.listdir(d) if x.startswith("p") and x.endswith(".png")):
+            r = subprocess.run(["tesseract", os.path.join(d, f), "stdout", "--psm", "6"], capture_output=True, timeout=180)
+            pages.append(r.stdout.decode("utf-8", "replace"))
+        return "\n\f\n".join(pages)
+
+
+def read_scans(cur):
+    """Scanned PDFs (no words inside) get their words read, then the app reads them again."""
+    cur.execute("""SELECT id, data FROM supplier_mail
+                   WHERE ocr_text IS NULL AND data IS NOT NULL AND status IN ('new', 'unread', 'error', 'needs_supplier')
+                     AND (lower(coalesce(file_name, '')) LIKE '%%.pdf' OR mime ILIKE '%%pdf%%')
+                     AND position('\\x2f466f6e74'::bytea IN data) = 0
+                     AND coalesce(received_at, created_at) > now() - interval '60 days'
+                   ORDER BY id LIMIT 20""")
+    n = 0
+    for mid, data in cur.fetchall():
+        text = ocr_pdf(bytes(data))
+        if text is None:
+            say("Couldn't read the scanned invoices this time (the reading tool didn't install).")
+            return 0
+        cur.execute("UPDATE supplier_mail SET ocr_text = %s, status = 'new', result = NULL WHERE id = %s", (text[:200000], mid))
+        n += 1
+    return n
 
 
 def connect_db():
@@ -156,6 +194,10 @@ def main():
                                VALUES (%s, %s, %s, %s, %s, %s, 'no_file') ON CONFLICT DO NOTHING""", (mid, when, addr[:200], name[:200], subj, body))
             cur.execute("INSERT INTO supplier_mail_seen (message_id) VALUES (%s) ON CONFLICT DO NOTHING", (mid,))
             emails += 1
+        cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'supplier_mail' AND column_name = 'ocr_text')")
+        scans = read_scans(cur) if cur.fetchone()[0] else 0   # needs setup file 93
+        if scans:
+            say(f"Read the words on {scans} scanned invoice{'s' if scans != 1 else ''}.")
         set_state(cur, "last_error", None)
         set_state(cur, "last_check", datetime.datetime.now(datetime.timezone.utc).isoformat())
         say(f"Supplier mail checked: {emails} new email{'s' if emails != 1 else ''}, {files} file{'s' if files != 1 else ''} saved.")
