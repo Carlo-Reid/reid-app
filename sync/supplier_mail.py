@@ -16,6 +16,8 @@ MAX_FILE = 15 * 1024 * 1024
 
 def say(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+    if QUIET:
+        print("::notice title=Supplier mail::" + msg, flush=True)   # shows on the run's summary page (counts only, never email details)
 
 
 def hdr(v):
