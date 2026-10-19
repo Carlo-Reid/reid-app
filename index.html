@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.161226">
+<meta name="app-version" content="2026-10-19.162355">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1107,6 +1107,7 @@
   .pb-newtag { background: var(--blue-wash); color: var(--blue); }
   .pb-up { color: var(--red); }
   .imp-box { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; } .imp-box h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); } .imp-box p { margin: 0; }
+  .owing .cl-row-3 select { width: 185px !important; min-width: 0 !important; }
   .pb-au-pill { background: #1f2933; color: #e9ecef; border: 1px solid #3d4a57; border-radius: 999px; padding: 2px 12px; font-size: 12px; font-weight: 700; cursor: pointer; text-transform: none; letter-spacing: 0; white-space: nowrap; }
   .pb-au-pill.on { background: #2f9e44; border-color: #51cf66; color: #fff; } .pb-au-pill b { background: rgba(255,255,255,.25); border-radius: 999px; padding: 0 6px; margin-left: 2px; }
   .ni-bar .btn b { background: #2f9e44; color: #fff; border-radius: 999px; padding: 0 6px; margin-left: 3px; font-size: 11px; } .ni-bar .btn b.au-warn { background: #e8590c; }
@@ -6097,7 +6098,10 @@ try { Object.assign(OW, JSON.parse(localStorage.getItem("reid.owing") || "{}"));
 OW.sort = OW.sort || "date_desc"; OW.group = OW.group || "none";
 OW.period = OW.period || "all"; OW.anchor = ymd(new Date());
 OW.to = OW.to || ymd(new Date()); OW.from = OW.from || ymd(addDays(new Date(), -30));
-const saveOw = () => { try { localStorage.setItem("reid.owing", JSON.stringify({ sort: OW.sort, group: OW.group, period: OW.period, from: OW.from, to: OW.to })); } catch {} };
+OW.jtype = OW.jtype || "all"; OW.paid = OW.paid || "all";
+const saveOw = () => { try { localStorage.setItem("reid.owing", JSON.stringify({ sort: OW.sort, group: OW.group, period: OW.period, from: OW.from, to: OW.to, jtype: OW.jtype, paid: OW.paid })); } catch {} };
+const OW_JTYPE = [["all", "All job types"], ["install", "Installs"], ["service", "Service"], ["security", "Security"], ["maintenance", "Maintenance"], ["warranty", "Warranty"], ["other", "Other"], ["none", "No job"]];
+const OW_PAID = [["all", "Paid or not"], ["none", "Nothing paid yet"], ["part", "Part paid"]];
 // "View by": the day, week (Monday to Sunday), month or year that OW.anchor falls in
 const OW_PERIODS = [["all", "All time"], ["day", "Day"], ["week", "Week"], ["month", "Month"], ["year", "Year"], ["range", "Pick dates"]];
 function owRange() {
@@ -6128,7 +6132,14 @@ function owStep(n) {
   else if (OW.period === "year") d.setFullYear(d.getFullYear() + n);
   OW.anchor = ymd(d);
 }
-const owInPeriod = rows => { const r = owRange(); if (!r) return rows; const a = ymd(r[0]), b = ymd(r[1]); return rows.filter(x => x.invoice_date >= a && x.invoice_date <= b); };
+const owPick = x => {
+  if (OW.jtype !== "all") { const n = String(x.job_type || ""), c = x.job_class !== undefined ? x.job_class || null   // (before setup 95: guess from the job type's name)
+      : !n ? null : /install/i.test(n) ? "install" : /secur|alarm/i.test(n) ? "security" : /maint|tune/i.test(n) ? "maintenance" : /warrant/i.test(n) ? "warranty" : /service|repair|no heat|no cool/i.test(n) ? "service" : "other";
+    if (OW.jtype === "none" ? x.job_type != null : OW.jtype === "other" ? (c == null || ["install", "service", "security", "maintenance", "warranty"].includes(c)) : c !== OW.jtype) return false; }
+  if (OW.paid === "none" && Number(x.paid || 0) > 0.004) return false;
+  if (OW.paid === "part" && !(Number(x.paid || 0) > 0.004)) return false;
+  return true; };
+const owInPeriod = rows => { const r = owRange(); rows = rows.filter(owPick); if (!r) return rows; const a = ymd(r[0]), b = ymd(r[1]); return rows.filter(x => x.invoice_date >= a && x.invoice_date <= b); };
 const OW_SORT = [["date_desc", "Newest first"], ["date_asc", "Oldest first"], ["amt_desc", "Biggest amount"], ["amt_asc", "Smallest amount"], ["cust", "Customer A–Z"], ["city", "City"]];
 const OW_GROUP = [["none", "No groups"], ["age", "How old"], ["month", "Month"], ["year", "Year"], ["customer", "Customer"], ["job", "Job type"], ["city", "City"], ["tag", "Kind (needs a look, plan sale, monthly)"]];
 const owAgeDays = r => Math.floor((Date.now() - new Date(r.invoice_date + "T12:00:00")) / 86400000);
@@ -6205,6 +6216,8 @@ function renderOwing(msg) {
         <div class="cl-group"><span class="cl-label">Which invoices</span>${seg(OW_KIND, OW.kind, "data-ow-kind")}</div>
       </div>
       <div class="cl-row cl-row-3">
+        <label class="cl-group cl-tech"><span class="cl-label">Job type</span><select id="ow-jtype">${OW_JTYPE.map(([k, x]) => `<option value="${k}" ${OW.jtype === k ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+        <label class="cl-group cl-tech"><span class="cl-label">Paid</span><select id="ow-paid">${OW_PAID.map(([k, x]) => `<option value="${k}" ${OW.paid === k ? "selected" : ""}>${x}</option>`).join("")}</select></label>
         <label class="cl-group cl-tech"><span class="cl-label">Sort</span><select id="ow-sort">${OW_SORT.map(([k, x]) => `<option value="${k}" ${OW.sort === k ? "selected" : ""}>${x}</option>`).join("")}</select></label>
         <label class="cl-group cl-tech"><span class="cl-label">Group by</span><select id="ow-group">${OW_GROUP.map(([k, x]) => `<option value="${k}" ${OW.group === k ? "selected" : ""}>${x}</option>`).join("")}</select></label>
         ${OW.group !== "none" ? `<button class="link ow-foldbtn" type="button" id="ow-fold">${OW.folded ? "Open all groups" : "Close all groups"}</button>` : ""}
@@ -6256,6 +6269,8 @@ function renderOwing(msg) {
   $("#ow-from")?.addEventListener("change", e => { if (e.target.value) { OW.from = e.target.value; OW.closed = []; saveOw(); renderOwing(); } });
   $("#ow-to")?.addEventListener("change", e => { if (e.target.value) { OW.to = e.target.value; OW.closed = []; saveOw(); renderOwing(); } });
   $("#ow-sort")?.addEventListener("change", e => { OW.sort = e.target.value; saveOw(); renderOwing(); });
+  $("#ow-jtype")?.addEventListener("change", e => { OW.jtype = e.target.value; OW.closed = []; saveOw(); renderOwing(); });
+  $("#ow-paid")?.addEventListener("change", e => { OW.paid = e.target.value; OW.closed = []; saveOw(); renderOwing(); });
   $("#ow-group")?.addEventListener("change", e => { OW.group = e.target.value; OW.closed = []; OW.folded = false; saveOw(); renderOwing(); });
   document.querySelectorAll("[data-ow-th]").forEach(b => b.addEventListener("click", () => {
     const k = b.dataset.owTh;
