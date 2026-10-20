@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.221628">
+<meta name="app-version" content="2026-10-19.221801">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -987,6 +987,8 @@
   .dmp-tech { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #ced4da; background: #fff; border-radius: 999px; padding: 3px 9px; font: inherit; font-size: 12.5px; cursor: pointer; }
   .dmp-tech i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; } .dmp-tech b { color: #495057; font-size: 11.5px; }
   .dmp-tech[aria-pressed="true"] { border-color: #1f6fd1; background: #e7f5ff; box-shadow: 0 0 0 1px #1f6fd1; } .dmp-tech:disabled { cursor: default; opacity: .7; }
+  .dsp-backnear { margin: 0 0 8px; }
+  .dc.dc-flash { animation: dcFlash 0.8s ease-in-out 3; } @keyframes dcFlash { 50% { box-shadow: 0 0 0 4px #e03131; } }
   .dmp-focus { background: #fff5f5; border: 2px solid #e03131; border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 14px; }
   .focus-pin .fp-pin { width: 34px; height: 34px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: #e03131; border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.45);
     display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; animation: fpPulse 1.6s ease-in-out infinite; }
@@ -4739,7 +4741,7 @@ function drawDspMap(fit) {
       opacity: dim ? 0.35 : 1, fillColor: col, fillOpacity: dim ? 0.25 : wait ? 0.35 : 0.9, dashArray: wait ? "3 3" : null });
     const techs = r.techs.map(t => t.name).join(", ");
     m.bindTooltip(`<b>${esc(r.customer_name)}</b><br>${wait ? "Waiting for a day" : esc(winText(r.arrival_start, r.arrival_end))}${techs ? " · " + esc(techs) : " · <i>no tech yet</i>"}<br>${esc(r.job_type)}<br>${esc([r.street, r.city].filter(Boolean).join(", "))} ${esc(r.postal_code || "")}${r.community ? `<br><b>${esc(r.community)}</b>` : ""}${r.hood ? `<br><i>${esc(r.hood)}</i>` : ""}${two ? `<br>On the border with <i>${esc(two.name)}</i>` : ""}`, { direction: "top" });
-    m.on("click", () => { DSP.sel = r.visit_id; document.querySelectorAll(".dc.sel").forEach(x => x.classList.remove("sel"));
+    m.on("click", () => { if (DSP.page === "map" && DSP.focus && !wait) return goToBoard(r.visit_id); DSP.sel = r.visit_id; document.querySelectorAll(".dc.sel").forEach(x => x.classList.remove("sel"));
       document.querySelectorAll(`.dc[data-visit="${r.visit_id}"]`).forEach(x => x.classList.add("sel")); renderDspPanel(); drawDspMap(); });
     m.addTo(DSP.mlayer); pts.push([Number(r.lat), Number(r.lng)]);
     if (DSP.page === "map" && DSP.mapTechNames !== false && !placesOn) {   // the tech's name beside the dot (dispatch map page)
@@ -5528,7 +5530,7 @@ function renderDispatchMapPage() {
         <label class="pb-check"><input type="checkbox" id="dmp-same" ${V.same !== false ? "checked" : ""}> Map colours match the groups</label>
         <label class="pb-check"><input type="checkbox" id="dmp-tnames" ${DSP.mapTechNames !== false ? "checked" : ""}> Tech names on the map</label>
       </section>
-      ${DSP.focus ? `<div class="dmp-focus">📍 Showing only calls near <b>${esc(DSP.focus.name)}</b>${DSP.focus.street ? ` (${esc(DSP.focus.street)}${DSP.focus.city ? ", " + esc(DSP.focus.city) : ""})` : ""}, about 5 km.${DSP.focus.latitude == null ? " This address isn't on the map yet, so it can't be marked." : ""}
+      ${DSP.focus ? `<div class="dmp-focus">📍 Showing only calls near <b>${esc(DSP.focus.name)}</b>${DSP.focus.street ? ` (${esc(DSP.focus.street)}${DSP.focus.city ? ", " + esc(DSP.focus.city) : ""})` : ""}, about 5 km. Click a call (on the map or in the list) to open it on the dispatch board.${DSP.focus.latitude == null ? " This address isn't on the map yet, so it can't be marked." : ""}
         <button class="link" type="button" id="dmp-unfocus">Show all calls</button></div>` : ""}
       ${(() => { const FULL = bookedTechIds(), T = new Map(); DSP.rows.filter(r => r.status !== "cancelled" && focusNear(r)).forEach(r => (r.techs.length ? r.techs : [{ id: 0, name: "No tech yet" }]).forEach(t => { const x = T.get(t.id) || { ...t, n: 0 }; x.n++; T.set(t.id, x); }));
         const list = [...T.values()].sort((a, b) => (a.id === 0) - (b.id === 0) || a.name.localeCompare(b.name));
@@ -5558,7 +5560,8 @@ function renderDispatchMapPage() {
   $("#dmp-same").addEventListener("change", e => { V.same = e.target.checked; if (V.same && V.group !== "none") { DSP.colorBy = V.group; saveDspMap(); } saveV(); renderDispatch(); });
   document.querySelectorAll(".dmp .dc").forEach(c => {
     c.removeAttribute("draggable");
-    c.addEventListener("click", () => { DSP.sel = Number(c.dataset.visit); document.querySelectorAll(".dc.sel").forEach(x => x.classList.remove("sel")); c.classList.add("sel");
+    c.addEventListener("click", () => { if (DSP.focus && dspCall(Number(c.dataset.visit))?.scheduled_date) return goToBoard(Number(c.dataset.visit));
+      DSP.sel = Number(c.dataset.visit); document.querySelectorAll(".dc.sel").forEach(x => x.classList.remove("sel")); c.classList.add("sel");
       renderDspPanel(); drawDspMap(); const r = dspCall(DSP.sel); if (r && r.lat != null && DSP.lmap) DSP.lmap.panTo([Number(r.lat), Number(r.lng)]); });
     c.addEventListener("keydown", e => { if (e.key === "Enter") c.click(); });
   });
@@ -5619,6 +5622,19 @@ function renderTownColours(msg) {
   });
 }
 
+// from the "calls nearby" map: open that call on the dispatch board, picked and in view, with a way back
+async function goToBoard(visitId) {
+  const focus = DSP.focus, date = DSP.date;
+  DSP.sel = visitId;
+  await openDispatch(date);
+  const card = document.querySelector(`.dsp .dc[data-visit="${visitId}"]`);
+  if (card) { document.querySelectorAll(".dc.sel").forEach(x => x.classList.remove("sel")); card.classList.add("sel", "dc-flash"); card.scrollIntoView({ block: "center", inline: "center" }); setTimeout(() => card.classList.remove("dc-flash"), 2600); }
+  if (typeof renderDspPanel === "function" && dspCall(visitId)) renderDspPanel();
+  if (focus) { const art = document.querySelector("#main article.dsp"); if (art && !art.querySelector(".dsp-backnear")) {
+    const b = document.createElement("div"); b.className = "dsp-backnear";
+    b.innerHTML = `<button class="btn quiet-btn" type="button">← Back to the calls near ${esc(focus.name)}</button>`;
+    b.querySelector("button").addEventListener("click", () => openDispatchMap(DSP.date, focus)); art.prepend(b); } }
+}
 async function openDispatch(date) {
   if (date) DSP.date = date;
   DSP.page = "board";
