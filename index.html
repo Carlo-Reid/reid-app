@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.204418">
+<meta name="app-version" content="2026-10-19.204809">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1131,6 +1131,7 @@
   .owl-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; } #owl-q { min-width: 320px; }
   .owl-t td { vertical-align: top; text-align: left; } .owl-t td.r { text-align: right; } .owl-t .link { text-align: left; }
   .ow-tag.ow-booktag, .ow-booktag { background: #e7f5ff; color: #1864ab; text-transform: capitalize; } .ow-scope-booked strong { color: #1864ab; }
+  .ow-copyall { width: 150px; white-space: nowrap; padding-left: 6px; padding-right: 6px; }
   .ow-scopes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
   .ow-scopes-ptn { grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
   .ow-scopes .ow-scope-p { padding: 6px 7px; min-height: 74px; } .ow-scopes .ow-scope-p span { font-size: 11px; line-height: 1.2; height: 2.4em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; max-width: 100%; }
@@ -6315,6 +6316,20 @@ function owAgeRows(sc) {
 }
 const owPtnRows = sc => (OW.ptnData?.rows || []).filter(r => "ptn:" + r.partner_id === sc && owPick(r));
 const owDollars = v => (Number(v) < 0 ? "−$" : "$") + Math.round(Math.abs(Number(v) || 0)).toLocaleString("en-CA");
+// Copy a list as a table (tab between columns): pastes straight into Excel, Google Sheets or an email
+// the button itself says it worked (so nothing else on the page moves)
+function owCopyDone(btn, n) { if (!btn) return; btn.textContent = n ? `✓ Copied ${n.toLocaleString()}` : "Couldn't copy"; clearTimeout(btn._t); btn._t = setTimeout(() => { if (btn.isConnected) btn.textContent = "⧉ Copy all"; }, 3000); }
+async function owCopyRows(rows, sc) {
+  const bal = sc === "owing" || owBalScope(sc), head = ["Date", sc === "booked" ? "Job" : "Invoice", "Customer", "Address", "City", "Job type", "Partner", "Total", bal ? "Still owed" : "Paid", "Status"];
+  const cell = v => String(v ?? "").replace(/[\t\r\n]+/g, " ").trim(), num = v => v == null || v === "" ? "" : Number(v).toFixed(2);
+  const lines = [head.join("\t")].concat(rows.map(r => [r.invoice_date, r._booked ? r.job_number : r.invoice_number, r.customer_name, r.street, r.city, r.job_type, r.job_partner || "",
+    num(r.total), bal ? num(r.balance) : num(r.paid ?? (r._paidOff ? r.total : "")),
+    r._booked ? (r.job_status || "").replace("_", " ") : r._paidOff ? "Paid" : r._show === "not_owed" ? "Not owed: " + (r.not_owed_reason || "") : r.status === "part" ? "Part paid" : "Owing"].map(cell).join("\t")));
+  const text = lines.join("\r\n");
+  try { await navigator.clipboard.writeText(text); return rows.length; } catch {
+    const t = document.createElement("textarea"); t.value = text; t.style.cssText = "position:fixed;top:0;left:-9999px"; document.body.appendChild(t); t.select();
+    let ok = false; try { ok = document.execCommand("copy"); } catch {} t.remove(); return ok ? rows.length : 0; }
+}
 const owBalScope = sc => sc.startsWith("age") || sc.startsWith("ptn:");   // these list what's still owed
 function owScopeRows(scope) {
   const paid = OW.paidData && OW.paidData.rows ? OW.paidData.rows.filter(owPick) : [], book = OW.bookedData && OW.bookedData.rows ? OW.bookedData.rows.filter(owPick) : [];
@@ -6357,7 +6372,8 @@ function renderOwList() {
     <div class="owl-tools"><input type="search" id="owl-q" placeholder="Find a customer, invoice, job or street…" value="${esc(OWL.q)}">
       ${many ? `<span class="staff-msg err">Listing the newest 2,000 of ${Number(src.n).toLocaleString()} — pick dates on the Receivables page to see the rest.</span>` : ""}
       ${src && src.error ? `<span class="staff-msg err">${esc(src.error)}</span>` : ""}
-      <label class="owl-ptn"><span class="cl-label">Partner</span>${owPartnerSelect("owl-partner")}</label></div>
+      <label class="owl-ptn"><span class="cl-label">Partner</span>${owPartnerSelect("owl-partner")}</label>
+      <button class="btn quiet-btn ow-copyall" type="button" id="owl-copy" ${rows.length ? "" : "disabled"} title="Copy every line in this list, ready to paste into Excel or an email">⧉ Copy all</button></div>
     ${scope === "owing" && officeInv() ? (() => { const pk = rows.filter(r => OWL.picked.has(r.invoice_id)), sum = pk.reduce((t, r) => t + Number(r.balance), 0), tg = OW.targets?.partners || [];
       return `<div class="pb-bulk owl-bulk ${pk.length ? "" : "owl-bulk-off"}"><strong>${pk.length ? `${pk.length.toLocaleString()} picked · ${money(sum)}` : "Tick invoices to move them"}</strong>
         <label>Bill them to <select id="owl-to"><option value="">Pick a partner…</option>${tg.map(p => `<option value="${p.id}" ${String(OWL.to) === String(p.id) ? "selected" : ""}>${esc(p.name)}${p.store ? " (customer pays the store)" : ""}</option>`).join("")}<option value="customer" ${OWL.to === "customer" ? "selected" : ""}>The customer</option></select></label>
@@ -6381,6 +6397,7 @@ function renderOwList() {
   main.querySelectorAll("[data-owl-th]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.owlTh;
     OWL.sort = k === "cust" ? "cust" : OWL.sort === k + "_desc" ? k + "_asc" : k + "_desc"; renderOwList(); }));
   OWL.msg = "";
+  $("#owl-copy")?.addEventListener("click", async e => owCopyDone(e.currentTarget, await owCopyRows(rows, scope)));
   $("#owl-partner")?.addEventListener("change", e => { OW.partner = e.target.value; OWL.picked = new Set(); saveOw(); renderOwList(); });
   main.querySelectorAll("[data-owl-pick]").forEach(cb => cb.addEventListener("change", () => { const id = Number(cb.dataset.owlPick); cb.checked ? OWL.picked.add(id) : OWL.picked.delete(id); renderOwList(); }));
   $("#owl-all")?.addEventListener("change", e => { OWL.picked = e.target.checked ? new Set(rows.map(r => r.invoice_id)) : new Set(); renderOwList(); });
@@ -6478,6 +6495,7 @@ function renderOwing(msg) {
     </div>`}
     <div class="ow-listhead"><strong>${scope === "owing" ? OW_SHOW.find(s => s[0] === OW.show)[1] : scope === "paid" ? "Paid" : scope === "booked" ? "Booked jobs" : scope === "all" ? "All invoices" : esc(owScopeName(scope))}: ${rows.length.toLocaleString()} ${scope === "booked" ? (rows.length === 1 ? "job" : "jobs") : rows.length === 1 ? "invoice" : "invoices"} · ${money(total)}${scope === "booked" ? " expected" : ""}</strong>
       <span class="quiet">${esc(owRangeLabel())}</span>
+      <button class="btn quiet-btn ow-copyall" type="button" id="ow-copy" ${rows.length ? "" : "disabled"} title="Copy every line in this list, ready to paste into Excel or an email">⧉ Copy all</button>
       <button class="link" type="button" id="ow-fullpage">Open as a full page${scope === "owing" ? " (tick many and bill them to a partner)" : ""} ›</button>
       ${(scope === "owing" ? (OW.all?.[OW.show] || []).length >= 2000 : PD && PD.n > (PD.rows || []).length) ? `<span class="staff-msg err">Listing the newest 2,000${scope === "owing" ? "" : " paid invoices; pick dates to see the rest"}.</span>` : ""}<span class="staff-msg ok" id="ow-msg" role="status">${msg ? esc(msg) : ""}</span></div>
     ${scope === "owing" && OW.kind === "all" && OW.show === "todo" && rows.some(r => r.over_total) ? `<div class="approve-banner"><div><strong>${rows.filter(r => r.over_total).length} invoices show more owing than the invoice itself</strong>
@@ -6518,6 +6536,7 @@ function renderOwing(msg) {
   document.querySelectorAll("[data-ow-scope]").forEach(b => b.addEventListener("click", () => { if (OW.scope === b.dataset.owScope) return;
     OW.scope = b.dataset.owScope; OW.closed = []; saveOw(); renderOwing(); }));
   $("#ow-fullpage")?.addEventListener("click", () => openOwList());
+  $("#ow-copy")?.addEventListener("click", async e => owCopyDone(e.currentTarget, await owCopyRows(owSorted(OW.rows || []), scope)));
   document.querySelectorAll("[data-ow-period]").forEach(b => b.addEventListener("click", () => { OW.period = b.dataset.owPeriod; OW.closed = []; saveOw(); renderOwing(); }));
   document.querySelectorAll("[data-ow-step]").forEach(b => b.addEventListener("click", () => { owStep(Number(b.dataset.owStep)); renderOwing(); }));
   $("#ow-today")?.addEventListener("click", () => { OW.period = "day"; OW.anchor = ymd(new Date()); OW.closed = []; saveOw(); renderOwing(); });   // Today = just today
