@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-20.092201">
+<meta name="app-version" content="2026-10-20.092911">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1195,6 +1195,14 @@
   .owl-bulk-off strong { opacity: .6; }
   body[data-page="owlist"] #main, body[data-page="owclean"] #main { overflow-anchor: none; }
   .ow-cleanbtn { margin-top: 8px; }
+  .call-pops { position: fixed; right: 16px; bottom: 16px; z-index: 3000; display: flex; flex-direction: column; gap: 10px; width: min(360px, calc(100vw - 32px)); pointer-events: none; }
+  .call-pop { pointer-events: auto; background: #fff; border-radius: 14px; border-left: 6px solid #2b8a3e; box-shadow: 0 10px 30px rgba(0,0,0,.22); padding: 12px 14px; animation: cp-in .25s ease-out; max-height: 70vh; overflow: auto; }
+  @media (max-width: 640px) { .call-pop { max-height: 45vh; } }
+  .call-pop.cp-missed { border-left-color: #e8590c; } @keyframes cp-in { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .cp-top { display: flex; gap: 10px; align-items: flex-start; } .cp-top > div { flex: 1; } .cp-ico { font-size: 22px; } .cp-num { font-size: 1.05em; font-weight: 600; }
+  .cp-x { border: 0; background: none; font-size: 16px; cursor: pointer; color: #868e96; padding: 2px 4px; }
+  .cp-cust { border-top: 1px solid #eee; margin-top: 8px; padding-top: 8px; } .cp-name { font-size: 1.1em; font-weight: 700; }
+  .cp-tags { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin: 4px 0; } .cp-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .ask-email { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 8px 0; padding: 8px 10px; border: 1px dashed #f08c00; border-radius: 10px; background: #fff9db; }
   .ask-email input { font: inherit; padding: 5px 8px; min-width: 220px; flex: 1 1 220px; max-width: 340px; border: 1px solid #ced4da; border-radius: 6px; }
   .dup-banner { margin: 8px 0; }
@@ -2552,6 +2560,7 @@ async function showApp() {
   $("#staff-link").classList.toggle("hidden", !ME.perms.has("staff.manage"));
   $("#logins-link").classList.toggle("hidden", !(ME.perms.has("staff.manage") || ME.role === "owner"));
   $("#dupes-link").classList.toggle("hidden", !can("customers.edit"));
+  setTimeout(callPopStart, 1500);
   $("#settings-link").classList.toggle("hidden", !ME.role);
   $("#history-link").classList.toggle("hidden", !ME.perms.has("history.restore"));
   $("#calls-link").classList.toggle("hidden", !ME.role);
@@ -7116,6 +7125,55 @@ function wireDupes(root) {
     if (error) { b.disabled = false; err(k, "Not undone: " + rpcErr(error)); return; }
     delete DUP.done[k]; dupRedraw(k);
   }));
+}
+
+/* ---------- Call pop-up: who's calling on Podium, with their file one click away ---------- */
+const CALLPOP = { last: null, timer: null, shown: new Map(), busy: false };
+async function callPopStart() {
+  if (CALLPOP.timer || !ME.role) return;
+  const { data, error } = await db.rpc("incoming_calls_last");
+  if (error) return;   // setup 99m not run yet
+  CALLPOP.last = Number(data) || 0;
+  CALLPOP.timer = setInterval(callPopPoll, 4000);
+}
+async function callPopPoll() {
+  if (CALLPOP.busy || document.hidden) return;
+  CALLPOP.busy = true;
+  try {
+    const { data } = await db.rpc("incoming_calls_since", { p_after: CALLPOP.last });
+    for (const c of data || []) { CALLPOP.last = Math.max(CALLPOP.last, c.id); callPopShow(c); }
+  } catch {} finally { CALLPOP.busy = false; }
+}
+function callPopShow(c) {
+  let box = document.getElementById("call-pops");
+  if (!box) { box = document.createElement("div"); box.id = "call-pops"; box.className = "call-pops"; box.setAttribute("aria-live", "polite"); document.body.appendChild(box); }
+  const key = c.uid || "id" + c.id, old = CALLPOP.shown.get(key);
+  const state = c.event === "call.missed" ? "Missed call" : c.event === "call.voicemail_left" ? "Left a voicemail" : c.event === "call.completed" ? "Call ended" : "Calling now";
+  if (old && c.event !== "call.received") {   // the same call, later: just say what happened
+    const st = old.querySelector(".cp-state"); if (st) { st.textContent = state; old.classList.toggle("cp-missed", /missed|voicemail/i.test(c.event)); }
+    if (c.event === "call.completed") setTimeout(() => old.remove(), 60000);
+    return;
+  }
+  if (old) return;
+  const el = document.createElement("div"); el.className = "call-pop" + (/missed|voicemail/.test(c.event) ? " cp-missed" : ""); CALLPOP.shown.set(key, el);
+  const who = c.customers || [], phone = c.phone ? phoneFmt(c.phone) : "Unknown number";
+  el.innerHTML = `<div class="cp-top"><span class="cp-ico" aria-hidden="true">📞</span><div><b class="cp-state">${state}</b>${c.test ? ` <span class="quiet">(test)</span>` : ""}<div class="cp-num">${esc(phone)}${c.name ? ` · ${esc(c.name)}` : ""}</div></div>
+      <button class="cp-x" type="button" aria-label="Close" title="Close">✕</button></div>
+    ${who.length ? who.slice(0, 4).map(u => `<div class="cp-cust"><button class="link cp-name" type="button" data-cp-open="${u.id}">${esc(u.name)}</button>
+        <div class="quiet">${esc(u.address || "")}</div>
+        <div class="cp-tags">${u.plan ? `<span class="flag blue">Plan member</span>` : ""}${Number(u.owing) > 0.004 ? `<span class="flag red">Owes ${money(u.owing)}</span>` : ""}${u.dnc ? `<span class="flag amber">Do not contact</span>` : ""}
+          ${u.next_visit ? `<span class="quiet">booked ${fmtDate(u.next_visit)}</span>` : u.last_job ? `<span class="quiet">last job ${fmtDate(u.last_job)}</span>` : ""}</div>
+        <div class="cp-btns"><button class="btn" type="button" data-cp-open="${u.id}">Open file</button>${can("calls.book") && ME.booking ? `<button class="btn quiet-btn" type="button" data-cp-book="${u.id}">Book a call</button>` : ""}</div></div>`).join("")
+        + (who.length > 4 ? `<div class="quiet">and ${who.length - 4} more with this number</div>` : "")
+      : `<div class="cp-cust"><div>Not a customer yet.</div><div class="cp-btns">${can("customers.add") ? `<button class="btn" type="button" data-cp-new>New customer</button>` : ""}<button class="btn quiet-btn" type="button" data-cp-find>Search</button></div></div>`}`;
+  box.prepend(el);
+  el.querySelector(".cp-x").addEventListener("click", () => el.remove());
+  el.querySelectorAll("[data-cp-open]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.cpOpen))));
+  el.querySelectorAll("[data-cp-book]").forEach(b => b.addEventListener("click", () => openBooking(Number(b.dataset.cpBook), {})));
+  el.querySelector("[data-cp-new]")?.addEventListener("click", () => openNewCustomer({ mobile: c.phone || "", display_name: c.name || "" }));
+  el.querySelector("[data-cp-find]")?.addEventListener("click", () => { const q = $("#q"); if (q) { q.value = c.phone || ""; q.dispatchEvent(new Event("input")); q.focus(); } });
+  setTimeout(() => { if (el.isConnected && !el.matches(":hover")) el.remove(); }, 10 * 60 * 1000);
+  while (box.children.length > 4) box.lastElementChild.remove();
 }
 
 /* ---------- Purchase orders page ---------- */
@@ -11741,6 +11799,17 @@ async function loadSyncBox() {
 }
 function renderSettings(slots, note) {
   setTimeout(wireMyPassword, 0);
+  setTimeout(async () => {
+    const on = $("#cp-on"), msg = $("#cp-msg"); if (!on) return;
+    const r = await db.rpc("my_call_popup");
+    if (r.error) { msg.className = "staff-msg err"; msg.textContent = "Run RUN SETUP NOW.bat first (file 99m)."; on.disabled = true; $("#cp-test").disabled = true; return; }
+    on.checked = r.data !== false;
+    on.addEventListener("change", async () => { const { error } = await db.rpc("set_my_call_popup", { p_on: on.checked });
+      msg.className = error ? "staff-msg err" : "staff-msg ok"; msg.textContent = error ? "Not saved: " + rpcErr(error) : on.checked ? "Pop-up on." : "Pop-up off."; });
+    $("#cp-test").addEventListener("click", async () => { const { error } = await db.rpc("test_incoming_call", { p_phone: null });
+      msg.className = error ? "staff-msg err" : "staff-msg ok"; msg.textContent = error ? "Not sent: " + rpcErr(error) : on.checked ? "A pretend call is on its way: watch the bottom right." : "Sent, but your pop-up is off: tick the box to see it.";
+      callPopStart(); setTimeout(callPopPoll, 300); });
+  }, 0);
   $("#main").innerHTML = `<article class="staff settings">
     <h1>Settings</h1>
     <p class="lead">${can("settings.manage") ? "Page colours are just for you. Pinned notes apply to everyone." : "Page colours are just for you. Nobody else's screen changes."}</p>
@@ -11760,6 +11829,13 @@ function renderSettings(slots, note) {
       <div class="font-pick" role="radiogroup" aria-label="Text size">${FONTS.map(([k, t, v]) =>
         `<button type="button" class="font-opt" role="radio" aria-checked="${k === FONT}" data-font="${k}"><span style="font-size:${Math.round(16 * v)}px">Aa</span>${t}</button>`).join("")}</div>
       <div class="staff-msg" id="font-msg" role="status"></div>
+    </section>
+    <section class="block" id="set-callpop">
+      <h2>Call pop-up</h2>
+      <p class="quiet" style="max-width:720px;margin:0 0 10px">When a call comes in on Podium, a card pops up at the bottom right with who's calling, their address, plan and balance, and a button to open their file. Just for you: everyone picks their own.</p>
+      <label class="check"><input type="checkbox" id="cp-on"> Show me the pop-up</label>
+      <button class="btn quiet-btn" type="button" id="cp-test">Test it</button>
+      <div class="staff-msg" id="cp-msg" role="status"></div>
     </section>
     <section class="block">
       <h2>Your page colours</h2>
