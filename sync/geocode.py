@@ -150,6 +150,7 @@ def main():
                        WHERE latitude IS NULL AND coalesce(btrim(street), '') <> '' AND (geo_source IS NULL OR geo_source <> 'not found')""")
         todo = cur.fetchall()
     conn.commit()
+    print(f"::notice title=Addresses without a map spot::{len(todo)}", flush=True)
     print(f"Addresses with no spot on the map: {len(todo)}", flush=True)
     if not todo: return
 
@@ -189,6 +190,7 @@ def main():
 
     for k in ("address list", "street estimate", "map search", "not found", "no house number"):
         print(f"  {k}: {how.get(k, 0)}", flush=True)
+    print("::notice title=Map counts::" + ", ".join(f"{k} {how.get(k, 0)}" for k in ("address list", "street estimate", "map search", "not found", "no house number")), flush=True)
     left = len(missed) - searched
     if left > 0: print(f"  still to look up next run: {left}", flush=True)
     if a.dry: print("Dry run: nothing changed."); return
