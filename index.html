@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.222158">
+<meta name="app-version" content="2026-10-19.222427">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2554,6 +2554,7 @@ async function showApp() {
   if (location.hash === "#history" && can("history.restore")) return openHistory();
   if (location.hash === "#calls" && ME.role) return openCalls();
   if (location.hash === "#dispatch" && ME.role) return openDispatch();
+  { const m = /^#dispatch=(\d{4}-\d{2}-\d{2})(?:&visit=(\d+))?$/.exec(location.hash); if (m && ME.role) return openBoardAt(m[1], m[2] ? Number(m[2]) : null); }
   if (location.hash === "#map-colours" && ME.role) return openMapColours();
   if (/^#dispatch-map(=\d{4}-\d{2}-\d{2})?(&full)?$/.test(location.hash) && ME.role) { if (/&full$/.test(location.hash)) { DSP.mapWp = "full"; document.body.dataset.side = "closed"; } return openDispatchMap((location.hash.split("=")[1] || "").replace("&full", "") || undefined); }
   if (location.hash === "#owing" && can("invoices.adjust")) return openOwing();
@@ -3407,6 +3408,7 @@ function routeTo(h) {
   if (h === "#history") return openHistory();
   if (h === "#calls") return openCalls();
   if (h === "#dispatch") return openDispatch();
+  { const m = /^#dispatch=(\d{4}-\d{2}-\d{2})(?:&visit=(\d+))?$/.exec(h); if (m) return openBoardAt(m[1], m[2] ? Number(m[2]) : null); }
   if (h === "#map-colours") return openMapColours();
   if (/^#dispatch-map(=\d{4}-\d{2}-\d{2})?(&full)?$/.test(h)) { if (/&full$/.test(h)) { DSP.mapWp = "full"; document.body.dataset.side = "closed"; } return openDispatchMap((h.split("=")[1] || "").replace("&full", "") || undefined); }
   if (h === "#owing") return openOwing();
@@ -5634,18 +5636,24 @@ function renderTownColours(msg) {
   });
 }
 
-// from the "calls nearby" map: open that call on the dispatch board, picked and in view, with a way back
-async function goToBoard(visitId) {
-  const focus = DSP.focus, date = DSP.date;
-  DSP.sel = visitId;
+// from the "calls nearby" map: open that call on the dispatch board in a new tab (the map stays open here)
+function goToBoard(visitId) {
+  const w = window.open(location.pathname + location.search + `#dispatch=${DSP.date}&visit=${visitId}`, "_blank");
+  if (!w) openBoardAt(DSP.date, visitId);   // pop-ups blocked: open it here instead
+}
+// the board on a day, with one call picked and brought into view (the board scrolls; the page itself never moves)
+async function openBoardAt(date, visitId) {
+  if (visitId) DSP.sel = visitId;
   await openDispatch(date);
-  const card = document.querySelector(`.dsp .dc[data-visit="${visitId}"]`);
-  if (card) { document.querySelectorAll(".dc.sel").forEach(x => x.classList.remove("sel")); card.classList.add("sel", "dc-flash"); card.scrollIntoView({ block: "center", inline: "center" }); setTimeout(() => card.classList.remove("dc-flash"), 2600); }
+  if (location.hash !== `#dispatch=${date}${visitId ? "&visit=" + visitId : ""}`) history.replaceState(null, "", `#dispatch=${date}${visitId ? "&visit=" + visitId : ""}`);
+  const card = visitId && document.querySelector(`.dsp .dc[data-visit="${visitId}"]`); if (!card) return;
+  document.querySelectorAll(".dc.sel").forEach(x => x.classList.remove("sel")); card.classList.add("sel", "dc-flash"); setTimeout(() => card.classList.remove("dc-flash"), 2600);
+  for (let el = card.parentElement; el && el !== document.body; el = el.parentElement) {   // scroll only the boxes that scroll
+    const cs = getComputedStyle(el), r = el.getBoundingClientRect(), c = card.getBoundingClientRect();
+    if (/(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight) el.scrollTop += (c.top - r.top) - (el.clientHeight - c.height) / 2;
+    if (/(auto|scroll)/.test(cs.overflowX) && el.scrollWidth > el.clientWidth) el.scrollLeft += (c.left - r.left) - (el.clientWidth - c.width) / 2;
+  }
   if (typeof renderDspPanel === "function" && dspCall(visitId)) renderDspPanel();
-  if (focus) { const art = document.querySelector("#main article.dsp"); if (art && !art.querySelector(".dsp-backnear")) {
-    const b = document.createElement("div"); b.className = "dsp-backnear";
-    b.innerHTML = `<button class="btn quiet-btn" type="button">← Back to the calls near ${esc(focus.name)}</button>`;
-    b.querySelector("button").addEventListener("click", () => openDispatchMap(DSP.date, focus)); art.prepend(b); } }
 }
 async function openDispatch(date) {
   if (date) DSP.date = date;
