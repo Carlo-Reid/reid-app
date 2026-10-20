@@ -321,6 +321,10 @@ KEEP = {"equipment": {"no_warranty", "requested_info", "ignored_info"}}
 
 def save(cur, out_dir, manifest):
     counts = {}
+    cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'customers' AND column_name = 'merged_into_id')")
+    merged = cur.fetchone()[0]
+    if merged:
+        cur.execute("SELECT EXISTS (SELECT 1 FROM customers WHERE merged_into_id IS NOT NULL)"); merged = cur.fetchone()[0]
     for t in manifest:
         table, cols, n = t["table"], t["columns"], t["rows"]
         how = SAVE.get(table, "skip")
@@ -337,6 +341,8 @@ def save(cur, out_dir, manifest):
                     chunk = fh.read(1 << 20)
                     if not chunk: break
                     cp.write(chunk)
+        if "customer_id" in cols and merged:   # customers merged in the app: what ServiceTitan files under the old one goes to the one kept
+            cur.execute(f"UPDATE {tmp} t SET customer_id = c.merged_into_id FROM customers c WHERE t.customer_id = c.id AND c.merged_into_id IS NOT NULL")
         upd = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c not in ("id", "created_at") and c not in KEEP.get(table, ()))
         sel = ", ".join(cols)
         if how == "id":
