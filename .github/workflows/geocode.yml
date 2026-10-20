@@ -1,0 +1,47 @@
+# Puts customer addresses on the map (finds the spot of every address that doesn't have one yet).
+# Uses the free Statistics Canada address list, then OpenStreetMap's free search for the few left over.
+# Runs every Sunday morning for new addresses, or any time with the "Run workflow" button.
+# The settings come from this repository's secrets, never from the code. The log shows counts only.
+name: Put addresses on the map
+
+on:
+  schedule:
+    - cron: "40 8 * * 0"      # Sundays 8:40 UTC = 4:40 am in Ottawa (3:40 am in winter)
+  workflow_dispatch: {}
+
+concurrency:
+  group: geocode
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  geocode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet "psycopg[binary]"
+      - name: Keep the address list between runs
+        uses: actions/cache@v4
+        with:
+          path: oda_on.zip
+          key: statcan-oda-on-v1
+      - name: Download the address list (first run only)
+        run: |
+          if [ ! -s oda_on.zip ]; then
+            curl -sSfL --retry 3 -A "ReidHVAC-address-map/1.0" -o oda_on.zip "https://www150.statcan.gc.ca/n1/en/pub/46-26-0001/2021001/ODA_ON_v1.zip"
+          fi
+          echo "Address list: $(du -h oda_on.zip | cut -f1)"
+      - name: Put addresses on the map
+        run: python sync/geocode.py --file oda_on.zip --search-max 2000
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
