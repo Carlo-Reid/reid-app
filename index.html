@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-20.114851">
+<meta name="app-version" content="2026-10-20.120440">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -7337,11 +7337,14 @@ function nfWire() {
     N.busy = true; N.err = false; N.msg = "Matching…"; nfShow();
     const val = (r, k) => c[k] >= 0 ? r[c[k]] : "", dt = v => v instanceof Date ? v.toISOString().slice(0, 10) : (String(v).match(/\d{4}-\d\d-\d\d/) || [""])[0];
     const found = [];
-    for (let i = 0; i < N.rows.length; i += 250) {
-      const chunk = N.rows.slice(i, i + 250).map((r, j) => ({ i: i + j, phone: String(val(r, "phone") || ""), email: String(val(r, "email") || ""), address: String(val(r, "address") || ""), name: String(val(r, "name") || ""), date: dt(val(r, "date")) }));
+    // 50 rows at a time (smaller again if the database is slow), so no request hits its time limit
+    for (let i = 0, size = 50; i < N.rows.length;) {
+      const chunk = N.rows.slice(i, i + size).map((r, j) => ({ i: i + j, phone: String(val(r, "phone") || ""), email: String(val(r, "email") || ""), address: String(val(r, "address") || ""), name: String(val(r, "name") || ""), date: dt(val(r, "date")) }));
       const { data, error } = await db.rpc("partner_file_notes", { p_partner: PP.store, p_rows: chunk, p_note_count: N.count || 30, p_podium: true });
+      if (error && /timeout|canceling statement/i.test(error.message || "") && size > 5) { size = Math.max(5, Math.floor(size / 3)); continue; }
       if (error) { N.busy = false; N.err = true; N.msg = "Stopped: " + (/PGRST202|could not find/i.test(error.message || "") ? "run RUN SETUP NOW.bat first (file 99p)." : rpcErr(error)); return nfShow(); }
-      found.push(...data); N.msg = `Matching… ${Math.min(i + 250, N.rows.length).toLocaleString()} of ${N.rows.length.toLocaleString()}`; const m = $("#nf-msg"); if (m) m.textContent = N.msg;
+      found.push(...data); i += chunk.length;
+      N.msg = `Matching… ${i.toLocaleString()} of ${N.rows.length.toLocaleString()}`; const m = $("#nf-msg"); if (m) m.textContent = N.msg;
     }
     N.found = found; N.busy = false; N.msg = "";
     // Vista and job notes ticked to start with; customer, address and Podium notes are there to pick
