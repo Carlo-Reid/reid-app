@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.215211">
+<meta name="app-version" content="2026-10-19.215815">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -534,14 +534,21 @@
   .sec1a { position: sticky; top: 0; z-index: 4; background: var(--panel); border-radius: var(--radius-m); padding: 10px 18px;
            box-shadow: 0 -12px 0 var(--paper), 0 4px 10px rgba(0,0,0,.07); }
   .sec1a .plate { padding-bottom: 0; border-bottom: 0; gap: 4px 16px; align-items: center; }
-  .sec1a .plate > .balance { max-height: calc(2in - 22px); display: flex; flex-direction: column; align-items: flex-end; }
-  .sec1a .sec1a-plans { max-height: calc(2in - 74px); overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; padding-right: 2px; }
+  .sec1a .plate > .balance { max-height: calc(2in - 54px); display: flex; flex-direction: column; align-items: flex-end; }
+  .sec1a .sec1a-plans { max-height: calc(2in - 106px); overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; padding-right: 2px; }
   .sec1a .sec1a-plans:empty { display: none; }
+  .near-calls { display: flex; align-items: center; gap: 4px 6px; min-height: 28px; font-size: calc(13px * var(--fs, 1)); margin: 4px 0 0; padding-top: 4px; border-top: 1px dashed var(--line, #d0d7de); flex-wrap: nowrap; }
+  .near-calls .nc-days { overflow-x: auto; flex-wrap: nowrap !important; scrollbar-width: thin; padding-bottom: 2px; }
+  .near-calls .nc-lab { white-space: nowrap; font-weight: 600; color: #495057; }
+  .near-calls .nc-days { display: flex; flex-wrap: wrap; gap: 4px 5px; }
+  .nc-day { white-space: nowrap; border: 1px solid #74c0fc; background: #e7f5ff; color: #1864ab; border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 12.5px; cursor: pointer; }
+  .nc-day b { background: #1864ab; color: #fff; border-radius: 999px; padding: 0 6px; margin-left: 3px; font-size: 11.5px; } .nc-day:hover { background: #d0ebff; }
+  .sec1a.stuck .near-calls { display: none; }
   @media (max-width: 900px) {   /* stacked on a phone: the whole box is at most 2 inches and scrolls */
     .sec1a > .plate { max-height: calc(2in - 20px); overflow-y: auto; overscroll-behavior: contain; }
     .sec1a > .plate > div:first-child, .sec1a .plate > .balance, .sec1a .sec1a-plans { max-height: none; overflow: visible; }
     .sec1a .plate > .balance, .sec1a .sec1a-plans { align-items: flex-start; } }
-  .sec1a > .plate > div:first-child { max-height: calc(2in - 22px); overflow-y: auto; overscroll-behavior: contain; }   /* Section 1A: at most 2 inches tall; more scrolls inside (the balance stays put) */
+  .sec1a > .plate > div:first-child { max-height: calc(2in - 54px); overflow-y: auto; overscroll-behavior: contain; }   /* Section 1A: at most 2 inches tall; more scrolls inside (the balance stays put) */
   .sec1a .plate h1 { font-size: calc(28px * var(--fs, 1)); }
   .sec1a .plate .meta { margin-top: 2px; font-size: calc(13.5px * var(--fs, 1)); }
   .sec1a .balance .amt { font-size: calc(21px * var(--fs, 1)); }
@@ -2499,6 +2506,7 @@ async function showApp() {
   $("#accounting-link").classList.toggle("hidden", !canTax());
   $("#au-link").classList.toggle("hidden", !(seeCost() && can("pricebook.edit")));
   if (seeCost() && can("pricebook.edit")) setTimeout(() => auLoad().catch(() => {}), 1500);
+  if (ME.role) setTimeout(() => loadNear().catch(() => {}), 2000);   // calls booked in the next 2 weeks (Section 1A "Calls nearby")
   $("#pricebook-link").classList.toggle("hidden", !ME.role || !(ME.role === "owner" || can("pricebook.view") || can("pricebook.edit")));
   $("#partners-link").classList.toggle("hidden", !canPartnerPay());
   $("#marketing-link").classList.toggle("hidden", !can("email.send"));
@@ -3635,6 +3643,7 @@ function renderFile() {
         <div class="amt num">${money(owed)}</div>
       </div>
     </div>
+    ${l ? `<div class="near-calls" id="near-calls" data-near-loc="${l.id}">${nearCallsHtml(l)}</div>` : ""}
     </div>
     <div class="sec1" data-tag="Section 1B">
     ${ME.booking ? `<div class="inv-start" id="inv-start" data-cust="${c.id}" data-loc="${l ? l.id : ""}"><button class="btn quiet-btn" type="button" id="inv-start-btn">+ Make an invoice</button><div id="inv-start-pick"></div></div>` : ""}
@@ -4814,6 +4823,37 @@ function planBadge(plans, l) {
   const last = (plans || []).filter(p => p.status !== "active" || p.end_date).sort((a, b) => String(b.cancelled_on || b.end_date || "").localeCompare(String(a.cancelled_on || a.end_date || "")))[0];
   return `<div class="plan-tags"><button type="button" class="plan-tag none" data-goto-plans>${last ? `No plan now <small>(${esc(last.plan_types?.name || "plan")} ${last.status === "cancelled" ? "cancelled" : "ended"}${last.cancelled_on || last.end_date ? " " + esc(monthYear(last.cancelled_on || last.end_date)) : ""})</small>` : "No plan"}</button></div>`;
 }
+// Section 1A: calls already booked near this address in the next 2 weeks, by day (click a day: that day's dispatch map)
+let NEAR = { at: 0, rows: null, p: null };
+function loadNear(force) {
+  if (!force && NEAR.rows && Date.now() - NEAR.at < 5 * 60 * 1000) return Promise.resolve(NEAR.rows);
+  if (NEAR.p) return NEAR.p;
+  return NEAR.p = db.rpc("calls_next_days", { p_days: 14 }).then(({ data, error }) => { NEAR.p = null; NEAR.at = Date.now(); NEAR.rows = error ? [] : data || []; NEAR.err = error ? rpcErr(error) : null; return NEAR.rows; });
+}
+function isNear(l, v) {
+  if (v.loc === l.id) return false;
+  if (l.latitude != null && v.latitude != null) {
+    const la = Number(l.latitude), dy = (Number(v.latitude) - la) * 110.57, dx = (Number(v.longitude) - Number(l.longitude)) * 111.32 * Math.cos(la * Math.PI / 180);
+    if (Math.sqrt(dx * dx + dy * dy) <= 5) return true;
+  }
+  if (l.latitude != null && v.latitude != null) return false;   // both on the map and further than 5 km
+  if (l.community_id && l.community_id === v.community_id) return true;
+  if (l.neighbourhood_id && l.neighbourhood_id === v.neighbourhood_id) return true;
+  const fa = pcKey(l.postal_code).slice(0, 3), fb = pcKey(v.postal_code).slice(0, 3);
+  return !!fa && fa.length === 3 && fa === fb;
+}
+function nearCallsHtml(l) {
+  if (!NEAR.rows) { loadNear().then(() => { const el = document.getElementById("near-calls"); if (el && Number(el.dataset.nearLoc) === l.id) el.innerHTML = nearCallsHtml(l); }); return `<span class="nc-lab">🚐 Calls nearby, next 2 weeks:</span> <span class="quiet">checking…</span>`; }
+  if (NEAR.err) return `<span class="nc-lab">🚐 Calls nearby:</span> <span class="quiet">${/PGRST202|could not find/i.test(NEAR.err) ? "run RUN SETUP NOW.bat (file 99i)" : esc(NEAR.err)}</span>`;
+  const near = NEAR.rows.filter(v => isNear(l, v)), days = new Map();
+  near.forEach(v => { const d = days.get(v.d) || []; d.push(v); days.set(v.d, d); });
+  if (!days.size) return `<span class="nc-lab">🚐 Calls nearby, next 2 weeks:</span> <span class="quiet">none booked</span>`;
+  const t = x => { if (!x) return ""; const d = new Date(x); return isNaN(d) ? String(x).slice(0, 5) : d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\s?([ap])\.?m\.?/i, "$1"); };
+  return `<span class="nc-lab" title="Booked calls within about 5 km (or the same community / postal area) in the next 14 days. Click a day to see it on the dispatch map.">🚐 Calls nearby (2 weeks):</span><span class="nc-days">${[...days].map(([d, vs]) => {
+    const tip = vs.map(v => `${v.from ? t(v.from) + (v.to ? "–" + t(v.to) : "") + " · " : ""}${v.street || ""}${v.city ? ", " + v.city : ""}${v.type ? " · " + v.type : ""}${v.techs ? " · " + v.techs : ""}`).join("\n");
+    return `<button type="button" class="nc-day" data-near-day="${d}" title="${esc(tip)}">${new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", day: "numeric" }).replace(/\./g, "")} <b>${vs.length}</b></button>`; }).join("")}</span>`;
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-near-day]"); if (b) openDispatchMap(b.dataset.nearDay); });
 // Section 1A: the zone bar (colour + town · neighbourhood · postal area + "how to find it" details)
 function zoneBar(l) {
   if (!l) return "";
