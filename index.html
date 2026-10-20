@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.220908">
+<meta name="app-version" content="2026-10-19.221448">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -987,6 +987,12 @@
   .dmp-tech { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #ced4da; background: #fff; border-radius: 999px; padding: 3px 9px; font: inherit; font-size: 12.5px; cursor: pointer; }
   .dmp-tech i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; } .dmp-tech b { color: #495057; font-size: 11.5px; }
   .dmp-tech[aria-pressed="true"] { border-color: #1f6fd1; background: #e7f5ff; box-shadow: 0 0 0 1px #1f6fd1; } .dmp-tech:disabled { cursor: default; opacity: .7; }
+  .dmp-focus { background: #fff5f5; border: 2px solid #e03131; border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 14px; }
+  .focus-pin .fp-pin { width: 34px; height: 34px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: #e03131; border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.45);
+    display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; animation: fpPulse 1.6s ease-in-out infinite; }
+  .focus-pin .fp-pin span { transform: rotate(45deg); line-height: 1; }
+  .focus-pin .fp-name { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); white-space: nowrap; background: #e03131; color: #fff; font: 800 12px/1.4 system-ui, sans-serif; padding: 1px 7px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+  @keyframes fpPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(224,49,49,.6), 0 2px 6px rgba(0,0,0,.45); } 50% { box-shadow: 0 0 0 10px rgba(224,49,49,0), 0 2px 6px rgba(0,0,0,.45); } }
   .tn-label span { display: inline-block; white-space: nowrap; background: rgba(255,255,255,.92); border-left: 4px solid; border-radius: 4px; padding: 1px 5px; font: 700 11px/1.3 system-ui, sans-serif; color: #1d2733; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
   .tx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } @media (max-width: 1000px) { .tx-grid { grid-template-columns: 1fr; } }
   .tx-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin: 10px 0; }
@@ -4697,7 +4703,7 @@ function wirePlacesLegend() {
   $("#dm-pcol")?.addEventListener("click", () => { const c = MAPC.by.get(DSP.placeSel); if (c) openMapColours("", { tab: "comms", q: c.name }); });
 }
 function dspMapRows() {
-  const rows = DSP.rows.filter(r => r.status !== "cancelled").map(r => ({ r, wait: false }));
+  const rows = DSP.rows.filter(r => r.status !== "cancelled" && (DSP.page !== "map" || focusNear(r))).map(r => ({ r, wait: false }));
   if (DSP.mapWait) DSP.waiting.forEach(r => rows.push({ r, wait: true }));
   return rows;
 }
@@ -4739,6 +4745,14 @@ function drawDspMap(fit) {
         html: `<span style="border-color:${esc(c)}">${esc(nm)}</span>` }) }).addTo(DSP.mlayer);
     }
   });
+  const F = DSP.page === "map" && !placesOn && DSP.focus && DSP.focus.latitude != null ? DSP.focus : null;
+  if (F) {   // the customer you're booking: a big red pin with their name, and the ~5 km "nearby" ring
+    const at = [Number(F.latitude), Number(F.longitude)];
+    L.circle(at, { radius: 5000, color: "#e03131", weight: 1.5, dashArray: "6 6", fillColor: "#e03131", fillOpacity: 0.05, interactive: false }).addTo(DSP.mlayer);
+    L.marker(at, { zIndexOffset: 2000, icon: L.divIcon({ className: "focus-pin", iconSize: [34, 44], iconAnchor: [17, 42],
+      html: `<div class="fp-pin"><span>★</span></div><div class="fp-name">${esc(F.name)}</div>` }) }).bindTooltip(`<b>${esc(F.name)}</b><br>${esc([F.street, F.city].filter(Boolean).join(", "))}<br>The customer you're booking`).addTo(DSP.mlayer);
+    pts.push(at);
+  }
   if (placesOn) { $("#dm-legend").innerHTML = placesLegend(inView); wirePlacesLegend(); return; }
   if (DSP.techSel == null && fit && pts.length) { DSP.lmap.fitBounds(pts, { padding: [30, 30], maxZoom: 13 }); DSP.mapFitFor = DSP.date + (DSP.mapWait ? "w" : ""); }
   // legend
@@ -4863,6 +4877,8 @@ function isNear(l, v) {
   return !!fa && fa.length === 3 && fa === fb;
 }
 function nearCallsHtml(l) {
+  NEAR.cur = { id: l.id, latitude: l.latitude, longitude: l.longitude, postal_code: l.postal_code, community_id: l.community_id, neighbourhood_id: l.neighbourhood_id,
+               name: current?.c?.display_name || "", street: l.street || "", city: l.city || "" };
   if (!NEAR.rows) { loadNear().then(() => { const el = document.getElementById("near-calls"); if (el && Number(el.dataset.nearLoc) === l.id) el.innerHTML = nearCallsHtml(l); }); return `<span class="nc-lab">🚐 Calls nearby, next 2 weeks:</span> <span class="quiet">checking…</span>`; }
   if (NEAR.err) return `<span class="nc-lab">🚐 Calls nearby:</span> <span class="quiet">${/PGRST202|could not find/i.test(NEAR.err) ? "run RUN SETUP NOW.bat (file 99i)" : esc(NEAR.err)}</span>`;
   const near = NEAR.rows.filter(v => isNear(l, v)), days = new Map();
@@ -4878,7 +4894,11 @@ function nearCallsHtml(l) {
 // the drop-down stays open or closed the way you left it
 let NEAR_OPEN = (() => { try { return localStorage.getItem("reid.nearOpen") === "1"; } catch { return false; } })();
 document.addEventListener("toggle", e => { if (e.target.matches?.(".nc-drop")) { NEAR_OPEN = e.target.open; try { localStorage.setItem("reid.nearOpen", NEAR_OPEN ? "1" : "0"); } catch {} } }, true);
-document.addEventListener("click", e => { const b = e.target.closest("[data-near-day]"); if (b) openDispatchMap(b.dataset.nearDay); });
+document.addEventListener("click", e => { const b = e.target.closest("[data-near-day]"); if (b) openDispatchMap(b.dataset.nearDay, NEAR.cur); });
+// the dispatch map opened from "Calls nearby": only the calls near that customer, and the customer marked
+const focusNear = r => { const f = DSP.focus; if (!f) return true;
+  return isNear({ id: f.id, latitude: f.latitude, longitude: f.longitude, postal_code: f.postal_code, community_id: f.community_id, neighbourhood_id: f.neighbourhood_id },
+                { loc: r.location_id, latitude: r.lat, longitude: r.lng, postal_code: r.postal_code, community_id: r.community_id, neighbourhood_id: r.hood_id }); };
 // Section 1A: the zone bar (colour + town · neighbourhood · postal area + "how to find it" details)
 function zoneBar(l) {
   if (!l) return "";
@@ -5438,8 +5458,9 @@ function renderCommColours(msg) {
 }
 
 /* ---------------- Dispatch map page: the day's calls listed on the left, a big map on the right ---------------- */
-async function openDispatchMap(date) {
+async function openDispatchMap(date, focus) {
   if (date) DSP.date = date;
+  DSP.focus = focus || null; DSP.techSel = null; DSP.mapFitFor = null;
   DSP.page = "map";
   setPage("dispatch-map", "dispatchmap", "Dispatch map");
   $("#main").innerHTML = `<div class="loading">Loading the map…</div>`;
@@ -5452,7 +5473,7 @@ function renderDispatchMapPage() {
   const V = DSP.mp || (DSP.mp = (() => { try { return JSON.parse(localStorage.getItem("reid.dmapView") || "null"); } catch { return null; } })() || {});
   V.group = V.group || DSP.colorBy || "hood"; V.sort = V.sort || "time"; V.q = V.q || "";
   const isToday = DSP.date === ymd(new Date()), top = $(".dmp-list")?.scrollTop || 0;
-  let rows = DSP.rows.filter(r => r.status !== "cancelled");
+  let rows = DSP.rows.filter(r => r.status !== "cancelled" && focusNear(r));
   if (DSP.mapWait) rows = rows.concat(DSP.waiting);
   const q = V.q.trim().toLowerCase();
   if (q) rows = rows.filter(r => [r.customer_name, r.city, r.street, r.postal_code, r.hood, r.job_type, r.summary, r.techs.map(t => t.name).join(" ")].join(" ").toLowerCase().includes(q));
@@ -5486,7 +5507,9 @@ function renderDispatchMapPage() {
         <label class="pb-check"><input type="checkbox" id="dmp-same" ${V.same !== false ? "checked" : ""}> Map colours match the groups</label>
         <label class="pb-check"><input type="checkbox" id="dmp-tnames" ${DSP.mapTechNames !== false ? "checked" : ""}> Tech names on the map</label>
       </section>
-      ${(() => { const T = new Map(); DSP.rows.filter(r => r.status !== "cancelled").forEach(r => (r.techs.length ? r.techs : [{ id: 0, name: "No tech yet" }]).forEach(t => { const x = T.get(t.id) || { ...t, n: 0 }; x.n++; T.set(t.id, x); }));
+      ${DSP.focus ? `<div class="dmp-focus">📍 Showing only calls near <b>${esc(DSP.focus.name)}</b>${DSP.focus.street ? ` (${esc(DSP.focus.street)}${DSP.focus.city ? ", " + esc(DSP.focus.city) : ""})` : ""}, about 5 km.${DSP.focus.latitude == null ? " This address isn't on the map yet, so it can't be marked." : ""}
+        <button class="link" type="button" id="dmp-unfocus">Show all calls</button></div>` : ""}
+      ${(() => { const T = new Map(); DSP.rows.filter(r => r.status !== "cancelled" && focusNear(r)).forEach(r => (r.techs.length ? r.techs : [{ id: 0, name: "No tech yet" }]).forEach(t => { const x = T.get(t.id) || { ...t, n: 0 }; x.n++; T.set(t.id, x); }));
         const list = [...T.values()].sort((a, b) => (a.id === 0) - (b.id === 0) || a.name.localeCompare(b.name));
         return list.length ? `<div class="dmp-techs" role="group" aria-label="Techs"><span class="cl-label">Techs</span><button type="button" class="dmp-tech" data-dmp-tech="" aria-pressed="${DSP.techSel == null}">All</button>${list.map(t =>
           `<button type="button" class="dmp-tech" data-dmp-tech="${t.id}" aria-pressed="${DSP.techSel === t.id}" ${t.id === 0 ? "disabled" : ""}><i style="background:${esc(t.id ? techCol(t) : "#adb5bd")}"></i>${esc(t.name)} <b>${t.n}</b></button>`).join("")}</div>` : ""; })()}
@@ -5508,6 +5531,7 @@ function renderDispatchMapPage() {
   qi.addEventListener("keydown", e => { if (e.key === "Escape" && qi.value) { e.stopPropagation(); V.q = ""; renderDispatch(); } });
   $("#dmp-group").addEventListener("change", e => { V.group = e.target.value; if (V.same !== false && V.group !== "none") { DSP.colorBy = V.group; saveDspMap(); } saveV(); renderDispatch(); });
   $("#dmp-sort").addEventListener("change", e => { V.sort = e.target.value; saveV(); renderDispatch(); });
+  $("#dmp-unfocus")?.addEventListener("click", () => { DSP.focus = null; DSP.techSel = null; DSP.mapFitFor = null; renderDispatch(); });
   $("#dmp-tnames")?.addEventListener("change", e => { DSP.mapTechNames = e.target.checked; try { localStorage.setItem("reid.dmapTechNames", e.target.checked ? "1" : "0"); } catch {} drawDspMap(); });
   document.querySelectorAll("[data-dmp-tech]").forEach(b => b.addEventListener("click", () => { const v = b.dataset.dmpTech; DSP.techSel = v === "" ? null : (DSP.techSel === Number(v) ? null : Number(v)); renderDispatch(); }));
   $("#dmp-same").addEventListener("change", e => { V.same = e.target.checked; if (V.same && V.group !== "none") { DSP.colorBy = V.group; saveDspMap(); } saveV(); renderDispatch(); });
