@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.222945">
+<meta name="app-version" content="2026-10-20.084819">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -982,6 +982,12 @@
   .gl-t input { font: inherit; padding: 4px 6px; border: 1px solid var(--line, #c9d0d8); border-radius: 6px; width: 100%; } .gl-num { width: 110px; } .gl-off td { opacity: .55; }
   .gl-t select { font: inherit; padding: 4px 6px; max-width: 260px; } .gl-act { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
   .gl .cl-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); } @media (max-width: 900px) { .gl .cl-stats { grid-template-columns: 1fr 1fr; } }
+  .mcost-item { border: 1px solid var(--line, #dee2e6); border-radius: 10px; margin: 6px 0; background: #fff; } .mcost-item[open] { box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+  .mcost-item > summary { display: grid; grid-template-columns: 1fr auto auto auto; gap: 14px; align-items: center; padding: 9px 12px; cursor: pointer; }
+  .mcost-item .mcost-s { font-weight: 800; min-width: 90px; text-align: right; } .mcost-item .mcost-d { min-width: 110px; text-align: right; }
+  .mcost-form { padding: 4px 12px 8px; align-items: end; } .mcost-item table.mcost-t { margin: 0 12px 10px; width: calc(100% - 24px); max-width: calc(100% - 24px); } .mcost-t td { padding-top: 4px; padding-bottom: 4px; }
+  .mcost-one { font: inherit; width: 90px; padding: 3px 6px; border: 1px solid var(--line, #c9d0d8); border-radius: 6px; }
+  @media (max-width: 640px) { .mcost-item > summary { grid-template-columns: 1fr auto; } .mcost-item .mcost-d { display: none; } }
   .gl-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; } .gl-acc h3 { margin: 14px 0 4px; }
   .pb-acct-grid select { font: inherit; padding: 6px 8px; border: 1px solid var(--line, #c9d0d8); border-radius: 6px; width: 100%; }
   .dmp-techs { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 6px; margin: 8px 0; }
@@ -7730,10 +7736,12 @@ async function openAccounting() {
 }
 async function loadAccounting(msg) {
   const [a, b] = txRange(GL.kind, GL.anchor);
-  const [setup, rep] = await Promise.all([db.rpc("gl_setup"), GL.tab === "report" ? db.rpc("gl_report", { p_from: ymd(a), p_to: ymd(b) }) : null]);
+  const [setup, rep] = await Promise.all([db.rpc("gl_setup"), GL.tab === "report" ? db.rpc("gl_report", { p_from: ymd(a), p_to: ymd(b) }) : GL.tab === "costs" ? db.rpc("missing_costs", { p_from: ymd(a), p_to: ymd(b) }) : null]);
   if (document.body.dataset.page !== "accounting") return;
   if (setup.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the books</h2>${esc(/PGRST202|could not find the function/i.test(setup.error.message || "") ? "Run RUN SETUP NOW.bat first (file 99d)." : rpcErr(setup.error))}</div></div>`; return; }
-  GL.setup = setup.data; if (rep) GL.rep = rep.error ? { error: rpcErr(rep.error) } : rep.data;
+  GL.setup = setup.data;
+  if (rep && GL.tab === "costs") GL.mc = rep.error ? { error: /PGRST202|could not find the function/i.test(rep.error.message || "") ? "Run RUN SETUP NOW.bat first (file 99j)." : rpcErr(rep.error) } : rep.data;
+  else if (rep) GL.rep = rep.error ? { error: rpcErr(rep.error) } : rep.data;
   renderAccounting(msg);
 }
 function glName(n) { const a = (GL.setup?.accounts || []).find(x => x.number === n); return a ? `${a.number} ${a.name}` : n || "—"; }
@@ -7749,17 +7757,42 @@ function renderAccounting(msg) {
   const seg = (list, cur, attr) => `<div class="seg" role="group">${list.map(([k, t]) => `<button type="button" aria-pressed="${cur === k}" ${attr}="${k}">${t}</button>`).join("")}</div>`;
   const acctOpts = (cur, kinds, blank) => `<option value="">${blank}</option>` + (S.accounts || []).filter(x => (x.active || x.number === cur) && kinds.includes(x.kind))
     .map(x => `<option value="${esc(x.number)}" ${x.number === cur ? "selected" : ""}>${esc(x.number + " " + x.name)}</option>`).join("");
+  const period = extra => `<section class="cl-tools ow-dates" aria-label="Period"><h2 class="ow-sec-title">Period</h2>
+        <div class="cl-row"><div class="cl-group"><span class="cl-label">View by</span>${seg(TX_KINDS.map(([k, t]) => [k, t.replace("ly", "")]), GL.kind, "data-gl-kind")}</div>
+          <div class="cl-group ow-when"><span class="cl-label">Period</span><div class="ow-nav"><button class="ow-step" type="button" data-gl-step="-1" aria-label="Back one">‹</button>
+            <strong class="ow-when-lab tx-lab">${esc(txLabel(a, b, GL.kind))}</strong><button class="ow-step" type="button" data-gl-step="1" aria-label="Forward one">›</button>
+            ${extra || ""}</div></div></div>
+      </section>`;
   let body = "";
-  if (GL.tab === "report") {
+  if (GL.tab === "costs") {
+    const M = GL.mc || {}, items = M.items || [];
+    body = M.error ? `<div class="staff-msg err">${esc(M.error)}</div>` : `${period()}
+      <div class="cl-stats">
+        <div class="cl-stat s-owe"><span>Lines with no cost</span><strong>${Number(M.lines || 0).toLocaleString()}</strong><em>equipment and parts</em></div>
+        <div class="cl-stat s-all"><span>Sold for</span><strong>${money(M.sales)}</strong><em>profit shows too high by their cost</em></div>
+        <div class="cl-stat s-cx"><span>Items</span><strong>${items.length.toLocaleString()}</strong><em>to fill in</em></div>
+        <div class="cl-stat s-done"><span>Filled from the price book</span><strong>${Number(M.filled || 0).toLocaleString()}</strong><em>lines, automatically</em></div>
+      </div>
+      <section class="block gl-mc"><h2>Missing costs · ${esc(txLabel(a, b, GL.kind))}</h2>
+        <p class="quiet">Equipment and parts sold with no cost. Lines whose item has a cost in the price book were filled in automatically (and new ones will be). What's left are items with no price book cost: type what one cost you and it fills every line of that item below. Biggest sales first.</p>
+        ${items.length ? items.map(g => `<details class="mcost-item" data-mc="${g.item_id}" ${GL.mcOpen?.has(g.item_id) ? "open" : ""}>
+          <summary><span class="mcost-name"><b>${esc(g.name || "Item " + g.item_id)}</b>${g.sku && g.sku !== g.name ? ` <span class="quiet">${esc(g.sku)}</span>` : ""} <span class="chip small">${g.type === "equipment" ? "Equipment" : "Part"}</span></span>
+            <span class="mcost-n">${Number(g.n).toLocaleString()} line${g.n == 1 ? "" : "s"}</span><span class="mcost-s num">${money(g.sales)}</span><span class="quiet mcost-d">last ${fmtDate(g.last)}</span></summary>
+          ${edit ? `<form class="tx-form mcost-form" data-mc-form="${g.item_id}" autocomplete="off"><label>Cost each<input name="cost" type="number" step="0.01" min="0" required placeholder="0.00"></label>
+            <label class="gl-act"><input type="checkbox" name="pb" ${Number(g.pb_cost) ? "disabled" : "checked"}> Also save it as the price book cost</label>
+            <button class="btn" type="submit">Fill ${Number(g.n) === 1 ? "this line" : `all ${Number(g.n).toLocaleString()} lines`}</button>
+            <button class="btn quiet-btn" type="button" data-mc-none="${g.item_id}" title="For labour, notes or anything with nothing to buy: takes these lines off the list">No cost (labour or a note)</button>
+            <span class="quiet">or type a cost on one line below (0 = no cost)</span></form>` : ""}
+          <table class="calls-table mcost-t"><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Line</th><th class="r">Qty</th><th class="r">Sold for</th>${edit ? "<th>Cost each</th>" : ""}</tr></thead><tbody>
+            ${g.lines.map(l => `<tr data-mc-line="${l.id}"><td>${fmtDate(l.date)}</td><td><a href="#invoice=${l.invoice_id}">${esc(l.invoice || "")}</a></td><td>${esc(l.customer || "")}</td><td>${esc(l.description || "")}</td>
+              <td class="r">${l.qty != null ? Number(l.qty) : ""}</td><td class="r num">${money(l.total)}</td>${edit ? `<td><input class="mcost-one" data-mc-one="${l.id}" type="number" step="0.01" min="0" placeholder="0.00" aria-label="Cost each"></td>` : ""}</tr>`).join("")}
+          </tbody></table></details>`).join("") : `<div class="quiet">Nothing missing for this period.</div>`}
+      </section>`;
+  } else if (GL.tab === "report") {
     const { R, sales, cogs, gross, exp, net } = glReportRows(), pct = v => sales ? (Math.round(v / sales * 1000) / 10) + "%" : "–";
     const row = (x, neg) => `<tr><td>${esc(x.number)}</td><td>${esc(x.name)}</td><td class="r num">${neg ? "−" : ""}${money(Math.abs(Number(x.amount)))}</td><td class="r quiet">${pct(Number(x.amount))}</td></tr>`;
     body = R.error ? `<div class="staff-msg err">${esc(R.error)}</div>` : `
-      <section class="cl-tools ow-dates" aria-label="Period"><h2 class="ow-sec-title">Period</h2>
-        <div class="cl-row"><div class="cl-group"><span class="cl-label">View by</span>${seg(TX_KINDS.map(([k, t]) => [k, t.replace("ly", "").replace("Quarter", "Quarter").replace("Year", "Year")]), GL.kind, "data-gl-kind")}</div>
-          <div class="cl-group ow-when"><span class="cl-label">Period</span><div class="ow-nav"><button class="ow-step" type="button" data-gl-step="-1" aria-label="Back one">‹</button>
-            <strong class="ow-when-lab tx-lab">${esc(txLabel(a, b, GL.kind))}</strong><button class="ow-step" type="button" data-gl-step="1" aria-label="Forward one">›</button>
-            <button class="link" type="button" id="gl-csv">⬇ File for the bookkeeper</button></div></div></div>
-      </section>
+      ${period(`<button class="link" type="button" id="gl-csv">⬇ File for the bookkeeper</button>`)}
       <div class="cl-stats">
         <div class="cl-stat s-all"><span>Sales before HST</span><strong>${money(sales)}</strong><em>${Number(R.invoices || 0).toLocaleString()} invoices</em></div>
         <div class="cl-stat s-cx"><span>Cost of sales</span><strong>${money(cogs)}</strong><em>${pct(cogs)} of sales</em></div>
@@ -7778,7 +7811,7 @@ function renderAccounting(msg) {
           <tr class="gl-sum gl-net"><td colspan="2">Profit</td><td class="r num">${money(net)}</td><td class="r">${pct(net)}</td></tr>
         </tbody></table>
         <p class="quiet">Sales are invoice lines before HST, booked to each item's account (or the usual account for that kind of item). Cost of sales is each line's cost.
-          ${Number(R.no_cost_lines) ? `<b>${Number(R.no_cost_lines).toLocaleString()} equipment or parts lines have no cost</b>, so cost of sales is low by that much.` : ""} HST charged: ${money(R.hst)} (see Tax payments). Wages and other costs not entered in the app aren't included.</p>
+          ${Number(R.no_cost_lines) ? `<b>${Number(R.no_cost_lines).toLocaleString()} equipment or parts lines have no cost</b>, so cost of sales is low by that much (<button class="link" type="button" data-gl-tab-go="costs">fill them in</button>).` : ""} HST charged: ${money(R.hst)} (see Tax payments). Wages and other costs not entered in the app aren't included.</p>
       </section>
       <section class="block gl-cls"><h2>By class</h2>
         <table class="calls-table"><thead><tr><th>Class</th><th class="r">Sales</th><th class="r">Cost</th><th class="r">Gross profit</th><th class="r">Margin</th></tr></thead><tbody>
@@ -7815,7 +7848,7 @@ function renderAccounting(msg) {
     <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Books</span><h1>Accounting</h1>
       <p>Where sales, costs and stock are booked, and how the business did for any month, quarter or year.</p></div>
       <div class="cl-hero-range"><span>Accounts</span><strong class="ow-hero-amt">${(S.accounts || []).filter(x => x.active).length}</strong><em>in use</em></div></header>
-    <section class="cl-tools"><div class="cl-row"><div class="cl-group"><span class="cl-label">Show</span>${seg([["report", "Income statement"], ["accounts", "Chart of accounts"], ["defaults", "Usual accounts and classes"]], GL.tab, "data-gl-tab")}</div>
+    <section class="cl-tools"><div class="cl-row"><div class="cl-group"><span class="cl-label">Show</span>${seg([["report", "Income statement"], ["costs", "Missing costs"], ["accounts", "Chart of accounts"], ["defaults", "Usual accounts and classes"]], GL.tab, "data-gl-tab")}</div>
       <span class="staff-msg ok" id="gl-msg" role="status">${msg ? esc(msg) : ""}</span></div></section>
     ${body}
   </article>`;
@@ -7824,6 +7857,21 @@ function renderAccounting(msg) {
   const say = m => { const el = $("#gl-msg"); if (el) { el.className = /^Not|Couldn/.test(m) ? "staff-msg err" : "staff-msg ok"; el.textContent = m; } };
   const go = (sel, fn) => keepSpot(sel, main, fn);
   main.querySelectorAll("[data-gl-tab]").forEach(x => x.addEventListener("click", () => { if (x.getAttribute("aria-pressed") === "true") return; GL.tab = x.dataset.glTab; saveGl(); go(`[data-gl-tab="${GL.tab}"]`, () => loadAccounting()); }));
+  main.querySelectorAll("[data-gl-tab-go]").forEach(x => x.addEventListener("click", () => { GL.tab = x.dataset.glTabGo; saveGl(); go(`[data-gl-tab]`, () => loadAccounting()); }));
+  GL.mcOpen ||= new Set();
+  main.querySelectorAll("details[data-mc]").forEach(d => d.addEventListener("toggle", () => { const id = Number(d.dataset.mc); d.open ? GL.mcOpen.add(id) : GL.mcOpen.delete(id); }));
+  const mcFill = async (sel, lines, cost, item, pb) => {
+    const { data, error } = await db.rpc("fill_line_costs", { p_lines: lines, p_cost: cost, p_item: item, p_item_too: pb });
+    if (error) return say("Not saved: " + rpcErr(error));
+    go(sel, () => loadAccounting(cost ? `Filled ${Number(data)} line${data == 1 ? "" : "s"} at ${money(cost)} each.` : `Marked ${Number(data)} line${data == 1 ? "" : "s"} as no cost.`));
+  };
+  main.querySelectorAll("[data-mc-form]").forEach(f => f.addEventListener("submit", e => { e.preventDefault();
+    const id = Number(f.dataset.mcForm), g = (GL.mc?.items || []).find(x => x.item_id === id);
+    mcFill(`[data-mc="${id}"]`, g.lines.map(l => l.id), Number(f.cost.value), id, f.pb.checked && !f.pb.disabled); }));
+  main.querySelectorAll("[data-mc-none]").forEach(x => x.addEventListener("click", () => {
+    const id = Number(x.dataset.mcNone), g = (GL.mc?.items || []).find(y => y.item_id === id); mcFill(`[data-mc="${id}"]`, g.lines.map(l => l.id), 0, id, false); }));
+  main.querySelectorAll("[data-mc-one]").forEach(i => i.addEventListener("change", () => { if (i.value === "") return;
+    const id = Number(i.closest("details").dataset.mc); mcFill(`[data-mc="${id}"]`, [Number(i.dataset.mcOne)], Number(i.value), id, false); }));
   main.querySelectorAll("[data-gl-kind]").forEach(x => x.addEventListener("click", () => { if (x.getAttribute("aria-pressed") === "true") return; GL.kind = x.dataset.glKind; saveGl(); go(`[data-gl-kind="${GL.kind}"]`, () => loadAccounting()); }));
   main.querySelectorAll("[data-gl-step]").forEach(x => x.addEventListener("click", () => { const d = new Date(ymd(a) + "T12:00:00"), s = Number(x.dataset.glStep);
     if (GL.kind === "month") d.setMonth(d.getMonth() + s); else if (GL.kind === "year") d.setFullYear(d.getFullYear() + s); else d.setMonth(d.getMonth() + 3 * s);
