@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.205015">
+<meta name="app-version" content="2026-10-19.205237">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1138,6 +1138,9 @@
   .owl-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; } #owl-q { min-width: 320px; }
   .owl-t td { vertical-align: top; text-align: left; } .owl-t td.r { text-align: right; } .owl-t .link { text-align: left; }
   .ow-tag.ow-booktag, .ow-booktag { background: #e7f5ff; color: #1864ab; text-transform: capitalize; } .ow-scope-booked strong { color: #1864ab; }
+  .ow-cp { width: 34px; padding-left: 4px !important; padding-right: 0 !important; }
+  .ow-rowcopy { width: 28px; height: 28px; border: 1px solid #ced4da; background: #fff; border-radius: 6px; cursor: pointer; font-size: 14px; line-height: 1; color: #495057; padding: 0; }
+  .ow-rowcopy:hover { border-color: #1f6fd1; color: #1f6fd1; } .ow-rowcopy.done { background: #ebfbee; border-color: #2b8a3e; color: #2b8a3e; }
   .ow-copyall { width: 150px; white-space: nowrap; padding-left: 6px; padding-right: 6px; }
   .ow-scopes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
   .ow-scopes-ptn { grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
@@ -6324,15 +6327,20 @@ function owAgeRows(sc) {
 const owPtnRows = sc => (OW.ptnData?.rows || []).filter(r => "ptn:" + r.partner_id === sc && owPick(r));
 const owDollars = v => (Number(v) < 0 ? "−$" : "$") + Math.round(Math.abs(Number(v) || 0)).toLocaleString("en-CA");
 // Copy a list as a table (tab between columns): pastes straight into Excel, Google Sheets or an email
+// the copy button on each line: copies just that line (Date, invoice, customer, address, city, job type, partner, total, owed/paid, status)
+document.addEventListener("click", async e => { const b = e.target.closest("[data-row-copy]"); if (!b) return;
+  const list = b.closest(".owl") ? OWL._list : OW._list, r = list?.[Number(b.dataset.rowCopy)]; if (!r) return;
+  const n = await owCopyRows([r], OW.scope, true); b.textContent = n ? "✓" : "✗"; b.classList.toggle("done", !!n);
+  clearTimeout(b._t); b._t = setTimeout(() => { if (b.isConnected) { b.textContent = "⧉"; b.classList.remove("done"); } }, 2000); });
 // the button itself says it worked (so nothing else on the page moves)
 function owCopyDone(btn, n) { if (!btn) return; btn.textContent = n ? `✓ Copied ${n.toLocaleString()}` : "Couldn't copy"; clearTimeout(btn._t); btn._t = setTimeout(() => { if (btn.isConnected) btn.textContent = "⧉ Copy all"; }, 3000); }
-async function owCopyRows(rows, sc) {
+async function owCopyRows(rows, sc, noHead) {
   const bal = sc === "owing" || owBalScope(sc), head = ["Date", sc === "booked" ? "Job" : "Invoice", "Customer", "Address", "City", "Job type", "Partner", "Total", bal ? "Still owed" : "Paid", "Status"];
   const cell = v => String(v ?? "").replace(/[\t\r\n]+/g, " ").trim(), num = v => v == null || v === "" ? "" : Number(v).toFixed(2);
-  const lines = [head.join("\t")].concat(rows.map(r => [r.invoice_date, r._booked ? r.job_number : r.invoice_number, r.customer_name, r.street, r.city, r.job_type, r.job_partner || "",
+  const lines = (noHead ? [] : [head.join("\t")]).concat(rows.map(r => [r.invoice_date, r._booked ? r.job_number : r.invoice_number, r.customer_name, r.street, r.city, r.job_type, r.job_partner || "",
     num(r.total), bal ? num(r.balance) : num(r.paid ?? (r._paidOff ? r.total : "")),
     r._booked ? (r.job_status || "").replace("_", " ") : r._paidOff ? "Paid" : r._show === "not_owed" ? "Not owed: " + (r.not_owed_reason || "") : r.status === "part" ? "Part paid" : "Owing"].map(cell).join("\t")));
-  const text = lines.join("\r\n");
+  const text = lines.join("\r\n") + (noHead ? "" : "");
   try { await navigator.clipboard.writeText(text); return rows.length; } catch {
     const t = document.createElement("textarea"); t.value = text; t.style.cssText = "position:fixed;top:0;left:-9999px"; document.body.appendChild(t); t.select();
     let ok = false; try { ok = document.execCommand("copy"); } catch {} t.remove(); return ok ? rows.length : 0; }
@@ -6387,8 +6395,8 @@ function renderOwList() {
         <button class="btn" type="button" id="owl-move" ${pk.length && OWL.to ? "" : "disabled"}>Move ${pk.length ? pk.length.toLocaleString() : ""} ${pk.length === 1 ? "invoice" : "invoices"}</button>
         <button class="link" type="button" id="owl-unpick" ${pk.length ? "" : "disabled"}>Clear</button>
         <span class="staff-msg" id="owl-msg" role="status">${esc(OWL.msg || "")}</span></div>`; })() : ""}
-    ${rows.length ? `<div class="staff-wrap"><table class="calls-table owl-t"><thead><tr>${scope === "owing" && officeInv() ? `<th class="pb-pick"><input type="checkbox" id="owl-all" aria-label="Pick all shown" ${rows.every(r => OWL.picked.has(r.invoice_id)) ? "checked" : ""}></th>` : ""}${th("date", scope === "booked" ? "Booked for" : "Date")}<th>${scope === "booked" ? "Job" : "Invoice"}</th>${th("cust", "Customer")}<th>Job type</th>${th("amt", scope === "owing" ? "Owing" : scope === "booked" ? "Expected" : "Total", "r")}<th>Status</th></tr></thead><tbody>
-      ${rows.map(r => `<tr>${scope === "owing" && officeInv() ? `<td class="pb-pick"><input type="checkbox" data-owl-pick="${r.invoice_id}" ${OWL.picked.has(r.invoice_id) ? "checked" : ""} aria-label="Pick invoice ${esc(r.invoice_number)}"></td>` : ""}<td class="num">${fmtDate(r.invoice_date)}</td>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table owl-t"><thead><tr><th class="ow-cp"></th>${scope === "owing" && officeInv() ? `<th class="pb-pick"><input type="checkbox" id="owl-all" aria-label="Pick all shown" ${rows.every(r => OWL.picked.has(r.invoice_id)) ? "checked" : ""}></th>` : ""}${th("date", scope === "booked" ? "Booked for" : "Date")}<th>${scope === "booked" ? "Job" : "Invoice"}</th>${th("cust", "Customer")}<th>Job type</th>${th("amt", scope === "owing" ? "Owing" : scope === "booked" ? "Expected" : "Total", "r")}<th>Status</th></tr></thead><tbody>
+      ${rows.map((r, i) => `<tr><td class="ow-cp"><button class="ow-rowcopy" type="button" data-row-copy="${i}" title="Copy this line" aria-label="Copy this line">⧉</button></td>${scope === "owing" && officeInv() ? `<td class="pb-pick"><input type="checkbox" data-owl-pick="${r.invoice_id}" ${OWL.picked.has(r.invoice_id) ? "checked" : ""} aria-label="Pick invoice ${esc(r.invoice_number)}"></td>` : ""}<td class="num">${fmtDate(r.invoice_date)}</td>
         <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button>`}</td>
         <td><button class="link" type="button" data-owl-cust="${r.customer_id}">${esc(r.customer_name || "")}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${esc(r.job_type || "")}${r.job_partner ? `<div class="quiet">${esc(r.job_partner)} job</div>` : ""}</td>
@@ -6399,6 +6407,7 @@ function renderOwList() {
       : `<p class="quiet" style="padding:20px 0">${src ? (q ? "Nothing matches." : "Nothing for these dates.") : "Loading…"}</p>`}
   </article>`;
   const art = main.querySelector("article.owl"); if (art && keepH) art.style.minHeight = keepH + "px";
+  OWL._list = rows;
   main.scrollTop = top;
   main.querySelectorAll("[data-owl-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.owlCust))));
   main.querySelectorAll("[data-owl-th]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.owlTh;
@@ -6509,17 +6518,17 @@ function renderOwing(msg) {
         (${money(rows.filter(r => r.over_total).reduce((s, r) => s + Number(r.balance) - Number(r.total), 0))} extra). ServiceTitan recorded a negative payment on them, usually a refund or a reversed payment. Check these first.</div>
         <button class="btn" type="button" data-ow-kind="over">Show them</button></div>` : ""}
     ${scope === "owing" && OW.kind === "over" ? `<p class="quiet ow-help">These show more owing than the invoice total because ServiceTitan recorded a negative payment (the "paid" amount under each). Open each one: if the customer really owes it, press <b>Still owing</b>; if it was a refund or a mistake, mark it with the reason. <button class="link" type="button" data-ow-kind="all">Show all invoices again</button></p>` : ""}
-    ${rows.length ? (() => { const list = owSorted(rows), sums = {};
+    ${rows.length ? (() => { const list = owSorted(rows), sums = {}; OW._list = list;
       list.forEach(r => { if (r._g) { const s = sums[r._g[0]] ||= { n: 0, t: 0 }; s.n++; s.t += r.balance; } });
       let last = null;
       const th = (k, t, cls = "") => { const on = OW.sort.startsWith(k) || OW.sort === k; return `<th class="${cls}"><button class="th-sort ${on ? "on" : ""}" type="button" data-ow-th="${k}">${t}${on ? (OW.sort.endsWith("asc") || k === "cust" || k === "city" ? " ▲" : " ▼") : ""}</button></th>`; };
-      return `<div class="staff-wrap"><table class="calls-table owing-table"><thead><tr>${th("date", "Date")}<th>${scope === "booked" ? "Job" : "Invoice"}</th>${th("cust", "Customer")}<th>Job</th>${th("amt", scope === "owing" ? "Owing" : scope === "booked" ? "Expected" : "Total", "r")}<th>${scope !== "owing" ? "Status" : done ? "Marked" : "Mark it"}</th></tr></thead><tbody>
-      ${list.map(r => { let head = "";
+      return `<div class="staff-wrap"><table class="calls-table owing-table"><thead><tr><th class="ow-cp"></th>${th("date", "Date")}<th>${scope === "booked" ? "Job" : "Invoice"}</th>${th("cust", "Customer")}<th>Job</th>${th("amt", scope === "owing" ? "Owing" : scope === "booked" ? "Expected" : "Total", "r")}<th>${scope !== "owing" ? "Status" : done ? "Marked" : "Mark it"}</th></tr></thead><tbody>
+      ${list.map((r, i) => { let head = "";
         if (r._g && r._g[0] !== last) { last = r._g[0]; const s = sums[last], shut = (OW.closed || []).includes(last);
-          head = `<tr class="ow-group" data-ow-g="${esc(last)}"><td colspan="6"><button type="button" class="ow-g-btn" aria-expanded="${!shut}">${shut ? "▸" : "▾"} ${esc(r._g[1])}</button>
+          head = `<tr class="ow-group" data-ow-g="${esc(last)}"><td colspan="7"><button type="button" class="ow-g-btn" aria-expanded="${!shut}">${shut ? "▸" : "▾"} ${esc(r._g[1])}</button>
             <span class="quiet">${s.n} ${s.n === 1 ? "invoice" : "invoices"}</span><strong>${money(s.t)}</strong></td></tr>`; }
         if (r._g && (OW.closed || []).includes(r._g[0])) return head;
-        return head + `<tr data-inv="${r.invoice_id}">
+        return head + `<tr data-inv="${r.invoice_id}"><td class="ow-cp"><button class="ow-rowcopy" type="button" data-row-copy="${i}" title="Copy this line" aria-label="Copy this line">⧉</button></td>
         <td class="num">${fmtDate(r.invoice_date)}</td>
         <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button>`}
           ${r.over_total ? `<div><span class="ow-tag odd" title="ServiceTitan shows ${esc(money(r.paid))} paid on this invoice, so it shows more owing than the invoice total. Usually a refund or a reversed payment.">Owing more than total</span></div>` : ""}
