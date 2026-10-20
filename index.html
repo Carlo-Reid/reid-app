@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-20.181743">
+<meta name="app-version" content="2026-10-20.184751">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1202,7 +1202,8 @@
   .ppl-nums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; } .ppl-nums span { display: flex; flex-direction: column; } .ppl-nums em { font-style: normal; font-size: .8em; color: #868e96; }
   .pbl-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; } .pbl-head h2 { margin: 0 8px 0 0; } .pbl-head label.btn { cursor: pointer; }
   #pbl-q { font: inherit; padding: 6px 10px; border: 1px solid var(--line, #ced4da); border-radius: 8px; min-width: 240px; flex: 1 1 240px; max-width: 380px; }
-  .pbl-cs { margin: 8px 0; } .pbl-cs summary { cursor: pointer; color: #1864ab; font-weight: 600; } .pbl-csl { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; }
+  .pbl-notes { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 10px 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--soft, #f5f7fa); }
+  .pbl .pp-nf { margin: 6px 0 10px; } .pbl-cs { margin: 8px 0; } .pbl-cs summary { cursor: pointer; color: #1864ab; font-weight: 600; } .pbl-csl { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; }
   .pbl-t td { vertical-align: top; } .pbl-closed td { opacity: .7; } .ow-tag.pbl-c { background: #e9ecef; color: #495057; } .ow-tag.pbl-o { background: #e7f5ff; color: #1864ab; } .pbl-acts { white-space: nowrap; }
   .apl-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 2500; display: flex; align-items: center; justify-content: center; padding: 16px; }
   .apl { background: #fff; border-radius: 14px; padding: 18px 20px; width: min(460px, 100%); display: flex; flex-direction: column; gap: 10px; box-shadow: 0 12px 40px rgba(0,0,0,.25); max-height: 90vh; overflow: auto; }
@@ -7367,9 +7368,13 @@ function nfWire() {
     } catch (x) { PP.nf = { msg: "Couldn't read that file: " + (x.message || x), err: true }; }
     nfShow(); });
   document.querySelectorAll("[data-nf-col]").forEach(s => s.addEventListener("change", () => { const v = s.value; if (v === "") delete PP.nf.cols[s.dataset.nfCol]; else PP.nf.cols[s.dataset.nfCol] = Number(v); }));
-  $("#nf-go")?.addEventListener("click", async () => {
-    const N = PP.nf, c = N.cols; if (!(c.phone >= 0 || c.email >= 0 || c.address >= 0 || c.name >= 0)) { N.msg = "Pick at least the phone, email, address or name column."; N.err = true; return nfShow(); }
-    N.busy = true; N.err = false; N.msg = "Matching…"; nfShow();
+  $("#nf-go")?.addEventListener("click", () => nfRun(nfShow));
+}
+// find each row's customer, job and notes, then open the Pick the notes page. show() redraws whatever shows N.msg
+async function nfRun(show) {
+  {
+    const N = PP.nf, c = N.cols; if (!(c.phone >= 0 || c.email >= 0 || c.address >= 0 || c.name >= 0)) { N.msg = "Pick at least the phone, email, address or name column."; N.err = true; return show(); }
+    N.busy = true; N.err = false; N.msg = "Matching…"; show();
     const val = (r, k) => c[k] >= 0 ? r[c[k]] : "", dt = v => v instanceof Date ? v.toISOString().slice(0, 10) : (String(v).match(/\d{4}-\d\d-\d\d/) || [""])[0];
     const found = [];
     // 50 rows at a time (smaller again if the database is slow), so no request hits its time limit
@@ -7377,16 +7382,16 @@ function nfWire() {
       const chunk = N.rows.slice(i, i + size).map((r, j) => ({ i: i + j, phone: String(val(r, "phone") || ""), email: String(val(r, "email") || ""), address: String(val(r, "address") || ""), name: String(val(r, "name") || ""), date: dt(val(r, "date")) }));
       const { data, error } = await db.rpc("partner_file_notes", { p_partner: PP.store, p_rows: chunk, p_note_count: 5, p_podium: true });
       if (error && /timeout|canceling statement/i.test(error.message || "") && size > 5) { size = Math.max(5, Math.floor(size / 3)); continue; }
-      if (error) { N.busy = false; N.err = true; N.msg = "Stopped: " + (/PGRST202|could not find/i.test(error.message || "") ? "run RUN SETUP NOW.bat first (file 99p)." : rpcErr(error)); return nfShow(); }
+      if (error) { N.busy = false; N.err = true; N.msg = "Stopped: " + (/PGRST202|could not find/i.test(error.message || "") ? "run RUN SETUP NOW.bat first (file 99p)." : rpcErr(error)); return show(); }
       found.push(...data); i += chunk.length;
-      N.msg = `Matching… ${i.toLocaleString()} of ${N.rows.length.toLocaleString()}`; const m = $("#nf-msg"); if (m) m.textContent = N.msg;
+      N.msg = `Matching… ${i.toLocaleString()} of ${N.rows.length.toLocaleString()}`; show();
     }
     N.found = found; N.busy = false; N.msg = "";
     // Vista and job notes ticked to start with; customer, address and Podium notes are there to pick
     N.pick = new Set(found.flatMap(f => (f.notes || []).filter(n => NF_KINDS.find(k => k[0] === n.kind)?.[3]).map(n => f.i + ":" + n.id)));
     N.colsOn = new Set(NF_ADD.map(c => c[0])); N.show = "all"; N.open = new Set(); N.edits = new Map(); N.ownN = 0; N.adding = null; N.editing = null;
     openNfPick();
-  });
+  }
 }
 
 
@@ -8699,14 +8704,18 @@ function pblHtml() {
   const D = PBL.data, st = (PP.stores || []).find(x => x.id === PBL.partner);
   if (!D) return `<section class="block pbl" id="pbl"><h2>Booking list</h2><div class="quiet">Loading…</div></section>`;
   if (D.error) return `<section class="block pbl" id="pbl"><h2>Booking list</h2><div class="staff-msg err">${esc(D.error)}</div></section>`;
-  const q = PBL.q.trim().toLowerCase(), rows = (D.rows || []).filter(r => !q || [r.ref, r.their_name, r.customer, r.address, r.status, r.service, r.job, r.invoice, r.phone].some(x => String(x || "").toLowerCase().includes(q)));
+  const q = PBL.q.trim().toLowerCase(), rows = pblRowsShown();
   const seg = (list, cur, attr) => `<div class="seg" role="group">${list.map(([k, t]) => `<button type="button" aria-pressed="${cur === k}" ${attr}="${k}">${t}</button>`).join("")}</div>`;
   const cs = new Set(D.closed_statuses || []);
-  return `<section class="block pbl" id="pbl"><div class="pbl-head"><h2>${esc(st?.name || "")} booking list</h2>
+  return `<section class="block pbl" id="pbl"><div class="pbl-head"><h2>${esc(D.list_name || (st?.name || "") + " booking list")}</h2>
       ${seg([["all", `Everything (${Number(D.all || 0).toLocaleString()})`], ["closed", `Closed (${Number(D.closed || 0).toLocaleString()})`]], PBL.tab, "data-pbl-tab")}
       <input type="search" id="pbl-q" placeholder="Find a name, address, their #, job or invoice…" value="${esc(PBL.q)}">
       <label class="btn quiet-btn">⬆ Update from their Excel<input type="file" id="pbl-file" accept=".xlsx,.xls,.csv" hidden></label>
       <button class="btn quiet-btn" type="button" id="pbl-addcall">＋ Add a call</button></div>
+    <div class="pbl-notes"><button class="btn" type="button" id="pbl-notes">📄 Add our notes to this list ›</button>
+      <span class="quiet">Matches every booking shown below${PBL.tab === "closed" ? " (Closed tab)" : ""}${PBL.q ? " (that match your search)" : ""} to our customers, then you pick the notes and download it as an Excel.</span>
+      <button class="link" type="button" id="pbl-nfother" aria-expanded="${!!PP.nfOpen}">${PP.nfOpen ? "Hide" : "Or use a different Excel file"}</button></div>
+    ${PP.nfOpen ? nfHtml() : ""}
     <details class="pbl-cs"><summary>Which of their statuses count as closed</summary><div class="pbl-csl">${(D.statuses || []).map(s => `<label class="gl-act"><input type="checkbox" data-pbl-cs="${esc(s.status)}" ${cs.has(s.status) ? "checked" : ""}> ${esc(s.status)} <span class="quiet">(${s.n})</span></label>`).join("") || `<span class="quiet">No statuses yet.</span>`}</div></details>
     <div class="staff-msg ${PBL.err ? "err" : "ok"}" id="pbl-msg" role="status">${esc(PBL.msg || "")}</div>
     ${rows.length ? `<div class="staff-wrap"><table class="calls-table pbl-t"><thead><tr><th>Their #</th><th>Booked</th><th>Service</th><th>Their status</th><th>Customer</th><th>Job</th><th>Invoice</th><th></th></tr></thead><tbody>
@@ -8722,6 +8731,17 @@ function pblHtml() {
           ${r.source === "added" ? ` · <button class="link danger" type="button" data-pbl-rm="${r.id}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="quiet">${q ? "Nothing matches." : PBL.tab === "closed" ? "Nothing closed yet." : "Nothing on the list yet. Upload their Excel, or add a call."}</p>`}
   </section>`;
+}
+function pblRowsShown() {
+  const q = PBL.q.trim().toLowerCase();
+  return (PBL.data?.rows || []).filter(r => !q || [r.ref, r.their_name, r.customer, r.address, r.status, r.service, r.job, r.invoice, r.phone].some(x => String(x || "").toLowerCase().includes(q)));
+}
+// the list itself as the "file" for Add our notes: Vista's own columns, from what was loaded from their Excel
+function nfFromList(rows, listName) {
+  const head = ["Reserve Id", "Creation Date", "Status", "Provider", "Service Name", "Service Date", "Address", "Additional Address Data", "Customer Name", "Customer Email", "Customer Phone Number"];
+  const d = v => v ? new Date(v) : "", body = rows.map(r => [r.ref || "", d(r.booked_at), r.status || "", r.provider || "", r.service || "", d(r.service_date), r.address || "", r.extra || "", r.their_name || r.customer || "", r.email || "", r.phone || ""]);
+  PP.nf = { name: `${listName} ${ymd(new Date())}.xlsx`, wb: { SheetNames: [], Sheets: {} }, sheet: listName.slice(0, 30), aoa: [head, ...body], hi: 0, head, rows: body,
+    cols: { phone: 10, email: 9, address: 6, name: 8, date: 1 }, count: 5, msg: "" };
 }
 function pblShow() {
   const host = $("#pbl-host"); if (!host) return;
@@ -8742,6 +8762,11 @@ function pblShow() {
     const { error } = await db.rpc("partner_closed_statuses", { p_partner: PBL.partner, p_statuses: list }); if (error) return say("Not saved: " + rpcErr(error), true);
     PBL.msg = "Saved which statuses count as closed."; await pblLoad(); host.querySelector(".pbl-cs")?.setAttribute("open", ""); }));
   $("#pbl-addcall")?.addEventListener("click", () => addToPartnerList({ partner: PBL.partner }));
+  $("#pbl-nfother")?.addEventListener("click", () => { PP.nfOpen = !PP.nfOpen; pblShow(); });
+  if (PP.nfOpen) nfWire();
+  $("#pbl-notes")?.addEventListener("click", e => { const shown = pblRowsShown(); if (!shown.length) return say("Nothing on the list to add notes to.", true);
+    e.currentTarget.disabled = true; nfFromList(shown, PBL.data?.list_name || "list");
+    nfRun(() => { const N = PP.nf; say(N.msg || "", N.err); if (N.err) { const b = $("#pbl-notes"); if (b) b.disabled = false; } }); });
   $("#pbl-file")?.addEventListener("change", async e => { const f = e.target.files[0]; if (!f) return; say("Reading " + f.name + "…");
     try {
       const X = await loadXlsx(), wb = X.read(await f.arrayBuffer(), { type: "array", cellDates: true }), aoa = X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: "" });
@@ -8841,13 +8866,11 @@ function renderPartners(msg) {
         <div class="cl-group"><span class="cl-label">Show</span>${PP.view === "jobs" ? seg(PJ_SHOW, PP.jshow, "data-pj-show") : seg(PP_SHOW, PP.show, "data-pp-show")}</div>
         <label class="cl-group pp-search"><span class="cl-label">Find</span><input type="search" id="pp-q" value="${esc(PP.q)}" placeholder="Customer, invoice or ${esc(st.name)} number"></label>
         ${edit ? `<div class="cl-group"><span class="cl-label">Partners</span><div class="pp-pbtns"><button class="btn quiet-btn" type="button" id="pp-add" aria-expanded="${!!PP.adding}">＋ Add a partner</button>
-          <button class="btn quiet-btn" type="button" id="pp-edit" aria-expanded="${!!PP.editing}">✎ Edit ${esc(st.name)}</button>
-          <button class="btn quiet-btn" type="button" id="pp-nfbtn" aria-expanded="${!!PP.nfOpen}">📄 Add our notes to a file</button></div></div>` : ""}
+          <button class="btn quiet-btn" type="button" id="pp-edit" aria-expanded="${!!PP.editing}">✎ Edit ${esc(st.name)}</button></div></div>` : ""}
       </div>
       ${edit && (PP.off || []).length ? `<div class="pp-off"><span class="cl-label">Switched off</span>${PP.off.map(x => `<span class="chip small">${esc(x.name)} <button class="link" type="button" data-pp-on="${x.id}">Switch back on</button></span>`).join("")}</div>` : ""}
       ${PP.adding ? ppAddForm() : ""}
       ${PP.editing && PP.editData ? ppEditForm(PP.editData) : ""}
-      ${PP.nfOpen ? nfHtml() : ""}
       ${vis && PP.view !== "jobs" ? `<form class="cl-row cl-row-2 pp-defaults pp-rules" id="pp-rules">
         <div class="cl-group"><span class="cl-label">${esc(st.name)}'s rules for every invoice billed to it</span>
           <div class="pp-def-in">
@@ -9009,10 +9032,8 @@ function wirePartners(st, rows) {
     if (PP.adding && !OW.targets) { const t = await db.rpc("partner_targets"); if (!t.error && t.data) OW.targets = t.data; }
     renderPartners(); if (PP.adding) $("#pp-addform [name=name]")?.focus({ preventScroll: true }); });
   $("#pp-addcancel")?.addEventListener("click", () => { PP.adding = false; renderPartners(); });
-  $("#pp-nfbtn")?.addEventListener("click", () => { PP.nfOpen = !PP.nfOpen; renderPartners(); });
   $("#pp-allp")?.addEventListener("click", () => openPartners());
   pblShow();
-  if (PP.nfOpen) nfWire();
   $("#pp-edit")?.addEventListener("click", async () => { PP.editing = !PP.editing; PP.adding = false;
     if (PP.editing) { const { data, error } = await db.rpc("partner_detail", { p_id: st.id }); if (error) { PP.editing = false; return say("Couldn't open it: " + rpcErr(error)); } PP.editData = data; }
     renderPartners(); });
