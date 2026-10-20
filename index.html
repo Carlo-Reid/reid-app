@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.220351">
+<meta name="app-version" content="2026-10-19.220458">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1159,6 +1159,7 @@
   .ow-scopes-ptn { grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
   .ow-scopes .ow-scope-p { padding: 6px 7px; min-height: 74px; } .ow-scopes .ow-scope-p span { font-size: 11px; line-height: 1.2; height: 2.4em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; max-width: 100%; }
   .ow-scopes .ow-scope-p strong { font-size: 15px; letter-spacing: -.01em; color: #7048e8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; } .ow-scopes .ow-scope-p em { font-size: 11px; line-height: 1.25; min-height: 2.5em; }
+  .ow-scopes .ow-scope-np strong { color: #1f6fd1; }
   .ow-scope-a strong { color: #e8590c; } .ow-scope-a:last-child strong { color: #c92a2a; }
   @media (max-width: 1150px) { .ow-scopes-ptn { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
   .ow-ptn { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line, #e3e7ec); }
@@ -6382,13 +6383,20 @@ const OWL_NAMES = { all: "All invoices", paid: "Paid invoices", owing: "Not paid
 // how old a not-paid invoice is (as of today, whatever dates are picked)
 const OW_AGE = [["age30", "30 days", 30, 60, "30 to 59 days old"], ["age60", "60 days", 60, 90, "60 to 89 days old"], ["age90", "90 days", 90, 120, "90 to 119 days old"], ["age120", "120+ days", 120, Infinity, "120 days or older"]];
 const owPartnersKnown = () => OW.ptnData?.partners?.length ? OW.ptnData.partners : (() => { try { return JSON.parse(localStorage.getItem("reid.owPtn") || "[]"); } catch { return []; } })();
-const owScopeName = sc => OWL_NAMES[sc] || (sc.startsWith("ptn:") ? (owPartnersKnown().find(x => "ptn:" + x.id === sc)?.name || "Partner") + " invoices"
+const owScopeName = sc => OWL_NAMES[sc] || (sc === "ptn:none" ? "No partner (all other invoices)" : sc.startsWith("ptn:") ? (owPartnersKnown().find(x => "ptn:" + x.id === sc)?.name || "Partner") + " invoices"
   : (OW_AGE.find(a => a[0] === sc) ? "Not paid · " + OW_AGE.find(a => a[0] === sc)[4] : "Invoices"));
 function owAgeRows(sc) {
   const a = OW_AGE.find(x => x[0] === sc); if (!a) return [];
   return ["todo", "checked"].flatMap(k => (OW.all?.[k] || []).filter(owPick).map(r => ({ ...r, _show: k }))).filter(r => { const d = owAgeDays(r); return d >= a[2] && d < a[3]; });
 }
-const owPtnRows = sc => (OW.ptnData?.rows || []).filter(r => "ptn:" + r.partner_id === sc && owPick(r));
+// "ptn:none": every invoice for the dates that isn't a partner's (not paid + paid)
+function owNoPartnerRows() {
+  const pid = new Set((OW.ptnData?.rows || []).map(r => r.invoice_id));
+  const owing = OW_SHOW.filter(([k]) => k !== "not_owed").flatMap(([k]) => owInPeriod(OW.all?.[k] || []).map(r => ({ ...r, _show: k })));
+  const paid = OW.paidData?.rows ? OW.paidData.rows.filter(owPick) : [];
+  return owing.concat(paid).filter(r => r.job_partner_id == null && !pid.has(r.invoice_id));
+}
+const owPtnRows = sc => sc === "ptn:none" ? owNoPartnerRows() : (OW.ptnData?.rows || []).filter(r => "ptn:" + r.partner_id === sc && owPick(r));
 const owDollars = v => (Number(v) < 0 ? "−$" : "$") + Math.round(Math.abs(Number(v) || 0)).toLocaleString("en-CA");
 // Copy a list as a table (tab between columns): pastes straight into Excel, Google Sheets or an email
 // the copy button on each line: copies just that line (Date, invoice, customer, address, city, job type, partner, total, owed/paid, status)
@@ -6563,7 +6571,11 @@ function renderOwing(msg) {
       ${owPartnersKnown().length ? `<div class="ow-scopes ow-scopes-ptn" role="group" aria-label="Partners">${owPartnersKnown().map(x => { const P = OW.ptnData?.loading ? null : OW.ptnData?.partners?.find(y => y.id === x.id), k = "ptn:" + x.id;
           const rs = P && (OW.jtype !== "all" || OW.paid !== "all") ? owPtnRows(k) : null, owed = rs ? rs.reduce((t, r) => t + Number(r.balance), 0) : P ? Number(P.owed) : null, n = rs ? rs.length : P ? Number(P.n) : null;
           return `<button type="button" class="ow-scope ow-scope-p" data-ow-scope="${k}" aria-pressed="${scope === k}" title="${esc(x.name)}"><span>${esc(x.name)}</span>
-            <strong>${owed == null ? "…" : owDollars(owed)}</strong><em>${n == null ? "loading…" : `${n.toLocaleString()} ${n === 1 ? "invoice" : "invoices"}${P && Number(P.total) ? `<br>${owDollars(P.total)} billed` : ""}`}</em></button>`; }).join("")}</div>` : ""}
+            <strong>${owed == null ? "…" : owDollars(owed)}</strong><em>${n == null ? "loading…" : `${n.toLocaleString()} ${n === 1 ? "invoice" : "invoices"}${P && Number(P.total) ? `<br>${owDollars(P.total)} billed` : ""}`}</em></button>`; }).join("")}
+        ${(() => { const ready = OW.all && OW.paidData?.rows && OW.ptnData && !OW.ptnData.loading, rs = ready ? owNoPartnerRows() : null;
+          const owed = rs ? rs.reduce((t, r) => t + Number(r.balance || 0), 0) : null, billed = rs ? rs.reduce((t, r) => t + Number(r.total || 0), 0) : null;
+          return `<button type="button" class="ow-scope ow-scope-p ow-scope-np" data-ow-scope="ptn:none" aria-pressed="${scope === "ptn:none"}" title="Every invoice that isn't a partner's"><span>No partner (all others)</span>
+            <strong>${owed == null ? "…" : owDollars(owed)}</strong><em>${rs ? `${rs.length.toLocaleString()} ${rs.length === 1 ? "invoice" : "invoices"}<br>${owDollars(billed)} billed` : "loading…"}</em></button>`; })()}</div>` : ""}
       <div class="ow-scopes ow-scopes-age" role="group" aria-label="How old">${OW_AGE.map(([k, label, , , sub]) => { const rs = OW.all ? owAgeRows(k) : null;
           return `<button type="button" class="ow-scope ow-scope-a" data-ow-scope="${k}" aria-pressed="${scope === k}"><span>${label}</span>
             <strong>${rs ? money(rs.reduce((t, r) => t + Number(r.balance), 0)) : "…"}</strong><em>${rs ? `${rs.length.toLocaleString()} ${rs.length === 1 ? "invoice" : "invoices"} · ${sub}` : "loading…"}</em></button>`; }).join("")}</div>
