@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.221448">
+<meta name="app-version" content="2026-10-19.221628">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -993,6 +993,9 @@
   .focus-pin .fp-pin span { transform: rotate(45deg); line-height: 1; }
   .focus-pin .fp-name { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); white-space: nowrap; background: #e03131; color: #fff; font: 800 12px/1.4 system-ui, sans-serif; padding: 1px 7px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
   @keyframes fpPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(224,49,49,.6), 0 2px 6px rgba(0,0,0,.45); } 50% { box-shadow: 0 0 0 10px rgba(224,49,49,0), 0 2px 6px rgba(0,0,0,.45); } }
+  .dmp-tech.full { border-color: #e03131; background: #fff5f5; color: #c92a2a; } .dmp-tech.full em { font-style: normal; font-weight: 800; font-size: 10.5px; color: #fff; background: #e03131; border-radius: 4px; padding: 0 4px; }
+  .tn-label.full span { color: #c92a2a !important; background: #fff5f5 !important; }
+  .nc-full { color: #c92a2a; font-weight: 700; }
   .tn-label span { display: inline-block; white-space: nowrap; background: rgba(255,255,255,.92); border-left: 4px solid; border-radius: 4px; padding: 1px 5px; font: 700 11px/1.3 system-ui, sans-serif; color: #1d2733; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
   .tx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } @media (max-width: 1000px) { .tx-grid { grid-template-columns: 1fr; } }
   .tx-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin: 10px 0; }
@@ -4740,8 +4743,10 @@ function drawDspMap(fit) {
       document.querySelectorAll(`.dc[data-visit="${r.visit_id}"]`).forEach(x => x.classList.add("sel")); renderDspPanel(); drawDspMap(); });
     m.addTo(DSP.mlayer); pts.push([Number(r.lat), Number(r.lng)]);
     if (DSP.page === "map" && DSP.mapTechNames !== false && !placesOn) {   // the tech's name beside the dot (dispatch map page)
-      const nm = r.techs.length ? r.techs.map(t => String(t.name || "").split(/\s+/)[0]).join(", ") : "No tech", c = r.techs[0] ? techCol(r.techs[0]) : "#adb5bd";
-      L.marker([Number(r.lat), Number(r.lng)], { interactive: false, opacity: dim ? 0.35 : 1, icon: L.divIcon({ className: "tn-label", iconSize: [0, 0], iconAnchor: [-(rad + 3), 9],
+      const FB = DSP._fullFor === DSP.date + DSP.rows.length ? DSP._full : (DSP._full = bookedTechIds(), DSP._fullFor = DSP.date + DSP.rows.length, DSP._full);
+      const nm = r.techs.length ? r.techs.map(t => String(t.name || "").split(/\s+/)[0] + (FB.has(t.id) ? " · booked" : "")).join(", ") : "No tech", c = r.techs[0] ? techCol(r.techs[0]) : "#adb5bd";
+      const isFull = r.techs.length && r.techs.every(t => FB.has(t.id));
+      L.marker([Number(r.lat), Number(r.lng)], { interactive: false, opacity: dim ? 0.35 : 1, icon: L.divIcon({ className: "tn-label" + (isFull ? " full" : ""), iconSize: [0, 0], iconAnchor: [-(rad + 3), 9],
         html: `<span style="border-color:${esc(c)}">${esc(nm)}</span>` }) }).addTo(DSP.mlayer);
     }
   });
@@ -4862,7 +4867,7 @@ let NEAR = { at: 0, rows: null, p: null };
 function loadNear(force) {
   if (!force && NEAR.rows && Date.now() - NEAR.at < 5 * 60 * 1000) return Promise.resolve(NEAR.rows);
   if (NEAR.p) return NEAR.p;
-  return NEAR.p = db.rpc("calls_next_days", { p_days: 14 }).then(({ data, error }) => { NEAR.p = null; NEAR.at = Date.now(); NEAR.rows = error ? [] : data || []; NEAR.err = error ? rpcErr(error) : null; return NEAR.rows; });
+  return NEAR.p = db.rpc("calls_next_days", { p_days: 14 }).then(({ data, error }) => { NEAR.p = null; NEAR.at = Date.now(); NEAR.rows = error ? [] : data || []; NEAR.full = null; NEAR.err = error ? rpcErr(error) : null; return NEAR.rows; });
 }
 function isNear(l, v) {
   if (v.loc === l.id) return false;
@@ -4881,7 +4886,7 @@ function nearCallsHtml(l) {
                name: current?.c?.display_name || "", street: l.street || "", city: l.city || "" };
   if (!NEAR.rows) { loadNear().then(() => { const el = document.getElementById("near-calls"); if (el && Number(el.dataset.nearLoc) === l.id) el.innerHTML = nearCallsHtml(l); }); return `<span class="nc-lab">🚐 Calls nearby, next 2 weeks:</span> <span class="quiet">checking…</span>`; }
   if (NEAR.err) return `<span class="nc-lab">🚐 Calls nearby:</span> <span class="quiet">${/PGRST202|could not find/i.test(NEAR.err) ? "run RUN SETUP NOW.bat (file 99i)" : esc(NEAR.err)}</span>`;
-  const near = NEAR.rows.filter(v => isNear(l, v)), days = new Map();
+  const near = NEAR.rows.filter(v => isNear(l, v)), days = new Map(), full = NEAR.full || (NEAR.full = bookedNames(NEAR.rows));
   near.forEach(v => { const d = days.get(v.d) || []; d.push(v); days.set(v.d, d); });
   if (!days.size) return `<span class="nc-lab">🚐 Calls nearby, next 2 weeks:</span> <span class="quiet">none booked</span>`;
   const t = x => { if (!x) return ""; const d = new Date(x); return isNaN(d) ? String(x).slice(0, 5) : d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\s?([ap])\.?m\.?/i, "$1"); };
@@ -4889,12 +4894,28 @@ function nearCallsHtml(l) {
     const tip = vs.map(v => `${v.from ? t(v.from) + (v.to ? "–" + t(v.to) : "") + " · " : ""}${v.street || ""}${v.city ? ", " + v.city : ""}${v.type ? " · " + v.type : ""}${v.techs ? " · " + v.techs : ""}`).join("\n");
     const hr = x => t(x).replace(":00", ""), rows = vs.slice().sort((a, b) => String(a.from || "").localeCompare(String(b.from || "")));
     return `<div class="nc-card"><button type="button" class="nc-day" data-near-day="${d}" title="${esc(tip)}">${new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", day: "numeric" }).replace(/\./g, "")} <b>${vs.length}</b></button>
-      <div class="nc-list">${rows.map(v => `<div title="${esc((v.street || "") + (v.city ? ", " + v.city : "") + (v.type ? " · " + v.type : ""))}"><span class="nc-t">${v.from ? hr(v.from) + (v.to ? "–" + hr(v.to) : "") : "—"}</span> ${esc(v.techs || "No tech yet")}</div>`).join("")}</div></div>`; }).join("")}</span></details>`;
+      <div class="nc-list">${rows.map(v => `<div title="${esc((v.street || "") + (v.city ? ", " + v.city : "") + (v.type ? " · " + v.type : ""))}"><span class="nc-t">${v.from ? hr(v.from) + (v.to ? "–" + hr(v.to) : "") : "—"}</span> ${v.techs ? v.techs.split(/,\s*/).map(n => full.has(d + "|" + n) ? `<span class="nc-full" title="${esc(n)} is booked 8 am to 5 pm on this day">${esc(n)} · booked</span>` : esc(n)).join(", ") : "No tech yet"}</div>`).join("")}</div></div>`; }).join("")}</span></details>`;
 }
 // the drop-down stays open or closed the way you left it
 let NEAR_OPEN = (() => { try { return localStorage.getItem("reid.nearOpen") === "1"; } catch { return false; } })();
 document.addEventListener("toggle", e => { if (e.target.matches?.(".nc-drop")) { NEAR_OPEN = e.target.open; try { localStorage.setItem("reid.nearOpen", NEAR_OPEN ? "1" : "0"); } catch {} } }, true);
 document.addEventListener("click", e => { const b = e.target.closest("[data-near-day]"); if (b) openDispatchMap(b.dataset.nearDay, NEAR.cur); });
+// a tech is "booked" for a day when their calls' times together cover 8 am to 5 pm
+function dayFull(spans, d) {
+  const a = new Date(d + "T08:00:00").getTime(), b = new Date(d + "T17:00:00").getTime();
+  const iv = spans.map(([x, y]) => [Math.max(a, new Date(x).getTime()), Math.min(b, new Date(y || x).getTime())]).filter(([x, y]) => y > x).sort((p, q) => p[0] - q[0]);
+  let at = a; for (const [x, y] of iv) { if (x > at + 15 * 60000) return false; at = Math.max(at, y); }
+  return at >= b - 15 * 60000;
+}
+// which techs are booked each day: from every call that day (not just the nearby ones). Section 1A: names; dispatch map: ids
+function bookedNames(rows) {   // rows from calls_next_days
+  const by = new Map(); rows.forEach(v => { if (!v.from || !v.techs) return; v.techs.split(/,\s*/).forEach(n => { const k = v.d + "|" + n; if (!by.has(k)) by.set(k, []); by.get(k).push([v.from, v.to]); }); });
+  const out = new Set(); by.forEach((sp, k) => { if (dayFull(sp, k.split("|")[0])) out.add(k); }); return out;
+}
+function bookedTechIds() {   // DSP.rows for the day on the map
+  const by = new Map(); DSP.rows.filter(r => r.status !== "cancelled" && r.arrival_start).forEach(r => r.techs.forEach(t => { if (!by.has(t.id)) by.set(t.id, []); by.get(t.id).push([r.arrival_start, r.arrival_end]); }));
+  const out = new Set(); by.forEach((sp, id) => { if (dayFull(sp, DSP.date)) out.add(id); }); return out;
+}
 // the dispatch map opened from "Calls nearby": only the calls near that customer, and the customer marked
 const focusNear = r => { const f = DSP.focus; if (!f) return true;
   return isNear({ id: f.id, latitude: f.latitude, longitude: f.longitude, postal_code: f.postal_code, community_id: f.community_id, neighbourhood_id: f.neighbourhood_id },
@@ -5509,10 +5530,10 @@ function renderDispatchMapPage() {
       </section>
       ${DSP.focus ? `<div class="dmp-focus">📍 Showing only calls near <b>${esc(DSP.focus.name)}</b>${DSP.focus.street ? ` (${esc(DSP.focus.street)}${DSP.focus.city ? ", " + esc(DSP.focus.city) : ""})` : ""}, about 5 km.${DSP.focus.latitude == null ? " This address isn't on the map yet, so it can't be marked." : ""}
         <button class="link" type="button" id="dmp-unfocus">Show all calls</button></div>` : ""}
-      ${(() => { const T = new Map(); DSP.rows.filter(r => r.status !== "cancelled" && focusNear(r)).forEach(r => (r.techs.length ? r.techs : [{ id: 0, name: "No tech yet" }]).forEach(t => { const x = T.get(t.id) || { ...t, n: 0 }; x.n++; T.set(t.id, x); }));
+      ${(() => { const FULL = bookedTechIds(), T = new Map(); DSP.rows.filter(r => r.status !== "cancelled" && focusNear(r)).forEach(r => (r.techs.length ? r.techs : [{ id: 0, name: "No tech yet" }]).forEach(t => { const x = T.get(t.id) || { ...t, n: 0 }; x.n++; T.set(t.id, x); }));
         const list = [...T.values()].sort((a, b) => (a.id === 0) - (b.id === 0) || a.name.localeCompare(b.name));
         return list.length ? `<div class="dmp-techs" role="group" aria-label="Techs"><span class="cl-label">Techs</span><button type="button" class="dmp-tech" data-dmp-tech="" aria-pressed="${DSP.techSel == null}">All</button>${list.map(t =>
-          `<button type="button" class="dmp-tech" data-dmp-tech="${t.id}" aria-pressed="${DSP.techSel === t.id}" ${t.id === 0 ? "disabled" : ""}><i style="background:${esc(t.id ? techCol(t) : "#adb5bd")}"></i>${esc(t.name)} <b>${t.n}</b></button>`).join("")}</div>` : ""; })()}
+          `<button type="button" class="dmp-tech ${FULL.has(t.id) ? "full" : ""}" data-dmp-tech="${t.id}" aria-pressed="${DSP.techSel === t.id}" ${t.id === 0 ? "disabled" : ""} ${FULL.has(t.id) ? `title="Booked 8 am to 5 pm"` : ""}><i style="background:${esc(t.id ? techCol(t) : "#adb5bd")}"></i>${esc(t.name)} <b>${t.n}</b>${FULL.has(t.id) ? ` <em>BOOKED</em>` : ""}</button>`).join("")}</div>` : ""; })()}
       <aside class="dsp-panel ${DSP.sel ? "" : "hidden"}" id="dsp-panel" aria-label="Call details"></aside>
       <div class="dmp-list">${gl.map(g => `<section class="dmp-group">${g.label ? `<header><span class="dm-dot" style="background:${esc(g.color)}"></span><strong>${esc(g.label)}</strong> <span class="quiet">${callsWord(g.list.length)}</span></header>` : ""}
           ${g.list.map(r => dspCard(r, r.techs[0]?.id || 0)).join("")}</section>`).join("") || `<div class="quiet">No calls${q ? " match" : " on this day"}.</div>`}</div>
