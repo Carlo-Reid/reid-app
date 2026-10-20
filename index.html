@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-19.205237">
+<meta name="app-version" content="2026-10-19.205703">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1280,6 +1280,9 @@
   .ie-tank-sum { margin: 0; }
   .pp-sps .seg { margin-bottom: 8px; }
   .pp-addform { margin-top: 12px; padding: 14px; border: 1px solid var(--line, #d9dee5); border-radius: 10px; background: var(--soft, #f5f7fa); display: grid; gap: 10px; }
+  .pp-pbtns { display: flex; gap: 8px; flex-wrap: wrap; } .pp-off { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 10px; }
+  .pp-editbtns { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; } .pp-danger { margin-left: auto; display: inline-flex; gap: 8px; }
+  .pp-addform .pp-notes { grid-column: 1 / -1; } .pp-billcust { display: inline-flex; gap: 6px; align-items: center; }
   .pp-addform h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); }
   .pp-add-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 14px; }
   .pp-add-grid label { display: flex; flex-direction: column; gap: 3px; font-size: calc(12.5px * var(--fs, 1)); font-weight: 600; }
@@ -7688,12 +7691,14 @@ async function openPartners() {
   await loadPartners();
 }
 async function loadPartners() {
-  const s = await db.rpc("partner_stores");
+  const [s, off] = await Promise.all([db.rpc("partner_stores"), canPartnerPay() ? db.rpc("partners_off") : null]);
+  PP.off = off && !off.error ? off.data || [] : [];
   if (!document.querySelector(".pp, .loading")) return;
   if (s.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load partner payments</h2>${esc(rpcErr(s.error))}</div></div>`; return; }
   PP.stores = s.data;
   if (!PP.stores.some(x => x.id === PP.store)) PP.store = PP.stores[0]?.id ?? null;
-  if (PP.stores.find(x => x.id === PP.store)?.pays_us) PP.view = "pay";   // Vista: payments only
+  if (PP.stores.find(x => x.id === PP.store)?.pays_us) PP.view = "pay";
+  if (PP.editData && PP.editData.id !== PP.store) { PP.editing = false; PP.editData = null; }   // Vista: payments only
   if (!PP.store) { $("#main").innerHTML = `<div class="empty"><div><h2>No stores set up</h2>No partner where the customer pays the store.</div></div>`; return; }
   const vis = !!PP.stores.find(x => x.id === PP.store)?.pays_us;
   const [l, pays, sps] = await Promise.all([db.rpc("partner_ledger", { p_partner: PP.store, p_show: PP.show, p_from: null, p_to: null }), db.rpc("partner_payments", { p_partner: PP.store }),
@@ -7728,9 +7733,12 @@ function renderPartners(msg) {
         ${vis ? "" : `<div class="cl-group"><span class="cl-label">Page</span>${seg([["jobs", "Jobs"], ["pay", "Payments"]], PP.view, "data-pp-view")}</div>`}
         <div class="cl-group"><span class="cl-label">Show</span>${PP.view === "jobs" ? seg(PJ_SHOW, PP.jshow, "data-pj-show") : seg(PP_SHOW, PP.show, "data-pp-show")}</div>
         <label class="cl-group pp-search"><span class="cl-label">Find</span><input type="search" id="pp-q" value="${esc(PP.q)}" placeholder="Customer, invoice or ${esc(st.name)} number"></label>
-        ${edit ? `<div class="cl-group"><span class="cl-label">New partner</span><button class="btn quiet-btn" type="button" id="pp-add" aria-expanded="${!!PP.adding}">＋ Add a partner</button></div>` : ""}
+        ${edit ? `<div class="cl-group"><span class="cl-label">Partners</span><div class="pp-pbtns"><button class="btn quiet-btn" type="button" id="pp-add" aria-expanded="${!!PP.adding}">＋ Add a partner</button>
+          <button class="btn quiet-btn" type="button" id="pp-edit" aria-expanded="${!!PP.editing}">✎ Edit ${esc(st.name)}</button></div></div>` : ""}
       </div>
+      ${edit && (PP.off || []).length ? `<div class="pp-off"><span class="cl-label">Switched off</span>${PP.off.map(x => `<span class="chip small">${esc(x.name)} <button class="link" type="button" data-pp-on="${x.id}">Switch back on</button></span>`).join("")}</div>` : ""}
       ${PP.adding ? ppAddForm() : ""}
+      ${PP.editing && PP.editData ? ppEditForm(PP.editData) : ""}
       ${vis && PP.view !== "jobs" ? `<form class="cl-row cl-row-2 pp-defaults pp-rules" id="pp-rules">
         <div class="cl-group"><span class="cl-label">${esc(st.name)}'s rules for every invoice billed to it</span>
           <div class="pp-def-in">
@@ -7806,6 +7814,33 @@ function renderPartners(msg) {
   wirePartners(st, rows);
   if (PP.view === "jobs") wirePartnerJobs(st);
 }
+function ppEditForm(D) {
+  const types = D.types || [], used = Number(D.jobs) + Number(D.invoices) + Number(D.payments);
+  return `<form class="pp-addform" id="pp-editform" autocomplete="off">
+    <h2>Edit ${esc(D.name)}</h2>
+    <p class="quiet" style="margin:0">Used by ${Number(D.jobs).toLocaleString()} jobs, ${Number(D.invoices).toLocaleString()} invoices and ${Number(D.payments).toLocaleString()} recorded payments.</p>
+    <div class="pp-add-grid">
+      <label>Name<input name="name" maxlength="120" required value="${esc(D.name)}"></label>
+      <label>Kind<select name="type">${types.map(t => `<option ${t === D.type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
+      <label>Who pays<select name="store"><option value="0" ${D.store ? "" : "selected"}>We bill the partner, the partner pays us (like Vista)</option><option value="1" ${D.store ? "selected" : ""}>The customer pays the partner, the partner pays us after its cut (like Costco)</option></select></label>
+      <label>Pays within (days)<input name="terms_days" inputmode="numeric" value="${D.terms_days ?? 30}"></label>
+      ${D.store ? `<label>Usual cut %<input name="cut_pct" inputmode="decimal" value="${D.cut_pct ?? 15}"></label><label>Gift card fee $<input name="card_fee" inputmode="decimal" value="${Number(D.card_fee || 0).toFixed(2)}"></label>` : ""}
+      <label>Phone<input name="phone" maxlength="40" value="${esc(D.phone || "")}"></label>
+      <label>Billing email<input name="email" type="email" maxlength="120" value="${esc(D.email || "")}"></label>
+      <label>Street<input name="street" maxlength="120" value="${esc(D.street || "")}"></label>
+      <label>City<input name="city" maxlength="80" value="${esc(D.city || "")}"></label>
+      <label>Postal code<input name="postal_code" maxlength="10" value="${esc(D.postal_code || "")}"></label>
+      ${D.store ? "" : `<label>Head office customer #<input name="customer_number" maxlength="20" value="${esc(D.customer_number || "")}" placeholder="optional"><small class="quiet">${D.customer_name ? "Now: " + esc(D.customer_name) + ". " : ""}Every invoice for this customer is billed to the partner.</small></label>`}
+      <label class="pp-notes">Notes<input name="notes" maxlength="500" value="${esc(D.notes || "")}"></label>
+    </div>
+    ${D.store ? "" : `<label class="pp-billcust"><input type="checkbox" name="bill_customer"> Also bill that customer's invoices already in the app to ${esc(D.name)}</label>`}
+    <div class="pp-editbtns"><button class="btn" type="submit">Save</button> <button class="link" type="button" id="pp-editcancel">Cancel</button>
+      <span class="pp-danger"><button class="btn quiet-btn" type="button" id="pp-off">Switch off</button>
+      <button class="btn quiet-btn danger" type="button" id="pp-del" ${used ? `title="It's in use, so it can only be switched off"` : ""}>Delete</button></span>
+      <span class="staff-msg err" id="pp-editmsg" role="status"></span></div>
+    <p class="quiet" style="margin:0">Switch off: it leaves the partner lists and boxes, but its jobs, invoices and payments stay. Delete: only for a partner nothing uses yet.</p>
+  </form>`;
+}
 function ppAddForm() {
   const types = OW.targets?.types || PP.types || ["Retailer", "Rental company", "Insurance company", "General contractor", "HVAC company", "Manufacturer"];
   return `<form class="pp-addform" id="pp-addform" autocomplete="off">
@@ -7865,6 +7900,28 @@ function wirePartners(st, rows) {
     if (PP.adding && !OW.targets) { const t = await db.rpc("partner_targets"); if (!t.error && t.data) OW.targets = t.data; }
     renderPartners(); if (PP.adding) $("#pp-addform [name=name]")?.focus({ preventScroll: true }); });
   $("#pp-addcancel")?.addEventListener("click", () => { PP.adding = false; renderPartners(); });
+  $("#pp-edit")?.addEventListener("click", async () => { PP.editing = !PP.editing; PP.adding = false;
+    if (PP.editing) { const { data, error } = await db.rpc("partner_detail", { p_id: st.id }); if (error) { PP.editing = false; return say("Couldn't open it: " + rpcErr(error)); } PP.editData = data; }
+    renderPartners(); });
+  $("#pp-editcancel")?.addEventListener("click", () => { PP.editing = false; renderPartners(); });
+  const emsg = (m, ok) => { const el = $("#pp-editmsg"); if (el) { el.className = ok ? "staff-msg ok" : "staff-msg err"; el.textContent = m; } };
+  $("#pp-editform")?.addEventListener("submit", async e => { e.preventDefault(); const f = e.target, g = n => f[n] ? f[n].value : undefined;
+    const p = { name: g("name"), type: g("type"), store: g("store") === "1", terms_days: g("terms_days"), cut_pct: g("cut_pct"), card_fee: g("card_fee"), phone: g("phone"), email: g("email"),
+      street: g("street"), city: g("city"), postal_code: g("postal_code"), notes: g("notes"), customer_number: g("customer_number") ?? "", bill_customer: !!f.bill_customer?.checked };
+    emsg("Saving…", true);
+    const { data, error } = await db.rpc("save_partner", { p_id: st.id, p }); if (error) return emsg("Not saved: " + rpcErr(error));
+    PP.editing = false; OW.targets = null; await loadPartners(); renderPartners(`Saved ${p.name}.${data?.moved ? ` ${data.moved} invoices now billed to it.` : ""}`); });
+  $("#pp-off")?.addEventListener("click", async e => { const b = e.currentTarget;
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = `Sure? Switch off ${st.name}`; return; }
+    const { error } = await db.rpc("set_partner_active", { p_id: st.id, p_on: false }); if (error) return emsg("Not done: " + rpcErr(error));
+    PP.editing = false; PP.store = null; OW.targets = null; await loadPartners(); renderPartners(`${st.name} is switched off. Its history stays; switch it back on any time below the partner list.`); });
+  $("#pp-del")?.addEventListener("click", async e => { const b = e.currentTarget;
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = `Sure? Delete ${st.name} for good`; return; }
+    const { error } = await db.rpc("delete_partner", { p_id: st.id }); if (error) { b.dataset.sure = ""; b.textContent = "Delete"; return emsg(rpcErr(error)); }
+    PP.editing = false; PP.store = null; OW.targets = null; await loadPartners(); renderPartners(`${st.name} deleted.`); });
+  document.querySelectorAll("[data-pp-on]").forEach(b => b.addEventListener("click", async () => {
+    const { error } = await db.rpc("set_partner_active", { p_id: Number(b.dataset.ppOn), p_on: true }); if (error) return say("Not done: " + rpcErr(error));
+    PP.store = Number(b.dataset.ppOn); OW.targets = null; savePp(); await loadPartners(); renderPartners("Switched back on."); }));
   $("#pp-addform")?.addEventListener("submit", async e => {
     e.preventDefault(); const f = e.target, m = $("#pp-addmsg"), store = f.store.value === "1";
     m.className = "staff-msg"; m.textContent = "Saving…";
