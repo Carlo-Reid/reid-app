@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-21.090031">
+<meta name="app-version" content="2026-10-21.091524">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1284,6 +1284,13 @@
   body:not([data-page="dispatch"]):not([data-page="dispatchmap"]) :is(#main, #search-page) .stk-mode[aria-pressed="true"] { background-image: linear-gradient(180deg, rgba(255,255,255,.16) 0%, rgba(0,0,0,.12) 100%); box-shadow: 0 3px 10px rgba(16,35,63,.25); }
   body:not([data-page="dispatch"]):not([data-page="dispatchmap"]) :is(#main, #search-page) .nc-day { background: linear-gradient(180deg, #f3f8ff 0%, #e2edfb 100%); box-shadow: 0 1px 4px rgba(16,35,63,.12); }
   body:not([data-page="dispatch"]):not([data-page="dispatchmap"]) :is(#main, #search-page) :is(.pb-ok, .pb-no, .plan-tag) { box-shadow: 0 2px 6px rgba(16,35,63,.18); }
+  /* Installs page: square buttons, all touching; pick dates */
+  .installs .ins-sq { display: inline-flex; flex-wrap: wrap; gap: 0; }
+  .installs .ins-sq .chip { border-radius: 0 !important; margin: 0 0 0 -1px; position: relative; }
+  .installs .ins-sq .chip:first-child { margin-left: 0; } .installs .ins-sq .chip[aria-pressed="true"], .installs .ins-sq .chip:hover { z-index: 1; }
+  .installs .ins-dates { display: inline-flex; align-items: center; gap: 6px; } .installs .ins-dates input { padding: 5px 8px; border: 1px solid var(--line); border-radius: 0; font: inherit; }
+  .installs .ins-dates .btn { border-radius: 0; padding: 6px 14px; }
+  .installs .ins-nd { color: #1864ab; font-weight: 700; }
   /* Calls page CA 4: the type buttons as square boxes, all touching */
   .cl-type-chips { gap: 0 !important; }
   .cl-type-chips .cl-type { border-radius: 0 !important; margin: 0 0 0 -1px; position: relative; }
@@ -8132,17 +8139,19 @@ async function showPO(id) {
 /* ---------- Installs: tracking each completed install and paying salespeople ---------- */
 let INS = (() => { try { return JSON.parse(localStorage.getItem("reid.installs") || "null"); } catch { return null; } })() || {};
 INS = Object.assign({ range: "90", show: "all", person: "", group: "person" }, INS, { sel: null, ratesOpen: false });
-const saveIns = () => { try { localStorage.setItem("reid.installs", JSON.stringify({ range: INS.range, show: INS.show, person: INS.person, group: INS.group })); } catch {} };
-const INS_RANGES = [["month", "This month"], ["last", "Last month"], ["90", "Last 90 days"], ["year", "This year"], ["all", "All time"]];
-const INS_SHOW = [["all", "All"], ["ready", "Ready to pay"], ["waiting", "Waiting for the customer"], ["early", "Paid early"], ["paid", "Paid"], ["missing", "Needs a salesperson or rate"]];
+const saveIns = () => { try { localStorage.setItem("reid.installs", JSON.stringify({ range: INS.range, show: INS.show, person: INS.person, group: INS.group, from: INS.from, to: INS.to })); } catch {} };
+const INS_RANGES = [["month", "This month"], ["last", "Last month"], ["90", "Last 90 days"], ["year", "This year"], ["all", "All time"], ["custom", "Pick dates"]];
+const INS_SHOW = [["all", "All"], ["notdone", "Not installed yet"], ["ready", "Ready to pay"], ["waiting", "Waiting for the customer"], ["early", "Paid early"], ["paid", "Paid"], ["missing", "Needs a salesperson or rate"]];
 const REBATE = { none: "No rebate", to_apply: "To apply for", applied: "Applied", approved: "Approved", paid: "Paid", denied: "Denied" };
 const FINANCE = { none: "No financing", applied: "Applied", approved: "Approved", funded: "Funded", declined: "Declined" };
 function insRange() {
   const t = new Date(), y = t.getFullYear(), m = t.getMonth();
   return { month: [ymd(new Date(y, m, 1)), null], last: [ymd(new Date(y, m - 1, 1)), ymd(new Date(y, m, 0))], "90": [ymd(addDays(t, -90)), null],
-           year: [ymd(new Date(y, 0, 1)), null], all: [null, null] }[INS.range];
+           year: [ymd(new Date(y, 0, 1)), null], all: [null, null], custom: [INS.from || null, INS.to || null] }[INS.range] || [ymd(new Date(y, m, 1)), null];
 }
+const insDone = r => !r.job_status || ["completed", "invoiced", "closed"].includes(r.job_status);
 function insState(r) {
+  if (!insDone(r)) return ["notdone", r.job_status === "scheduled" || r.job_status === "dispatched" ? "Booked " + fmtDate(r.date_on) : r.job_status === "in_progress" ? "Being installed" : "Not booked yet", "s-open"];
   if (!r.salesperson_id) return ["missing", "No salesperson", "s-off"];
   if (r.paid_at) return ["paid", "Paid " + fmtDate(r.paid_at.slice(0, 10)), "s-done"];
   if (r.prepaid_at) return ["early", "Paid early " + fmtDate(r.prepaid_at.slice(0, 10)), r.customer_paid ? "s-done" : "s-warn"];
@@ -8603,13 +8612,13 @@ function renderInstalls(msg) {
   const scope = all.filter(r => !INS.person || String(r.salesperson_id) === INS.person);
   const ready = scope.filter(r => insState(r)[0] === "ready"), waiting = scope.filter(r => insState(r)[0] === "waiting");
   const paid = scope.filter(r => r.paid_at || r.prepaid_at), earlyOwing = scope.filter(r => r.prepaid_at && !r.paid_at && !r.customer_paid);
-  if (INS.group === "person") rows.sort((a, b) => (a.salesperson || "~").localeCompare(b.salesperson || "~") || b.completed_on.localeCompare(a.completed_on));
+  if (INS.group === "person") rows.sort((a, b) => (a.salesperson || "~").localeCompare(b.salesperson || "~") || String(b.date_on || b.completed_on || "").localeCompare(String(a.date_on || a.completed_on || "")));
   const gs = {}; rows.forEach(r => { const g = INS.group === "person" ? (r.salesperson || "No salesperson") : ""; const s = gs[g] ||= { n: 0, sale: 0, ready: 0 }; s.n++; s.sale += Number(r.sale_amount || 0); if (insState(r)[0] === "ready") s.ready += insOwed(r); });
   let last = null;
   const top = $("#main").scrollTop, canEdit = true;
   $("#main").innerHTML = `<article class="staff installs">
     <div class="pos-head"><h1>Installs</h1><button class="btn quiet-btn" type="button" id="ins-rates">${INS.ratesOpen ? "Hide commission rates" : "Commission rates"}</button></div>
-    <p class="lead">Every install shows up here once it's completed. A salesperson's commission is their % of the sale (before tax), ready to pay once the customer has paid in full. You can also pay it early.</p>
+    <p class="lead">Every install sale shows up here: done, booked or not booked yet. Pick dates to see any day or period. A salesperson's commission is their % of the sale (before tax), ready to pay once the customer has paid in full. You can also pay it early.</p>
     ${INS.ratesOpen ? `<section class="block ins-rates"><h2>Commission rates</h2><p class="quiet">The % each salesperson gets on the installs they sell. A change applies to installs that don't already have their own %.</p>
       <div class="ins-rate-list">${(INS.people || []).filter(p => p.pct != null || Number(p.installs_this_year) > 0 || INS.allPeople).map(p => `<label class="ins-rate"><span>${esc(p.name)}<em class="quiet">${Number(p.installs_this_year) ? ` · ${p.installs_this_year} installs this year` : ""}</em></span>
         <span><input type="number" min="0" max="100" step="0.25" value="${p.pct ?? ""}" data-rate="${p.employee_id}" placeholder="—"> %</span></label>`).join("")}</div>
@@ -8621,12 +8630,13 @@ function renderInstalls(msg) {
       <div class="ow-off"><span>Paid early, customer still owes</span><strong>${money(sum(earlyOwing, r => r.prepaid_amount))}</strong><em>${earlyOwing.length} installs</em></div>
     </div>
     <div class="calls-filters">
-      <span>${INS_RANGES.map(([k, t]) => `<button class="chip small" type="button" data-ins-range="${k}" aria-pressed="${INS.range === k}">${t}</button>`).join("")}</span>
+      <span class="ins-sq">${INS_RANGES.map(([k, t]) => `<button class="chip small" type="button" data-ins-range="${k}" aria-pressed="${INS.range === k}">${t}</button>`).join("")}</span>
+      ${INS.range === "custom" ? `<span class="ins-dates"><input type="date" id="ins-from" value="${esc(INS.from || "")}" aria-label="From"> → <input type="date" id="ins-to" value="${esc(INS.to || "")}" aria-label="To"> <button class="btn" type="button" id="ins-go">Show</button></span>` : ""}
       <label class="calls-tech">Salesperson <select id="ins-person"><option value="">Everyone</option>${[...new Map(all.filter(r => r.salesperson_id).map(r => [r.salesperson_id, r.salesperson])).entries()].sort((a, b) => a[1].localeCompare(b[1]))
         .map(([id, n]) => `<option value="${id}" ${String(id) === INS.person ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
       <label class="calls-tech">Group <select id="ins-group"><option value="person" ${INS.group === "person" ? "selected" : ""}>By salesperson</option><option value="none" ${INS.group === "none" ? "selected" : ""}>No groups (newest first)</option></select></label>
     </div>
-    <div class="calls-filters"><span>${INS_SHOW.map(([k, t]) => `<button class="chip small" type="button" data-ins-show="${k}" aria-pressed="${INS.show === k}">${t} <span class="count">${k === "all" ? scope.length : scope.filter(r => insState(r)[0] === k).length}</span></button>`).join("")}</span>
+    <div class="calls-filters"><span class="ins-sq">${INS_SHOW.map(([k, t]) => `<button class="chip small" type="button" data-ins-show="${k}" aria-pressed="${INS.show === k}">${t} <span class="count">${k === "all" ? scope.length : scope.filter(r => insState(r)[0] === k).length}</span></button>`).join("")}</span>
       ${rows.length ? `<button class="link" type="button" id="ins-copy">Copy list</button>` : ""}<span class="staff-msg ok" role="status">${msg ? esc(msg) : ""}</span></div>
     <div class="dsp-wrap">
       <div class="staff-wrap" style="flex:1;min-width:0">${rows.length ? `<table class="calls-table ins-table"><thead><tr><th>Done</th><th>Customer</th><th>Install</th><th class="r">Sale</th><th class="r">Commission</th><th>Status</th><th>Rebate / financing / registered</th></tr></thead><tbody>
@@ -8635,7 +8645,7 @@ function renderInstalls(msg) {
             head = `<tr class="ow-group"><td colspan="7"><b>${esc(g)}</b> <span class="quiet">${s.n} installs · ${money(s.sale)} sold</span><strong>${s.ready ? "Ready to pay " + money(s.ready) : ""}</strong></td></tr>`; } }
           const [k, label, cls] = insState(r), reg = r.registered_at || (r.equipment || []).some(e => e.registered);
           return head + `<tr class="po-row ${INS.sel === r.job_id ? "sel" : ""}" tabindex="0" data-ins="${r.job_id}">
-            <td class="num">${fmtDate(r.completed_on)}</td>
+            <td class="num">${r.completed_on ? fmtDate(r.completed_on) : `<span class="ins-nd">${r.job_status === "in_progress" ? "Being installed" : r.date_on && r.date_on !== r.sold_on ? "Booked " + fmtDate(r.date_on) : "Not booked"}</span>`}${r.sold_on ? `<div class="quiet">sold ${fmtDate(r.sold_on)}</div>` : ""}</td>
             <td><strong>${esc(r.customer_name)}</strong><div class="quiet">${esc(r.address || "")}</div></td>
             <td>${esc(r.job_type)}<div class="quiet">Job ${esc(r.job_number)}${INS.group !== "person" && r.salesperson ? " · " + esc(r.salesperson) : ""}</div></td>
             <td class="r num">${money(r.sale_amount)}</td>
@@ -8659,14 +8669,16 @@ function renderInstalls(msg) {
     const ppl = await db.rpc("commission_people"); INS.people = ppl.data || INS.people;
     await loadInstalls(); const m2 = $("#rate-msg"); if (m2) { m2.className = "staff-msg ok"; m2.textContent = "Saved."; }
   }));
-  document.querySelectorAll("[data-ins-range]").forEach(b => b.addEventListener("click", () => { INS.range = b.dataset.insRange; saveIns(); loadInstalls(); }));
+  document.querySelectorAll("[data-ins-range]").forEach(b => b.addEventListener("click", () => { if (INS.range === b.dataset.insRange) return; INS.range = b.dataset.insRange;
+    if (INS.range === "custom" && !INS.from) { const t = new Date(); INS.from = ymd(new Date(t.getFullYear(), t.getMonth(), 1)); INS.to = ymd(t); } saveIns(); loadInstalls(); }));
+  $("#ins-go")?.addEventListener("click", () => { INS.from = $("#ins-from").value || null; INS.to = $("#ins-to").value || null; saveIns(); loadInstalls(); });
   document.querySelectorAll("[data-ins-show]").forEach(b => b.addEventListener("click", () => { INS.show = b.dataset.insShow; saveIns(); renderInstalls(); }));
   $("#ins-person").addEventListener("change", e => { INS.person = e.target.value; saveIns(); renderInstalls(); });
   $("#ins-group").addEventListener("change", e => { INS.group = e.target.value; saveIns(); renderInstalls(); });
   document.querySelectorAll("[data-ins]").forEach(tr => { tr.addEventListener("click", () => { INS.sel = Number(tr.dataset.ins); document.querySelectorAll(".po-row.sel").forEach(x => x.classList.remove("sel")); tr.classList.add("sel"); showInstall(INS.sel); });
     tr.addEventListener("keydown", e => { if (e.key === "Enter") tr.click(); }); });
   $("#ins-copy")?.addEventListener("click", async e => {
-    const text = "Completed\tCustomer\tAddress\tInstall\tJob\tSalesperson\tSale\tCommission %\tCommission\tStatus\tRebate\tFinancing\n" + rows.map(r => [r.completed_on, r.customer_name, r.address, r.job_type, r.job_number,
+    const text = "Completed\tCustomer\tAddress\tInstall\tJob\tSalesperson\tSale\tCommission %\tCommission\tStatus\tRebate\tFinancing\n" + rows.map(r => [r.completed_on || "not done", r.customer_name, r.address, r.job_type, r.job_number,
       r.salesperson || "", r.sale_amount, r.commission_pct ?? "", r.commission_amount ?? "", insState(r)[1], REBATE[r.rebate_status], FINANCE[r.financing_status]].join("\t")).join("\n");
     const ok = await copyText(text); e.target.textContent = ok ? "Copied ✓ (pastes into Excel)" : "Couldn't copy"; setTimeout(() => e.target.textContent = "Copy list", 2000);
   });
@@ -8678,7 +8690,7 @@ function showInstall(id) {
   const amt = v => v == null ? "" : Number(v).toFixed(2);
   p.innerHTML = `<div class="dp-head"><strong>${esc(r.customer_name)}</strong><button class="link" type="button" data-ins-close>Close</button></div>
     <div class="quiet">${esc(r.address || "")}</div>
-    <div class="dp-job">${esc(r.job_type)} · Job ${esc(r.job_number)} · done ${fmtDate(r.completed_on)}</div>
+    <div class="dp-job">${esc(r.job_type)} · Job ${esc(r.job_number)} · ${r.completed_on ? "done " + fmtDate(r.completed_on) : esc(insState(r)[1])}${r.sold_on ? " · sold " + fmtDate(r.sold_on) : ""}</div>
     <div class="ins-open"><button class="btn quiet-btn" type="button" data-ins-cust>Open the customer file</button><span id="ins-invs" class="ins-invs"><span class="quiet">Finding the invoice…</span></span></div>
     <h3>Commission</h3>
     <div><span class="status ${cls}">${esc(label)}</span></div>
