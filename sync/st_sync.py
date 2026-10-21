@@ -677,6 +677,12 @@ def main():
             try:
                 n_po = sync_purchase_orders(cur, st, state, new_state)
                 if n_po: log(f"Purchase orders: {n_po} brought in or updated.")
+                if os.environ.get("GITHUB_ACTIONS") and not (state.get("inv-probe") or {}).get("since"):   # one time: which inventory lists we can read
+                    try:
+                        import st_probe_lib; st_probe_lib.run(st)
+                        new_state["inv-probe"] = {"continue_from": None, "since": started.isoformat()}
+                    except Exception as e:
+                        print(f"::notice::Inventory check failed: {str(e)[:200]}", flush=True)
                 if os.environ.get("GITHUB_ACTIONS"):   # counts only, for the Actions page
                     cur.execute("SELECT coalesce(string_agg(y || ': ' || n, ', ' ORDER BY y), 'none') FROM (SELECT extract(year FROM coalesce(ordered_at, created_at))::int y, count(*) n FROM purchase_orders GROUP BY 1) t")
                     print(f"::notice::Purchase orders in the app by year: {cur.fetchone()[0]}", flush=True)
