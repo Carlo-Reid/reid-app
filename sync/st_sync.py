@@ -535,6 +535,8 @@ def sync_purchase_orders(cur, st, state, new_state):
     return saved
 
 
+OLD_PLACE = re.compile(r"z+ ?-?past|do not use", re.I)
+
 def sync_inventory(cur, st, state, new_state):
     """ServiceTitan's warehouses and trucks (with their techs), which price book items are stocked, and the stock history
     (receipts, transfers, adjustments, returns) kept as read-only history. ServiceTitan has no 'on hand now' list:
@@ -554,12 +556,13 @@ def sync_inventory(cur, st, state, new_state):
         addr = rec.get("address") or {}
         note = ", ".join(x for x in [addr.get("street"), addr.get("city")] if x) or None
         if row:
-            cur.execute("""UPDATE stock_locations SET name = %s, active = %s, parent_location_id = coalesce(%s, parent_location_id),
+            # ServiceTitan turning a place off turns it off here; it never turns one back on (places hidden here stay hidden)
+            cur.execute("""UPDATE stock_locations SET name = %s, active = CASE WHEN %s THEN active ELSE false END, parent_location_id = coalesce(%s, parent_location_id),
                            assigned_employee_id = coalesce(%s, assigned_employee_id), note = coalesce(note, %s) WHERE id = %s""",
                         (nm, rec.get("active") is not False, parent, emp, note, row[0]))
             return row[0]
         cur.execute("""INSERT INTO stock_locations (name, location_type, active, parent_location_id, assigned_employee_id, st_id, note)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""", (nm, kind, rec.get("active") is not False, parent, emp, int(rec["id"]), note))
+                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""", (nm, kind, rec.get("active") is not False and not OLD_PLACE.search(nm), parent, emp, int(rec["id"]), note))
         return cur.fetchone()[0]
     wmap = {int(w["id"]): place(w, "warehouse") for w in whs}
     for t in trucks:
@@ -568,6 +571,12 @@ def sync_inventory(cur, st, state, new_state):
             cur.execute("SELECT id FROM employees WHERE st_id = %s", (int(tid),)); r = cur.fetchone()
             if r: emp = r[0]; break
         place(t, "truck", wmap.get(int(t.get("warehouseId") or 0)), emp)
+    # once: hide ServiceTitan's old places (ZPast-, ZzPast-, "Do Not Use"); they can be turned back on from the Places tab
+    if not state.get("inv-hide-old"):
+        cur.execute(r"""UPDATE stock_locations SET active = false WHERE st_id IS NOT NULL AND active
+                        AND (name ~* 'z+ ?-?past' OR name ~* 'do not use')""")
+        out.append(f"{cur.rowcount} old places hidden")
+        new_state["inv-hide-old"] = {"continue_from": None, "since": datetime.now(timezone.utc).isoformat()}
     out.append(f"{len(whs)} warehouses, {len(trucks)} trucks")
     # which price book items are stocked (only ever turns it on: nothing the office set is undone)
     if not (state.get("inv-items") or {}).get("since") or datetime.now(timezone.utc).weekday() == 6:
