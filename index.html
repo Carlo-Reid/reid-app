@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-21.193516">
+<meta name="app-version" content="2026-10-21.194826">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3078,6 +3078,9 @@ body[data-page="calls"] #main .cl-mt.owe strong { color: #b23a2e !important; }
 body[data-page="calls"] #main .cl-bcalls-t, body[data-page="calls"] #main .cl-bcalls-t td { background: transparent !important; }
 body[data-page="calls"] #page-bar-act .cl-showing { border-radius: 0 !important; }
 /* ===== END SAND THEME ===== */
+.pbg-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 0 0 12px; }
+.pbg-t select { padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: inherit; }
+.pbg-t tr.pbg-off td { opacity: .45; }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -3303,6 +3306,7 @@ async function showApp() {
   if (location.hash === "#pricebook" && ME.role) return openPricebook();
   if (location.hash === "#addon-kits" && ME.role) return openAddonKits();
   if (location.hash === "#print-book" && ME.role) return openPrintBook();
+  if (location.hash === "#pb-group" && ME.role) return openPbGroup();
   if (location.hash === "#price-books" && ME.role) return openPriceBooks();
   if (location.hash === "#pictures" && ME.role) return openPictureLibrary();
   if (location.hash === "#price-formulas" && ME.role) return openFormulas();
@@ -4138,7 +4142,7 @@ function showPageBar() {
   pageIcon(name);
 }
 // pages that sit under another page: Back always goes there, even when the page was opened straight from a link or a refresh
-const PAGE_PARENT = { "#print-book": ["#pricebook", "Price book"], "#addon-kits": ["#pricebook", "Price book"], "#price-books": ["#pricebook", "Price book"],
+const PAGE_PARENT = { "#print-book": ["#pricebook", "Price book"], "#pb-group": ["#pricebook", "Price book"], "#addon-kits": ["#pricebook", "Price book"], "#price-books": ["#pricebook", "Price book"],
   "#pictures": ["#pricebook", "Price book"], "#price-formulas": ["#pricebook", "Price book"], "#receivables-list": ["#owing", "Receivables"], "#receivables-cleanup": ["#owing", "Receivables"] };
 function pageParent() { const h = (NAV.stack[NAV.stack.length - 1] || {}).hash || location.hash, p = PAGE_PARENT[h]; return p ? { hash: p[0], label: p[1] } : null; }
 function goBack() {
@@ -4170,6 +4174,7 @@ function routeTo(h) {
   if (h === "#pricebook") return openPricebook();
   if (h === "#addon-kits") return openAddonKits();
   if (h === "#print-book") return openPrintBook();
+  if (h === "#pb-group") return openPbGroup();
   if (h === "#price-books") return openPriceBooks();
   if (h === "#pictures") return openPictureLibrary();
   if (h === "#price-formulas") return openFormulas();
@@ -12046,6 +12051,121 @@ async function loadPbBooks() {
   PB.books = error || !data ? [] : data.books || []; PB.myBook = error || !data ? null : data.mine;
 }
 let PBK = { open: null };
+// ----- Group categories: put each top category under a main category (Furnaces, Air Conditioners, …). Preview first; can be undone. -----
+const PBG_GROUPS = [
+  ["Furnaces", /furnace|\bfurn\b|\bsl2\d\d|\bel29\d|\bml\d{3}(?!xc|xp)|\bslp9|\bel19\d|gas heat/i],
+  ["Air Conditioners", /air ?condition|\ba\/?c\b|condens(er|ing unit)|\bxc\d|\b(el|ml|sl)\d+xc|cooling unit/i],
+  ["Heat Pumps", /heat ?pump|\bxp\d|\b(el|ml|sl)\d+xp/i],
+  ["Ductless Mini-Splits", /mini.?split|ductless|wall ?mount|\bmulti.?zone|\bhead unit/i],
+  ["Coils", /\bcoils?\b|evaporator|\bcx\d|\bcbk/i],
+  ["Boilers", /boiler|combi|hydronic/i],
+  ["Water Heaters", /water ?heater|\bhwt\b|tankless|hot ?water|navien|rinnai|bradford|rheem tank/i],
+  ["Water Treatment", /softener|water treatment|reverse osmosis|\bro system|well water|iron filter/i],
+  ["Fireplaces", /fireplace|\binsert\b|\bstove\b/i],
+  ["Humidifiers", /humidif/i],
+  ["Indoor Air Quality", /air ?clean|purif|\buv\b|hepa|\bhrv\b|\berv\b|ventilat|pure ?air|air quality|media filter|\bfilters?\b|dehumid/i],
+  ["Thermostats & Controls", /thermostat|icomfort|ecobee|\bnest\b|\bcontrols?\b|zon(e|ing)/i],
+  ["Generators", /generator|generac/i],
+  ["Service & Labour", /service|labou?r|repair|diagnos|tune.?up|maintenance|cleaning|inspection|hourly|trip charge|call.?out/i],
+  ["Plans & Memberships", /\bplan\b|membership|protection|warranty plan|rental/i],
+  ["Parts & Materials", /part|material|fitting|pipe|copper|wire|electrical|motor|capacitor|board|igniter|valve|vent|duct|sheet ?metal|refrigerant|misc/i]];
+const PBG = { rows: null, msg: "" };
+function pbgGuess(text) {
+  let best = null, bestN = 0;
+  for (const [g, re] of PBG_GROUPS) { const n = (text.match(new RegExp(re.source, "gi")) || []).length; if (n > bestN) { best = g; bestN = n; } }
+  return best;
+}
+async function openPbGroup() {
+  setPage("pb-group", "pricebook", "Group categories");
+  if (!can("pricebook.edit") && ME.role !== "owner") { $("#main").innerHTML = `<div class="empty"><div><h2>Owners only</h2></div></div>`; return; }
+  $("#main").innerHTML = `<div class="loading">Looking through the price book…</div>`;
+  PB.viewBook = null; await loadPbCats();
+  const groupNames = new Set(PBG_GROUPS.map(g => g[0].toLowerCase()).concat(["other"]));
+  const tops = PB.catTop.filter(c => c.active && !groupNames.has(c.name.toLowerCase()));
+  // a category whose name says what it is moves as a whole; a general one (a brand, "Equipment"…) is opened up and its
+  // categories are sorted one by one; a category with no categories inside is judged by its items
+  PBG.rows = []; let looked = 0;
+  const say = () => { const box = $("#main .loading"); if (box) box.textContent = `Looking through the price book… ${looked} categories checked`; };
+  const walk = async (c, path) => {
+    looked++; say();
+    const kids = c.kids.filter(k => k.active);
+    let g = pbgGuess(c.name), why = g ? "its name" : "";
+    if (!g && kids.length) {
+      for (const k of kids) await walk(k, path.concat(c.name));
+      if (!Number(c.items)) return;                         // nothing of its own left: it stays as it is
+    }
+    if (!g && (Number(c.items) || c.total)) {
+      const { data } = await db.rpc("pb_list", { p_search: null, p_type: "all", p_active: true, p_category: c.id, p_flag: null, p_limit: 150 });
+      const eq = (data || []).filter(x => x.item_type === "equipment");
+      g = pbgGuess((eq.length ? eq : data || []).map(x => [x.name, x.description, x.model].filter(Boolean).join(" ")).join(" | "));
+      if (g) why = "the items in it";
+    }
+    if (!g && !(Number(c.items) || c.total)) return;          // empty: leave it
+    PBG.rows.push({ id: c.id, name: c.name, path: path.join(" › "), total: c.total || 0, kids: kids.length, to: g || "Other", why: why || "nothing matched", pick: true });
+  };
+  for (const c of tops) await walk(c, []);
+  renderPbGroup();
+}
+function renderPbGroup() {
+  const m = $("#main"), opts = PBG_GROUPS.map(g => g[0]).concat(["Other", ""]);
+  let undo = null; try { undo = JSON.parse(localStorage.getItem("reid.pbgroup.undo") || "null"); } catch {}
+  const by = new Map(); PBG.rows.forEach(r => { if (r.pick) by.set(r.to, (by.get(r.to) || 0) + 1); });
+  m.innerHTML = `<article class="staff pbg">
+    <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Price book</span><h1>Group categories</h1>
+      <p>Every category goes inside a main category: Furnaces, Air Conditioners, and so on. A category whose name says what it is moves as a whole; a general one (a brand, "Equipment") is opened up and the categories inside it are sorted one by one. The guess comes from the name or the items. Change any guess, untick any you want left alone, then press the button. Nothing changes until then, and it can be undone.</p></div>
+      <div class="cl-hero-range"><span>Main categories</span><strong>${by.size}</strong><em>${PBG.rows.filter(r => r.pick).length} categories to move</em></div></header>
+    ${PBG.msg ? `<div class="staff-msg">${PBG.msg}</div>` : ""}
+    <div class="pbg-bar"><button class="btn" type="button" id="pbg-go" ${PBG.rows.some(r => r.pick) ? "" : "disabled"}>Move them into main categories</button>
+      ${undo ? `<button class="btn quiet-btn" type="button" id="pbg-undo">↩ Undo the last grouping (${undo.moves.length} categories)</button>` : ""}
+      <span class="staff-msg" id="pbg-msg" role="status"></span></div>
+    <table class="calls-table pbg-t"><thead><tr><th></th><th>Category now</th><th class="r">Items</th><th>Goes under</th><th>Guessed from</th></tr></thead><tbody>
+    ${PBG.rows.slice().sort((a, b) => opts.indexOf(a.to) - opts.indexOf(b.to) || a.name.localeCompare(b.name)).map(r => `<tr class="${r.pick ? "" : "pbg-off"}">
+      <td><input type="checkbox" data-pbg-pick="${r.id}" ${r.pick ? "checked" : ""} aria-label="Move ${esc(r.name)}"></td>
+      <td>${r.path ? `<span class="quiet">${esc(r.path)} › </span>` : ""}<b>${esc(r.name)}</b>${r.kids ? ` <span class="quiet">+ ${r.kids} inside</span>` : ""}</td><td class="r num">${r.total.toLocaleString()}</td>
+      <td><select data-pbg-to="${r.id}">${opts.filter(Boolean).map(o => `<option ${o === r.to ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></td>
+      <td class="quiet">${esc(r.why)}</td></tr>`).join("") || `<tr><td colspan="5" class="quiet">Every top category is already inside a main category.</td></tr>`}</tbody></table>
+  </article>`;
+  m.querySelectorAll("[data-pbg-pick]").forEach(b => b.addEventListener("change", () => { PBG.rows.find(r => r.id === Number(b.dataset.pbgPick)).pick = b.checked; b.closest("tr").classList.toggle("pbg-off", !b.checked); }));
+  m.querySelectorAll("[data-pbg-to]").forEach(s => s.addEventListener("change", () => { const r = PBG.rows.find(x => x.id === Number(s.dataset.pbgTo)); r.to = s.value; r.why = "you picked it"; }));
+  $("#pbg-go")?.addEventListener("click", pbgApply);
+  $("#pbg-undo")?.addEventListener("click", pbgUndo);
+}
+async function pbgApply() {
+  const msg = $("#pbg-msg"), go = $("#pbg-go"); go.disabled = true;
+  const rows = PBG.rows.filter(r => r.pick), wanted = [...new Set(rows.map(r => r.to))];
+  const existing = new Map(PB.catTop.filter(c => c.active).map(c => [c.name.toLowerCase(), c.id]));
+  const made = [], ids = {};
+  try {
+    for (const g of wanted) {
+      if (existing.has(g.toLowerCase())) { ids[g] = existing.get(g.toLowerCase()); continue; }
+      msg.textContent = `Making ${g}…`;
+      const { data, error } = await db.rpc("save_pb_category", { p_id: null, p_name: g, p_parent_id: null, p_active: true });
+      if (error) throw error; ids[g] = data; made.push(data);
+    }
+    const moves = [];
+    for (const [i, r] of rows.entries()) {
+      msg.textContent = `Moving ${i + 1} of ${rows.length}…`;
+      const c = PB.catBy.get(r.id);
+      const { error } = await db.rpc("save_pb_category", { p_id: r.id, p_name: c.name, p_parent_id: ids[r.to], p_active: c.active });
+      if (error) throw error; moves.push({ id: r.id, name: c.name, parent: c.parent_id || null });
+    }
+    try { localStorage.setItem("reid.pbgroup.undo", JSON.stringify({ at: new Date().toISOString(), made, moves })); } catch {}
+    PBG.msg = `Done: ${moves.length} categories moved into ${wanted.length} main categories${made.length ? ` (${made.length} new)` : ""}. Open the Price book to see them.`;
+    await openPbGroup();
+  } catch (e) { msg.textContent = "Stopped: " + rpcErr(e); msg.classList.add("err"); go.disabled = false; }
+}
+async function pbgUndo() {
+  let u = null; try { u = JSON.parse(localStorage.getItem("reid.pbgroup.undo") || "null"); } catch {}
+  if (!u) return;
+  const msg = $("#pbg-msg"); $("#pbg-undo").disabled = true;
+  try {
+    for (const mv of u.moves) { msg.textContent = `Putting back ${mv.name}…`; const { error } = await db.rpc("save_pb_category", { p_id: mv.id, p_name: mv.name, p_parent_id: mv.parent, p_active: null }); if (error) throw error; }
+    await loadPbCats();
+    for (const id of u.made) { const c = PB.catBy.get(id); if (c && !c.kids.length && !Number(c.items)) await db.rpc("save_pb_category", { p_id: id, p_name: c.name, p_parent_id: null, p_active: false }); }
+    try { localStorage.removeItem("reid.pbgroup.undo"); } catch {}
+    PBG.msg = "Undone: every category is back where it was."; await openPbGroup();
+  } catch (e) { msg.textContent = "Stopped: " + rpcErr(e); msg.classList.add("err"); }
+}
 async function openPriceBooks(msg) {
   setPage("price-books", "pricebook", "Price books");
   if (!document.querySelector(".pbk")) $("#main").innerHTML = `<div class="loading">Loading the price books…</div>`;
@@ -12151,7 +12271,7 @@ function pbCatTree(edit) {
           <input name="n" value="${f.mode === "rename" ? esc(cur?.name || "") : ""}" maxlength="120" required></label>
           ${f.mode === "rename" ? `<label>Inside<select name="par"><option value="">Top level (not inside another)</option>${pbCatOptions(cur?.id)}</select></label>` : ""}
           <span><button class="btn" type="submit">Save</button> <button class="link" type="button" id="pb-catcancel">Cancel</button></span><span class="staff-msg err" id="pb-catmsg" role="status"></span></form>`
-        : `<button class="link" type="button" data-pb-catnew="">+ New category</button>
+        : `<button class="link" type="button" data-pb-catnew="">+ New category</button> <button class="link" type="button" id="pb-group">Group into main categories…</button>
           ${cur ? `<button class="link pb-cattools-btn" type="button" id="pb-cattools" aria-expanded="${!!PB.catToolsOpen}">${PB.catToolsOpen ? "▾" : "▸"} Change ${esc(cur.name)}</button>` : ""}
           ${cur && PB.catToolsOpen ? `<div class="pb-cattools"><button class="link" type="button" data-pb-catnew="${cur.id}">+ New one inside ${esc(cur.name)}</button>
           <button class="link" type="button" data-pb-move="-1" title="Move ${esc(cur.name)} up">↑ Up</button><button class="link" type="button" data-pb-move="1" title="Move ${esc(cur.name)} down">↓ Down</button><button class="link" type="button" id="pb-catren">Edit (name or where it sits)</button><button class="link" type="button" id="pb-catret" title="${cur.active ? "Turn off just the category; its items stay on" : "Turn the category back on"}">${cur.active ? "Deactivate category only" : "Reactivate category only"}</button>
@@ -12422,6 +12542,7 @@ function renderPricebook(msg) {
       if (e.key === "Escape") { q.value = ""; show(); } });
     q?.addEventListener("blur", () => setTimeout(() => res.classList.add("hidden"), 150));
     q?.addEventListener("focus", () => { if (q.value.trim()) show(); }); }
+  $("#pb-group")?.addEventListener("click", () => openPbGroup());
   document.querySelectorAll("[data-pb-catnew]").forEach(el => el.addEventListener("click", e => { PB.catForm = { mode: "new", parent: e.target.dataset.pbCatnew ? Number(e.target.dataset.pbCatnew) : null }; renderPricebook(); $("#pb-catform input").focus(); }));
   $("#pb-catren")?.addEventListener("click", () => { PB.catForm = { mode: "rename" }; renderPricebook(); const cur = PB.catBy.get(PB.cat); const s = $("#pb-catform [name=par]"); if (s) s.value = cur?.parent_id || ""; $("#pb-catform input").select(); });
   $("#pb-catcancel")?.addEventListener("click", () => { PB.catForm = null; renderPricebook(); });
