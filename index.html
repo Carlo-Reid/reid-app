@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-20.225928">
+<meta name="app-version" content="2026-10-20.230554">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -7008,6 +7008,20 @@ function owScopeRows(scope) {
   if (scope.startsWith("ptn:")) return owPtnRows(scope);
   return scope === "paid" ? paid : scope === "booked" ? book : scope === "owing" ? owingAll.filter(r => r._show !== "not_owed") : owingAll.concat(paid);
 }
+// a partner's list broken down by who it's billed to (Vista Credit, Boone, Wolseley…; one-off customers together)
+function owAcctSplit(rows, scope, sel) {
+  if (!scope.startsWith("ptn:") || scope === "ptn:none" || !rows.length) return { rows, html: "", sel: "" };
+  const amt0 = r => Number(r.balance) || 0, cnt = new Map(); rows.forEach(r => cnt.set(r.customer_id, (cnt.get(r.customer_id) || 0) + 1));
+  const acctRx = /credit|vista|distribut|warranty|wolseley|boone|trent|redmond|\biws\b|supply|supplies|plumbing|wholesale|emco|noble|reliance|enercare/i;
+  const keyOf = r => acctRx.test(r.customer_name || "") || cnt.get(r.customer_id) >= 3 ? "c" + r.customer_id : "direct";
+  const g = new Map(); rows.forEach(r => { const k = keyOf(r), x = g.get(k) || { k, name: k === "direct" ? "Customers billed directly" : r.customer_name, n: 0, sum: 0 }; x.n++; x.sum += amt0(r); g.set(k, x); });
+  const list = [...g.values()].sort((a, b) => (a.k === "direct") - (b.k === "direct") || b.sum - a.sum || b.n - a.n);
+  if (sel && !g.has(sel)) sel = "";
+  if (list.length < 2) return { rows, html: "", sel: "" };
+  const html = `<div class="owl-accts" role="group" aria-label="Billed to"><button type="button" class="owl-acct" data-owl-acct="" aria-pressed="${!sel}"><b>Everything</b><span>${rows.length.toLocaleString()} · ${money(rows.reduce((t, r) => t + amt0(r), 0))}</span></button>${list.map(x =>
+    `<button type="button" class="owl-acct ${x.k === "direct" ? "owl-acct-direct" : ""}" data-owl-acct="${x.k}" aria-pressed="${sel === x.k}"><b>${esc(x.name)}</b><span>${x.n.toLocaleString()} · ${money(x.sum)}</span></button>`).join("")}</div>`;
+  return { rows: sel ? rows.filter(r => keyOf(r) === sel) : rows, html, sel };
+}
 const OWL = { q: "", sort: "date_desc", picked: new Set(), to: "" };
 async function openOwList(scope) {
   if (scope) OW.scope = scope;
@@ -7017,7 +7031,7 @@ async function openOwList(scope) {
   const k = owPaidKey();
   if (OW.paidKey !== k || !OW.paidData) { OW.paidKey = k; const r = owRange(), args = { p_from: r ? ymd(r[0]) : null, p_to: r ? ymd(r[1]) : null };
     const [pd, bk, pt] = await Promise.all([db.rpc("paid_invoices", { ...args, p_kind: OW.kind }), db.rpc("booked_jobs", args), db.rpc("partner_receivables", args)]); owSetPaid(pd.data, pd.error, bk, pt); }
-  OWL.q = ""; OWL.picked = new Set(); OWL.acct = "";
+  OWL.q = ""; OWL.picked = new Set(); if (!OWL.keepAcct) OWL.acct = ""; OWL.keepAcct = false;
   renderOwList();
 }
 function renderOwList() {
@@ -7029,19 +7043,7 @@ function renderOwList() {
   const src = scope === "booked" ? OW.bookedData : scope === "owing" || scope.startsWith("age") ? {} : scope.startsWith("ptn:") ? (OW.ptnData || null) : OW.paidData;
   const q = OWL.q.trim().toLowerCase();
   let rows = owScopeRows(scope);
-  // a partner's list: broken down by who it's billed to (Vista Credit, Boone, Wolseley…; one-off customers together)
-  let acctHtml = "";
-  if (scope.startsWith("ptn:") && scope !== "ptn:none" && rows.length) {
-    const amt0 = r => Number(r.balance) || 0, cnt = new Map(); rows.forEach(r => cnt.set(r.customer_id, (cnt.get(r.customer_id) || 0) + 1));
-    const acctRx = /credit|vista|distribut|warranty|wolseley|boone|trent|redmond|\biws\b|supply|supplies|plumbing|wholesale|emco|noble|reliance|enercare/i;
-    const keyOf = r => acctRx.test(r.customer_name || "") || cnt.get(r.customer_id) >= 3 ? "c" + r.customer_id : "direct";
-    const g = new Map(); rows.forEach(r => { const k = keyOf(r), x = g.get(k) || { k, name: k === "direct" ? "Customers billed directly" : r.customer_name, n: 0, sum: 0 }; x.n++; x.sum += amt0(r); g.set(k, x); });
-    const list = [...g.values()].sort((a, b) => (a.k === "direct") - (b.k === "direct") || b.sum - a.sum || b.n - a.n);
-    if (OWL.acct && !g.has(OWL.acct)) OWL.acct = "";
-    if (list.length > 1) acctHtml = `<div class="owl-accts" role="group" aria-label="Billed to"><button type="button" class="owl-acct" data-owl-acct="" aria-pressed="${!OWL.acct}"><b>Everything</b><span>${rows.length.toLocaleString()} · ${money(rows.reduce((t, r) => t + amt0(r), 0))}</span></button>${list.map(x =>
-      `<button type="button" class="owl-acct ${x.k === "direct" ? "owl-acct-direct" : ""}" data-owl-acct="${x.k}" aria-pressed="${OWL.acct === x.k}"><b>${esc(x.name)}</b><span>${x.n.toLocaleString()} · ${money(x.sum)}</span></button>`).join("")}</div>`;
-    if (OWL.acct) rows = rows.filter(r => keyOf(r) === OWL.acct);
-  }
+  const sp = owAcctSplit(rows, scope, OWL.acct); rows = sp.rows; OWL.acct = sp.sel; const acctHtml = sp.html;
   if (q) rows = rows.filter(r => [r.invoice_number, r.job_number, r.customer_name, r.street, r.city, r.job_type].some(x => String(x || "").toLowerCase().includes(q)));
   const amt = r => Number(scope === "owing" || owBalScope(scope) ? r.balance : r.total);
   const by = { date_desc: (a, b) => String(b.invoice_date).localeCompare(String(a.invoice_date)), date_asc: (a, b) => String(a.invoice_date).localeCompare(String(b.invoice_date)),
@@ -7135,6 +7137,7 @@ function renderOwing(msg) {
   const scope = OW.scope;
   OW.rows = scope === "owing" ? owInPeriod(OW.all?.[OW.show] || []) : scope.startsWith("age") ? owAgeRows(scope) : scope.startsWith("ptn:") ? owPtnRows(scope)
     : scope === "paid" ? paidRows : scope === "booked" ? bookRows : owingAll.concat(paidRows);
+  { if (OW.acctFor !== scope) { OW.acct = ""; OW.acctFor = scope; } const sp = owAcctSplit(OW.rows, scope, OW.acct); OW.rows = sp.rows; OW.acct = sp.sel; OW._acctHtml = sp.html; }
   const top = $("#main").scrollTop, rows = OW.rows, total = rows.reduce((s, r) => s + Number(scope === "owing" || owBalScope(scope) ? r.balance : r.total), 0);
   const done = OW.show !== "todo", C = OW.counts, n = k => C[k]?.n || 0, m = k => C[k]?.sum || 0;
   const seg = (list, cur, attr) => `<div class="seg" role="group">${list.map(([k, txt]) => `<button type="button" aria-pressed="${cur === k}" ${attr}="${k}">${txt}</button>`).join("")}</div>`;
@@ -7184,6 +7187,7 @@ function renderOwing(msg) {
       ${tile("checked", "s-owe", "Checked, still owing")}
       ${tile("not_owed", "s-cx", "Marked not owed")}
     </div>`}
+    ${OW._acctHtml || ""}
     <div class="ow-listhead"><strong>${scope === "owing" ? OW_SHOW.find(s => s[0] === OW.show)[1] : scope === "paid" ? "Paid" : scope === "booked" ? "Booked jobs" : scope === "all" ? "All invoices" : esc(owScopeName(scope))}: ${rows.length.toLocaleString()} ${scope === "booked" ? (rows.length === 1 ? "job" : "jobs") : rows.length === 1 ? "invoice" : "invoices"} · ${money(total)}${scope === "booked" ? " expected" : ""}</strong>
       <span class="quiet">${esc(owRangeLabel())}</span>
       <button class="btn quiet-btn ow-copyall" type="button" id="ow-copy" ${rows.length ? "" : "disabled"} title="Copy every line in this list, ready to paste into Excel or an email">⧉ Copy all</button>
@@ -7227,7 +7231,8 @@ function renderOwing(msg) {
   // the boxes show their list right here, below (like the "Still to check" boxes)
   document.querySelectorAll("[data-ow-scope]").forEach(b => b.addEventListener("click", () => { if (OW.scope === b.dataset.owScope) return;
     OW.scope = b.dataset.owScope; OW.closed = []; saveOw(); renderOwing(); }));
-  $("#ow-fullpage")?.addEventListener("click", () => openOwList());
+  $("#ow-fullpage")?.addEventListener("click", () => { OWL.acct = OW.acct || ""; OWL.keepAcct = true; openOwList(); });
+  document.querySelectorAll("#main [data-owl-acct]").forEach(b => b.addEventListener("click", () => { if (OW.acct === b.dataset.owlAcct) return; OW.acct = b.dataset.owlAcct; OW.closed = []; renderOwing(); }));
   $("#ow-cleanup")?.addEventListener("click", () => openCleanup());
   $("#ow-copy")?.addEventListener("click", async e => owCopyDone(e.currentTarget, await owCopyRows(owSorted(OW.rows || []), scope)));
   document.querySelectorAll("[data-ow-period]").forEach(b => b.addEventListener("click", () => { OW.period = b.dataset.owPeriod; OW.closed = []; saveOw(); renderOwing(); }));
