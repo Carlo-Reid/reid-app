@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-21.160534">
+<meta name="app-version" content="2026-10-21.161232">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2730,6 +2730,18 @@
 .stk-imp-bad { color:#b3261e; }
 tr.stk-imp-skip td { background:#fff4f2; }
 #page-bar-act .stk-tabs .btn.ni-on { color:#fff !important; background:linear-gradient(180deg,#2a7be0,#1858ad) !important; border-color:#1858ad !important; }
+.dsp-map .dm-techs { margin-top: 8px; border-top: 1px solid rgba(255,255,255,.18); padding-top: 6px; }
+.dsp-map .dm-tlist { display: flex; flex-direction: column; gap: 3px; }
+.dsp-map .dm-trow { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; font: inherit; font-size: 12.5px; color: #e6e8ec; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; padding: 4px 8px; cursor: pointer; }
+.dsp-map .dm-trow i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.dsp-map .dm-trow span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsp-map .dm-trow b { font-size: 11.5px; opacity: .8; }
+.dsp-map .dm-trow em { font-style: normal; font-weight: 800; font-size: 10px; color: #fff; background: #e03131; border-radius: 4px; padding: 0 4px; }
+.dsp-map .dm-trow:hover:not(:disabled) { background: rgba(255,255,255,.14); }
+.dsp-map .dm-trow[aria-pressed="true"] { background: #fff; color: #10233f; border-color: #fff; box-shadow: 0 0 0 2px #ff5fa2; }
+.dsp-map .dm-trow:disabled { opacity: .55; cursor: default; }
+.dsp-map .dm-techs .dm-route { margin: 8px 0 0; font-size: 12.5px; color: #e6e8ec; border-color: #ff5fa2; }
+.dsp-map .dm-techs .dm-route .quiet { color: rgba(230,232,236,.75); }
 </style>
 </head>
 <body>
@@ -5105,6 +5117,22 @@ function placesLegend(inView) {
     <strong>Places in view</strong> <span class="quiet">${inView.length}</span>
     ${inView.sort((a, b) => b.n - a.n).slice(0, 80).map(x => `<div class="dm-leg dm-pl" data-pl="${x.id}" role="button" tabindex="0"><span class="dm-dot" style="background:${esc(x.color || hashCol("c" + x.name))}"></span>${esc(x.name)} <span class="quiet">${x.n.toLocaleString()}</span></div>`).join("") || `<div class="quiet">Move or zoom out the map.</div>`}`;
 }
+// Dispatch map page: a second section under "Show the rest" listing the techs; click one to see just their route (like the board)
+try { DSP.techsOpen = localStorage.getItem("reid.dmTechs") !== "0"; } catch {}
+function dmTechsSection(leg) {
+  const FULL = bookedTechIds(), T = new Map();
+  DSP.rows.filter(r => r.status !== "cancelled" && focusNear(r)).forEach(r => (r.techs.length ? r.techs : [{ id: 0, name: "No tech yet" }]).forEach(t => { const x = T.get(t.id) || { ...t, n: 0 }; x.n++; T.set(t.id, x); }));
+  const list = [...T.values()].sort((a, b) => (a.id === 0) - (b.id === 0) || a.name.localeCompare(b.name));
+  const d = document.createElement("details"); d.className = "dm-more dm-techs"; d.open = DSP.techsOpen !== false || DSP.techSel != null;
+  d.innerHTML = `<summary>Techs <span class="quiet">${list.filter(t => t.id).length}</span></summary><div class="dm-tlist">
+    <button type="button" class="dm-trow" data-dm-tech="" aria-pressed="${DSP.techSel == null}"><i style="background:#868e96"></i><span>All techs</span></button>
+    ${list.map(t => `<button type="button" class="dm-trow ${FULL.has(t.id) ? "full" : ""}" data-dm-tech="${t.id}" aria-pressed="${DSP.techSel === t.id}" ${t.id === 0 ? "disabled" : ""} title="${t.id ? `Show only ${esc(t.name)}'s calls and driving route` : ""}"><i style="background:${esc(t.id ? techCol(t) : "#adb5bd")}"></i><span>${esc(t.name)}</span><b>${t.n}</b>${FULL.has(t.id) ? `<em>BOOKED</em>` : ""}</button>`).join("") || `<div class="quiet">No calls on this day.</div>`}
+  </div>`;
+  const rt = leg.querySelector("#dm-route"); if (rt) d.appendChild(rt);   // the chosen tech's route and stops sit under the list
+  leg.appendChild(d);
+  d.addEventListener("toggle", () => { DSP.techsOpen = d.open; try { localStorage.setItem("reid.dmTechs", d.open ? "1" : "0"); } catch {} });
+  d.querySelectorAll("[data-dm-tech]").forEach(b => b.addEventListener("click", () => { const v = b.dataset.dmTech; DSP.techSel = v === "" ? null : (DSP.techSel === Number(v) ? null : Number(v)); DSP.mapFitFor = null; renderDispatch(); }));
+}
 // Under the map: just "Find a place"; everything else (the colour list, places in view…) opens with "Show the rest"
 function dmLegendWrap() {
   const leg = $("#dm-legend"); if (!leg) return;
@@ -5115,6 +5143,7 @@ function dmLegendWrap() {
     <datalist id="dm-pl">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>`;
   leg.appendChild(more);
   more.addEventListener("toggle", () => { DSP.legOpen = more.open; });
+  if (DSP.page === "map") dmTechsSection(leg);
   const q = $("#dm-pq");
   q.addEventListener("focus", async () => { if ((MAPC.list || []).length) return; await loadComms().catch(() => {});
     const dl = $("#dm-pl"); if (dl) dl.innerHTML = [...new Set((MAPC.list || []).filter(x => !x.hidden).map(x => x.name))].sort().map(n => `<option value="${esc(n)}">`).join(""); }, { once: true });
