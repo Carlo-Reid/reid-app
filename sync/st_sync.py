@@ -535,6 +535,89 @@ def sync_purchase_orders(cur, st, state, new_state):
     return saved
 
 
+def sync_inventory(cur, st, state, new_state):
+    """ServiceTitan's warehouses and trucks (with their techs), which price book items are stocked, and the stock history
+    (receipts, transfers, adjustments, returns) kept as read-only history. ServiceTitan has no 'on hand now' list:
+    the counts come from its on-hand report, imported on the Stock page. Returns a short summary."""
+    out = []
+    # warehouses and trucks: one place each, matched by ServiceTitan number (or an unnumbered place with the same name)
+    whs = pull_pages(st, "inventory/v2/tenant/{t}/warehouses")
+    trucks = pull_pages(st, "inventory/v2/tenant/{t}/trucks")
+    def place(rec, kind, parent=None, emp=None):
+        nm = (rec.get("name") or "").strip() or f"{kind.title()} {rec['id']}"
+        cur.execute("SELECT id FROM stock_locations WHERE st_id = %s", (int(rec["id"]),))
+        row = cur.fetchone()
+        if not row:
+            cur.execute("SELECT id FROM stock_locations WHERE st_id IS NULL AND location_type = %s AND lower(btrim(name)) = lower(%s) LIMIT 1", (kind, nm))
+            row = cur.fetchone()
+            if row: cur.execute("UPDATE stock_locations SET st_id = %s WHERE id = %s", (int(rec["id"]), row[0]))
+        addr = rec.get("address") or {}
+        note = ", ".join(x for x in [addr.get("street"), addr.get("city")] if x) or None
+        if row:
+            cur.execute("""UPDATE stock_locations SET name = %s, active = %s, parent_location_id = coalesce(%s, parent_location_id),
+                           assigned_employee_id = coalesce(%s, assigned_employee_id), note = coalesce(note, %s) WHERE id = %s""",
+                        (nm, rec.get("active") is not False, parent, emp, note, row[0]))
+            return row[0]
+        cur.execute("""INSERT INTO stock_locations (name, location_type, active, parent_location_id, assigned_employee_id, st_id, note)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""", (nm, kind, rec.get("active") is not False, parent, emp, int(rec["id"]), note))
+        return cur.fetchone()[0]
+    wmap = {int(w["id"]): place(w, "warehouse") for w in whs}
+    for t in trucks:
+        emp = None
+        for tid in t.get("technicianIds") or []:
+            cur.execute("SELECT id FROM employees WHERE st_id = %s", (int(tid),)); r = cur.fetchone()
+            if r: emp = r[0]; break
+        place(t, "truck", wmap.get(int(t.get("warehouseId") or 0)), emp)
+    out.append(f"{len(whs)} warehouses, {len(trucks)} trucks")
+    # which price book items are stocked (only ever turns it on: nothing the office set is undone)
+    if not (state.get("inv-items") or {}).get("since") or datetime.now(timezone.utc).weekday() == 6:
+        stocked = []
+        for path in ("pricebook/v2/tenant/{t}/materials", "pricebook/v2/tenant/{t}/equipment"):
+            stocked += [int(m["id"]) for m in pull_pages(st, path) if m.get("isInventory")]
+        cur.execute("UPDATE pricebook_items SET track_inventory = true WHERE st_id = ANY(%s) AND track_inventory IS NOT TRUE", (stocked,))
+        out.append(f"{len(stocked)} items stocked in ServiceTitan ({cur.rowcount} newly marked)")
+        new_state["inv-items"] = {"continue_from": None, "since": datetime.now(timezone.utc).isoformat()}
+    # stock history, read-only: everything the first time, then what changed
+    cur.execute("""CREATE TABLE IF NOT EXISTS st_stock_history (
+        kind text NOT NULL, line_st_id bigint NOT NULL, doc_st_id bigint, doc_number text, sku_st_id bigint, item_name text, item_code text,
+        quantity numeric, unit_cost numeric, from_st bigint, to_st bigint, job_st_id bigint, happened_at timestamptz, memo text, active boolean,
+        PRIMARY KEY (kind, line_st_id))""")
+    cur.execute("CREATE INDEX IF NOT EXISTS st_stock_history_sku_idx ON st_stock_history (sku_st_id, happened_at DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS st_stock_history_when_idx ON st_stock_history (happened_at DESC)")
+    cur.execute("ALTER TABLE st_stock_history ENABLE ROW LEVEL SECURITY")
+    feeds = {"receipts": ("receivedOn", None, "inventoryLocationId"), "returns": ("returnedOn", "inventoryLocationId", None),
+             "transfers": ("receivedDate", "fromLocationId", "toLocationId"), "adjustments": ("date", "inventoryLocationId", "inventoryLocationId")}
+    started = datetime.now(timezone.utc)
+    for kind, (when, frm, to) in feeds.items():
+        since = (state.get("inv-" + kind) or {}).get("since")
+        recs = pull_pages(st, "inventory/v2/tenant/{t}/" + kind, {"modifiedOnOrAfter": since} if since else None)
+        rows = []
+        for d in recs:
+            at = d.get(when) or d.get("date") or d.get("returnDate") or d.get("createdOn")
+            for it in d.get("items") or []:
+                q = float(it.get("quantity") or 0)
+                if not q or not it.get("id"): continue
+                f_, t_ = (d.get(frm) if frm else None), (d.get(to) if to else None)
+                if kind == "adjustments": f_, t_ = (d.get(frm), None) if q < 0 else (None, d.get(to))
+                rows.append((kind, int(it["id"]), int(d["id"]), str(d.get("number") or d.get("referenceNumber") or "") or None,
+                             int(it.get("skuId") or 0) or None, (it.get("name") or it.get("description") or "")[:300] or None, it.get("code"),
+                             abs(q), it.get("cost"), int(f_ or 0) or None, int(t_ or 0) or None, int(d.get("jobId") or 0) or None, at,
+                             ((d.get("type") or d.get("transferType") or "") + (" · " if (d.get("type") or d.get("transferType")) and d.get("memo") else "") + (d.get("memo") or ""))[:500] or None,
+                             d.get("active") is not False and it.get("active") is not False))
+        if rows:
+            cur.execute("CREATE TEMP TABLE IF NOT EXISTS _s_sh (LIKE st_stock_history) ON COMMIT DROP"); cur.execute("TRUNCATE _s_sh")
+            with cur.copy("COPY _s_sh FROM STDIN") as cp:
+                for r in rows: cp.write_row(r)
+            cur.execute("""INSERT INTO st_stock_history SELECT DISTINCT ON (kind, line_st_id) * FROM _s_sh ORDER BY kind, line_st_id
+                           ON CONFLICT (kind, line_st_id) DO UPDATE SET doc_number = EXCLUDED.doc_number, sku_st_id = EXCLUDED.sku_st_id,
+                             item_name = EXCLUDED.item_name, item_code = EXCLUDED.item_code, quantity = EXCLUDED.quantity, unit_cost = EXCLUDED.unit_cost,
+                             from_st = EXCLUDED.from_st, to_st = EXCLUDED.to_st, job_st_id = EXCLUDED.job_st_id, happened_at = EXCLUDED.happened_at,
+                             memo = EXCLUDED.memo, active = EXCLUDED.active""")
+        new_state["inv-" + kind] = {"continue_from": None, "since": (started - timedelta(hours=1)).isoformat()}
+        out.append(f"{kind} {len(recs)} ({len(rows)} lines)")
+    return "; ".join(out)
+
+
 def sync_notes(cur, st, delta):
     """Notes on the customers, addresses and jobs that changed."""
     targets = []
@@ -677,6 +760,16 @@ def main():
             try:
                 n_po = sync_purchase_orders(cur, st, state, new_state)
                 if n_po: log(f"Purchase orders: {n_po} brought in or updated.")
+                cur.execute("SAVEPOINT inv")
+                try:
+                    inv = sync_inventory(cur, st, state, new_state)
+                    log("Stock: " + inv)
+                    if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Stock from ServiceTitan: {inv}", flush=True)
+                    cur.execute("RELEASE SAVEPOINT inv")
+                except Exception as e:   # never let stock stop the rest of the sync
+                    cur.execute("ROLLBACK TO SAVEPOINT inv")
+                    for k in [k for k in new_state if k.startswith("inv-") and k != "inv-probe"]: new_state.pop(k, None)
+                    print(f"::notice::Stock skipped this time: {str(e)[:300]}", flush=True)
                 if os.environ.get("GITHUB_ACTIONS") and not (state.get("inv-probe") or {}).get("since"):   # one time: which inventory lists we can read
                     try:
                         import st_probe_lib; st_probe_lib.run(st)
