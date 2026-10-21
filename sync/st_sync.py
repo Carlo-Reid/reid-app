@@ -463,6 +463,23 @@ def sync_purchase_orders(cur, st, state, new_state):
     prev = (state.get("purchase-orders") or {}).get("continue_from")
     pos, marker = pull_export(st, "inventory/v2/tenant/{t}/export/purchase-orders", prev)
     new_state["purchase-orders"] = {"continue_from": marker, "since": None}
+    # one time: the export feed only gave this year's POs, so ask the regular PO list for the older ones, a year at a time
+    if not (state.get("po-backfill") or {}).get("since"):
+        older, ok = {}, True
+        for y in range(2004, datetime.now(timezone.utc).year + 1):
+            try:
+                got = pull_pages(st, "inventory/v2/tenant/{t}/purchase-orders",
+                                 {"createdOnOrAfter": f"{y}-01-01T00:00:00Z", "createdBefore": f"{y + 1}-01-01T00:00:00Z"})
+            except RuntimeError as e:
+                log(f"  Older purchase orders: ServiceTitan wouldn't list {y} ({str(e)[:160]}); will try again next time.")
+                ok = False; break
+            for r in got: older[r.get("id")] = r
+            if got: log(f"  Older purchase orders: {len(got)} from {y}")
+        have = {r.get("id") for r in pos}
+        pos = pos + [r for i, r in older.items() if i not in have]
+        if ok:
+            new_state["po-backfill"] = {"continue_from": None, "since": datetime.now(timezone.utc).isoformat()}
+            log(f"  Older purchase orders: {len(older)} found in ServiceTitan's list ({len([i for i in older if i not in have])} not seen before).")
     # suppliers: match by ServiceTitan number, then by name; add the new ones
     cur.execute("DROP TABLE IF EXISTS _s_vend; CREATE TEMP TABLE _s_vend (st_id bigint, name text, active boolean) ON COMMIT DROP")
     with cur.copy("COPY _s_vend FROM STDIN") as cp:
@@ -663,7 +680,7 @@ def main():
                 cur.execute("RELEASE SAVEPOINT pos")
             except Exception as e:   # never let POs stop the rest of the sync
                 cur.execute("ROLLBACK TO SAVEPOINT pos")
-                new_state.pop("purchase-orders", None)
+                new_state.pop("purchase-orders", None); new_state.pop("po-backfill", None)
                 log("  Purchase orders skipped this time: " + ("see the Settings page" if QUIET else str(e)[:300]))
         if st:
             # the techs on calls from 2 days ago to 6 weeks ahead always match ServiceTitan; the first time, go back 6 months
