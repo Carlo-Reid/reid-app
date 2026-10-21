@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-20.213716">
+<meta name="app-version" content="2026-10-20.214749">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -4788,7 +4788,7 @@ function loadLeaflet() {
   });
   return LEAFLET;
 }
-const saveDspMap = () => { try { localStorage.setItem("reid.dispatchMap", JSON.stringify({ map: !!DSP.map, colorBy: DSP.colorBy || "hood", mapWait: !!DSP.mapWait, mapLines: !!DSP.mapLines, ov: DSP.ov || "auto", ovWarn: DSP.ovWarn !== false, h0: DSP.h0, h1: DSP.h1, mapTab: DSP.mapTab || "calls", mapW: DSP.mapW || null, mapWp: DSP.mapWp || null, mapFill: !!DSP.mapFill, mapCNames: !!DSP.mapCNames })); } catch {} };
+const saveDspMap = () => { try { localStorage.setItem("reid.dispatchMap", JSON.stringify({ map: !!DSP.map, colorBy: DSP.colorBy || "hood", mapWait: !!DSP.mapWait, mapLines: !!DSP.mapLines, ov: DSP.ov || "auto", ovWarn: DSP.ovWarn !== false, hrs: dspHrs(), mapTab: DSP.mapTab || "calls", mapW: DSP.mapW || null, mapWp: DSP.mapWp || null, mapFill: !!DSP.mapFill, mapCNames: !!DSP.mapCNames })); } catch {} };
 try { Object.assign(DSP, JSON.parse(localStorage.getItem("reid.dispatchMap") || "{}")); } catch {}
 function dspTechColor(id) { const i = (BOOK.techs || []).findIndex(t => t.id === id); return i < 0 ? MAP_GREY : MAP_PALETTE[i % MAP_PALETTE.length]; }
 function dspMarkColor(r) { return dspKey(r).color; }
@@ -5974,7 +5974,7 @@ function dspCard(r, from) {
 // The timeline: hours across the top; each call sits under its arrival time and spans its arrival window.
 const hourOf = iso => { const d = new Date(iso); return d.getHours() + d.getMinutes() / 60; };
 function dspTimeline(rows, techs, none, colOf, mins, isToday) {
-  // the whole day is on the board; the screen is sized to show 7 am – 6 pm (DSP.h0 / DSP.h1) and you scroll for the rest
+  // the whole day is on the board; the screen shows a few hours of it (dspHrs) and you scroll for the rest
   const h0 = 0, h1 = 24;
   const span = h1 - h0, pct = h => ((h - h0) / span * 100).toFixed(3) + "%";
   const hours = Array.from({ length: span }, (_, i) => h0 + i);
@@ -6101,24 +6101,46 @@ async function drawTechRoute(L) {
 }
 function wireRouteX() { $("#dm-route-x")?.addEventListener("click", () => { DSP.techSel = null; renderDispatch(); }); }
 
-// size the timeline so the chosen hours (7 am – 6 pm) fill the screen, and start there; scroll sideways for the rest of the day
+// The board shows a few hours at a time (6 by default) and you scroll sideways for the rest of the day.
+// On today it starts an hour before now and moves along as the day goes (until you scroll it yourself; "Now" brings it back).
+const dspHrs = () => [3, 4, 6, 8, 10, 12, 24].includes(DSP.hrs) ? DSP.hrs : 6;
+const dspIsToday = () => DSP.date === ymd(new Date());
+function dspStartHour() {
+  const n = dspHrs(); if (n >= 24) return 0;
+  if (dspIsToday()) { const d = new Date(), now = d.getHours() + d.getMinutes() / 60; return Math.max(0, Math.min(24 - n, Math.floor(now * 2) / 2 - 1)); }   // an hour before now, on the half hour
+  return Math.min(24 - n, 7);   // other days: from 7 am
+}
+function dspTrackW(bd) {
+  const cs = getComputedStyle(bd), fixed = parseFloat(cs.getPropertyValue("--name-w")) + parseFloat(cs.getPropertyValue("--any-w"));
+  return Math.round(Math.max(300, bd.clientWidth - fixed - 4) * 24 / dspHrs());
+}
+function dspScrollTo(bd, h, smooth) { const t = dspTrackW(bd); DSP.autoScroll = Date.now(); bd.scrollTo({ left: Math.round(t * h / 24), behavior: smooth ? "smooth" : "auto" }); DSP.followAt = h; }
 function dspFitHours(keep) {
   const bd = $("#dsp-board"); if (!bd) return;
-  const a = Number.isFinite(DSP.h0) ? DSP.h0 : 7, z = Number.isFinite(DSP.h1) && DSP.h1 > a ? DSP.h1 : Math.max(a + 1, 18);
-  const cs = getComputedStyle(bd), fixed = parseFloat(cs.getPropertyValue("--name-w")) + parseFloat(cs.getPropertyValue("--any-w"));
-  const vis = Math.max(300, bd.clientWidth - fixed - 4), track = Math.round(vis * 24 / (z - a));
-  bd.style.setProperty("--track-w", track + "px");
-  const key = DSP.date + ":" + a + "-" + z;
-  if (DSP.fitFor !== key) { DSP.fitFor = key; bd.scrollLeft = Math.round(track * a / 24); } else bd.scrollLeft = keep;
+  bd.style.setProperty("--track-w", dspTrackW(bd) + "px");
+  const key = DSP.date + ":" + dspHrs();
+  const following = dspIsToday() && !(DSP.manualAt && Date.now() - DSP.manualAt < 15 * 60e3);
+  if (DSP.fitFor !== key || following) { DSP.fitFor = key; dspScrollTo(bd, dspStartHour()); } else { DSP.autoScroll = Date.now(); bd.scrollLeft = keep; }
+  if (!bd.dataset.follow) { bd.dataset.follow = "1";   // scrolling it yourself stops it following the time for 15 minutes
+    bd.addEventListener("scroll", () => { if (Date.now() - (DSP.autoScroll || 0) > 1500) DSP.manualAt = Date.now(); }, { passive: true }); }
   if (!DSP.fitObs && window.ResizeObserver) {
     let w = bd.clientWidth;
-    DSP.fitObs = new ResizeObserver(() => { const b2 = $("#dsp-board"); if (!b2 || Math.abs(b2.clientWidth - w) < 4) return; w = b2.clientWidth;
-      const a2 = Number.isFinite(DSP.h0) ? DSP.h0 : 7, z2 = Number.isFinite(DSP.h1) && DSP.h1 > a2 ? DSP.h1 : 18, c2 = getComputedStyle(b2);
-      const t2 = Math.round(Math.max(300, w - parseFloat(c2.getPropertyValue("--name-w")) - parseFloat(c2.getPropertyValue("--any-w")) - 4) * 24 / (z2 - a2));
-      b2.style.setProperty("--track-w", t2 + "px"); b2.scrollLeft = Math.round(t2 * a2 / 24); });
+    DSP.fitObs = new ResizeObserver(() => { const b2 = $("#dsp-board"); if (!b2 || Math.abs(b2.clientWidth - w) < 4) return;
+      const at = b2.scrollLeft / (parseFloat(b2.style.getPropertyValue("--track-w")) || 1) * 24; w = b2.clientWidth;
+      b2.style.setProperty("--track-w", dspTrackW(b2) + "px"); dspScrollTo(b2, at); });
   }
   if (DSP.fitObs) { DSP.fitObs.disconnect(); DSP.fitObs.observe(bd); }
 }
+// every minute: move the red "now" line, and on today slide the board along with the time
+function dspFollow(force) {
+  const bd = $("#dsp-board"); if (!bd || document.body.dataset.page !== "dispatch" || !dspIsToday()) return;
+  const d = new Date(), now = d.getHours() + d.getMinutes() / 60;
+  bd.querySelectorAll(".tl-now").forEach(l => { l.style.left = (now / 24 * 100).toFixed(3) + "%"; });
+  if (!force && DSP.manualAt && Date.now() - DSP.manualAt < 15 * 60e3) return;
+  if (force) DSP.manualAt = 0;
+  const h = dspStartHour(); if (force || h !== DSP.followAt) dspScrollTo(bd, h, true);
+}
+setInterval(() => { if (!document.hidden) dspFollow(); }, 60e3);
 // a stack / summary card opens a small list of its calls (click one for its details, or drag it to another tech)
 function openPile(btn) {
   closePile();
@@ -6175,9 +6197,8 @@ function renderDispatch() {
         <button class="btn quiet-btn" type="button" data-dday="1" aria-label="Next day">›</button>
         <strong class="dsp-title">${esc(dayText(DSP.date))}</strong>
       </div>
-        <label class="dsp-hrs dsp-hrs-top" title="The board fits these hours on screen; scroll sideways to see earlier or later">Fit <select id="dsp-h0">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === (Number.isFinite(DSP.h0) ? DSP.h0 : 7) ? "selected" : ""}>${(h % 12 || 12) + (h < 12 ? " am" : " pm")}</option>`).join("")}</select>
-          to <select id="dsp-h1">${Array.from({ length: 24 }, (_, i) => i + 1).map(h => `<option value="${h}" ${h === (Number.isFinite(DSP.h1) ? DSP.h1 : 18) ? "selected" : ""}>${h === 24 ? "midnight" : (h % 12 || 12) + (h < 12 || h === 24 ? " am" : " pm")}</option>`).join("")}</select>
-          ${(Number.isFinite(DSP.h0) && DSP.h0 !== 7) || (Number.isFinite(DSP.h1) && DSP.h1 !== 18) ? `<button class="link dsp-hrs-reset" type="button" id="dsp-hrs-reset">7–6</button>` : ""}</label>
+        <label class="dsp-hrs dsp-hrs-top" title="How many hours fit on the screen; scroll sideways to go back or forward in time. On today, the board moves along with the time.">Show <select id="dsp-hrs">${[3, 4, 6, 8, 10, 12, 24].map(h => `<option value="${h}" ${h === dspHrs() ? "selected" : ""}>${h === 24 ? "the whole day" : h + " hours"}</option>`).join("")}</select>
+          ${isToday ? `<button class="link dsp-hrs-reset" type="button" id="dsp-now" title="Go back to the time now (the board follows the time again)">Now</button>` : ""}</label>
       <div class="dsp-sum quiet">${callsWord(rows.length)}${none.length ? ` · <span class="owe">${none.length} without a tech</span>` : ""}${cancelled ? ` · ${cancelled} cancelled` : ""}
         <label class="dsp-all"><input type="checkbox" id="dsp-all" ${DSP.all ? "checked" : ""}> Show every tech</label>
         <button class="btn ${DSP.map ? "" : "quiet-btn"} dsp-mapbtn" type="button" id="dsp-map" aria-pressed="${!!DSP.map}">🗺 ${DSP.map ? "Hide map" : "Map"}</button>
@@ -6206,9 +6227,8 @@ function renderDispatch() {
   $("#dsp-all").addEventListener("change", e => { DSP.all = e.target.checked; saveDsp(); renderDispatch(); });
   $("#dsp-map").addEventListener("click", () => { DSP.map = !DSP.map; saveDspMap(); renderDispatch(); });
   $("#dsp-menu")?.addEventListener("click", () => { DSP.map = false; saveDspMap(); renderDispatch(); });
-  $("#dsp-h0")?.addEventListener("change", e => { DSP.h0 = Number(e.target.value); if ((DSP.h1 ?? 18) <= DSP.h0) DSP.h1 = Math.min(24, DSP.h0 + 1); DSP.fitFor = null; saveDspMap(); renderDispatch(); });
-  $("#dsp-h1")?.addEventListener("change", e => { DSP.h1 = Number(e.target.value); if ((DSP.h0 ?? 7) >= DSP.h1) DSP.h0 = Math.max(0, DSP.h1 - 1); DSP.fitFor = null; saveDspMap(); renderDispatch(); });
-  $("#dsp-hrs-reset")?.addEventListener("click", () => { DSP.h0 = 7; DSP.h1 = 18; DSP.fitFor = null; saveDspMap(); renderDispatch(); });
+  $("#dsp-hrs")?.addEventListener("change", e => { DSP.hrs = Number(e.target.value); DSP.fitFor = null; DSP.manualAt = 0; saveDspMap(); renderDispatch(); });
+  $("#dsp-now")?.addEventListener("click", () => { DSP.manualAt = 0; dspFollow(true); });
   document.querySelectorAll("[data-ov]").forEach(b => b.addEventListener("click", () => { DSP.ov = b.dataset.ov; saveDspMap(); renderDispatch(); }));
   $("[data-ov-warn]")?.addEventListener("click", () => { DSP.ovWarn = DSP.ovWarn === false; saveDspMap(); renderDispatch(); });
   document.querySelectorAll(".dc-pile").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); openPile(b); }));
