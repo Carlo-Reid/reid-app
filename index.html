@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-20.210414">
+<meta name="app-version" content="2026-10-20.211144">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -617,12 +617,11 @@
     text-transform: uppercase; padding: 2px 8px; border-radius: 4px; line-height: 1.5; }
   /* section names on every area (temporary, with the Section tags) */
   body.section-tags .atag-rel { position: relative; }
-  body.section-tags [data-atag]::after { content: attr(data-atag); position: absolute; top: -8px; left: 8px; z-index: 30; pointer-events: none;
-    background: #b5179e; color: #fff; font: 800 10px/1.5 Arial, sans-serif; letter-spacing: .05em; text-transform: uppercase; padding: 0 6px; border-radius: 4px; white-space: nowrap; }
-  body.section-tags #page-bar[data-atag]::after { top: 2px; left: auto; right: 10px; }
-  body.section-tags #side[data-atag]::after { top: 4px; left: auto; right: 6px; }
-  body.section-tags .pbx[data-atag]::after, body.section-tags .plp[data-atag]::after, body.section-tags .pile-pop[data-atag]::after { top: 4px; left: 50%; transform: translateX(-50%); }
-  @media print { body.section-tags [data-atag]::after { display: none; } }
+  /* the tags sit on their own layer above everything, inside each area's top-left corner, so nothing hides them */
+  #atag-layer { position: fixed; inset: 0; z-index: 2147483000; pointer-events: none; overflow: hidden; }
+  #atag-layer span { position: absolute; background: #b5179e; color: #fff; font: 800 11px/1.45 Arial, sans-serif; letter-spacing: .05em; text-transform: uppercase;
+    padding: 1px 7px; border-radius: 5px; white-space: nowrap; border: 1px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  @media print { #atag-layer { display: none; } }
   /* thicker, slightly darker outline on the main boxes of the customer file */
   :root { --box-edge: color-mix(in srgb, var(--line) 55%, var(--steel)); }
   .file .sec1, .file .sec1a, .file .notes-list, .file .scroll-box, .file .tech-card, .file .equip, .file .plan {
@@ -13963,8 +13962,36 @@ const sideIsMini = () => document.body.dataset.side === "mini";
     document.querySelectorAll(POPS.join(",")).forEach(el => tag(el, `${c} Pop-up ${++pn}`));
     const bar = document.getElementById("page-bar"); if (bar) bar.dataset.atag = "Top bar";
     const side = document.getElementById("side"); if (side) { side.dataset.atag = "Side bar"; side.classList.add("atag-rel"); }
+    place();
   };
-  new MutationObserver(muts => { if (muts.every(m => m.type === "attributes")) return; if (!t) t = setTimeout(run, 150); })
+  // draw every tag on one layer: in the area's top-left corner (or the top of the part you can see), never on top of another tag
+  let layer = null, raf = 0;
+  const place = () => { raf = 0; if (!SHOW_SECTION_TAGS) return;
+    if (!layer) { layer = document.createElement("div"); layer.id = "atag-layer"; layer.setAttribute("aria-hidden", "true"); document.body.appendChild(layer); }
+    const pops = [...document.querySelectorAll(POPS.join(","))].filter(p => p.offsetParent || getComputedStyle(p).position === "fixed");
+    const els = [...document.querySelectorAll("[data-atag]")].filter(el => !pops.length || el.id === "page-bar" || pops.some(p => p === el || p.contains(el)));
+    const main = document.getElementById("main"), mr = main?.getBoundingClientRect(), placed = [], out = [];
+    const ctx = document.createElement("canvas").getContext("2d"); ctx.font = "800 11px Arial"; const W = t => ctx.measureText(t.toUpperCase()).width + t.length * .55 + 16;
+    for (const el of els) {
+      const r = el.getBoundingClientRect(); if (!r.width || !r.height) continue;
+      const label = el.dataset.atag, w = W(label), h = 18;
+      const inMain = main && main.contains(el), top0 = inMain ? Math.max(mr.top, 0) : 0, bot0 = inMain ? mr.bottom : innerHeight;
+      let x, y;
+      if (el.id === "page-bar") { x = r.right - w - 10; y = r.bottom - h / 2; }   // on its bottom edge, clear of Refresh
+      else if (el.id === "side") { x = r.right - w / 2; y = r.bottom - h - 3; }   // on its right edge, at the bottom
+      else { x = Math.max(r.left + 8, 2); y = Math.max(r.top - h / 2, top0 + 1); if (y + h > Math.min(r.bottom, bot0)) continue; }   // on the box's top edge; scrolled out of sight: none
+      for (let k = 0; k < 40 && placed.some(p => x < p.x + p.w + 3 && x + w + 3 > p.x && y < p.y + h && y + h > p.y); k++) {
+        const hit = placed.find(p => x < p.x + p.w + 3 && x + w + 3 > p.x && y < p.y + h && y + h > p.y); x = hit.x + hit.w + 4;
+        if (x + w > r.right - 2) { x = Math.max(r.left + 4, 2); y += h + 2; } }
+      placed.push({ x, y, w }); out.push(`<span style="left:${Math.round(x)}px;top:${Math.round(y)}px">${esc(label)}</span>`);
+    }
+    const html = out.join(""); if (layer.dataset.h !== html) { layer.dataset.h = html; layer.innerHTML = html; }
+  };
+  const soon = () => { if (!raf) raf = requestAnimationFrame(place); };
+  document.addEventListener("scroll", soon, true); window.addEventListener("resize", soon);
+  document.addEventListener("click", () => setTimeout(soon, 60), true); document.addEventListener("toggle", soon, true);
+  setInterval(() => { if (!document.hidden) soon(); }, 1000);
+  new MutationObserver(muts => { if (muts.every(m => m.type === "attributes" || (layer && (m.target === layer || layer.contains(m.target))))) return; if (!t) t = setTimeout(run, 150); })
     .observe(document.body, { childList: true, subtree: true });
   window.addEventListener("hashchange", () => setTimeout(run, 200));
 })();
