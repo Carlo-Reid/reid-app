@@ -677,6 +677,11 @@ def main():
             try:
                 n_po = sync_purchase_orders(cur, st, state, new_state)
                 if n_po: log(f"Purchase orders: {n_po} brought in or updated.")
+                if os.environ.get("GITHUB_ACTIONS"):   # counts only, for the Actions page
+                    cur.execute("SELECT coalesce(string_agg(y || ': ' || n, ', ' ORDER BY y), 'none') FROM (SELECT extract(year FROM coalesce(ordered_at, created_at))::int y, count(*) n FROM purchase_orders GROUP BY 1) t")
+                    print(f"::notice::Purchase orders in the app by year: {cur.fetchone()[0]}", flush=True)
+                    if "po-backfill" not in new_state and not (state.get("po-backfill") or {}).get("since"):
+                        print("::notice::Older purchase orders: ServiceTitan's PO list didn't answer this time; it will try again next run.", flush=True)
                 cur.execute("RELEASE SAVEPOINT pos")
             except Exception as e:   # never let POs stop the rest of the sync
                 cur.execute("ROLLBACK TO SAVEPOINT pos")
