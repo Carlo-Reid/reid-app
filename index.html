@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-21.093951">
+<meta name="app-version" content="2026-10-21.160534">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2722,6 +2722,14 @@
   .mapc-tools { flex-direction: row !important; flex-wrap: wrap; align-items: center; gap: 10px 16px !important; }
   .mapc-add { display: flex; gap: 8px; align-items: flex-end; } .mapc-add label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; }
   .mapc-add input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; width: 110px; }
+.stk-st { display:inline-block; font-size:11px; padding:0 5px; border-radius:4px; background:#eef3fb; color:#3b5b88; }
+.stk-imp .stk-card { margin-bottom:12px; }
+.stk-imp-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; }
+.stk-imp-grid label { display:flex; flex-direction:column; gap:3px; font-size:13px; }
+.stk-imp-file { cursor:pointer; }
+.stk-imp-bad { color:#b3261e; }
+tr.stk-imp-skip td { background:#fff4f2; }
+#page-bar-act .stk-tabs .btn.ni-on { color:#fff !important; background:linear-gradient(180deg,#2a7be0,#1858ad) !important; border-color:#1858ad !important; }
 </style>
 </head>
 <body>
@@ -8212,7 +8220,7 @@ async function openStock(tab) {
 }
 function stkBar() {
   const pba = document.getElementById("page-bar-act"); if (!pba) return;
-  pba.innerHTML = `<span class="pb-bar-tools stk-tabs">${[["scan", "📷 Scan"], ["here", "What's here"], ["history", "History"], ["places", "Places"]].map(([k, t]) =>
+  pba.innerHTML = `<span class="pb-bar-tools stk-tabs">${[["scan", "📷 Scan"], ["here", "What's here"], ["history", "History"], ["places", "Places"]].concat((STK.data || {}).can_edit ? [["import", "Import counts"]] : []).map(([k, t]) =>
     `<button type="button" class="btn quiet-btn ${STK.tab === k ? "ni-on" : ""}" data-stk-tab="${k}" aria-pressed="${STK.tab === k}">${t}</button>`).join("")}${niBtn()}</span>`;
   pba.querySelectorAll("[data-stk-tab]").forEach(b => b.addEventListener("click", () => { stkCamStop(); STK.tab = b.dataset.stkTab; stkSave(); renderStock(); }));
 }
@@ -8225,6 +8233,7 @@ function renderStock() {
   if (STK.tab === "here") return stkHere();
   if (STK.tab === "history") return stkHistory();
   if (STK.tab === "places") return stkPlaces();
+  if (STK.tab === "import") return stkImport();
   const md = STK_MODES[STK.mode];
   m.innerHTML = `<article class="staff stk stk-scan stk-m-${STK.mode}">
     <div class="stk-where"><label>I'm at ${stkPlaceSelect("stk-place", STK.place)}</label></div>
@@ -8446,17 +8455,107 @@ async function stkHistory() {
   $("#stk-place").addEventListener("change", e => { if (e.target.value) { STK.place = Number(e.target.value); STK.hplace = null; stkSave(); } else STK.hplace = 0; stkHistory(); });
   const { data, error } = await db.rpc("stock_history", { p_place: STK.hplace === 0 ? null : STK.place, p_item: null, p_limit: 150 }); const box = $("#stk-hist"); if (!box) return;
   if (error) { box.innerHTML = `<p class="staff-msg err">${esc(rpcErr(error))}</p>`; return; }
-  const T = { receipt: "⬇ In", job_use: "⬆ Out for a job", adjustment_out: "⬆ Out", adjustment_in: "⬇ Back in", transfer: "⇄ Moved", count_correction: "# Count fixed", pos_sale: "Sold", return_to_supplier: "Back to supplier", warranty_replacement_in: "Warranty in" };
+  const T = { receipt: "⬇ In", job_use: "⬆ Out for a job", adjustment_out: "⬆ Out", adjustment_in: "⬇ Back in", transfer: "⇄ Moved", count_correction: "# Count fixed", pos_sale: "Sold", return_to_supplier: "Back to supplier", warranty_replacement_in: "Warranty in",
+    st_receipts: "⬇ Received", st_returns: "↩ Back to supplier", st_transfers: "⇄ Moved", st_adjustments_in: "⬇ Adjusted in", st_adjustments_out: "⬆ Adjusted out" };
   box.innerHTML = !(data || []).length ? `<p class="quiet">No scans yet.</p>` : `<table class="calls-table stk-t"><thead><tr><th>When</th><th>What</th><th>Item</th><th class="r">Qty</th><th>Where</th><th>Job / note</th><th>Who</th><th></th></tr></thead><tbody>
     ${data.map(r => `<tr class="${r.undone ? "stk-undone" : ""}"><td class="num">${fmtDate(r.when)}<br><span class="quiet">${new Date(r.when).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" })}</span></td>
-      <td>${r.is_undo ? "↩ Undo" : T[r.type] || esc(r.type)}${r.undone ? `<br><span class="quiet">undone</span>` : ""}</td>
-      <td><button class="link" type="button" data-ni-item="${r.item_id}">${esc(r.item)}</button>${r.serials ? `<br><span class="quiet">serial ${esc(r.serials.join(", "))}</span>` : ""}</td>
+      <td>${r.is_undo ? "↩ Undo" : T[r.type] || esc(r.type)}${r.st ? `<br><span class="stk-st">ServiceTitan</span>` : ""}${r.undone ? `<br><span class="quiet">${r.st ? "cancelled" : "undone"}</span>` : ""}</td>
+      <td>${r.item_id ? `<button class="link" type="button" data-ni-item="${r.item_id}">${esc(r.item)}</button>` : esc(r.item || "")}${r.serials ? `<br><span class="quiet">serial ${esc(r.serials.join(", "))}</span>` : ""}</td>
       <td class="r">${stkNum(r.qty)}</td><td>${esc([r.from, r.to].filter(Boolean).join(" → "))}</td>
       <td>${r.job ? `${r.customer_id ? `<button class="link" type="button" data-ni-cust="${r.customer_id}">${esc(r.customer || "")}</button>` : ""} <span class="quiet">job ${esc(r.job)}</span>` : ""}${r.note ? `<div class="quiet">${esc(r.note)}</div>` : ""}</td>
       <td>${esc(r.who || "")}</td><td>${r.can_undo ? `<button class="link" type="button" data-stk-undo="${r.id}">Undo</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
   box.querySelectorAll("[data-ni-item]").forEach(b => b.addEventListener("click", () => openPbItemPage(Number(b.dataset.niItem))));
   box.querySelectorAll("[data-ni-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.niCust))));
   stkWireLog(box);
+}
+
+// ----- import counts from ServiceTitan's on-hand report -----
+const STKI = { rows: null, head: [], col: {}, place: null, file: "", match: null };
+const stkiGuess = (head, res, avoid = []) => { for (const re of res) { const i = head.findIndex((h, k) => !avoid.includes(k) && re.test(h)); if (i >= 0) return i; } return -1; };
+function stkImport() {
+  const m = $("#main"), H = STKI.head, c = STKI.col;
+  const colSel = (k, label, none) => `<label>${label}<select data-stki-col="${k}"><option value="-1">${none}</option>${H.map((h, i) => `<option value="${i}" ${c[k] === i ? "selected" : ""}>${esc(h || "Column " + (i + 1))}</option>`).join("")}</select></label>`;
+  m.innerHTML = `<article class="staff stk stk-imp">
+    <div class="stk-card"><h3>Set counts from ServiceTitan's on-hand report</h3>
+      <p class="quiet">In ServiceTitan, open the on-hand (inventory) report, show every warehouse and truck, and export it to Excel. Pick that file here. Nothing changes until you press the button at the bottom.</p>
+      <label class="btn stk-imp-file">📄 Pick the Excel file<input type="file" id="stki-file" accept=".xlsx,.xls,.csv" hidden></label> <span class="quiet">${esc(STKI.file)}</span></div>
+    ${STKI.rows ? `<div class="stk-card stk-imp-cols"><h3>Which columns are which</h3><div class="stk-imp-grid">
+      ${colSel("loc", "Place (warehouse or truck)", "— no place column —")}${colSel("code", "Item code", "— none —")}${colSel("name", "Item name", "— none —")}${colSel("qty", "On hand", "— pick one —")}
+      ${c.loc < 0 ? `<label>Put everything in ${stkPlaceSelect("stki-place", STKI.place)}</label>` : ""}</div></div>
+      <div id="stki-prev"><div class="loading">Matching items…</div></div>` : ""}
+  </article>`;
+  $("#stki-file").addEventListener("change", e => { const f = e.target.files[0]; if (f) stkiRead(f); });
+  m.querySelectorAll("[data-stki-col]").forEach(s => s.addEventListener("change", () => { c[s.dataset.stkiCol] = Number(s.value); STKI.match = null; stkImport(); }));
+  const ps = $("#stki-place"); if (ps) { if (STKI.place == null) STKI.place = Number(ps.value); ps.addEventListener("change", () => { STKI.place = Number(ps.value); stkiPreview(); }); }
+  if (STKI.rows) stkiPreview();
+}
+async function stkiRead(f) {
+  try {
+    await loadXlsx();
+    const wb = XLSX.read(await f.arrayBuffer(), { type: "array" }), all = [];
+    wb.SheetNames.forEach(n => all.push(...XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", raw: true })));
+    let hi = all.slice(0, 25).findIndex(r => r.filter(v => String(v).trim() !== "").length >= 3 && r.some(v => /^(on ?hand|quantity|qty)/i.test(String(v).trim())));
+    if (hi < 0) hi = 0;
+    const head = (all[hi] || []).map(v => String(v).trim()), lc = head.map(h => h.toLowerCase());
+    STKI.head = head; STKI.file = f.name; STKI.match = null;
+    STKI.rows = all.slice(hi + 1).filter(r => r.some(v => String(v).trim() !== "") && !/^total/i.test(String(r[0]).trim()) && r.join("|") !== all[hi].join("|"));
+    const qty = stkiGuess(lc, [/on ?hand/, /^qty|quantity/, /available/]);
+    const loc = stkiGuess(lc, [/warehouse|truck|inventory location|^location/], [qty]);
+    const code = stkiGuess(lc, [/^(sku|code|item code|part ?#?|part number|item #)$/, /code|sku|part/], [qty, loc]);
+    const name = stkiGuess(lc, [/name|description/], [qty, loc, code]);
+    STKI.col = { loc, code, name, qty };
+    stkImport();
+  } catch (e) { alertMsg("Couldn't read that file: " + (e.message || e)); }
+}
+function stkiPlaceFor(v) {
+  const n = String(v || "").trim().toLowerCase(); if (!n) return null;
+  const ps = (STK.places || []).filter(p => p.active);
+  return (ps.find(p => p.name.toLowerCase() === n) || ps.find(p => p.name.toLowerCase().includes(n) || n.includes(p.name.toLowerCase())) || {}).id || null;
+}
+async function stkiPreview() {
+  const box = $("#stki-prev"); if (!box) return;
+  const c = STKI.col, num = v => { const x = Number(String(v).replace(/[^0-9.\-]/g, "")); return String(v).trim() === "" || isNaN(x) ? null : x; };
+  if (c.qty < 0 || (c.code < 0 && c.name < 0)) { box.innerHTML = `<p class="staff-msg err">Pick the On hand column and the item code or name column above.</p>`; return; }
+  if (!STKI.match) {
+    const keys = new Set(); STKI.rows.forEach(r => { if (c.code >= 0 && String(r[c.code]).trim()) keys.add(String(r[c.code]).trim()); if (c.name >= 0 && String(r[c.name]).trim()) keys.add(String(r[c.name]).trim()); });
+    const list = [...keys], mm = {};
+    for (let i = 0; i < list.length; i += 500) {
+      const { data, error } = await db.rpc("stock_match_items", { p_codes: list.slice(i, i + 500) });
+      if (error) { box.innerHTML = `<p class="staff-msg err">${esc(rpcErr(error))}</p>`; return; }
+      (data || []).forEach(x => mm[x.code.toLowerCase()] = x);
+    }
+    STKI.match = mm; if (!$("#stki-prev")) return;
+  }
+  const mm = STKI.match, out = [], seen = new Map();
+  STKI.rows.forEach(r => {
+    const code = c.code >= 0 ? String(r[c.code]).trim() : "", name = c.name >= 0 ? String(r[c.name]).trim() : "";
+    const it = mm[code.toLowerCase()] || mm[name.toLowerCase()];
+    const locTxt = c.loc >= 0 ? String(r[c.loc]).trim() : "", place = c.loc >= 0 ? stkiPlaceFor(locTxt) : STKI.place, qty = num(r[c.qty]);
+    const row = { code, name, locTxt, place, qty, it, why: !it ? "item not found" : !place ? "place not found" : qty == null ? "no count" : "" };
+    if (!row.why) { const k = place + ":" + it.id, prev = seen.get(k); if (prev) { prev.qty += qty; row.why = "added to the line above"; } else seen.set(k, row); }
+    out.push(row);
+  });
+  const ok = out.filter(r => !r.why), bad = out.filter(r => r.why && r.why !== "added to the line above");
+  const badPlaces = [...new Set(out.filter(r => r.why === "place not found").map(r => r.locTxt || "(blank)"))];
+  const show = [...bad, ...ok].slice(0, 300);
+  box.innerHTML = `<div class="stk-card"><h3>${ok.length} count${ok.length === 1 ? "" : "s"} ready${bad.length ? `, <span class="stk-imp-bad">${bad.length} skipped</span>` : ""}</h3>
+    ${badPlaces.length ? `<p class="staff-msg err">These places in the file aren't in the app yet: ${esc(badPlaces.slice(0, 12).join(", "))}${badPlaces.length > 12 ? "…" : ""}. Add them on the Places tab, then pick the file again.</p>` : ""}
+    <p class="quiet">Each place's count for each item is set to what's in the file. History shows it as "Count fixed".</p>
+    <button class="btn" type="button" id="stki-go" ${ok.length ? "" : "disabled"}>Set ${ok.length} count${ok.length === 1 ? "" : "s"}</button> <span class="staff-msg" id="stki-msg" role="status"></span></div>
+    <table class="calls-table stk-t"><thead><tr><th>Place</th><th>Item in the file</th><th>Matched to</th><th class="r">On hand</th><th></th></tr></thead><tbody>
+    ${show.map(r => `<tr class="${r.why && r.why !== "added to the line above" ? "stk-imp-skip" : ""}"><td>${esc(r.place ? stkPlaceName(r.place) : r.locTxt)}</td><td>${esc([r.code, r.name].filter(Boolean).join(" · "))}</td><td>${r.it ? esc(r.it.name) : ""}</td><td class="r">${r.qty == null ? "" : stkNum(r.qty)}</td><td class="quiet">${esc(r.why)}</td></tr>`).join("")}</tbody></table>
+    ${out.length > show.length ? `<p class="quiet">Showing ${show.length} of ${out.length} lines.</p>` : ""}`;
+  $("#stki-go").addEventListener("click", async e => {
+    const b = e.target, msg = $("#stki-msg"); b.disabled = true; let changed = 0, same = 0;
+    const rows = ok.map(r => ({ place: r.place, item: r.it.id, qty: r.qty }));
+    for (let i = 0; i < rows.length; i += 300) {
+      msg.textContent = `Saving ${Math.min(i + 300, rows.length)} of ${rows.length}…`;
+      const { data, error } = await db.rpc("stock_import_counts", { p_rows: rows.slice(i, i + 300) });
+      if (error) { msg.textContent = "Stopped: " + rpcErr(error); msg.classList.add("err"); b.disabled = false; return; }
+      changed += data.changed; same += data.same;
+    }
+    msg.textContent = `Done: ${changed} count${changed === 1 ? "" : "s"} changed, ${same} already right.`;
+  });
 }
 
 // ----- stock places -----
