@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-21.215913">
+<meta name="app-version" content="2026-10-21.220908">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3181,6 +3181,13 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .nc-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px; }
 .nc-chip { font: inherit; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; border: 1px solid #8ccf9b; background: #ebfbee; color: #2b8a3e; cursor: pointer; }
 .nc-chip:hover { background: #d3f9d8; }
+/* booking: What row also holds Sales Call and the priority */
+.bk-what { flex-wrap: wrap; align-items: center; gap: 5px !important; }
+.bk-what .chip { padding: 4px 10px; font-size: 13px; }
+.bk-what .chip.small { padding: 3px 9px; font-size: 12px; }
+.bk-sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+.ppl-wrap { display: flex; flex-direction: column; gap: 4px; min-width: 0; } .ppl-wrap > .ppl-card { flex: 1; }
+.ppl-sales { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 650; padding: 2px 4px; cursor: pointer; }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -5254,6 +5261,7 @@ const rpcErr = e => e.code === "PGRST202" || /could not find the function|schema
 
 /* ---------- book a call ---------- */
 let BK = null;
+let BK_SALES = null;   // partners ticked for sales calls
 async function openBooking(custId, opt = {}) {
   setPage("book=" + custId, "book", "Book a call");
   $("#main").innerHTML = `<div class="loading">Getting the booking form ready…</div>`;
@@ -5301,9 +5309,14 @@ function renderBooking(msg) {
     <p class="lead"><button class="link" type="button" data-open-cust="${F.cust.id}">${esc(F.cust.display_name)}</button> · Customer ${esc(F.cust.customer_number)}
       ${F.cust.do_not_contact ? ` · <strong class="owe">Marked do not contact</strong>` : ""}</p>
     <form id="bk-form" class="bk-form" autocomplete="off">
-      ${F.jobs.length ? `<div class="bk-row"><span class="bk-label">What</span><span class="bk-chips">
-        <button class="chip" type="button" data-bk-mode="new" aria-pressed="${!visit}">A new job</button>
-        <button class="chip" type="button" data-bk-mode="visit" aria-pressed="${visit}">Another visit on an open job</button></span></div>` : ""}
+      <div class="bk-row"><span class="bk-label">What</span><span class="bk-chips bk-what">
+        <button class="chip" type="button" data-bk-mode="new" aria-pressed="${F.mode === "new"}">A new job</button>
+        ${F.jobs.length ? `<button class="chip" type="button" data-bk-mode="visit" aria-pressed="${visit}">Another visit on an open job</button>` : ""}
+        <button class="chip" type="button" data-bk-mode="sales" aria-pressed="${F.mode === "sales"}">Sales Call</button>
+        ${visit ? "" : `<span class="bk-sep" aria-hidden="true"></span>${[["normal", "Normal"], ["high", "High"], ["emergency", "Emergency"]].map(([k, x]) =>
+          `<button class="chip small prio-${k}" type="button" data-bk-prio="${k}" aria-pressed="${F.prio === k}" title="Priority">${x}</button>`).join("")}`}</span></div>
+      ${F.mode === "sales" ? `<div class="bk-row"><span class="bk-label">Sales call for</span><span class="bk-chips">${[{ id: 0, name: "Reid" }].concat((BK_SALES || []).filter(x => x.sales_ok)).map(x =>
+          `<button class="chip small" type="button" data-bk-sales="${x.id}" aria-pressed="${Number(F.salesFor || 0) === x.id}">${esc(x.name.replace(/\s*\(.*\)\s*$/, ""))} Sales Call</button>`).join("")}</span></div>` : ""}
       ${visit ? `<label class="bk-row"><span class="bk-label">Job</span><select id="bk-job" required>
           <option value="">Pick the job…</option>${F.jobs.map(j => `<option value="${j.job_id}" ${j.job_id === F.jobId ? "selected" : ""}>Job ${esc(j.job_number)}: ${esc(j.job_type)}, ${esc(j.summary || "")}${j.last_visit ? " (last visit " + esc(longDate(j.last_visit)) + ")" : ""}</option>`).join("")}</select></label>
         <label class="bk-row"><span class="bk-label">This visit is for</span><input id="bk-summary" maxlength="200" value="${esc(F.summary)}" placeholder="e.g. Install the part that came in"></label>`
@@ -5315,8 +5328,6 @@ function renderBooking(msg) {
             `<option value="${x.id}" ${String(x.id) === String(F.type) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup>`).join("")}</select></label>
         <label class="bk-row"><span class="bk-label">Department</span><select id="bk-unit" required><option value="">Pick one…</option>
           ${L.units.map(u => `<option value="${u.id}" ${String(u.id) === String(F.unit) ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></label>
-        <div class="bk-row"><span class="bk-label">Priority</span><span class="bk-chips">${[["normal", "Normal"], ["high", "High"], ["emergency", "Emergency"]].map(([k, x]) =>
-          `<button class="chip small prio-${k}" type="button" data-bk-prio="${k}" aria-pressed="${F.prio === k}">${x}</button>`).join("")}</span></div>
         <label class="bk-row"><span class="bk-label">What's wrong / what's needed</span><input id="bk-summary" maxlength="200" value="${esc(F.summary)}" placeholder="${esc(t ? t.name : "e.g. No heat, furnace making a noise")}"></label>`}
       <label class="bk-row top"><span class="bk-label">Notes for the tech</span><textarea id="bk-note" rows="3" maxlength="4000" placeholder="Anything the tech should know: parking, side door, dog, what the customer said…">${esc(F.note)}</textarea></label>
 
@@ -5345,7 +5356,15 @@ function renderBooking(msg) {
   };
   const redraw = () => { keep(); renderBooking(); };
   document.querySelectorAll("[data-open-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.openCust))));
-  document.querySelectorAll("[data-bk-mode]").forEach(b => b.addEventListener("click", () => { F.mode = b.dataset.bkMode; redraw(); }));
+  document.querySelectorAll("[data-bk-mode]").forEach(b => b.addEventListener("click", async () => { F.mode = b.dataset.bkMode;
+    if (F.mode === "sales") {   // a sales call: the partners ticked for sales (Partners page), and a quote job type to start
+      if (!BK_SALES) { const { data } = await db.rpc("partner_sales"); BK_SALES = data || []; }
+      const ty = BOOK.job_types.find(x => String(x.id) === String(F.type));
+      if (!ty || ty.job_class !== "sales") { const q = BOOK.job_types.filter(x => x.job_class === "sales").sort((a, b) => (/^hvac quote$/i.test(b.name) - /^hvac quote$/i.test(a.name)) || a.name.localeCompare(b.name))[0]; if (q) F.type = String(q.id); }
+      if (F.salesFor == null) F.salesFor = 0;
+    }
+    redraw(); }));
+  document.querySelectorAll("[data-bk-sales]").forEach(b => b.addEventListener("click", () => { F.salesFor = Number(b.dataset.bkSales); redraw(); }));
   $("#bk-job")?.addEventListener("change", e => { F.jobId = Number(e.target.value) || null; });
   $("#bk-loc")?.addEventListener("change", e => { F.loc = Number(e.target.value); });
   $("#bk-type")?.addEventListener("change", e => {
@@ -5374,9 +5393,9 @@ function renderBooking(msg) {
     e.preventDefault(); keep();
     const say = (t, err) => { const m = $("#bk-msg"); m.className = "staff-msg " + (err ? "err" : ""); m.textContent = t; };
     if (F.mode === "visit" && !F.jobId) return say("Pick the job this visit is for.", true);
-    if (F.mode === "new" && !F.loc) return say("This customer has no address yet. Add one with the pencil on their file first.", true);
-    if (F.mode === "new" && !F.type) return say("Pick the type of job.", true);
-    if (F.mode === "new" && !F.unit) return say("Pick the department.", true);
+    if (F.mode !== "visit" && !F.loc) return say("This customer has no address yet. Add one with the pencil on their file first.", true);
+    if (F.mode !== "visit" && !F.type) return say("Pick the type of job.", true);
+    if (F.mode !== "visit" && !F.unit) return say("Pick the department.", true);
     let start = null, end = null;
     if (!F.later) {
       if (!F.date) return say("Pick the day.", true);
@@ -5390,6 +5409,9 @@ function renderBooking(msg) {
     $("#bk-save").disabled = true; say("Booking…");
     const { data, error } = await db.rpc("book_call", { p });
     if (error) { $("#bk-save").disabled = false; return say("Not booked: " + rpcErr(error), true); }
+    if (F.mode === "sales" && Number(F.salesFor) && data?.job_id) {   // a partner's sales call: the job is theirs
+      const { error: e2 } = await db.rpc("set_job_partner", { p_job: data.job_id, p_partner: Number(F.salesFor) });
+      if (e2) alertMsg("Booked, but not marked as the partner's sales call: " + rpcErr(e2)); }
     bookedScreen(F, data, start, end);
   });
 }
@@ -5939,14 +5961,16 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
 let NEAR_SHUT = null;   // the address whose list was closed by scrolling (stays closed while you're on that file)
 let NEAR_OPEN = (() => { try { return localStorage.getItem("reid.nearOpen") === "1"; } catch { return false; } })();
 document.addEventListener("toggle", e => { if (e.target.matches?.(".nc-drop") && !e.target._auto) { NEAR_OPEN = e.target.open; try { localStorage.setItem("reid.nearOpen", NEAR_OPEN ? "1" : "0"); } catch {} } if (e.target._auto) e.target._auto = false; }, true);
-// scrolling down the file twice closes the open "Calls nearby" (it stays the way you like it for the next file)
+// scrolling down past the end of the open "Calls nearby" closes it (it stays the way you like it for the next file)
 { let n = 0, last = 0, lastTop = 0;
   document.addEventListener("scroll", e => { const main = e.target; if (main.id !== "main") return;
     const top = main.scrollTop, down = top > lastTop + 2; lastTop = top;
     const d = document.querySelector(".sec1a .nc-drop[open]"); if (!d) { n = 0; return; }
     if (!down) return;
+    // only once you've scrolled past the whole list (its bottom has gone above the top of the page), so every day can be read first
+    if (d.getBoundingClientRect().bottom > main.getBoundingClientRect().top) { n = 0; return; }
     const now = Date.now(); if (now - last > 350) n++; last = now;   // each new scroll counts once
-    if (n >= 2) { n = 0; const box = d.closest(".sec1a"), h0 = box.offsetHeight; d._auto = true; d.open = false; NEAR_SHUT = Number(d.closest("#near-calls")?.dataset.nearLoc) || null;
+    if (n >= 1) { n = 0; const box = d.closest(".sec1a"), h0 = box.offsetHeight; d._auto = true; d.open = false; NEAR_SHUT = Number(d.closest("#near-calls")?.dataset.nearLoc) || null;
       main.scrollTop -= Math.max(0, h0 - box.offsetHeight); lastTop = main.scrollTop; }
   }, true);
   document.addEventListener("toggle", e => { if (e.target.matches?.(".nc-drop") && e.target.open) { n = 0; if (!e.target._auto) NEAR_SHUT = null; } }, true); }
@@ -9834,7 +9858,8 @@ const canPartnerPay = () => can("partners.pay") || can("invoices.adjust") || ["o
 async function openPartners(msg) {
   setPage("partners", "partners", "Partners"); PP.solo = false;
   if (!document.querySelector(".ppl")) $("#main").innerHTML = `<div class="loading">Loading partners…</div>`;
-  const [s, off, cards] = await Promise.all([db.rpc("partner_stores"), canPartnerPay() ? db.rpc("partners_off") : null, db.rpc("partner_cards")]);
+  const [s, off, cards, sales] = await Promise.all([db.rpc("partner_stores"), canPartnerPay() ? db.rpc("partners_off") : null, db.rpc("partner_cards"), db.rpc("partner_sales")]);
+  PP.sales = sales && !sales.error ? sales.data || [] : null;
   if (document.body.dataset.page !== "partners" || PP.solo) return;
   if (s.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load partners</h2>${esc(rpcErr(s.error))}</div></div>`; return; }
   PP.stores = s.data || []; PP.off = off && !off.error ? off.data || [] : [];
@@ -9844,11 +9869,12 @@ async function openPartners(msg) {
     <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Partners</span><h1>Partners</h1>
       <p>Click a partner to open its page: its booking list, what it owes us, payments, rules and files.</p></div>
       <div class="cl-hero-range"><span>Partners owe us</span><strong class="ow-hero-amt">${money(PP.stores.reduce((t, x) => t + Number(x.still_owed || 0), 0))}</strong><em>${PP.stores.length} partners</em></div></header>
-    <div class="ppl-grid">${PP.stores.map(x => { const c = C.get(x.id) || {};
-      return `<button type="button" class="ppl-card" data-ppl="${x.id}"><span class="ppl-name">${esc(x.name)}</span>
+    <div class="ppl-grid">${PP.stores.map(x => { const c = C.get(x.id) || {}, sk = (PP.sales || []).find(y => y.id === x.id);
+      return `<div class="ppl-wrap"><button type="button" class="ppl-card" data-ppl="${x.id}"><span class="ppl-name">${esc(x.name)}</span>
         <span class="quiet">${x.pays_us ? "We bill them; they pay us" : "Customer pays the store"}</span>
         <span class="ppl-nums"><span><b>${money(x.still_owed)}</b><em>still owed</em></span><span><b>${Number(x.invoices || 0).toLocaleString()}</b><em>invoices waiting</em></span>
-          <span><b>${Number(c.open || 0).toLocaleString()}</b><em>open on the list${c.all ? ` (of ${Number(c.all).toLocaleString()})` : ""}</em></span></span></button>`; }).join("")}</div>
+          <span><b>${Number(c.open || 0).toLocaleString()}</b><em>open on the list${c.all ? ` (of ${Number(c.all).toLocaleString()})` : ""}</em></span></span></button>
+        ${PP.sales ? `<label class="ppl-sales" title="Ticked: shows under Sales Call on the booking page and can be used for sales invoices. Not ticked: only for normal invoices and billing."><input type="checkbox" data-ppl-sales="${x.id}" ${sk && sk.sales_ok ? "checked" : ""} ${canPartnerPay() ? "" : "disabled"}> Use for sales calls and sales invoices</label>` : ""}</div>`; }).join("")}</div>
     ${canPartnerPay() ? `<div class="pp-nf-row" style="margin-top:12px"><button class="btn quiet-btn" type="button" id="ppl-add">＋ Add a partner</button>
       ${(PP.off || []).length ? `<span class="cl-label">Switched off</span>${PP.off.map(x => `<span class="chip small">${esc(x.name)} <button class="link" type="button" data-ppl-on="${x.id}">Switch back on</button></span>`).join("")}` : ""}
       <span class="staff-msg ok" role="status">${esc(msg || "")}</span></div>` : ""}
@@ -9856,6 +9882,10 @@ async function openPartners(msg) {
   main.scrollTop = top;
   main.querySelectorAll("[data-ppl]").forEach(b => b.addEventListener("click", () => openPartnerPage(Number(b.dataset.ppl))));
   $("#ppl-add")?.addEventListener("click", async () => { PP.adding = true; const t = await db.rpc("partner_targets"); if (!t.error && t.data) OW.targets = t.data; openPartnerPage(PP.stores[0]?.id); });
+  main.querySelectorAll("[data-ppl-sales]").forEach(cb => cb.addEventListener("change", async () => {
+    const { error } = await db.rpc("set_partner_sales", { p_id: Number(cb.dataset.pplSales), p_on: cb.checked });
+    if (error) { cb.checked = !cb.checked; alertMsg("Not saved: " + rpcErr(error)); return; }
+    const x = (PP.sales || []).find(y => y.id === Number(cb.dataset.pplSales)); if (x) x.sales_ok = cb.checked; BK_SALES = null; }));
   main.querySelectorAll("[data-ppl-on]").forEach(b => b.addEventListener("click", async () => { const { error } = await db.rpc("set_partner_active", { p_id: Number(b.dataset.pplOn), p_on: true });
     if (error) return; OW.targets = null; openPartnerPage(Number(b.dataset.pplOn)); }));
 }

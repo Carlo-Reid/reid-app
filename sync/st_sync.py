@@ -797,6 +797,50 @@ END $$;
 REVOKE EXECUTE ON FUNCTION public.tech_kinds(), public.set_tech_kind(bigint, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.tech_kinds(), public.set_tech_kind(bigint, text) TO authenticated;
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================
+-- Partners for sales: a tick on each partner says it can be used for sales calls and sales invoices
+-- (otherwise it's only for normal invoices and billing). The booking page's "Sales Call" lists Reid plus the ticked partners.
+-- Once: Rona, Costco, Vista and Hudson Restoration are ticked; Lowe's, IWS and Maytag are switched off. Safe to run more than once.
+-- =====================================================================
+ALTER TABLE public.partners ADD COLUMN IF NOT EXISTS sales_ok boolean NOT NULL DEFAULT false;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM audit_log WHERE table_name = 'setup' AND new_values ->> 'step' = 'sales partners') THEN
+    UPDATE partners SET sales_ok = true WHERE name ~* '^(rona|costco|vista|hudson)';
+    UPDATE partners SET active = false WHERE name ~* '^(lowe|iws|maytag)';
+    INSERT INTO audit_log (table_name, row_id, action, new_values) VALUES ('setup', 0, 'update', jsonb_build_object('step', 'sales partners'));
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.partner_sales()
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE
+    coalesce((SELECT jsonb_agg(jsonb_build_object('id', id, 'name', name, 'sales_ok', sales_ok) ORDER BY name) FROM partners WHERE active), '[]'::jsonb) END
+$$;
+
+CREATE OR REPLACE FUNCTION public.set_partner_sales(p_id bigint, p_on boolean)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT public._can_partner_pay() THEN RAISE EXCEPTION 'You don''t have permission to change partners'; END IF;
+  UPDATE partners SET sales_ok = coalesce(p_on, false), updated_at = now() WHERE id = p_id;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('partners', p_id, 'update', public.current_app_user_id(), jsonb_build_object('sales_ok', p_on));
+END $$;
+
+-- a sales call booked for a partner: the job belongs to that partner
+CREATE OR REPLACE FUNCTION public.set_job_partner(p_job bigint, p_partner bigint)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  UPDATE jobs SET partner_id = p_partner WHERE id = p_job;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('jobs', p_job, 'update', public.current_app_user_id(), jsonb_build_object('partner_id', p_partner));
+END $$;
+
+REVOKE EXECUTE ON FUNCTION public.partner_sales(), public.set_partner_sales(bigint, boolean), public.set_job_partner(bigint, bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.partner_sales(), public.set_partner_sales(bigint, boolean), public.set_job_partner(bigint, bigint) TO authenticated;
+NOTIFY pgrst, 'reload schema';
 """
 
 
@@ -826,7 +870,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
