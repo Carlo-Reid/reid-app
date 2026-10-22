@@ -756,6 +756,9 @@ def main():
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks).")
         cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
+        cur.execute("SELECT count(*) FILTER (WHERE name_style IS NOT NULL), count(*) FILTER (WHERE description_html IS NOT NULL), string_agg(sku || ' ' || name_style::text, '; ') FILTER (WHERE name_style IS NOT NULL) FROM pricebook_items")
+        a1, a2, a3 = cur.fetchone()
+        if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Items with a coloured name: {a1}, with a styled description: {a2}. {(a3 or '')[:300]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks not added: {str(e)[:200]}", flush=True)
