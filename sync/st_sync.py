@@ -769,7 +769,7 @@ GRANT EXECUTE ON FUNCTION public.pb_item_labour(bigint), public.set_pb_item_labo
 NOTIFY pgrst, 'reload schema';
 
 -- =====================================================================
--- What each technician mainly does: Maintenance, Service or Installs (set on the Staff page, Technicians).
+-- What each technician mainly does: Maintenance, Service, Installs or Security (set on the Staff page, Technicians).
 -- The customer page uses it to suggest the right tech for a call. Safe to run more than once.
 -- =====================================================================
 ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS tech_kind text;
@@ -788,7 +788,7 @@ CREATE OR REPLACE FUNCTION public.set_tech_kind(p_employee bigint, p_kind text)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   IF NOT (public.has_permission('staff.manage') OR public.current_staff_role() = 'owner') THEN RAISE EXCEPTION 'Only owners can change this'; END IF;
-  IF p_kind IS NOT NULL AND p_kind NOT IN ('maintenance', 'service', 'installs') THEN RAISE EXCEPTION 'Pick Maintenance, Service or Installs'; END IF;
+  IF p_kind IS NOT NULL AND p_kind NOT IN ('maintenance', 'service', 'installs', 'security') THEN RAISE EXCEPTION 'Pick Maintenance, Service, Installs or Security'; END IF;
   UPDATE employees SET tech_kind = p_kind, updated_at = now() WHERE id = p_employee;
   INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
   VALUES ('employees', p_employee, 'update', public.current_app_user_id(), jsonb_build_object('tech_kind', p_kind));
