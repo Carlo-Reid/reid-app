@@ -1094,6 +1094,99 @@ REVOKE ALL ON FUNCTION public.golive_lock(), public.set_golive_lock(boolean) FRO
 GRANT EXECUTE ON FUNCTION public.golive_lock(), public.set_golive_lock(boolean) TO authenticated;
 
 SELECT public._golive_apply_wages();
+
+-- 99zf: the Sales page shows only install sales and the Install jobs they turned into, and only sales people's (role "Sales").
+-- Safe to run more than once.
+ALTER TABLE public.jobs ADD COLUMN IF NOT EXISTS from_estimate_id bigint;
+CREATE INDEX IF NOT EXISTS jobs_from_estimate_idx ON public.jobs (from_estimate_id) WHERE from_estimate_id IS NOT NULL;
+-- Install jobs already made by closing a deal: link them to their estimate
+UPDATE public.jobs j SET from_estimate_id = a.row_id
+  FROM public.audit_log a
+ WHERE a.table_name = 'estimates' AND a.new_values ? 'install_job' AND (a.new_values ->> 'install_job')::bigint = j.id AND j.from_estimate_id IS NULL;
+
+CREATE OR REPLACE FUNCTION public.est_close(p_id bigint, p_option bigint)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE e estimates; sj jobs; v_type bigint; ij jobs; v_name text;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  SELECT * INTO e FROM estimates WHERE id = p_id; IF e.id IS NULL THEN RAISE EXCEPTION 'That estimate no longer exists'; END IF;
+  IF e.status = 'accepted' THEN RAISE EXCEPTION 'This deal is already closed'; END IF;
+  SELECT name INTO v_name FROM estimate_options WHERE id = p_option AND estimate_id = p_id;
+  IF v_name IS NULL THEN RAISE EXCEPTION 'Pick the option the customer chose'; END IF;
+  UPDATE estimates SET status = 'accepted', accepted_option_id = p_option, accepted_at = now(), accepted_via = 'tablet',
+         sold_by_employee_id = coalesce(sold_by_employee_id, public._my_employee()), updated_at = now() WHERE id = p_id;
+  SELECT * INTO sj FROM jobs WHERE id = e.job_id;
+  SELECT id INTO v_type FROM job_types WHERE job_class = 'install' AND active IS NOT FALSE ORDER BY (name ~* '^install x 1') DESC, (name ~* '^install') DESC, name LIMIT 1;
+  INSERT INTO jobs (job_number, customer_id, location_id, job_type_id, business_unit_id, status, priority, summary, booked_by_user_id, sold_by_employee_id, partner_id, from_estimate_id)
+  VALUES ('new', e.customer_id, e.location_id, v_type, coalesce(e.business_unit_id, sj.business_unit_id), 'new', 'normal',
+          left('Install: ' || v_name || ' (estimate ' || e.estimate_number || ')', 200), public.current_app_user_id(), coalesce(e.sold_by_employee_id, public._my_employee()), coalesce(e.partner_id, sj.partner_id), e.id)
+  RETURNING * INTO ij;
+  UPDATE jobs SET job_number = ij.id::text WHERE id = ij.id RETURNING * INTO ij;
+  INSERT INTO job_status_history (job_id, from_status, to_status, changed_by_user_id, note) VALUES (ij.id, NULL, 'new', public.current_app_user_id(), 'Sold on estimate ' || e.estimate_number);
+  IF sj.id IS NOT NULL AND sj.status NOT IN ('completed', 'cancelled') THEN
+    UPDATE jobs SET status = 'completed', completed_at = now() WHERE id = sj.id;
+    INSERT INTO job_status_history (job_id, from_status, to_status, changed_by_user_id, note) VALUES (sj.id, sj.status, 'completed', public.current_app_user_id(), 'Deal closed');
+  END IF;
+  INSERT INTO notes (entity_type, entity_id, body, author_user_id, source)
+  VALUES ('job', ij.id, 'Sold: ' || v_name || ' on estimate ' || e.estimate_number || '. Book the install from Dispatch.', public.current_app_user_id(), 'sales');
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values) VALUES ('estimates', p_id, 'update', public.current_app_user_id(), jsonb_build_object('status', 'accepted', 'option', p_option, 'install_job', ij.id));
+  RETURN jsonb_build_object('install_job_id', ij.id, 'install_job_number', ij.job_number);
+END $$;
+
+
+-- the install kinds of sales call (not walk-throughs, gas piping or pool heaters)
+CREATE OR REPLACE FUNCTION public._is_install_sale(p_type_name text) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$ SELECT coalesce(p_type_name ~* '(hvac quote|quote for a/?c|quote for furnace)', false) $$;
+
+CREATE OR REPLACE FUNCTION public.sales_pipeline(p_all boolean DEFAULT false)
+ RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
+AS $function$
+  WITH me AS (SELECT public._my_employee() AS emp, public.current_app_user_id() AS uid,
+                     coalesce(public.current_staff_role() = 'owner' OR public.has_permission('calls.dispatch'), false) AS boss),
+  sp AS (SELECT id AS uid, employee_id AS emp FROM app_users WHERE role = 'sales'),          -- the sales people
+  j AS (
+    SELECT jb.* FROM jobs jb JOIN job_types t ON t.id = jb.job_type_id, me
+    WHERE t.job_class = 'sales' AND public._is_install_sale(t.name) AND jb.created_at > now() - interval '18 months'
+      AND CASE WHEN me.boss
+               THEN EXISTS (SELECT 1 FROM sp WHERE sp.uid = jb.booked_by_user_id OR sp.emp = jb.sold_by_employee_id
+                              OR sp.emp IN (SELECT va.employee_id FROM visits v JOIN visit_assignments va ON va.visit_id = v.id WHERE v.job_id = jb.id))
+               ELSE jb.booked_by_user_id = me.uid OR jb.sold_by_employee_id = me.emp
+                    OR EXISTS (SELECT 1 FROM visits v JOIN visit_assignments va ON va.visit_id = v.id WHERE v.job_id = jb.id AND va.employee_id = me.emp) END
+    ORDER BY jb.created_at DESC LIMIT 400),
+  rows AS (
+    SELECT jsonb_build_object(
+      'job_id', j.id, 'job_number', j.job_number, 'status', j.status, 'summary', j.summary, 'type', t.name,
+      'customer_id', c.id, 'customer', c.display_name, 'street', l.street, 'city', l.city,
+      'partner', (SELECT name FROM partners WHERE id = j.partner_id),
+      'visit_date', v.scheduled_date, 'visit_from', v.arrival_start, 'visit_to', v.arrival_end,
+      'seller', (SELECT public._emp_name(va.employee_id) FROM visit_assignments va WHERE va.visit_id = v.id ORDER BY va.role = 'lead' DESC LIMIT 1),
+      'est_id', e.id, 'est_number', e.estimate_number, 'est_status', e.status, 'est_total', (SELECT max(t2.tot) FROM (SELECT sum(el.line_total) tot FROM estimate_options o JOIN estimate_lines el ON el.estimate_option_id = o.id WHERE o.estimate_id = e.id GROUP BY o.id) t2),
+      'sold_total', (SELECT sum(el.line_total) FROM estimate_lines el WHERE el.estimate_option_id = e.accepted_option_id),
+      'stage', CASE WHEN e.status = 'accepted' THEN 'closed' WHEN e.status IN ('lost', 'declined', 'expired') OR j.status = 'cancelled' THEN 'lost'
+                    WHEN e.id IS NOT NULL THEN 'estimate' ELSE 'booked' END,
+      'sort', coalesce(e.updated_at, j.created_at)) AS x, e.id AS est
+    FROM j JOIN job_types t ON t.id = j.job_type_id JOIN customers c ON c.id = j.customer_id LEFT JOIN locations l ON l.id = j.location_id
+    LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = j.id ORDER BY v.visit_number DESC LIMIT 1) v ON true
+    LEFT JOIN LATERAL (SELECT * FROM estimates e WHERE e.job_id = j.id ORDER BY e.id DESC LIMIT 1) e ON true),
+  -- the Install jobs those deals turned into
+  inst AS (
+    SELECT jsonb_build_object(
+      'job_id', ij.id, 'job_number', ij.job_number, 'status', ij.status, 'summary', ij.summary, 'type', t.name,
+      'customer_id', c.id, 'customer', c.display_name, 'street', l.street, 'city', l.city,
+      'partner', (SELECT name FROM partners WHERE id = ij.partner_id),
+      'visit_date', v.scheduled_date, 'visit_from', v.arrival_start, 'visit_to', v.arrival_end,
+      'seller', public._emp_name(ij.sold_by_employee_id),
+      'est_id', e.id, 'est_number', e.estimate_number, 'est_status', e.status,
+      'sold_total', (SELECT sum(el.line_total) FROM estimate_lines el WHERE el.estimate_option_id = e.accepted_option_id),
+      'stage', 'install', 'sort', ij.created_at) AS x
+    FROM rows r JOIN jobs ij ON ij.from_estimate_id = r.est JOIN estimates e ON e.id = r.est
+    JOIN job_types t ON t.id = ij.job_type_id JOIN customers c ON c.id = ij.customer_id LEFT JOIN locations l ON l.id = ij.location_id
+    LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = ij.id ORDER BY v.visit_number DESC LIMIT 1) v ON true)
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb
+              ELSE coalesce((SELECT jsonb_agg(x ORDER BY x->>'sort' DESC) FROM (SELECT x FROM rows UNION ALL SELECT x FROM inst) a), '[]'::jsonb) END
+$function$;
+REVOKE EXECUTE ON FUNCTION public.sales_pipeline(boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.sales_pipeline(boolean) TO authenticated;
 """
 
 
@@ -1123,7 +1216,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
