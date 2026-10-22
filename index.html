@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-21.211942">
+<meta name="app-version" content="2026-10-21.212845">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3137,6 +3137,22 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .nc-row:hover { background: var(--blue-wash); } .nc-km { font-weight: 800; color: var(--blue); white-space: nowrap; } .nc-d { font-weight: 700; }
 .nc-st { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) { .nc-all-in { grid-template-columns: 1fr; } .nc-row { grid-template-columns: 56px 80px 1fr; } .nc-row .nc-st { grid-column: 1 / -1; } }
+/* question box */
+.ask-wrap { position: fixed; inset: 0; z-index: 2147483100; background: rgba(10,20,25,.45); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.ask { background: var(--panel); color: var(--ink); border-radius: 12px; padding: 18px 20px; width: min(460px, 100%); box-shadow: 0 20px 50px rgba(0,0,0,.35); }
+.ask h3 { margin: 0 0 6px; font-size: 17px; } .ask p { margin: 0 0 14px; color: var(--steel); } .ask-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+/* copy buttons on the part's form */
+.pb-has-copy { position: relative; }
+.pb-copy { position: absolute; right: 0; top: 0; border: 0; background: transparent; cursor: pointer; font-size: 12px; padding: 0 2px; line-height: 1.3; opacity: .55; }
+.pb-copy:hover { opacity: 1; }
+/* labour cost on the part's page */
+.pbi-lab-f { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: end; }
+.pbi-lab-f label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; font-weight: 650; }
+.pbi-lab-f input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; min-width: 0; }
+.pbi-lab-tot { grid-column: 1 / -1; font-size: 14px; } .pbi-lab-tot b { font-size: 16px; }
+.pbi-lab-f .btn { grid-column: 1 / -1; justify-self: start; }
+.pbi-lab-note { font-size: 13px; padding: 6px 9px; border-radius: 6px; margin: 0 0 8px; }
+.pbi-lab-note.kit { background: var(--blue-wash); } .pbi-lab-note.over { background: var(--amber-wash); }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -10648,6 +10664,18 @@ async function startInvoice(jobId) {
   if (error) { alertMsg("Couldn't start the invoice: " + rpcErr(error)); return; }
   openInvoiceEditor(data);
 }
+// a question with buttons (in the app, not the browser's pop-up). Resolves with the picked button's key, or "" when closed.
+function askChoice(title, text, buttons) {
+  return new Promise(ok => {
+    document.querySelector(".ask-wrap")?.remove();
+    const d = document.createElement("div"); d.className = "ask-wrap"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", title);
+    d.innerHTML = `<div class="ask"><h3>${esc(title)}</h3>${text ? `<p>${text}</p>` : ""}<div class="ask-btns">${buttons.map(([k, t, main]) => `<button type="button" class="btn ${main ? "" : "quiet-btn"}" data-ask="${esc(k)}">${esc(t)}</button>`).join("")}</div></div>`;
+    const done = k => { d.remove(); ok(k); };
+    d.addEventListener("click", e => { const b = e.target.closest("[data-ask]"); if (b) done(b.dataset.ask); else if (e.target === d) done(""); });
+    d.addEventListener("keydown", e => { if (e.key === "Escape") done(""); });
+    document.body.append(d); d.querySelector("[data-ask]")?.focus();
+  });
+}
 const alertMsg = m => { const t = document.createElement("div"); t.className = "ie-toast"; t.textContent = m; document.body.append(t); setTimeout(() => t.remove(), 5000); };
 async function openInvoiceEditor(id, msg) {
   if (location.hash !== "#invoice-edit=" + id) setPage("invoice-edit=" + id, "invoice", "invoice");
@@ -11400,6 +11428,36 @@ async function openPbItemPage(id) {
   }
   renderPbItemPage();
 }
+// labour: hours × techs × cost per hour. A part with an add-on kit uses the kit's hours until someone types their own (a pricing override).
+async function pbiLabour(id, edit, msg) {
+  const box = $("#pbi-lab"); if (!box) return;
+  const { data, error } = await db.rpc("pb_item_labour", { p_item: id });
+  if (!$("#pbi-lab")) return;
+  if (error) { box.innerHTML = `<h2>Labour cost</h2><p class="quiet">${/function|schema|PGRST202/i.test(error.message || "") ? "Getting ready: this turns on after tonight's update." : esc(rpcErr(error))}</p>`; return; }
+  const own = data.own, kit = data.kit, rate0 = Number(data.rate) || null;
+  const v = own ? { h: own.hours, t: own.techs || 1, r: own.rate ?? rate0 } : kit ? { h: kit.hours, t: 1, r: rate0 } : { h: "", t: 1, r: rate0 };
+  const num = x => x === "" || x == null ? "" : Number(x);
+  const note = own ? `<div class="pbi-lab-note over">✎ <b>Pricing override</b> by ${esc(own.by || "someone")}${own.at ? " on " + esc(fmtDate(own.at)) : ""}${kit ? ` <button class="link" type="button" id="pbi-lab-kit">Go back to the kit's pricing</button>` : ` <button class="link" type="button" id="pbi-lab-clear">Clear</button>`}</div>`
+    : kit ? `<div class="pbi-lab-note kit">🧰 <b>Taking kit pricing</b> from ${esc((kit.names || []).slice(0, 2).join(", "))}${(kit.names || []).length > 2 ? ` and ${(kit.names || []).length - 2} more parts` : ""}. Change a number and save to override it.</div>`
+    : `<div class="pbi-lab-note quiet">No add-on kit on this part. Type the labour here.</div>`;
+  box.innerHTML = `<h2>Labour cost</h2>${note}
+    <form class="pbi-lab-f" id="pbi-lab-f"><label>Hours<input name="h" inputmode="decimal" value="${num(v.h)}" ${edit ? "" : "disabled"}></label>
+      <label>Techs<input name="t" inputmode="numeric" value="${num(v.t)}" ${edit ? "" : "disabled"}></label>
+      <label>Cost per hour<input name="r" inputmode="decimal" value="${v.r == null ? "" : Number(v.r).toFixed(2)}" placeholder="${rate0 ? rate0.toFixed(2) : ""}" ${edit ? "" : "disabled"}></label>
+      <div class="pbi-lab-tot">Labour cost <b id="pbi-lab-tot">—</b></div>
+      ${edit ? `<button class="btn" type="submit">Save labour</button>` : ""}</form>
+    <div id="pbi-lab-msg" role="status">${msg ? `<div class="staff-msg ok">${esc(msg)}</div>` : ""}</div>`;
+  const fm = $("#pbi-lab-f"), n = x => { const y = Number(String(x).replace(/[$,\s]/g, "")); return String(x).trim() === "" || !isFinite(y) ? null : y; };
+  const tot = () => { const h = n(fm.h.value), t = n(fm.t.value) ?? 1, r = n(fm.r.value) ?? rate0; $("#pbi-lab-tot").textContent = h != null && r != null ? `${money(h * t * r)}  (${h} h × ${t} tech${t === 1 ? "" : "s"} × ${money(r)})` : "—"; };
+  fm.addEventListener("input", tot); tot();
+  const save = async (h, t, r, okMsg) => { const { error: e2 } = await db.rpc("set_pb_item_labour", { p_item: id, p_hours: h, p_techs: t, p_rate: r });
+    if (e2) { $("#pbi-lab-msg").innerHTML = `<div class="staff-msg err">Not saved: ${esc(rpcErr(e2))}</div>`; return; } pbiLabour(id, edit, okMsg); };
+  fm.addEventListener("submit", e => { e.preventDefault(); const h = n(fm.h.value), t = Math.max(1, Math.round(n(fm.t.value) ?? 1)), r = n(fm.r.value);
+    if (h == null || h < 0) { $("#pbi-lab-msg").innerHTML = `<div class="staff-msg err">Type the hours as a number.</div>`; return; }
+    save(h, t, r ?? rate0, "Saved."); });
+  $("#pbi-lab-kit")?.addEventListener("click", () => save(null, null, null, "Back to the kit's pricing."));
+  $("#pbi-lab-clear")?.addEventListener("click", () => save(null, null, null, "Cleared."));
+}
 function renderPbItemPage(msg) {
   const id = PB.itemPage, r = (PB.rows || []).find(x => x.id === id);
   if (r && !PBLOOK.has(id)) { pbLoadLooks([id]).then(() => { if (PB.itemPage === id) renderPbItemPage(msg); }); return; }
@@ -11416,6 +11474,7 @@ function renderPbItemPage(msg) {
           <div class="pbi-form"><label>Type<select id="pbi-type">${PB_TYPES.slice(1).map(([k, t]) => `<option value="${k}" ${k === r.item_type ? "selected" : ""}>${t}</option>`).join("")}</select></label>
             <button class="btn quiet-btn" type="button" id="pbi-move">Move it</button></div>
           <p class="quiet">For example from Materials to Equipment. Its categories stay the same; change those under Categories on the left.</p></section>` : ""}
+        ${seeCost() ? `<section class="cl-tools pbi-box pbi-lab" id="pbi-lab"><h2>Labour cost</h2><div class="quiet">Loading…</div></section>` : ""}
         <section class="cl-tools pbi-box"><h2>Add it to an invoice</h2>
           <form id="pbi-inv" class="pbi-form"><label>Invoice number<input name="n" placeholder="e.g. R10023" required autocomplete="off"></label>
             <label>How many<input name="q" value="1" inputmode="decimal"></label><button class="btn" type="submit">Add to the invoice</button></form>
@@ -11429,6 +11488,7 @@ function renderPbItemPage(msg) {
       </div>
     </div></article>`;
   showPbItem(id);
+  if (seeCost()) pbiLabour(id, edit);
   const say = (el, t, err) => { el.innerHTML = `<div class="staff-msg ${err ? "err" : "ok"}">${t}</div>`; };
   $("#pbi-move")?.addEventListener("click", async () => {
     const t = $("#pbi-type").value; if (t === r.item_type) return renderPbItemPage("It's already listed there.");
@@ -12700,6 +12760,20 @@ function renderPricebook(msg) {
   $("#pb-catform")?.addEventListener("submit", async e => {
     e.preventDefault(); const n = e.target.n.value.trim(), f = PB.catForm, cur = PB.catBy.get(PB.cat);
     const par = f.mode === "rename" && e.target.par ? (e.target.par.value ? Number(e.target.par.value) : null) : null;
+    // a category with this name already? say so (and offer to bring back a turned-off one)
+    const same = (PB.cats || []).find(c => c.name.trim().toLowerCase() === n.toLowerCase() && !(f.mode === "rename" && cur && c.id === cur.id));
+    if (same) {
+      const where = esc(pbCatPath(same.id) || same.name);
+      const k = same.active
+        ? await askChoice(`"${same.name}" is already a category`, `It's here: <b>${where}</b>.`, [["go", "Go to it", true], ["new", f.mode === "rename" ? "Use the name anyway" : "Make another one anyway"], ["", "Cancel"]])
+        : await askChoice(`"${same.name}" is already a category, but it's turned off`, `It's here: <b>${where}</b>. Bring it back instead of making a new one?`, [["back", "Bring it back", true], ["new", f.mode === "rename" ? "Use the name anyway" : "Make a new one anyway"], ["", "Cancel"]]);
+      if (!k) return;
+      if (k === "go" || k === "back") {
+        if (k === "back" && !(await saveCat(same.id, same.name, same.parent_id, true))) return;
+        PB.catForm = null; PB.cat = same.id; let c = same; while (c && c.parent_id) { PB.open.add(c.parent_id); c = PB.catBy.get(c.parent_id); }
+        await loadPbCats(); await loadPricebook(); renderPricebook(k === "back" ? `${same.name} is back.` : ""); return;
+      }
+    }
     const id = f.mode === "rename" ? await saveCat(cur.id, n, par, cur.active) : await saveCat(null, n, f.parent, true);
     if (id && f.mode === "rename" && par) PB.open.add(par);
     if (!id) return;
@@ -13010,6 +13084,20 @@ function showPbItem(id) {
     supRender((data.rows || []).map(r => ({ supplier_id: r.supplier_id, sku: r.sku || "", cost: SUP.see ? (r.cost == null ? "" : Number(r.cost).toFixed(2)) : null, lead: r.lead ?? "", note: r.note || "", preferred: !!r.preferred, _w: r.waiting ?? "", _d: r.price_date || "" })));
     SUP.start = supKey(supCollect()); f.dispatchEvent(new Event("pb-reset-start")); });
   if (!nw) db.rpc("pb_item_desc", { p_item: id }).then(({ data }) => { const a = $("#pb-desc-rte"); if (data && a && a.dataset.changed !== "1") { a.innerHTML = rteClean(data); f.dispatchEvent(new Event("pb-reset-start")); } });
+  // 📋 next to every value: copies what's in the box
+  f.querySelectorAll("label").forEach(lb => {
+    const inp = lb.querySelector("input:not([type=hidden]):not([type=checkbox]):not([type=file]), select");
+    if (!inp || lb.querySelector(".pb-copy") || lb.classList.contains("pb-check")) return;
+    const b = document.createElement("button"); b.type = "button"; b.className = "pb-copy"; b.title = "Copy"; b.textContent = "📋"; b.setAttribute("aria-label", "Copy");
+    b.addEventListener("click", async e => { e.preventDefault(); e.stopPropagation();
+      const v = inp.tagName === "SELECT" ? (inp.selectedOptions[0]?.textContent || "") : inp.value;
+      const ok = await copyText(String(v).trim()); b.textContent = ok ? "✓" : "✗"; setTimeout(() => { b.textContent = "📋"; }, 1200); });
+    lb.classList.add("pb-has-copy"); lb.append(b);
+  });
+  { const dl = f.querySelector(".pb-desc-lab"), a = $("#pb-desc-rte");
+    if (dl && a && !dl.querySelector(".pb-copy")) { const b = document.createElement("button"); b.type = "button"; b.className = "pb-copy"; b.title = "Copy the description"; b.textContent = "📋";
+      b.addEventListener("click", async e => { e.preventDefault(); const ok = await copyText(a.innerText.trim()); b.textContent = ok ? "✓" : "✗"; setTimeout(() => { b.textContent = "📋"; }, 1200); });
+      dl.classList.add("pb-has-copy"); dl.append(b); } }
   // the name's own look: click into the name and the tools show under it (they float, so nothing moves)
   const lookStart = f.name_style.value + "\u0001" + (f.unit_length?.value || "");
   { const ni = $("#pb-name-in"), nt = $("#pb-ntools");
@@ -13051,6 +13139,21 @@ function showPbItem(id) {
     if (pbText(r.description) === f.description.value.trim()) delete pl.description;   // keep ServiceTitan's formatting if it wasn't changed
     if (f.active) pl.active = f.active.checked;
     if (["unit_price", "unit_cost", "member_price", "est_labour_hours"].some(k => pl[k] !== "" && !isFinite(Number(pl[k])))) { m.className = "staff-msg err"; m.textContent = "Type numbers only in the prices, cost and hours."; return; }
+    if (nw || pl.name.toLowerCase() !== String(r.name || "").toLowerCase() || pl.sku.toLowerCase() !== String(r.sku || "").toLowerCase()) {
+      // another part with this name or code? say so, and offer to bring back a retired one
+      const look = async q => (await db.rpc("pb_list", { p_search: q, p_type: "all", p_active: null, p_category: null, p_flag: null, p_limit: 25 })).data || [];
+      const hits = [...(await look(pl.name)), ...(pl.sku ? await look(pl.sku) : [])];
+      const dup = hits.find(x => x.id !== id && (x.name.trim().toLowerCase() === pl.name.toLowerCase() || (pl.sku && String(x.sku || "").trim().toLowerCase() === pl.sku.toLowerCase())));
+      if (dup) {
+        const what = dup.name.trim().toLowerCase() === pl.name.toLowerCase() ? "name" : "code";
+        const k = dup.active
+          ? await askChoice(`There's already a part with this ${what}`, `<b>${esc(pbName(dup.name))}</b> (${esc(dup.sku || "")}) · ${money(dup.unit_price)}`, [["open", "Open that part", true], ["save", "Save this anyway"], ["", "Cancel"]])
+          : await askChoice(`There's already a part with this ${what}, but it's retired`, `<b>${esc(pbName(dup.name))}</b> (${esc(dup.sku || "")}). Bring it back instead?`, [["back", "Bring it back", true], ["save", "Save this anyway"], ["", "Cancel"]]);
+        if (!k) { m.textContent = ""; return; }
+        if (k === "back") { const { error: eb } = await db.rpc("pb_set_items_active", { p_ids: [dup.id], p_active: true }); if (eb) { m.className = "staff-msg err"; m.textContent = "Not brought back: " + rpcErr(eb); return; } }
+        if (k === "open" || k === "back") { PB.rows = null; return openPbItemPage(dup.id); }
+      }
+    }
     m.className = "staff-msg"; m.textContent = "Saving…";
     const { data, error } = await db.rpc("save_pb_item", { p_id: nw ? null : id, p: pl });
     if (error) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }

@@ -725,6 +725,48 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.set_pb_item_look(bigint, jsonb, numeric), public.pb_item_looks(bigint[]) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.set_pb_item_look(bigint, jsonb, numeric), public.pb_item_looks(bigint[]) TO authenticated;
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================
+-- Labour cost on a part: hours × number of techs × cost per hour.
+-- A part with an add-on kit takes the kit's labour (the hours of everything in the kit, at the company labour rate)
+-- until someone types their own numbers; then it says "pricing override" and who did it.
+-- Safe to run more than once.
+-- =====================================================================
+ALTER TABLE public.pricebook_items ADD COLUMN IF NOT EXISTS labour_hours numeric(8,2);
+ALTER TABLE public.pricebook_items ADD COLUMN IF NOT EXISTS labour_techs integer;
+ALTER TABLE public.pricebook_items ADD COLUMN IF NOT EXISTS labour_rate numeric(10,2);
+ALTER TABLE public.pricebook_items ADD COLUMN IF NOT EXISTS labour_set_by bigint;
+ALTER TABLE public.pricebook_items ADD COLUMN IF NOT EXISTS labour_set_at timestamptz;
+
+CREATE OR REPLACE FUNCTION public.pb_item_labour(p_item bigint)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public SET jit = off AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE jsonb_build_object(
+    'own', (SELECT CASE WHEN i.labour_hours IS NULL AND i.labour_rate IS NULL THEN NULL ELSE jsonb_build_object(
+              'hours', i.labour_hours, 'techs', i.labour_techs, 'rate', i.labour_rate, 'at', i.labour_set_at,
+              'by', (SELECT coalesce(public._emp_name(u.employee_id), u.login_email::text) FROM app_users u WHERE u.id = i.labour_set_by)) END
+            FROM pricebook_items i WHERE i.id = p_item),
+    'kit', (SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_build_object(
+              'hours', round(sum(k.quantity * coalesce(c.est_labour_hours, 0)), 2),
+              'names', (SELECT jsonb_agg(c2.name ORDER BY x.sequence) FROM pricebook_kit_items x JOIN pricebook_items c2 ON c2.id = x.component_item_id WHERE x.parent_item_id = p_item)) END
+            FROM public.pb_kit_parts(p_item) k JOIN pricebook_items c ON c.id = k.item_id),
+    'rate', (SELECT labour_cost_per_hour FROM company_settings ORDER BY id LIMIT 1)) END
+$$;
+
+CREATE OR REPLACE FUNCTION public.set_pb_item_labour(p_item bigint, p_hours numeric, p_techs integer, p_rate numeric)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT public.has_permission('pricebook.edit') THEN RAISE EXCEPTION 'You don''t have permission to change the price book'; END IF;
+  UPDATE pricebook_items SET labour_hours = p_hours, labour_techs = p_techs, labour_rate = p_rate,
+         labour_set_by = CASE WHEN p_hours IS NULL AND p_rate IS NULL THEN NULL ELSE public.current_app_user_id() END,
+         labour_set_at = CASE WHEN p_hours IS NULL AND p_rate IS NULL THEN NULL ELSE now() END, updated_at = now()
+  WHERE id = p_item;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('pricebook_items', p_item, 'update', public.current_app_user_id(), jsonb_build_object('labour_hours', p_hours, 'labour_techs', p_techs, 'labour_rate', p_rate));
+END $$;
+
+REVOKE EXECUTE ON FUNCTION public.pb_item_labour(bigint), public.set_pb_item_labour(bigint, numeric, integer, numeric) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.pb_item_labour(bigint), public.set_pb_item_labour(bigint, numeric, integer, numeric) TO authenticated;
+NOTIFY pgrst, 'reload schema';
 """
 
 
@@ -753,8 +795,8 @@ def main():
     run_id = cur.fetchone()[0]; conn.commit()
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
-        cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL")
+        cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
