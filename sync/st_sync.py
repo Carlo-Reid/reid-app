@@ -1191,6 +1191,104 @@ GRANT EXECUTE ON FUNCTION public.sales_pipeline(boolean) TO authenticated;
 -- 99zg: Walk site visits booked from the Sales page show on the Sales page too. Safe to run more than once.
 CREATE OR REPLACE FUNCTION public._is_install_sale(p_type_name text) RETURNS boolean
 LANGUAGE sql IMMUTABLE AS $$ SELECT coalesce(p_type_name ~* '(hvac quote|quote for a/?c|quote for furnace|walk\s*site)', false) $$;
+
+-- 99zh: each sales person sees only their own Sales page, unless an owner lets them see someone else's.
+-- Owners and dispatchers can always see any sales person's page (and everyone's). Safe to run more than once.
+CREATE TABLE IF NOT EXISTS public.sales_viewers (
+  viewer_user_id bigint NOT NULL REFERENCES public.app_users(id) ON DELETE CASCADE,
+  seller_user_id bigint NOT NULL REFERENCES public.app_users(id) ON DELETE CASCADE,
+  granted_by_user_id bigint, granted_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (viewer_user_id, seller_user_id));
+ALTER TABLE public.sales_viewers ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.sales_viewers FROM anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public._sales_boss() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT coalesce(public.current_staff_role() = 'owner' OR public.has_permission('calls.dispatch'), false) $$;
+
+-- the names in the drop-down: owners/dispatchers get every sales person; a sales person gets themself plus the ones they're allowed
+CREATE OR REPLACE FUNCTION public.sales_people() RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH me AS (SELECT public.current_app_user_id() AS uid, public._sales_boss() AS boss)
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', u.id, 'name', coalesce(public._emp_name(u.employee_id), u.login_email::text), 'me', u.id = me.uid,
+           'can_see', (SELECT coalesce(jsonb_agg(v.seller_user_id), '[]'::jsonb) FROM sales_viewers v WHERE v.viewer_user_id = u.id))
+         ORDER BY u.id <> me.uid, coalesce(public._emp_name(u.employee_id), u.login_email::text)), '[]'::jsonb)
+  FROM app_users u, me
+  WHERE u.role = 'sales' AND u.active AND public.current_staff_role() IS NOT NULL
+    AND (me.boss OR u.id = me.uid OR EXISTS (SELECT 1 FROM sales_viewers v WHERE v.viewer_user_id = me.uid AND v.seller_user_id = u.id)) $$;
+
+-- owners only: let one sales person see another's page (or stop it)
+CREATE OR REPLACE FUNCTION public.set_sales_viewer(p_viewer bigint, p_seller bigint, p_on boolean) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF coalesce(public.current_staff_role(), '') <> 'owner' THEN RAISE EXCEPTION 'Only an owner can change who sees which sales pages'; END IF;
+  IF p_viewer = p_seller THEN RETURN; END IF;
+  IF p_on THEN INSERT INTO sales_viewers (viewer_user_id, seller_user_id, granted_by_user_id) VALUES (p_viewer, p_seller, public.current_app_user_id()) ON CONFLICT DO NOTHING;
+  ELSE DELETE FROM sales_viewers WHERE viewer_user_id = p_viewer AND seller_user_id = p_seller; END IF;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('sales_viewers', p_viewer, CASE WHEN p_on THEN 'insert' ELSE 'delete' END, public.current_app_user_id(), jsonb_build_object('viewer', p_viewer, 'seller', p_seller));
+END $$;
+
+CREATE OR REPLACE FUNCTION public.sales_list(p_seller bigint DEFAULT NULL)
+ RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
+AS $function$
+  WITH me AS (SELECT public._my_employee() AS emp, public.current_app_user_id() AS uid, public._sales_boss() AS boss),
+  who AS (   -- whose jobs: one sales person (p_seller), or everyone (owners/dispatchers with no p_seller)
+    SELECT CASE WHEN p_seller IS NULL AND me.boss THEN NULL ELSE coalesce(p_seller, me.uid) END AS seller FROM me),
+  ok AS (SELECT (me.boss OR who.seller = me.uid OR EXISTS (SELECT 1 FROM sales_viewers v WHERE v.viewer_user_id = me.uid AND v.seller_user_id = who.seller)) AS ok FROM me, who),
+  tgt AS (SELECT u.id AS uid, u.employee_id AS emp FROM app_users u, who WHERE u.id = who.seller),
+  sp AS (SELECT id AS uid, employee_id AS emp FROM app_users WHERE role = 'sales'),          -- the sales people
+  j AS (
+    SELECT jb.* FROM jobs jb JOIN job_types t ON t.id = jb.job_type_id, me
+    WHERE t.job_class = 'sales' AND public._is_install_sale(t.name) AND jb.created_at > now() - interval '18 months'
+      AND (SELECT ok FROM ok)
+      AND CASE WHEN (SELECT seller FROM who) IS NULL
+               -- everyone: jobs of the sales people, and sales jobs booked in this app by the office (not old ServiceTitan ones)
+               THEN EXISTS (SELECT 1 FROM sp WHERE sp.uid = jb.booked_by_user_id OR sp.emp = jb.sold_by_employee_id
+                              OR sp.emp IN (SELECT va.employee_id FROM visits v JOIN visit_assignments va ON va.visit_id = v.id WHERE v.job_id = jb.id))
+                    OR EXISTS (SELECT 1 FROM app_users u WHERE u.id = jb.booked_by_user_id AND u.role <> 'technician')
+               ELSE EXISTS (SELECT 1 FROM tgt WHERE tgt.uid = jb.booked_by_user_id OR tgt.emp = jb.sold_by_employee_id
+                              OR tgt.emp IN (SELECT va.employee_id FROM visits v JOIN visit_assignments va ON va.visit_id = v.id WHERE v.job_id = jb.id)) END
+    ORDER BY jb.created_at DESC LIMIT 400),
+  rows AS (
+    SELECT jsonb_build_object(
+      'job_id', j.id, 'job_number', j.job_number, 'status', j.status, 'summary', j.summary, 'type', t.name,
+      'customer_id', c.id, 'customer', c.display_name, 'street', l.street, 'city', l.city,
+      'partner', (SELECT name FROM partners WHERE id = j.partner_id),
+      'visit_date', v.scheduled_date, 'visit_from', v.arrival_start, 'visit_to', v.arrival_end,
+      'seller', (SELECT public._emp_name(va.employee_id) FROM visit_assignments va WHERE va.visit_id = v.id ORDER BY va.role = 'lead' DESC LIMIT 1),
+      'est_id', e.id, 'est_number', e.estimate_number, 'est_status', e.status, 'est_total', (SELECT max(t2.tot) FROM (SELECT sum(el.line_total) tot FROM estimate_options o JOIN estimate_lines el ON el.estimate_option_id = o.id WHERE o.estimate_id = e.id GROUP BY o.id) t2),
+      'sold_total', (SELECT sum(el.line_total) FROM estimate_lines el WHERE el.estimate_option_id = e.accepted_option_id),
+      'stage', CASE WHEN e.status = 'accepted' THEN 'closed' WHEN e.status IN ('lost', 'declined', 'expired') OR j.status = 'cancelled' THEN 'lost'
+                    WHEN e.id IS NOT NULL THEN 'estimate' ELSE 'booked' END,
+      'sort', coalesce(e.updated_at, j.created_at)) AS x, e.id AS est
+    FROM j JOIN job_types t ON t.id = j.job_type_id JOIN customers c ON c.id = j.customer_id LEFT JOIN locations l ON l.id = j.location_id
+    LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = j.id ORDER BY v.visit_number DESC LIMIT 1) v ON true
+    LEFT JOIN LATERAL (SELECT * FROM estimates e WHERE e.job_id = j.id ORDER BY e.id DESC LIMIT 1) e ON true),
+  -- the Install jobs those deals turned into
+  inst AS (
+    SELECT jsonb_build_object(
+      'job_id', ij.id, 'job_number', ij.job_number, 'status', ij.status, 'summary', ij.summary, 'type', t.name,
+      'customer_id', c.id, 'customer', c.display_name, 'street', l.street, 'city', l.city,
+      'partner', (SELECT name FROM partners WHERE id = ij.partner_id),
+      'visit_date', v.scheduled_date, 'visit_from', v.arrival_start, 'visit_to', v.arrival_end,
+      'seller', public._emp_name(ij.sold_by_employee_id),
+      'est_id', e.id, 'est_number', e.estimate_number, 'est_status', e.status,
+      'sold_total', (SELECT sum(el.line_total) FROM estimate_lines el WHERE el.estimate_option_id = e.accepted_option_id),
+      'stage', 'install', 'sort', ij.created_at) AS x
+    FROM rows r JOIN jobs ij ON ij.from_estimate_id = r.est JOIN estimates e ON e.id = r.est
+    JOIN job_types t ON t.id = ij.job_type_id JOIN customers c ON c.id = ij.customer_id LEFT JOIN locations l ON l.id = ij.location_id
+    LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = ij.id ORDER BY v.visit_number DESC LIMIT 1) v ON true)
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb
+              ELSE coalesce((SELECT jsonb_agg(x ORDER BY x->>'sort' DESC) FROM (SELECT x FROM rows UNION ALL SELECT x FROM inst) a), '[]'::jsonb) END
+$function$;
+
+-- the old list (everyone's for owners) now follows the same rules
+CREATE OR REPLACE FUNCTION public.sales_pipeline(p_all boolean DEFAULT false) RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$ SELECT public.sales_list(NULL) $$;
+
+REVOKE EXECUTE ON FUNCTION public.sales_list(bigint), public.sales_pipeline(boolean), public.sales_people(), public.set_sales_viewer(bigint, bigint, boolean), public._sales_boss() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.sales_list(bigint), public.sales_pipeline(boolean), public.sales_people(), public.set_sales_viewer(bigint, bigint, boolean), public._sales_boss() TO authenticated;
 """
 
 
@@ -1220,7 +1318,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")

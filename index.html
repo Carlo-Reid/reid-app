@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-22.184629">
+<meta name="app-version" content="2026-10-22.193908">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3224,6 +3224,8 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .est-close-btn { background: var(--green) !important; border-color: var(--green) !important; color: var(--on-accent) !important; }
 .sl-find { margin: 0 0 16px; } .sl-find .sp-wrap { max-width: 760px; margin: 0; padding: 0; } .sl-find .sp-head h1 { font-size: 22px; }
 .book .lead button.link, .cl-hero p button.link, :root[data-theme] .cl-hero p button.link { color: inherit !important; text-decoration: underline; }
+.sl-who { display: inline-flex; gap: 8px; align-items: center; font-weight: 700; } .sl-who select { font: inherit; font-weight: 600; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.st-sl { display: flex; flex-direction: column; gap: 8px; } .st-sl-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); } .st-sl-chips { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 /* sales people: only what they need on a customer's file */
 body.sales-only #main :is([data-tag="Section 2"], [data-tag="Section 3"], [data-tag="Section 4"], [data-tag="Section 4B"], [data-tag="Section 5"], [data-tag="Section 8"]) { display: none !important; }
 body.sales-only:not(.sales-inv) #main [data-tag="Section 6"], body.sales-only:not(.sales-inv) #main .sec1a .balance { display: none !important; }
@@ -5339,17 +5341,28 @@ const rpcErr = e => e.code === "PGRST202" || /could not find the function|schema
 /* ---------- book a call ---------- */
 let BK = null;
 /* ---------------- Sales page: sales jobs → booked → estimate → closed deal ---------------- */
-const SALES = { tab: "open", all: false, rows: null };
+const SALES = { tab: "open", seller: "", people: [], rows: null };
 try { Object.assign(SALES, JSON.parse(localStorage.getItem("reid.sales") || "{}")); } catch {}
-const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, all: SALES.all })); } catch {} };
+const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller })); } catch {} };
 const salesBoss = () => ME.role === "owner" || can("calls.dispatch");
 async function openSales(msg) {
   setPage("sales", "sales", "Sales");
   if (!SALES.rows) $("#main").innerHTML = `<div class="loading">Loading the sales jobs…</div>`;
-  const { data, error } = await db.rpc("sales_pipeline", { p_all: salesBoss() });
+  // whose page: your own, or (if an owner allowed it) another sales person's; owners can pick anyone or Everyone
+  const ppl = await db.rpc("sales_people"); SALES.people = ppl.error ? [] : ppl.data || [];
+  if (SALES.seller && !SALES.people.some(x => String(x.id) === String(SALES.seller))) SALES.seller = "";
+  const { data, error } = await db.rpc("sales_list", { p_seller: SALES.seller ? Number(SALES.seller) : null });
   if (document.body.dataset.page !== "sales") return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load sales</h2>${/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</div></div>`; return; }
   SALES.rows = data || []; renderSales(msg);
+}
+// the drop-down of sales people: owners/dispatchers always; a sales person only when an owner let them see someone else's page
+function salesWhoPicker() {
+  const P = SALES.people || [], boss = salesBoss();
+  if (!boss && P.length < 2) return "";
+  return `<label class="sl-who"><span>Sales page of</span><select id="sl-who">
+    ${boss ? `<option value="" ${!SALES.seller ? "selected" : ""}>Everyone</option>` : ""}
+    ${P.map(x => `<option value="${x.id}" ${String(SALES.seller) === String(x.id) || (!boss && !SALES.seller && x.me) ? "selected" : ""}>${esc(x.me ? x.name + " (me)" : x.name)}</option>`).join("")}</select></label>`;
 }
 function renderSales(msg) {
   spHome();
@@ -5366,7 +5379,7 @@ function renderSales(msg) {
     <section class="sl-find" id="sl-find" aria-label="Find a customer"></section>
     <div class="sl-bar"><span class="seg sl-tabs" role="group">${[["open", "Open"], ["booked", "Booked"], ["estimate", "Estimates"], ["closed", "Closed deals"], ["install", "Installs"], ["lost", "Not sold"], ["all", "All"]].map(([k, x]) =>
         `<button type="button" data-sl-tab="${k}" aria-pressed="${SALES.tab === k}">${x} <span class="sl-n">${n(k)}</span></button>`).join("")}</span>
-      ${salesBoss() ? `<span class="quiet">Showing every sales person's jobs</span>` : ""}</div>
+      ${salesWhoPicker()}</div>
     ${rows.length ? `<table class="calls-table sl-t"><thead><tr><th>Stage</th><th>Customer</th><th>Call</th><th>For</th><th class="r">Estimate</th><th></th></tr></thead><tbody>
       ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span><div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
@@ -5380,6 +5393,7 @@ function renderSales(msg) {
       : `<p class="quiet">${SALES.tab === "open" ? "No open sales jobs. Find a customer above and press + Book a sales call." : "Nothing here."}</p>`}
   </article>`;
   document.querySelectorAll("[data-sl-tab]").forEach(b => b.addEventListener("click", () => { SALES.tab = b.dataset.slTab; salesSave(); renderSales(); }));
+  $("#sl-who")?.addEventListener("change", e => { const me = (SALES.people || []).find(x => x.me); SALES.seller = me && String(me.id) === e.target.value ? "" : e.target.value; salesSave(); openSales(); });
   { const w = document.querySelector(".sp-wrap"), box = $("#sl-find"); if (w && box) { box.appendChild(w);
       const h = w.querySelector(".sp-head h1"); if (h) h.textContent = "Find a customer";
       $("#sp-new").classList.toggle("hidden", !(can("customers.add") && ME.booking)); } }
@@ -14475,6 +14489,23 @@ function makePassword() {   // easy to read out loud: no 0/O, 1/l/I
 const TECH_KINDS = [["maintenance", "Maintenance"], ["service", "Service"], ["installs", "Installs"], ["security", "Security"]];
 let TKIND = null;
 async function loadTechKinds(force) { if (TKIND && !force) return TKIND; const { data, error } = await db.rpc("tech_kinds"); TKIND = error ? [] : data || []; return TKIND; }
+// Staff page: which other sales people's Sales page each sales person may see (owners only; owners always see them all)
+async function stSales() {
+  const box = document.getElementById("st-sales"); if (!box) return;
+  const { data, error } = await db.rpc("sales_people"); if (!document.getElementById("st-sales")) return;
+  const P = error ? [] : (data || []);
+  box.innerHTML = `<h2>Sales people <span class="count">${P.length}</span></h2>
+    <p class="quiet">Each sales person only sees their own Sales page. Tick the others whose page they may also see: they then get a drop-down with those names. Owners always see everyone's.</p>
+    ${error ? `<p class="quiet">${/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</p>`
+      : P.length < 2 ? `<p class="quiet">${P.length ? "Only one sales person so far." : "No one has the Sales role yet. Set it in their Role above."}</p>`
+      : `<div class="st-sl">${P.map(v => `<div class="st-sl-row"><b>${esc(v.name)}</b><span class="quiet">can also see</span>
+          <span class="st-sl-chips">${P.filter(x => x.id !== v.id).map(x => `<label class="check"><input type="checkbox" data-sv-viewer="${v.id}" data-sv-seller="${x.id}" ${(v.can_see || []).includes(x.id) ? "checked" : ""}> ${esc(x.name)}</label>`).join("")}</span></div>`).join("")}</div>`}`;
+  box.querySelectorAll("[data-sv-viewer]").forEach(cb => cb.addEventListener("change", async () => {
+    const { error } = await db.rpc("set_sales_viewer", { p_viewer: Number(cb.dataset.svViewer), p_seller: Number(cb.dataset.svSeller), p_on: cb.checked });
+    const m = $("#staff-msg"); if (m) { m.className = "staff-msg " + (error ? "err" : "ok"); m.textContent = error ? "Not saved: " + rpcErr(error) : "Saved."; }
+    if (error) cb.checked = !cb.checked;
+  }));
+}
 async function stTechs() {
   const box = document.getElementById("st-techs"); if (!box) return;
   const list = (await loadTechKinds(true)).filter(t => t.recent || t.kind);
@@ -14492,7 +14523,7 @@ async function stTechs() {
   }));
 }
 function renderStaff(users, perms, note) {
-  setTimeout(stTechs, 0);
+  setTimeout(stTechs, 0); setTimeout(stSales, 0);
   const isOwner = ME.role === "owner";
   const roleOptions = (sel, lockHigh) => ROLES.filter(([v]) => isOwner || !["owner", "admin"].includes(v) || v === sel)
     .map(([v, t]) => `<option value="${v}" ${v === sel ? "selected" : ""}>${t}</option>`).join("");
@@ -14551,6 +14582,7 @@ function renderStaff(users, perms, note) {
           </div></div>`; }).join("")}
     </section>
     <section class="block st-techs" id="st-techs"><h2>Technicians</h2><div class="quiet">Loading…</div></section>
+    ${ME.role === "owner" ? `<section class="block st-sales" id="st-sales"><h2>Sales people</h2><div class="quiet">Loading…</div></section>` : ""}
     <div class="staff-msg ${note?.err ? "err" : "ok"}" id="staff-msg" role="status">${note ? esc(note.text) : ""}</div>
     <div id="pbcat-panel"></div>
 
