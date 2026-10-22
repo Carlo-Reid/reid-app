@@ -981,6 +981,25 @@ AS $function$
 $function$;
 
 NOTIFY pgrst, 'reload schema';
+
+-- 99zd: sales people only see invoices and payments when they have "See invoices" (invoices.view).
+-- Everyone else on staff sees them as before. Safe to run more than once.
+CREATE OR REPLACE FUNCTION public._can_see_invoices() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT public.current_staff_role() IS NOT NULL
+     AND (public.current_staff_role() IS DISTINCT FROM 'sales' OR public.has_permission('invoices.view'))
+$$;
+REVOKE ALL ON FUNCTION public._can_see_invoices() FROM public;
+GRANT EXECUTE ON FUNCTION public._can_see_invoices() TO authenticated;
+
+DO $$ DECLARE t text; BEGIN
+  FOREACH t IN ARRAY ARRAY['invoices','invoice_lines','payments','payment_applications','payment_plans','payment_plan_installments'] LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('DROP POLICY IF EXISTS staff_read ON public.%I', t);
+      EXECUTE format('CREATE POLICY staff_read ON public.%I FOR SELECT TO authenticated USING ((SELECT public._can_see_invoices()))', t);
+    END IF;
+  END LOOP;
+END $$;
 """
 
 
@@ -1010,7 +1029,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
