@@ -767,6 +767,36 @@ END $$;
 REVOKE EXECUTE ON FUNCTION public.pb_item_labour(bigint), public.set_pb_item_labour(bigint, numeric, integer, numeric) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.pb_item_labour(bigint), public.set_pb_item_labour(bigint, numeric, integer, numeric) TO authenticated;
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================
+-- What each technician mainly does: Maintenance, Service or Installs (set on the Staff page, Technicians).
+-- The customer page uses it to suggest the right tech for a call. Safe to run more than once.
+-- =====================================================================
+ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS tech_kind text;
+
+CREATE OR REPLACE FUNCTION public.tech_kinds()
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public SET jit = off AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE coalesce(jsonb_agg(jsonb_build_object(
+      'id', e.id, 'name', public._emp_name(e.id), 'kind', e.tech_kind,
+      'recent', EXISTS (SELECT 1 FROM visit_assignments va JOIN visits v ON v.id = va.visit_id WHERE va.employee_id = e.id AND v.scheduled_date > current_date - 120)
+                OR EXISTS (SELECT 1 FROM app_users u WHERE u.employee_id = e.id AND u.active AND u.deleted_at IS NULL AND u.role = 'technician'))
+      ORDER BY public._emp_name(e.id)), '[]'::jsonb) END
+  FROM employees e WHERE e.active AND e.is_technician AND e.first_name NOT LIKE 'ZPast-%' AND public._emp_name(e.id) IS NOT NULL
+$$;
+
+CREATE OR REPLACE FUNCTION public.set_tech_kind(p_employee bigint, p_kind text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT (public.has_permission('staff.manage') OR public.current_staff_role() = 'owner') THEN RAISE EXCEPTION 'Only owners can change this'; END IF;
+  IF p_kind IS NOT NULL AND p_kind NOT IN ('maintenance', 'service', 'installs') THEN RAISE EXCEPTION 'Pick Maintenance, Service or Installs'; END IF;
+  UPDATE employees SET tech_kind = p_kind, updated_at = now() WHERE id = p_employee;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('employees', p_employee, 'update', public.current_app_user_id(), jsonb_build_object('tech_kind', p_kind));
+END $$;
+
+REVOKE EXECUTE ON FUNCTION public.tech_kinds(), public.set_tech_kind(bigint, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.tech_kinds(), public.set_tech_kind(bigint, text) TO authenticated;
+NOTIFY pgrst, 'reload schema';
 """
 
 
@@ -796,7 +826,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
