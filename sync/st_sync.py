@@ -1187,6 +1187,10 @@ AS $function$
 $function$;
 REVOKE EXECUTE ON FUNCTION public.sales_pipeline(boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.sales_pipeline(boolean) TO authenticated;
+
+-- 99zg: Walk site visits booked from the Sales page show on the Sales page too. Safe to run more than once.
+CREATE OR REPLACE FUNCTION public._is_install_sale(p_type_name text) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$ SELECT coalesce(p_type_name ~* '(hvac quote|quote for a/?c|quote for furnace|walk\s*site)', false) $$;
 """
 
 
