@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-21.221409">
+<meta name="app-version" content="2026-10-21.222433">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3188,6 +3188,12 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .bk-sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
 .ppl-wrap { display: flex; flex-direction: column; gap: 4px; min-width: 0; } .ppl-wrap > .ppl-card { flex: 1; }
 .ppl-sales { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 650; padding: 2px 4px; cursor: pointer; }
+.nc-hide { border: 0; background: transparent; color: var(--steel); cursor: pointer; font-size: 11px; padding: 0 4px 0 0; line-height: 1; } .nc-hide:hover { color: #c92a2a; }
+.nc-chipw { display: inline-flex; align-items: center; }
+.nc-chipx { border: 0; background: transparent; color: var(--steel); cursor: pointer; font-size: 10px; padding: 0 2px; } .nc-chipx:hover { color: #c92a2a; }
+.nc-reset { font-size: 12px; text-transform: none; letter-spacing: 0; margin-left: 8px; }
+/* the top bar always stays in view (also if a page ever scrolls the whole window) */
+#page-bar { position: sticky; top: 0; z-index: 900; }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -5901,7 +5907,7 @@ function nearCallsHtml(l) {
     return { n: mine.length, free, clash, full: full.has(p.d + "|" + p.tech) || !free.length }; };
   // only the picked kind of tech (Any tech = everyone)
   const KIND = new Map((TKIND || []).map(t => [t.name, t.kind]));
-  const okKind = n => !NEAR_KIND || KIND.get(n) === NEAR_KIND;
+  const okKind = n => !NEAR_KIND || KIND.get(n) === NEAR_KIND || (NEAR_KIND === "maintenance" && KIND.get(n) === "service");   // service techs do maintenance too
   const near2 = [...pairs.values()].filter(p => okKind(p.tech)).map(p => { const dd = dayOf(p); return { ...p, ...dd, score: p.calls.length * 2 + (5 - (p.min ?? 4)) - (dd.full ? 20 : 0) - (dd.clash ? 5 : 0) }; });
   // techs with nothing booked that day: available, no calls yet (weekdays in the next 2 weeks)
   const busy = new Set(NEAR.rows.flatMap(v => (v.techs ? v.techs.split(/,\s*/) : []).map(n => v.d + "|" + n)));
@@ -5911,20 +5917,21 @@ function nearCallsHtml(l) {
   // ten day boxes (the next 10 working days): every tech worth sending that day, best first
   const opts = [...near2, ...free].sort((a, b) => b.score - a.score);
   const days10 = []; for (let i = 0; days10.length < 10 && i < 21; i++) { const dt = new Date(); dt.setDate(dt.getDate() + i); const wd = dt.getDay(); if (wd === 0 || wd === 6) continue; days10.push(ymd(dt)); }
-  const best = opts.filter(p => days10.includes(p.d));
+  const hidden = opts.filter(p => days10.includes(p.d) && NEAR_HIDE.has(p.d + "|" + p.tech)).length;
+  const best = opts.filter(p => days10.includes(p.d) && !NEAR_HIDE.has(p.d + "|" + p.tech));
   const top = best.find(p => !p.full);
   const line = p => `<div class="nc-opt ${p.full ? "over" : p.clash ? "warn" : "room"}">
-      <div class="nc-o1"><b>${esc(p.tech)}</b> <span class="quiet">${p.none ? "no calls booked yet" : `${p.calls.length} nearby${p.min != null ? ", " + kmTxt(p.min) : ""}`}</span></div>
+      <div class="nc-o1"><button type="button" class="nc-hide" data-near-hide="${esc(p.d + "|" + p.tech)}" title="Take ${esc(p.tech)} off ${esc(day(p.d))} for now">✕</button><b>${esc(p.tech)}</b> <span class="quiet">${p.none ? "no calls booked yet" : `${p.calls.length} nearby${p.min != null ? ", " + kmTxt(p.min) : ""}`}</span></div>
       <div class="nc-o2">${p.full ? `<span class="nc-flag over">⚠ Over-booked: ${p.n} calls, no free window</span>`
         : `<span class="nc-flag room">${p.none ? "Available all day" : "Free " + esc(p.free.map(w => w[2]).join(", "))}</span>`}${p.clash ? ` <span class="nc-flag warn">⚠ Two calls at once (${esc(win(p.clash))})</span>` : ""}</div>
       <button type="button" class="btn nc-book" data-near-book="${esc(p.d)}" data-near-tech="${esc(p.tech)}" ${!p.full && p.free.length ? `data-near-time="${String(p.free[0][0]).padStart(2, "0")}:00"` : ""}>${p.full ? "Book anyway" : "Book " + esc(p.tech)}</button></div>`;
   const box = d => { const os = best.filter(p => p.d === d), nn = near.filter(v => v.d === d).length, isTop = top && top.d === d;
     return `<div class="nc-dbox ${isTop ? "top" : ""}"><div class="nc-bday">${esc(day(d))}${isTop ? ` <span class="nc-star">★ best</span>` : ""}<span class="nc-dn">${nn ? nn + " call" + (nn === 1 ? "" : "s") + " nearby" : ""}</span></div>
       <div class="nc-opts">${os.length ? os.filter(p => !p.none).map(line).join("") + (() => { const fr = os.filter(p => p.none); return fr.length ? `<div class="nc-opt room nc-freeall"><span class="nc-flag room">Free all day, no calls yet:</span>
-        <span class="nc-chips">${fr.map(p => `<button type="button" class="nc-chip" data-near-book="${esc(p.d)}" data-near-tech="${esc(p.tech)}" data-near-time="08:00" title="Book ${esc(p.tech)} on ${esc(day(p.d))}">${esc(p.tech)}</button>`).join("")}</span></div>` : ""; })() : `<div class="quiet nc-none">No ${NEAR_KIND ? esc(TECH_KINDS.find(k => k[0] === NEAR_KIND)?.[1] || "") + " " : ""}tech free or nearby</div>`}</div></div>`; };
+        <span class="nc-chips">${fr.map(p => `<span class="nc-chipw"><button type="button" class="nc-chip" data-near-book="${esc(p.d)}" data-near-tech="${esc(p.tech)}" data-near-time="08:00" title="Book ${esc(p.tech)} on ${esc(day(p.d))}">${esc(p.tech)}</button><button type="button" class="nc-chipx" data-near-hide="${esc(p.d + "|" + p.tech)}" title="Take ${esc(p.tech)} off ${esc(day(p.d))} for now">✕</button></span>`).join("")}</span></div>` : ""; })() : `<div class="quiet nc-none">No ${NEAR_KIND ? esc(TECH_KINDS.find(k => k[0] === NEAR_KIND)?.[1] || "") + " " : ""}tech free or nearby</div>`}</div></div>`; };
   const list = near.map(v => ({ v, k: km(v) })).sort((a, b) => (a.k ?? 99) - (b.k ?? 99) || a.v.d.localeCompare(b.v.d));
   return `<details class="nc-drop" ${NEAR_OPEN && NEAR_SHUT !== l.id ? "open" : ""}><summary class="nc-lab" title="Booked calls within about 5 km (or the same community / postal area) in the next 14 days">🚐 Calls nearby (2 weeks): <b>${near.length}</b> on ${days.size} ${days.size === 1 ? "day" : "days"}${top ? ` · best day: <b>${esc(day(top.d))}</b> with ${esc(top.tech)}` : ""}</summary>
-    <div class="nc-best"><div class="nc-h">The next 10 working days <span class="nc-kindnote">${NEAR_KIND ? ` · showing ${esc(TECH_KINDS.find(k => k[0] === NEAR_KIND)?.[1] || "")} techs` : ""}</span><span class="nc-legend">· green = has room · orange = two calls at the same time · red = no room left</span></div>
+    <div class="nc-best"><div class="nc-h">The next 10 working days <span class="nc-kindnote">${NEAR_KIND ? ` · showing ${esc(TECH_KINDS.find(k => k[0] === NEAR_KIND)?.[1] || "")} techs` : ""}</span><span class="nc-legend">· green = has room · orange = two calls at the same time · red = no room left · ✕ takes one off for now</span>${hidden ? ` <button type="button" class="link nc-reset" data-near-reset>↺ Reset (${hidden} taken off)</button>` : ""}</div>
       <div class="nc-days10">${days10.map(box).join("")}</div>
       ${NEAR_KIND && !best.length ? `<div class="quiet">No ${esc(TECH_KINDS.find(k => k[0] === NEAR_KIND)?.[1] || "")} techs to suggest. Check that they're set on the Staff page, under Technicians.</div>` : ""}</div>
   </details>`;
@@ -5949,6 +5956,12 @@ async function ncMap(l, list) {
 document.addEventListener("click", async e => { const b = e.target.closest("[data-near-book]"); if (!b || !current?.c) return;
   e.preventDefault(); let tech = null; try { const B = await bookLists(); tech = (B.techs || []).find(x => x.name === b.dataset.nearTech || x.name.split(" ")[0] === b.dataset.nearTech)?.id || null; } catch {}
   openBooking(current.c.id, { locId: current.loc, date: b.dataset.nearBook, tech, time: b.dataset.nearTime || undefined }); });
+// options taken off with ✕ (only until the page is loaded again or Reset is pressed)
+const NEAR_HIDE = new Set();
+const nearRedraw = () => { const el = document.getElementById("near-calls"); if (!el || !NEAR.cur) return; const was = el.querySelector(".nc-drop")?.open, y = $("#main").scrollTop;
+  el.innerHTML = nearCallsHtml({ ...NEAR.cur }); const d = el.querySelector(".nc-drop"); if (d && was) { d._auto = true; d.open = true; } $("#main").scrollTop = y; };
+document.addEventListener("click", e => { const h = e.target.closest("[data-near-hide]"), r = e.target.closest("[data-near-reset]"); if (!h && !r) return;
+  e.preventDefault(); e.stopPropagation(); if (h) NEAR_HIDE.add(h.dataset.nearHide); else NEAR_HIDE.clear(); nearRedraw(); }, true);
 // which kind of tech "Calls nearby" suggests: any, or only Maintenance / Service / Installs techs (set on the Staff page)
 let NEAR_KIND = (() => { try { return localStorage.getItem("reid.nearKind") || ""; } catch { return ""; } })();
 const nearKindBtns = () => `<span class="nk-btns" role="group" aria-label="Which kind of tech">${[["", "Any tech"]].concat(TECH_KINDS).map(([k, t]) => `<button type="button" class="nk-btn" data-near-kind="${k}" aria-pressed="${NEAR_KIND === k}">${t}</button>`).join("")}</span>`;
@@ -14217,9 +14230,9 @@ async function stTechs() {
   if (!document.getElementById("st-techs")) return;
   const ed = can("staff.manage") || ME.role === "owner";
   box.innerHTML = `<h2>Technicians <span class="count">${list.length}</span></h2>
-    <p class="quiet">Pick what each tech mainly does: Maintenance, Service, Installs or Security. On a customer's page, "Calls nearby" can then suggest only the right kind of tech.</p>
+    <p class="quiet">Pick what each tech mainly does: Maintenance, Service, Installs or Security. A Service tech also shows when you look for Maintenance. On a customer's page, "Calls nearby" can then suggest only the right kind of tech.</p>
     ${list.length ? `<div class="st-tk">${list.map(t => `<label class="st-tk-row"><span>${esc(t.name)}</span><select data-tkind="${t.id}" ${ed ? "" : "disabled"}>
-      <option value="">Not set</option>${TECH_KINDS.map(([k, n]) => `<option value="${k}" ${t.kind === k ? "selected" : ""}>${n}</option>`).join("")}</select></label>`).join("")}</div>`
+      <option value="">Not set</option>${TECH_KINDS.map(([k, n]) => `<option value="${k}" ${t.kind === k ? "selected" : ""}>${k === "service" ? "Service (and Maintenance)" : n}</option>`).join("")}</select></label>`).join("")}</div>`
       : `<p class="quiet">No technicians found.</p>`}`;
   box.querySelectorAll("[data-tkind]").forEach(sel => sel.addEventListener("change", async () => {
     const { error } = await db.rpc("set_tech_kind", { p_employee: Number(sel.dataset.tkind), p_kind: sel.value || null });
