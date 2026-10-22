@@ -695,6 +695,39 @@ def sync_notes(cur, st, delta):
 
 
 # ---------------------------------------------------------------------------
+APP_SCHEMA = r"""
+-- =====================================================================
+-- Price book items: the name can have its own look (colour, bold, size, font) like the picture boxes,
+-- and an item sold by the roll or the foot keeps its length (feet per roll / feet bought).
+-- The name's look and the description's colours show everywhere the item shows (price book, print book, item page).
+-- Safe to run more than once.
+-- =====================================================================
+ALTER TABLE public.pricebook_items ADD COLUMN IF NOT EXISTS name_style jsonb;
+ALTER TABLE public.pricebook_items ADD COLUMN IF NOT EXISTS unit_length numeric(10,2);
+
+CREATE OR REPLACE FUNCTION public.set_pb_item_look(p_item bigint, p_name_style jsonb, p_unit_length numeric)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT public.has_permission('pricebook.edit') THEN RAISE EXCEPTION 'You don''t have permission to change the price book'; END IF;
+  UPDATE pricebook_items SET name_style = CASE WHEN p_name_style IS NULL OR p_name_style = '{}'::jsonb THEN NULL ELSE p_name_style END,
+         unit_length = CASE WHEN p_unit_length > 0 THEN p_unit_length END, updated_at = now()
+  WHERE id = p_item;
+END $$;
+
+-- the looks for a list of items (the price book page asks for the ones it shows)
+CREATE OR REPLACE FUNCTION public.pb_item_looks(p_ids bigint[])
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public SET jit = off AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE
+    coalesce((SELECT jsonb_agg(jsonb_build_object('id', id, 'name_style', name_style, 'desc_html', description_html, 'unit_length', unit_length))
+              FROM pricebook_items WHERE id = ANY(p_ids) AND (name_style IS NOT NULL OR description_html IS NOT NULL OR unit_length IS NOT NULL)), '[]'::jsonb) END
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.set_pb_item_look(bigint, jsonb, numeric), public.pb_item_looks(bigint[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_pb_item_look(bigint, jsonb, numeric), public.pb_item_looks(bigint[]) TO authenticated;
+NOTIFY pgrst, 'reload schema';
+"""
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default="manual")
@@ -718,6 +751,11 @@ def main():
         fail("Another sync is running right now. Try again in a few minutes.")
     cur.execute("INSERT INTO st_sync_runs (source) VALUES (%s) RETURNING id", (args.source,))
     run_id = cur.fetchone()[0]; conn.commit()
+    # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
+    try:
+        cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks).")
+    except Exception as e:
+        conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
 
     try:
         new_state = {}
