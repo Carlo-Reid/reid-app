@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-21.214551">
+<meta name="app-version" content="2026-10-21.215913">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3166,6 +3166,21 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .st-tk { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; }
 .st-tk-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 .st-tk-row select { padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: inherit; }
+/* Calls nearby: one box per day, 5 across, every box the same height */
+.nc-days10 { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 6px; }
+@media (max-width: 1100px) { .nc-days10 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.nc-dbox { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 5px 6px; display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 11.5px; line-height: 1.3; }
+.nc-dbox.top { border: 2px solid var(--blue); background: var(--blue-wash); }
+.nc-dbox .nc-bday { flex-wrap: wrap; } .nc-dn { margin-left: auto; font-weight: 600; font-size: 10.5px; color: var(--steel); }
+.nc-opts { display: flex; flex-direction: column; gap: 4px; }
+.nc-opt { border-left: 3px solid var(--line); padding: 2px 0 3px 5px; display: flex; flex-direction: column; gap: 1px; }
+.nc-opt.room { border-left-color: #2f9e44; } .nc-opt.warn { border-left-color: #f59f00; } .nc-opt.over { border-left-color: #e03131; background: #fff5f5; }
+.nc-o1 b { font-size: 12px; } .nc-o2 { display: flex; flex-wrap: wrap; gap: 0 6px; }
+.nc-opt .nc-book { margin-top: 2px; padding: 1px 7px !important; font-size: 11px !important; }
+.nc-none { padding: 4px 0; }
+.nc-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px; }
+.nc-chip { font: inherit; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; border: 1px solid #8ccf9b; background: #ebfbee; color: #2b8a3e; cursor: pointer; }
+.nc-chip:hover { background: #d3f9d8; }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -5871,17 +5886,25 @@ function nearCallsHtml(l) {
   const free = [];
   for (let i = 0; i < 14; i++) { const dt = new Date(); dt.setDate(dt.getDate() + i); const wd = dt.getDay(); if (wd === 0 || wd === 6) continue;
     const d = ymd(dt); (TKIND || []).filter(t => t.recent && okKind(t.name) && !busy.has(d + "|" + t.name)).forEach(t => free.push({ d, tech: t.name, calls: [], min: null, n: 0, free: WINS, clash: null, full: false, none: true, score: 3 - i * 0.05 })); }
-  const best = [...near2, ...free].sort((a, b) => b.score - a.score || a.d.localeCompare(b.d)).slice(0, 10);   // up to 10; room first, over-booked last
+  // ten day boxes (the next 10 working days): every tech worth sending that day, best first
+  const opts = [...near2, ...free].sort((a, b) => b.score - a.score);
+  const days10 = []; for (let i = 0; days10.length < 10 && i < 21; i++) { const dt = new Date(); dt.setDate(dt.getDate() + i); const wd = dt.getDay(); if (wd === 0 || wd === 6) continue; days10.push(ymd(dt)); }
+  const best = opts.filter(p => days10.includes(p.d));
+  const top = best.find(p => !p.full);
+  const line = p => `<div class="nc-opt ${p.full ? "over" : p.clash ? "warn" : "room"}">
+      <div class="nc-o1"><b>${esc(p.tech)}</b> <span class="quiet">${p.none ? "no calls booked yet" : `${p.calls.length} nearby${p.min != null ? ", " + kmTxt(p.min) : ""}`}</span></div>
+      <div class="nc-o2">${p.full ? `<span class="nc-flag over">⚠ Over-booked: ${p.n} calls, no free window</span>`
+        : `<span class="nc-flag room">${p.none ? "Available all day" : "Free " + esc(p.free.map(w => w[2]).join(", "))}</span>`}${p.clash ? ` <span class="nc-flag warn">⚠ Two calls at once (${esc(win(p.clash))})</span>` : ""}</div>
+      <button type="button" class="btn nc-book" data-near-book="${esc(p.d)}" data-near-tech="${esc(p.tech)}" ${!p.full && p.free.length ? `data-near-time="${String(p.free[0][0]).padStart(2, "0")}:00"` : ""}>${p.full ? "Book anyway" : "Book " + esc(p.tech)}</button></div>`;
+  const box = d => { const os = best.filter(p => p.d === d), nn = near.filter(v => v.d === d).length, isTop = top && top.d === d;
+    return `<div class="nc-dbox ${isTop ? "top" : ""}"><div class="nc-bday">${esc(day(d))}${isTop ? ` <span class="nc-star">★ best</span>` : ""}<span class="nc-dn">${nn ? nn + " call" + (nn === 1 ? "" : "s") + " nearby" : ""}</span></div>
+      <div class="nc-opts">${os.length ? os.filter(p => !p.none).map(line).join("") + (() => { const fr = os.filter(p => p.none); return fr.length ? `<div class="nc-opt room nc-freeall"><span class="nc-flag room">Free all day, no calls yet:</span>
+        <span class="nc-chips">${fr.map(p => `<button type="button" class="nc-chip" data-near-book="${esc(p.d)}" data-near-tech="${esc(p.tech)}" data-near-time="08:00" title="Book ${esc(p.tech)} on ${esc(day(p.d))}">${esc(p.tech)}</button>`).join("")}</span></div>` : ""; })() : `<div class="quiet nc-none">No ${NEAR_KIND ? esc(TECH_KINDS.find(k => k[0] === NEAR_KIND)?.[1] || "") + " " : ""}tech free or nearby</div>`}</div></div>`; };
   const list = near.map(v => ({ v, k: km(v) })).sort((a, b) => (a.k ?? 99) - (b.k ?? 99) || a.v.d.localeCompare(b.v.d));
-  return `<details class="nc-drop" ${NEAR_OPEN && NEAR_SHUT !== l.id ? "open" : ""}><summary class="nc-lab" title="Booked calls within about 5 km (or the same community / postal area) in the next 14 days">🚐 Calls nearby (2 weeks): <b>${near.length}</b> on ${days.size} ${days.size === 1 ? "day" : "days"}${best.length ? ` · best day: <b>${esc(day(best[0].d))}</b> with ${esc(best[0].tech)}` : ""}</summary>
-    ${best.length ? `<div class="nc-best"><div class="nc-h">Best days to send someone here <span class="nc-kindnote">${NEAR_KIND ? ` · showing ${esc(TECH_KINDS.find(k => k[0] === NEAR_KIND)?.[1] || "")} techs` : ""}</span><span class="nc-legend">· green = has room · orange = two calls at the same time · red = no room left</span></div><div class="nc-best-row">${best.map((p, i) => `<div class="nc-bcard ${i ? "" : "top"} ${p.full ? "over" : p.clash ? "warn" : "room"}">
-      <div class="nc-bday"><span class="nc-rank">${i + 1}</span>${esc(day(p.d))}${i || p.full ? "" : ` <span class="nc-star">★</span>`}</div>
-      <div><b>${esc(p.tech)}</b> · ${p.none ? "no calls booked yet" : `${p.calls.length} nearby${p.min != null ? `, ${kmTxt(p.min)}` : ""}`}</div>
-      ${p.full ? `<div class="nc-flag over">⚠ Over-booked: ${p.n} calls, no free window</div>`
-        : `<div class="nc-flag room">${p.none ? "Available all day" : "Free " + esc(p.free.map(w => w[2]).join(", "))}</div>`}
-      ${p.clash ? `<div class="nc-flag warn">⚠ Two calls at once (${esc(win(p.clash))})</div>` : ""}
-      <button type="button" class="btn nc-book" data-near-book="${esc(p.d)}" data-near-tech="${esc(p.tech)}" ${!p.full && p.free.length ? `data-near-time="${String(p.free[0][0]).padStart(2, "0")}:00"` : ""}>${p.full ? "Book anyway" : "Book " + esc(day(p.d).split(" ")[0].replace(",", ""))}</button></div>`).join("")}</div></div>`
-      : `<div class="nc-best quiet">${NEAR_KIND ? "No " + esc(TECH_KINDS.find(k => k[0] === NEAR_KIND)?.[1] || "") + " techs to suggest. Check that they're set on the Staff page, under Technicians." : "Every tech close by is booked solid on those days."}</div>`}
+  return `<details class="nc-drop" ${NEAR_OPEN && NEAR_SHUT !== l.id ? "open" : ""}><summary class="nc-lab" title="Booked calls within about 5 km (or the same community / postal area) in the next 14 days">🚐 Calls nearby (2 weeks): <b>${near.length}</b> on ${days.size} ${days.size === 1 ? "day" : "days"}${top ? ` · best day: <b>${esc(day(top.d))}</b> with ${esc(top.tech)}` : ""}</summary>
+    <div class="nc-best"><div class="nc-h">The next 10 working days <span class="nc-kindnote">${NEAR_KIND ? ` · showing ${esc(TECH_KINDS.find(k => k[0] === NEAR_KIND)?.[1] || "")} techs` : ""}</span><span class="nc-legend">· green = has room · orange = two calls at the same time · red = no room left</span></div>
+      <div class="nc-days10">${days10.map(box).join("")}</div>
+      ${NEAR_KIND && !best.length ? `<div class="quiet">No ${esc(TECH_KINDS.find(k => k[0] === NEAR_KIND)?.[1] || "")} techs to suggest. Check that they're set on the Staff page, under Technicians.</div>` : ""}</div>
   </details>`;
 }
 // the little map under "Show all": this house and the calls nearby (drawn when that part is open)
