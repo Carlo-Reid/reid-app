@@ -841,6 +841,146 @@ END $$;
 REVOKE EXECUTE ON FUNCTION public.partner_sales(), public.set_partner_sales(bigint, boolean), public.set_job_partner(bigint, bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.partner_sales(), public.set_partner_sales(bigint, boolean), public.set_job_partner(bigint, bigint) TO authenticated;
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================
+-- Sales page: sales jobs → booked → estimate (price book items, up to 3 options) → closed deal (sold + an Install job).
+-- Sales people see their own; owners see everyone's. "See invoices" is a permission an owner can give a sales person.
+-- Safe to run more than once.
+-- =====================================================================
+INSERT INTO public.permissions (code, name, description, category, sort_order)
+VALUES ('invoices.view', 'See invoices', 'Sales people: see a customer''s invoices and what they owe', 'Invoices', 61)
+ON CONFLICT (code) DO NOTHING;
+
+-- the sales jobs on the Sales page (mine, or everyone's for owners / dispatch)
+CREATE OR REPLACE FUNCTION public.sales_pipeline(p_all boolean DEFAULT false)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public SET jit = off AS $$
+  WITH me AS (SELECT public._my_employee() AS emp, public.current_app_user_id() AS uid,
+                     coalesce(public.current_staff_role() = 'owner' OR public.has_permission('calls.dispatch'), false) AS boss),
+  j AS (
+    SELECT jb.* FROM jobs jb JOIN job_types t ON t.id = jb.job_type_id, me
+    WHERE t.job_class = 'sales' AND jb.created_at > now() - interval '18 months'
+      AND (p_all AND me.boss OR jb.booked_by_user_id = me.uid OR jb.sold_by_employee_id = me.emp
+           OR EXISTS (SELECT 1 FROM visits v JOIN visit_assignments va ON va.visit_id = v.id WHERE v.job_id = jb.id AND va.employee_id = me.emp))
+    ORDER BY jb.created_at DESC LIMIT 400)
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE coalesce(jsonb_agg(x ORDER BY x->>'sort' DESC), '[]'::jsonb) END FROM (
+    SELECT jsonb_build_object(
+      'job_id', j.id, 'job_number', j.job_number, 'status', j.status, 'summary', j.summary, 'type', t.name,
+      'customer_id', c.id, 'customer', c.display_name, 'street', l.street, 'city', l.city,
+      'partner', (SELECT name FROM partners WHERE id = j.partner_id),
+      'visit_date', v.scheduled_date, 'visit_from', v.arrival_start, 'visit_to', v.arrival_end,
+      'seller', (SELECT public._emp_name(va.employee_id) FROM visit_assignments va WHERE va.visit_id = v.id ORDER BY va.role = 'lead' DESC LIMIT 1),
+      'est_id', e.id, 'est_number', e.estimate_number, 'est_status', e.status, 'est_total', (SELECT max(t2.tot) FROM (SELECT sum(el.line_total) tot FROM estimate_options o JOIN estimate_lines el ON el.estimate_option_id = o.id WHERE o.estimate_id = e.id GROUP BY o.id) t2),
+      'sold_total', (SELECT sum(el.line_total) FROM estimate_lines el WHERE el.estimate_option_id = e.accepted_option_id),
+      'stage', CASE WHEN e.status = 'accepted' THEN 'closed' WHEN e.status IN ('lost', 'declined', 'expired') OR j.status = 'cancelled' THEN 'lost'
+                    WHEN e.id IS NOT NULL THEN 'estimate' ELSE 'booked' END,
+      'sort', coalesce(e.updated_at, j.created_at)) AS x
+    FROM j JOIN job_types t ON t.id = j.job_type_id JOIN customers c ON c.id = j.customer_id LEFT JOIN locations l ON l.id = j.location_id
+    LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = j.id ORDER BY v.visit_number DESC LIMIT 1) v ON true
+    LEFT JOIN LATERAL (SELECT * FROM estimates e WHERE e.job_id = j.id ORDER BY e.id DESC LIMIT 1) e ON true) s
+$$;
+
+-- start an estimate for a sales job (or open the one it has)
+CREATE OR REPLACE FUNCTION public.est_create(p_job bigint)
+RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE j jobs; v_id bigint;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  SELECT * INTO j FROM jobs WHERE id = p_job; IF j.id IS NULL THEN RAISE EXCEPTION 'That job no longer exists'; END IF;
+  SELECT id INTO v_id FROM estimates WHERE job_id = p_job AND status NOT IN ('lost', 'declined', 'expired') ORDER BY id DESC LIMIT 1;
+  IF v_id IS NOT NULL THEN RETURN v_id; END IF;
+  INSERT INTO estimates (estimate_number, job_id, customer_id, location_id, business_unit_id, partner_id, sold_by_employee_id, created_via, status)
+  VALUES ('E' || p_job || '-' || floor(extract(epoch FROM now()))::bigint % 100000, p_job, j.customer_id, j.location_id, j.business_unit_id, j.partner_id,
+          public._my_employee(), 'onsite', 'draft') RETURNING id INTO v_id;
+  UPDATE estimates SET estimate_number = 'E' || v_id WHERE id = v_id;
+  INSERT INTO estimate_options (estimate_id, sequence, name, is_recommended) VALUES (v_id, 1, 'Option 1', true);
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values) VALUES ('estimates', v_id, 'insert', public.current_app_user_id(), jsonb_build_object('job_id', p_job));
+  RETURN v_id;
+END $$;
+
+-- save the estimate: its options and their lines (replaces what was there). Not after it's sold or lost.
+CREATE OR REPLACE FUNCTION public.est_save(p_id bigint, p jsonb)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE e estimates; o jsonb; ln jsonb; v_opt bigint; n int := 0; k int;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  SELECT * INTO e FROM estimates WHERE id = p_id; IF e.id IS NULL THEN RAISE EXCEPTION 'That estimate no longer exists'; END IF;
+  IF e.status IN ('accepted', 'lost', 'declined', 'expired') THEN RAISE EXCEPTION 'This estimate is closed and can''t be changed'; END IF;
+  IF jsonb_array_length(coalesce(p -> 'options', '[]')) > 3 THEN RAISE EXCEPTION 'Up to 3 options'; END IF;
+  DELETE FROM estimate_lines WHERE estimate_option_id IN (SELECT id FROM estimate_options WHERE estimate_id = p_id);
+  DELETE FROM estimate_options WHERE estimate_id = p_id;
+  FOR o IN SELECT * FROM jsonb_array_elements(coalesce(p -> 'options', '[]')) LOOP
+    n := n + 1;
+    INSERT INTO estimate_options (estimate_id, sequence, name, description, is_recommended)
+    VALUES (p_id, n, coalesce(nullif(btrim(o ->> 'name'), ''), 'Option ' || n), nullif(btrim(o ->> 'description'), ''), coalesce((o ->> 'recommended')::boolean, false))
+    RETURNING id INTO v_opt;
+    k := 0;
+    FOR ln IN SELECT * FROM jsonb_array_elements(coalesce(o -> 'lines', '[]')) LOOP
+      k := k + 1;
+      INSERT INTO estimate_lines (estimate_option_id, sequence, item_id, description, quantity, unit_price, unit_cost, est_labour_hours, taxable)
+      SELECT v_opt, k, i.id, coalesce(nullif(btrim(ln ->> 'description'), ''), i.name, 'Item'), coalesce((ln ->> 'qty')::numeric, 1),
+             coalesce((ln ->> 'price')::numeric, i.unit_price, 0), coalesce(i.unit_cost, 0), i.est_labour_hours, coalesce(i.taxable, true)
+      FROM (SELECT 1) one LEFT JOIN pricebook_items i ON i.id = nullif(ln ->> 'item_id', '')::bigint;
+    END LOOP;
+  END LOOP;
+  UPDATE estimates SET status = CASE WHEN p ? 'sent' AND (p ->> 'sent')::boolean THEN 'sent' ELSE status END,
+         sent_at = CASE WHEN p ? 'sent' AND (p ->> 'sent')::boolean AND sent_at IS NULL THEN now() ELSE sent_at END, updated_at = now() WHERE id = p_id;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values) VALUES ('estimates', p_id, 'update', public.current_app_user_id(), jsonb_build_object('options', n));
+END $$;
+
+-- closed deal: the customer picked an option. Marks it sold and makes an Install job, ready to schedule.
+CREATE OR REPLACE FUNCTION public.est_close(p_id bigint, p_option bigint)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE e estimates; sj jobs; v_type bigint; ij jobs; v_name text;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  SELECT * INTO e FROM estimates WHERE id = p_id; IF e.id IS NULL THEN RAISE EXCEPTION 'That estimate no longer exists'; END IF;
+  IF e.status = 'accepted' THEN RAISE EXCEPTION 'This deal is already closed'; END IF;
+  SELECT name INTO v_name FROM estimate_options WHERE id = p_option AND estimate_id = p_id;
+  IF v_name IS NULL THEN RAISE EXCEPTION 'Pick the option the customer chose'; END IF;
+  UPDATE estimates SET status = 'accepted', accepted_option_id = p_option, accepted_at = now(), accepted_via = 'tablet',
+         sold_by_employee_id = coalesce(sold_by_employee_id, public._my_employee()), updated_at = now() WHERE id = p_id;
+  SELECT * INTO sj FROM jobs WHERE id = e.job_id;
+  SELECT id INTO v_type FROM job_types WHERE job_class = 'install' AND active IS NOT FALSE ORDER BY (name ~* '^install x 1') DESC, (name ~* '^install') DESC, name LIMIT 1;
+  INSERT INTO jobs (job_number, customer_id, location_id, job_type_id, business_unit_id, status, priority, summary, booked_by_user_id, sold_by_employee_id, partner_id)
+  VALUES ('new', e.customer_id, e.location_id, v_type, coalesce(e.business_unit_id, sj.business_unit_id), 'new', 'normal',
+          left('Install: ' || v_name || ' (estimate ' || e.estimate_number || ')', 200), public.current_app_user_id(), coalesce(e.sold_by_employee_id, public._my_employee()), coalesce(e.partner_id, sj.partner_id))
+  RETURNING * INTO ij;
+  UPDATE jobs SET job_number = ij.id::text WHERE id = ij.id RETURNING * INTO ij;
+  INSERT INTO job_status_history (job_id, from_status, to_status, changed_by_user_id, note) VALUES (ij.id, NULL, 'new', public.current_app_user_id(), 'Sold on estimate ' || e.estimate_number);
+  IF sj.id IS NOT NULL AND sj.status NOT IN ('completed', 'cancelled') THEN
+    UPDATE jobs SET status = 'completed', completed_at = now() WHERE id = sj.id;
+    INSERT INTO job_status_history (job_id, from_status, to_status, changed_by_user_id, note) VALUES (sj.id, sj.status, 'completed', public.current_app_user_id(), 'Deal closed');
+  END IF;
+  INSERT INTO notes (entity_type, entity_id, body, author_user_id, source)
+  VALUES ('job', ij.id, 'Sold: ' || v_name || ' on estimate ' || e.estimate_number || '. Book the install from Dispatch.', public.current_app_user_id(), 'sales');
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values) VALUES ('estimates', p_id, 'update', public.current_app_user_id(), jsonb_build_object('status', 'accepted', 'option', p_option, 'install_job', ij.id));
+  RETURN jsonb_build_object('install_job_id', ij.id, 'install_job_number', ij.job_number);
+END $$;
+
+-- not sold
+CREATE OR REPLACE FUNCTION public.est_lost(p_id bigint, p_reason text, p_note text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  UPDATE estimates SET status = 'lost', lost_reason = CASE WHEN p_reason IN ('price', 'competitor', 'not_doing_work', 'no_response', 'financing_declined', 'other') THEN p_reason ELSE 'other' END,
+         lost_note = nullif(btrim(p_note), ''), updated_at = now() WHERE id = p_id AND status <> 'accepted';
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values) VALUES ('estimates', p_id, 'update', public.current_app_user_id(), jsonb_build_object('status', 'lost', 'reason', p_reason));
+END $$;
+
+REVOKE EXECUTE ON FUNCTION public.sales_pipeline(boolean), public.est_create(bigint), public.est_save(bigint, jsonb), public.est_close(bigint, bigint), public.est_lost(bigint, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.sales_pipeline(boolean), public.est_create(bigint), public.est_save(bigint, jsonb), public.est_close(bigint, bigint), public.est_lost(bigint, text, text) TO authenticated;
+-- sales people can always book (the app only lets them book sales calls) and look up price book items for estimates
+CREATE OR REPLACE FUNCTION public.has_permission(p_code text)
+ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public'
+AS $function$
+  SELECT coalesce(public.current_staff_role() = 'owner', false)
+      OR EXISTS (SELECT 1 FROM public.user_permissions
+                 WHERE app_user_id = public.current_app_user_id() AND permission_code = p_code)
+      OR (p_code = 'pricebook.view' AND EXISTS (SELECT 1 FROM public.app_users WHERE id = public.current_app_user_id() AND price_book_id IS NOT NULL))
+      OR (p_code IN ('calls.book', 'pricebook.view') AND coalesce(public.current_staff_role() = 'sales', false))
+$function$;
+
+NOTIFY pgrst, 'reload schema';
 """
 
 
@@ -870,7 +1010,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
