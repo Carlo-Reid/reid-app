@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-21.204906">
+<meta name="app-version" content="2026-10-21.210500">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3116,6 +3116,9 @@ body[data-page="calls"] #page-bar-act .cl-showing { border-radius: 0 !important;
 .pb-ntools .pbx-sw[aria-pressed="true"] { box-shadow: 0 0 0 2px #1c2630; }
 .pb-ntools input[type=color] { width: 30px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 4px; }
 .pb-ntools select { width: auto; padding: 3px 6px; }
+.pb-cat[data-pb-drag] { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.pb-cat.pb-dragging { outline: 2px dashed var(--blue); outline-offset: 1px; background: var(--blue-wash); cursor: grabbing; }
+body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -12323,7 +12326,7 @@ function pbCatTree(edit) {
   const node = (c, d) => {
     if (!c.active && PB.cat !== c.id && !PB.showRetiredCats) return "";
     const kids = c.kids.filter(k => k.active || PB.cat === k.id || PB.showRetiredCats), open = PB.open.has(c.id);
-    return `<li><div class="pb-cat ${PB.cat === c.id ? "cur" : ""} ${c.active ? "" : "pb-cat-old"}" ${edit ? `draggable="true" data-pb-drag="${c.id}" title="Drag up or down to change the order"` : ""}>${edit ? `<span class="pb-grip" aria-hidden="true">⠿</span>` : ""}${kids.length
+    return `<li><div class="pb-cat ${PB.cat === c.id ? "cur" : ""} ${c.active ? "" : "pb-cat-old"}" ${edit ? `data-pb-drag="${c.id}" title="Click to open · press and hold, then drag up or down to change the order"` : ""}>${edit ? `<span class="pb-grip" aria-hidden="true">⠿</span>` : ""}${kids.length
         ? `<button class="pb-tw" type="button" data-pb-tw="${c.id}" aria-expanded="${open}" aria-label="${open ? "Close" : "Open"} ${esc(c.name)}">${open ? "▾" : "▸"}</button>` : `<span class="pb-tw"></span>`}
       <button class="pb-catbtn" type="button" data-pb-cat="${c.id}" title="${esc(c.name)}">${esc(c.name)}${c.total ? ` <span class="quiet">${c.total}</span>` : ""}</button>${edit ? `<button class="pb-cat-pw ${c.active ? "" : "off"}" type="button" data-pb-off="${c.id}" title="${c.active ? `Deactivate ${esc(c.name)} and every item in it` : `Reactivate ${esc(c.name)} and every item in it`}" aria-label="${c.active ? "Deactivate" : "Reactivate"} ${esc(c.name)} with its items">⏻</button>` : ""}</div>
       ${open && kids.length ? `<ul>${kids.map(k => node(k, d + 1)).join("")}</ul>` : ""}</li>`;
@@ -12553,7 +12556,11 @@ function renderPricebook(msg) {
   document.querySelectorAll("[data-pb-tw]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.pbTw); PB.open.has(id) ? PB.open.delete(id) : PB.open.add(id); renderPricebook(); }));
   document.querySelectorAll("[data-pb-cat]").forEach(b => b.addEventListener("click", () => {
     const id = b.dataset.pbCat ? Number(b.dataset.pbCat) : null;
-    PB.cat = id; PB.catForm = null; PB.catToolsOpen = false;   // picking a category doesn't open it; use the ▸ arrow to see what's inside
+    if (PB.dragJustEnded) { PB.dragJustEnded = false; return; }   // that was a press-and-hold drag, not a click
+    // clicking a category picks it and opens it (clicking the picked, open one again closes it)
+    const c = id ? PB.catBy.get(id) : null;
+    if (c && c.kids.length) { if (!PB.open.has(id)) PB.open.add(id); else if (PB.cat === id) PB.open.delete(id); }
+    PB.cat = id; PB.catForm = null; PB.catToolsOpen = false;
     if (id && !matchMedia("(min-width: 900px)").matches) PB.catsOpen = false;
     reload();
   }));
@@ -12572,16 +12579,30 @@ function renderPricebook(msg) {
     const me = sibs.find(c => c.id === id); sibs.splice(sibs.indexOf(me), 1); sibs.splice(sibs.findIndex(c => c.id === targetId) + (after ? 1 : 0), 0, me); saveOrder(sibs, me.name); };
   document.querySelectorAll("[data-pb-move]").forEach(b => b.addEventListener("click", () => { const id = PB.cat, sibs = sibsOf(id), vis = sibs.filter(c => c.active || PB.showRetiredCats || c.id === id), i = vis.findIndex(c => c.id === id), j = i + Number(b.dataset.pbMove);
     if (j < 0 || j >= vis.length) return; moveTo(id, vis[j].id, Number(b.dataset.pbMove) > 0); }));
-  let dragId = null;
+  // press and hold a category (about half a second), then drag it up or down among its neighbours; a quick click just opens it
   document.querySelectorAll("[data-pb-drag]").forEach(d => {
-    d.addEventListener("dragstart", e => { dragId = Number(d.dataset.pbDrag); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", String(dragId)); } catch {} d.classList.add("pb-dragging"); });
-    d.addEventListener("dragend", () => { dragId = null; document.querySelectorAll(".pb-dragging, .pb-drop-before, .pb-drop-after").forEach(x => x.classList.remove("pb-dragging", "pb-drop-before", "pb-drop-after")); });
-    d.addEventListener("dragover", e => { if (dragId == null) return; const t = Number(d.dataset.pbDrag); if (t === dragId || !sibsOf(dragId).some(c => c.id === t)) return;
-      e.preventDefault(); const r = d.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
-      d.classList.toggle("pb-drop-after", after); d.classList.toggle("pb-drop-before", !after); });
-    d.addEventListener("dragleave", () => d.classList.remove("pb-drop-before", "pb-drop-after"));
-    d.addEventListener("drop", e => { e.preventDefault(); const after = d.classList.contains("pb-drop-after"), t = Number(d.dataset.pbDrag), id = dragId;
-      d.classList.remove("pb-drop-before", "pb-drop-after"); if (id != null) moveTo(id, t, after); });
+    let timer = null, start = null, holding = false, over = null;
+    const clear = () => { document.querySelectorAll(".pb-drop-before, .pb-drop-after").forEach(x => x.classList.remove("pb-drop-before", "pb-drop-after")); };
+    const stop = () => { clearTimeout(timer); timer = null; holding = false; over = null; d.classList.remove("pb-dragging", "pb-holdready"); document.body.classList.remove("pb-dragmode"); clear(); };
+    d.addEventListener("pointerdown", e => {
+      if (e.button !== 0 || e.target.closest(".pb-cat-pw, .pb-tw")) return;
+      start = { x: e.clientX, y: e.clientY, id: e.pointerId };
+      timer = setTimeout(() => { holding = true; d.classList.add("pb-dragging"); document.body.classList.add("pb-dragmode"); try { d.setPointerCapture(start.id); } catch {} try { navigator.vibrate?.(30); } catch {} }, 450);
+    });
+    d.addEventListener("pointermove", e => {
+      if (!start) return;
+      if (!holding) { if (Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y) > 8) { clearTimeout(timer); timer = null; start = null; } return; }
+      e.preventDefault();
+      const el = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-pb-drag]"); clear(); over = null;
+      if (!el) return; const t = Number(el.dataset.pbDrag), me = Number(d.dataset.pbDrag);
+      if (t === me || !sibsOf(me).some(c => c.id === t)) return;
+      const r = el.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+      el.classList.add(after ? "pb-drop-after" : "pb-drop-before"); over = { t, after };
+    });
+    d.addEventListener("pointerup", () => { const was = holding, o = over, me = Number(d.dataset.pbDrag); stop(); start = null;
+      if (was) { PB.dragJustEnded = true; setTimeout(() => { PB.dragJustEnded = false; }, 400); if (o) moveTo(me, o.t, o.after); } });
+    d.addEventListener("pointercancel", () => { stop(); start = null; });
+    d.addEventListener("contextmenu", e => { if (holding || timer) e.preventDefault(); });
   });
   // find a category by typing
   { const q = $("#pb-catq"), res = $("#pb-catres"); let hits = [], pick = 0;
