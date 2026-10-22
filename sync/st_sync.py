@@ -586,6 +586,31 @@ def sync_inventory(cur, st, state, new_state):
         cur.execute("UPDATE pricebook_items SET track_inventory = true WHERE st_id = ANY(%s) AND track_inventory IS NOT TRUE", (stocked,))
         out.append(f"{len(stocked)} items stocked in ServiceTitan ({cur.rowcount} newly marked)")
         new_state["inv-items"] = {"continue_from": None, "since": datetime.now(timezone.utc).isoformat()}
+    # supplier part numbers from ServiceTitan's price book (primary and other vendors): the first time, then on Sundays.
+    # Fills in what's missing only; a part number or price the office typed is never changed.
+    if not (state.get("st-vendor-parts") or {}).get("since") or datetime.now(timezone.utc).weekday() == 6:
+        cur.execute("DROP TABLE IF EXISTS _s_vp; CREATE TEMP TABLE _s_vp (item_st bigint, vendor_st bigint, part text, cost numeric, prim boolean) ON COMMIT DROP")
+        n = 0
+        with cur.copy("COPY _s_vp FROM STDIN") as cp:
+            for path in ("pricebook/v2/tenant/{t}/materials", "pricebook/v2/tenant/{t}/equipment"):
+                for m in pull_pages(st, path):
+                    vs = ([dict(m["primaryVendor"], _p=True)] if m.get("primaryVendor") else []) + [dict(v, _p=False) for v in (m.get("otherVendors") or [])]
+                    for v in vs:
+                        part = str(v.get("vendorPart") or "").strip()
+                        vid = v.get("vendorId")
+                        if not vid or v.get("active") is False: continue
+                        cost = v.get("cost")
+                        cp.write_row((int(m["id"]), int(vid), part[:80] or None, cost if isinstance(cost, (int, float)) and cost > 0 else None, v["_p"])); n += 1
+        cur.execute("""INSERT INTO supplier_items (supplier_id, item_id, supplier_sku, cost, is_preferred)
+                       SELECT DISTINCT ON (s.id, i.id) s.id, i.id, v.part, v.cost,
+                              v.prim AND NOT EXISTS (SELECT 1 FROM supplier_items x WHERE x.item_id = i.id AND x.is_preferred)
+                       FROM _s_vp v JOIN pricebook_items i ON i.st_id = v.item_st JOIN suppliers s ON s.st_id = v.vendor_st
+                       ORDER BY s.id, i.id, v.prim DESC
+                       ON CONFLICT (supplier_id, item_id) DO UPDATE
+                         SET supplier_sku = coalesce(supplier_items.supplier_sku, EXCLUDED.supplier_sku),
+                             cost = coalesce(supplier_items.cost, EXCLUDED.cost)""")
+        out.append(f"supplier part numbers: {n} from ServiceTitan, {cur.rowcount} added or filled in")
+        new_state["st-vendor-parts"] = {"continue_from": None, "since": datetime.now(timezone.utc).isoformat()}
     # stock history, read-only: everything the first time, then what changed
     cur.execute("""CREATE TABLE IF NOT EXISTS st_stock_history (
         kind text NOT NULL, line_st_id bigint NOT NULL, doc_st_id bigint, doc_number text, sku_st_id bigint, item_name text, item_code text,
