@@ -1000,6 +1000,100 @@ DO $$ DECLARE t text; BEGIN
     END IF;
   END LOOP;
 END $$;
+
+-- 99ze: (1) Desert can be picked in Settings, and a picked theme sticks after logging in again
+--       (2) sales people can add new customers
+--       (3) the go-live lock: one switch (Settings, owners only), OFF until go-live.
+--           When ON: purchase orders, supplier bills, supplier payments only for people with "Create POs" or "See costs",
+--           and staff pay rates (hourly wage, burden, labour cost) can't be read from the staff list.
+-- Safe to run more than once.
+
+-- (1) colour themes
+CREATE OR REPLACE FUNCTION public.save_my_theme(p_prefs jsonb)
+ RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public'
+AS $function$
+DECLARE v_me bigint := public.current_app_user_id();
+BEGIN
+  IF v_me IS NULL THEN RAISE EXCEPTION 'Only staff can save colours'; END IF;
+  IF coalesce(p_prefs ->> 'id', '') NOT IN ('desert', 'classic', 'night', 'warm', 'forest') THEN RAISE EXCEPTION 'Unknown colour theme'; END IF;
+  IF coalesce(p_prefs ->> 'font', 'm') NOT IN ('s', 'm', 'l', 'xl') THEN RAISE EXCEPTION 'Unknown text size'; END IF;
+  IF p_prefs ? 'custom' AND (jsonb_typeof(p_prefs -> 'custom') <> 'object' OR EXISTS (
+       SELECT 1 FROM jsonb_each(p_prefs -> 'custom') t
+       WHERE t.key NOT IN ('desert', 'classic', 'night', 'warm', 'forest') OR jsonb_typeof(t.value) <> 'object'
+          OR EXISTS (SELECT 1 FROM jsonb_each_text(t.value) c
+                     WHERE c.key NOT IN ('paper', 'panel', 'blue', 'ink') OR c.value !~ '^#[0-9A-Fa-f]{6}$'))) THEN
+    RAISE EXCEPTION 'One of the custom colours isn''t valid';
+  END IF;
+  UPDATE app_users SET theme_prefs = jsonb_build_object('id', p_prefs -> 'id', 'custom', coalesce(p_prefs -> 'custom', '{}'::jsonb),
+                                                       'font', coalesce(p_prefs ->> 'font', 'm'), 'v', 2)
+  WHERE id = v_me;
+END $function$;
+
+-- (2) sales people: book calls, look up the price book, add customers
+CREATE OR REPLACE FUNCTION public.has_permission(p_code text)
+ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public'
+AS $function$
+  SELECT coalesce(public.current_staff_role() = 'owner', false)
+      OR EXISTS (SELECT 1 FROM public.user_permissions
+                 WHERE app_user_id = public.current_app_user_id() AND permission_code = p_code)
+      OR (p_code = 'pricebook.view' AND EXISTS (SELECT 1 FROM public.app_users WHERE id = public.current_app_user_id() AND price_book_id IS NOT NULL))
+      OR (p_code IN ('calls.book', 'pricebook.view', 'customers.add') AND coalesce(public.current_staff_role() = 'sales', false))
+$function$;
+
+-- (3) the go-live lock
+ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS golive_lock boolean NOT NULL DEFAULT false;
+
+CREATE OR REPLACE FUNCTION public._golive_locked() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT coalesce((SELECT golive_lock FROM public.company_settings ORDER BY id LIMIT 1), false)
+$$;
+CREATE OR REPLACE FUNCTION public._can_see_buying() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT public.current_staff_role() IS NOT NULL
+     AND (NOT public._golive_locked() OR public.has_permission('po.create') OR public.has_permission('costs.view'))
+$$;
+REVOKE ALL ON FUNCTION public._golive_locked(), public._can_see_buying() FROM public;
+GRANT EXECUTE ON FUNCTION public._golive_locked(), public._can_see_buying() TO authenticated;
+
+DO $$ DECLARE t text; BEGIN
+  FOREACH t IN ARRAY ARRAY['purchase_orders','purchase_order_lines','supplier_invoices','third_party_supplier_payments','supplier_items'] LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('DROP POLICY IF EXISTS staff_read ON public.%I', t);
+      EXECUTE format('CREATE POLICY staff_read ON public.%I FOR SELECT TO authenticated USING ((SELECT public._can_see_buying()))', t);
+    END IF;
+  END LOOP;
+END $$;
+
+-- staff pay rates: readable from the staff list only while the lock is off
+CREATE OR REPLACE FUNCTION public._golive_apply_wages() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE cols text;
+BEGIN
+  IF public._golive_locked() THEN
+    SELECT string_agg(quote_ident(column_name), ', ') INTO cols FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'employees' AND column_name NOT IN ('hourly_wage', 'burden_pct', 'labour_cost_per_hour');
+    EXECUTE 'REVOKE SELECT ON public.employees FROM authenticated';
+    EXECUTE 'GRANT SELECT (' || cols || ') ON public.employees TO authenticated';
+  ELSE
+    EXECUTE 'GRANT SELECT ON public.employees TO authenticated';
+  END IF;
+END $$;
+REVOKE ALL ON FUNCTION public._golive_apply_wages() FROM public, authenticated, anon;
+
+CREATE OR REPLACE FUNCTION public.golive_lock() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$ SELECT public._golive_locked() $$;
+CREATE OR REPLACE FUNCTION public.set_golive_lock(p_on boolean) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF coalesce(public.current_staff_role(), '') <> 'owner' THEN RAISE EXCEPTION 'Only an owner can change the go-live lock'; END IF;
+  UPDATE public.company_settings SET golive_lock = coalesce(p_on, false), updated_at = now();
+  PERFORM public._golive_apply_wages();
+  RETURN public._golive_locked();
+END $$;
+REVOKE ALL ON FUNCTION public.golive_lock(), public.set_golive_lock(boolean) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.golive_lock(), public.set_golive_lock(boolean) TO authenticated;
+
+SELECT public._golive_apply_wages();
 """
 
 
@@ -1029,7 +1123,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
