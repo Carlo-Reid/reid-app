@@ -3751,7 +3751,17 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .pap-tag { display: inline-block; vertical-align: middle; margin-left: 10px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .02em; background: #e7f5ee; color: #1b6e43; border: 1px solid #b5e0c8; }
 .sec-safe { margin: 8px 0 0; font-size: 13px; }
 .sec-inbox .sec-safe { margin: 0 0 10px; }
-.sec-file-table td { white-space: nowrap; } .sec-file-table tr.sec-nf td { background: rgba(176,58,72,.05); }
+.sec-file-table td { white-space: nowrap; } .sec-file-table tr.sec-frow { cursor: pointer; } .sec-file-table tr.sec-on td { background: rgba(253,230,138,.35); }
+.sec-file-table tr.sec-open-row > td { white-space: normal; padding: 0; }
+.sec-panel { margin: 4px 0 10px; padding: 14px 16px; border: 1px solid rgba(127,127,127,.25); border-radius: 10px; background: rgba(127,127,127,.05); display: grid; gap: 14px; position: sticky; left: 0; max-width: min(1100px, 92vw); }
+.sec-card-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; } .sec-card-name { font-size: 16px; }
+.sec-card-acts { display: flex; gap: 12px; align-items: center; }
+.sec-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 20px; margin-top: 10px; font-size: 13.5px; }
+.sec-card-pap { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.sec-find-title { font-weight: 600; margin-bottom: 6px; } .sec-find-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .sec-find-bar input { min-width: 260px; flex: 1 1 260px; max-width: 420px; }
+.sec-find-list { display: grid; gap: 6px; margin-top: 10px; max-height: 360px; overflow: auto; }
+.sec-find-item { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 8px; background: rgba(127,127,127,.06); }
+.sec-find-go { display: flex; gap: 10px; align-items: center; flex: none; } .sec-nf-btn { border: 0; cursor: pointer; font: inherit; } .sec-file-table tr.sec-nf td { background: rgba(176,58,72,.05); }
 .sec-hirow td { background: rgba(253,230,138,.45); font-weight: 600; }
 .ow-amt .cl-row { align-items: flex-end; } .ow-amt #ow-amt { width: 150px; }
 .ow-amt-msg { margin-top: 12px; } .ow-amt-table { margin-top: 8px; }
@@ -12514,7 +12524,79 @@ async function secFileLoad() {
   if (SEC.view?.id === SEC.fv) return;
   const { data, error } = await db.rpc("pap_file_view", { p_id: SEC.fv });
   SEC.view = error ? { id: SEC.fv, error: rpcErr(error) } : data;
+  (SEC.view?.rows || []).forEach((r, k) => { r._k = k; });
 }
+// ---- the panel under an EFT row: the customer's details, or a search to find them by hand ----
+async function secCard(id) {
+  SEC.cards = SEC.cards || {};
+  if (SEC.cards[id]) return SEC.cards[id];
+  const { data, error } = await db.rpc("pap_customer_card", { p_id: id });
+  SEC.cards[id] = error ? { error: rpcErr(error) } : data;
+  return SEC.cards[id];
+}
+async function secToggleRow(k) {
+  if (SEC.openRow === k) { SEC.openRow = null; return renderSecurity(); }
+  SEC.openRow = k; SEC.find = null;
+  const r = SEC.view?.rows?.[k]; if (!r) return;
+  if (r.customer_id) { renderSecurity(); await secCard(r.customer_id); }
+  else { SEC.find = { q: secGuessQ(r), loading: true }; renderSecurity(); await secFindRun(); }
+  if (SEC.openRow === k) { renderSecurity(); document.querySelector(".sec-open-row")?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+}
+// what to search for first: the last name (or the business name) from the bank's file
+function secGuessQ(r) {
+  const n = String(r.name || "").replace(/&amp;/g, "&").trim(), w = n.split(/\s+/).filter(Boolean);
+  return w.length >= 2 && !/\d/.test(n) && !/\b(inc|ltd|corp|restaurant|pizza|dental|clinic|salon|shop)\b/i.test(n) ? w[w.length - 1] : n;
+}
+async function secFindRun() {
+  const F = SEC.find; if (!F) return;
+  const q = F.q.trim(); if (q.length < 2) { SEC.find = { q: F.q, rows: [] }; return; }
+  const digits = q.replace(/\D/g, ""), isPhone = digits.length >= 7 && !/[a-z]/i.test(q);
+  const { data, error } = await db.rpc("search_customers", isPhone ? { p_phone: digits, p_limit: 25 } : { p_any: q, p_limit: 25 });
+  if (SEC.find?.q !== F.q) return;
+  SEC.find = { q: F.q, rows: error ? [] : (data || []), error: error ? rpcErr(error) : null, total: data?.[0] ? Number(data[0].total_count) : 0 };
+}
+async function secLink(k, customerId) {
+  const r = SEC.view?.rows?.[k]; if (!r) return;
+  const { error } = await db.rpc("pap_link_set", { p_ref: r.num || "", p_name: r.name || "", p_customer: customerId });
+  if (error) { SEC.find = { ...(SEC.find || { q: "" }), error: rpcErr(error) }; return renderSecurity(); }
+  SEC.view = null; SEC.find = null; await secFileLoad(); SEC.openRow = k;
+  const nr = SEC.view?.rows?.[k]; if (nr?.customer_id) await secCard(nr.customer_id);
+  renderSecurity();
+}
+function secPanelHtml(r, span) {
+  const money0 = n => money(Number(n || 0)), kinds = { phone: "Phone", mobile: "Mobile", email: "Email", fax: "Fax" };
+  const F = SEC.find, wantFind = !r.customer_id || F;
+  const find = !wantFind ? "" : `<div class="sec-find">
+      <div class="sec-find-title">${r.customer_id ? "Not the right customer? Find the right one:" : "Not found automatically. Find this customer:"}</div>
+      <form class="sec-find-bar" id="sec-find-form"><input type="search" id="sec-find-q" value="${esc(F?.q ?? secGuessQ(r))}" placeholder="Name, phone, address, customer #…" aria-label="Find a customer">
+        <button class="btn" type="submit">Search</button>${r.customer_id ? `<button class="link" type="button" id="sec-find-cancel">Cancel</button>` : ""}</form>
+      ${F?.loading ? `<div class="quiet">Searching…</div>` : F?.error ? `<div class="staff-msg err">${esc(F.error)}</div>`
+        : F && !F.rows?.length ? `<div class="quiet">No customers match. Try just the last name, the street name, or a phone number.</div>`
+        : F ? `<div class="sec-find-list">${F.rows.map(c => `<div class="sec-find-item"><div><strong>${esc(c.display_name || "")}</strong>${c.status && c.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}
+              <div class="quiet">${esc([c.street, c.city].filter(Boolean).join(", "))}${c.phone ? " · " + esc(phoneFmt(c.phone)) : ""}</div></div>
+              <div class="sec-find-go"><button class="link" type="button" data-sec-peek="${c.customer_id}">Open</button>
+              <button class="btn" type="button" data-sec-link="${c.customer_id}">This is them</button></div></div>`).join("")}
+            ${F.total > F.rows.length ? `<div class="quiet">${F.total.toLocaleString()} matches, showing ${F.rows.length}. Add more words to narrow it down.</div>` : ""}</div>` : ""}
+      <p class="quiet">"This is them" links this line of the bank's file to the customer. It's remembered, so they match on their own in next month's file too.</p></div>`;
+  let card = "";
+  if (r.customer_id) {
+    const C = SEC.cards?.[r.customer_id];
+    card = !C ? `<div class="quiet">Loading the customer…</div>` : C.error ? `<div class="staff-msg err">${esc(C.error)}</div>` : `<div class="sec-card">
+      <div class="sec-card-head"><div><strong class="sec-card-name">${esc(C.name || "")}</strong> <span class="quiet">#${esc(C.number || "")}${C.status && C.status !== "active" ? " · " + esc(C.status) : ""}</span>
+          <div class="quiet">Matched ${({ manual: "by hand", number: "by customer #", address: "by address", phone: "by phone", name: "by name" })[r.how] || ""}${r.how === "manual" ? ` · <button class="link" type="button" data-sec-unlink>Unlink</button>` : ""}</div></div>
+        <div class="sec-card-acts"><button class="btn" type="button" data-sec-open="${C.id}">Open customer page</button>${!F ? `<button class="link" type="button" id="sec-find-start">Wrong customer?</button>` : ""}</div></div>
+      <div class="sec-card-grid">
+        <div><div class="cl-label">Phone &amp; email</div>${(C.contacts || []).map(k => `<div>${esc(kinds[k.kind] || k.kind)}: ${esc(/phone|mobile|fax/.test(k.kind) ? phoneFmt(k.value) : k.value)}${k.primary ? ' <span class="quiet">(main)</span>' : ""}</div>`).join("") || `<div class="quiet">None on file</div>`}</div>
+        <div><div class="cl-label">Address</div>${(C.locations || []).map(l => `<div>${esc([l.street, l.city, l.postal].filter(Boolean).join(", "))}${l.active === false ? ' <span class="quiet">(old)</span>' : ""}</div>`).join("") || `<div class="quiet">None on file</div>`}</div>
+        <div><div class="cl-label">PAP</div><div>${C.pap_list ? esc(papName(C.pap_list)) + (C.pap_set_at ? ` <span class="quiet">since ${esc(fmtDate(C.pap_set_at))}</span>` : "") : `<span class="quiet">Not on PAP</span>`}</div>
+          <div class="sec-card-pap">${PAP_LISTS.filter(([x]) => x !== C.pap_list).map(([x, t]) => `<button class="chip small" type="button" data-sec-setpap="${x}">Put on ${esc(t)}</button>`).join("")}${C.pap_list ? `<button class="chip small" type="button" data-sec-setpap="">Take off PAP</button>` : ""}</div></div>
+        <div><div class="cl-label">Owing</div><div><strong>${money0(C.owing)}</strong></div>
+          ${(C.invoices || []).length ? `<div class="cl-label" style="margin-top:6px">Last invoices</div>${C.invoices.map(v => `<div><button class="link" type="button" data-sec-inv="${v.id}">${esc(v.number || "#" + v.id)}</button> <span class="quiet">${esc(fmtDate(v.date))} · ${money0(v.total)}${Number(v.balance) > 0.004 ? " · owes " + money0(v.balance) : ""}</span></div>`).join("")}` : ""}</div>
+      </div></div>`;
+  }
+  return `<tr class="sec-open-row"><td colspan="${span}"><div class="sec-panel">${card}${find}</div></td></tr>`;
+}
+
 const SEC_PSHOW = [["all", "Everyone"], ["found", "Found"], ["missing", "Not found"], ["bad", "Not approved"], ["nopap", "Found, not on PAP"]];
 const secBad = r => r.response && !/^\s*approved\s*$/i.test(r.response);
 function secPeopleHtml() {
@@ -12523,10 +12605,10 @@ function secPeopleHtml() {
   const ok = (r, k) => k === "all" || (k === "found" ? r.customer_id : k === "missing" ? !r.customer_id : k === "bad" ? secBad(r) : r.customer_id && !r.pap_list);
   const rows = all.filter(r => ok(r, show) && (!q || `${(r.cells || []).join(" ")} ${r.customer_name || ""} ${r.customer_number || ""} ${r.address || ""}`.toLowerCase().includes(q)));
   const cols = V?.cols || [], nameCol = cols.map(c => /name|payor|payer|customer/i.test(String(c))), respCol = cols.map(c => /response|status|result/i.test(String(c)));
-  const how = { number: "by customer #", address: "by address", phone: "by phone", name: "by name" };
+  const how = { manual: "linked by hand", number: "by customer #", address: "by address", phone: "by phone", name: "by name" };
   const when = d => d ? esc(fmtDate(d)) : "";
   const cellHtml = (r, v, j) => { v = String(v ?? "");
-    if (nameCol[j] && v && r.customer_id) return `<button class="link" type="button" data-sec-open="${r.customer_id}"><strong>${esc(v)}</strong></button>`;
+    if (nameCol[j] && v) return `<button class="link" type="button" data-sec-row="${r._k}" aria-expanded="${SEC.openRow === r._k}"><strong>${esc(v)}</strong></button>`;
     if (respCol[j] && v) return /^\s*approved\s*$/i.test(v) ? esc(v) : `<span class="ow-tag odd">${esc(v)}</span>`;
     return esc(v); };
   return `<section class="cl-tools sec-up sec-people"><h2>EFT lists</h2>
@@ -12542,12 +12624,12 @@ function secPeopleHtml() {
     <div class="cl-row"><div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${SEC_PSHOW.filter(([k]) => k !== "bad" || all.some(secBad)).map(([k, x]) => `<button type="button" aria-pressed="${show === k}" data-sec-pshow="${k}">${x} <span class="quiet">${all.filter(r => ok(r, k)).length.toLocaleString()}</span></button>`).join("")}</div></div>
       <label class="cl-group"><span class="cl-label">Find</span><input type="search" id="sec-pq" value="${esc(SEC.pq || "")}" placeholder="Name, reference, amount…" aria-label="Find in this EFT list"></label></div>
     ${rows.length ? `<div class="staff-wrap"><table class="calls-table sec-file-table"><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}<th>Customer in the app</th></tr></thead><tbody>
-      ${rows.slice(0, 2000).map(r => `<tr${r.customer_id ? "" : ' class="sec-nf"'}>${cols.map((c, j) => `<td>${cellHtml(r, (r.cells || [])[j], j)}</td>`).join("")}
-        <td>${r.customer_id ? `<button class="link" type="button" data-sec-open="${r.customer_id}">${esc(r.customer_name || "")}</button><div class="quiet">#${esc(r.customer_number || "")} · ${how[r.how] || ""}${r.pap_list ? " · PAP " + esc(papName(r.pap_list)) : " · not on PAP"}</div>`
-          : `<span class="ow-tag odd">Not found</span>`}</td></tr>`).join("")}
+      ${rows.slice(0, 2000).map(r => `<tr class="sec-frow${r.customer_id ? "" : " sec-nf"}${SEC.openRow === r._k ? " sec-on" : ""}" data-sec-rowclick="${r._k}">${cols.map((c, j) => `<td>${cellHtml(r, (r.cells || [])[j], j)}</td>`).join("")}
+        <td>${r.customer_id ? `<button class="link" type="button" data-sec-row="${r._k}">${esc(r.customer_name || "")}</button><div class="quiet">#${esc(r.customer_number || "")} · ${how[r.how] || ""}${r.pap_list ? " · PAP " + esc(papName(r.pap_list)) : " · not on PAP"}</div>`
+          : `<button class="ow-tag odd sec-nf-btn" type="button" data-sec-row="${r._k}">Not found · find them</button>`}</td></tr>${SEC.openRow === r._k ? secPanelHtml(r, cols.length + 1) : ""}`).join("")}
       </tbody></table>${rows.length > 2000 ? `<p class="quiet">Showing the first 2,000. Use Find to narrow it down.</p>` : ""}</div>`
       : `<div class="quiet">Nobody matches.</div>`}
-    <p class="quiet">Click a name to open the customer. Bank account details are never kept.</p>`}
+    <p class="quiet">Click a name (or a row) to see the customer's details. For a row that wasn't found, search for the customer and click This is them. Bank account details are never kept.</p>`}
   </section>`;
 }
 // ---- every email sent to eftupload@hsginc.ca, kept with its attachments (owners only; opening a file goes in History) ----
@@ -12787,7 +12869,22 @@ function wireSecurity() {
   document.querySelectorAll("[data-sec-off]").forEach(b => b.addEventListener("click", async () => {
     const { error } = await db.rpc("pap_set", { p_ids: [Number(b.dataset.secOff)], p_list: null, p_replace: false });
     say(error ? "Not saved: " + rpcErr(error) : "Taken off PAP."); }));
-  $("#sec-fv")?.addEventListener("change", async e => { SEC.fv = Number(e.target.value); SEC.view = null; renderSecurity(); await secFileLoad(); renderSecurity(); });
+  $("#sec-fv")?.addEventListener("change", async e => { SEC.fv = Number(e.target.value); SEC.view = null; SEC.openRow = null; SEC.find = null; renderSecurity(); await secFileLoad(); renderSecurity(); });
+  document.querySelectorAll("[data-sec-row]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); secToggleRow(Number(b.dataset.secRow)); }));
+  document.querySelectorAll("[data-sec-rowclick]").forEach(tr => tr.addEventListener("click", e => { if (e.target.closest("button, a, input, select")) return; secToggleRow(Number(tr.dataset.secRowclick)); }));
+  $("#sec-find-form")?.addEventListener("submit", async e => { e.preventDefault(); SEC.find = { q: $("#sec-find-q").value, loading: true }; renderSecurity(); await secFindRun(); renderSecurity(); const n = $("#sec-find-q"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } });
+  $("#sec-find-start")?.addEventListener("click", async () => { const r = SEC.view?.rows?.[SEC.openRow]; if (!r) return; SEC.find = { q: secGuessQ(r), loading: true }; renderSecurity(); await secFindRun(); renderSecurity(); });
+  $("#sec-find-cancel")?.addEventListener("click", () => { SEC.find = null; renderSecurity(); });
+  document.querySelectorAll("[data-sec-link]").forEach(b => b.addEventListener("click", () => { b.disabled = true; b.textContent = "Linking…"; secLink(SEC.openRow, Number(b.dataset.secLink)); }));
+  document.querySelectorAll("[data-sec-peek]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.secPeek))));
+  $("[data-sec-unlink]")?.addEventListener("click", () => secLink(SEC.openRow, null));
+  document.querySelectorAll("[data-sec-inv]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.secInv))));
+  document.querySelectorAll("[data-sec-setpap]").forEach(b => b.addEventListener("click", async () => {
+    const r = SEC.view?.rows?.[SEC.openRow]; if (!r?.customer_id) return; b.disabled = true;
+    const { error } = await db.rpc("pap_set", { p_ids: [Number(r.customer_id)], p_list: b.dataset.secSetpap || null, p_replace: false });
+    if (error) return renderSecurity("Not saved: " + rpcErr(error));
+    delete SEC.cards[r.customer_id]; SEC.view = null; const k = SEC.openRow; await secFileLoad(); SEC.openRow = k; await secCard(r.customer_id);
+    openSecurity(b.dataset.secSetpap ? "Put on PAP · " + papName(b.dataset.secSetpap) + "." : "Taken off PAP."); }));
   document.querySelectorAll("[data-sec-pshow]").forEach(b => b.addEventListener("click", () => { SEC.pshow = b.dataset.secPshow; renderSecurity(); }));
   $("#sec-pq")?.addEventListener("input", e => { SEC.pq = e.target.value; const pos = e.target.selectionStart; renderSecurity(); const n = $("#sec-pq"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } });
   document.querySelectorAll("[data-sec-mail]").forEach(b => b.addEventListener("click", () => secMailOpen(Number(b.dataset.secMail))));
