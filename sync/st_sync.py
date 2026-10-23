@@ -2302,6 +2302,88 @@ REVOKE EXECUTE ON FUNCTION public.partner_booking_details(bigint), public.partne
 GRANT EXECUTE ON FUNCTION public.partner_booking_details(bigint), public.partner_booking_details_import(bigint, jsonb), public.partner_booking_edit(bigint, jsonb) TO authenticated;
 NOTIFY pgrst, 'reload schema';
 
+
+-- =====================================================================
+-- HTIN List: the daily "HSG Bookings" workbook both ways (Bookings, Products, Status History, Alerts).
+-- Importing keeps what was added in our app: status updates and alerts that aren't in the file stay,
+-- and office notes only fill in when ours are empty. Exporting gives every booking with its full record.
+-- Safe to run more than once.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.partner_booking_details_import(p_partner bigint, p_rows jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE r jsonb; n int := 0; miss int := 0; b partner_bookings; nd jsonb; h jsonb; a jsonb;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Sign in first'; END IF;
+  IF jsonb_array_length(p_rows) > 200 THEN RAISE EXCEPTION 'Up to 200 at a time'; END IF;
+  FOR r IN SELECT * FROM jsonb_array_elements(p_rows) LOOP
+    SELECT * INTO b FROM partner_bookings WHERE partner_id = p_partner AND ref = btrim(r ->> 'ref');
+    IF b.id IS NULL THEN miss := miss + 1; CONTINUE; END IF;
+    nd := coalesce(r -> 'details', '{}'::jsonb);
+    -- status updates added in our app (not in the file) stay, in time order
+    h := coalesce(nd -> 'history', '[]'::jsonb) || coalesce((SELECT jsonb_agg(x) FROM jsonb_array_elements(coalesce(b.details -> 'history', '[]'::jsonb)) x
+           WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(coalesce(nd -> 'history', '[]'::jsonb)) y WHERE y ->> 'status' = x ->> 'status' AND left(y ->> 'at', 16) = left(x ->> 'at', 16))), '[]'::jsonb);
+    h := coalesce((SELECT jsonb_agg(x ORDER BY x ->> 'at') FROM jsonb_array_elements(h) x), '[]'::jsonb);
+    -- alerts added in our app stay too
+    a := coalesce(nd -> 'alerts', '[]'::jsonb) || coalesce((SELECT jsonb_agg(x) FROM jsonb_array_elements(coalesce(b.details -> 'alerts', '[]'::jsonb)) x
+           WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(coalesce(nd -> 'alerts', '[]'::jsonb)) y
+                             WHERE (y ->> 'id' IS NOT NULL AND y ->> 'id' = x ->> 'id') OR (y ->> 'title' = x ->> 'title' AND left(coalesce(y ->> 'created', ''), 16) = left(coalesce(x ->> 'created', ''), 16)))), '[]'::jsonb);
+    nd := nd || jsonb_build_object('history', h, 'alerts', a);
+    UPDATE partner_bookings SET details = nd,
+           note = CASE WHEN note IS NULL AND nullif(btrim(r ->> 'note'), '') IS NOT NULL THEN btrim(r ->> 'note') ELSE note END, updated_at = now()
+    WHERE id = b.id AND (details IS DISTINCT FROM nd OR (note IS NULL AND nullif(btrim(r ->> 'note'), '') IS NOT NULL));
+    IF FOUND THEN n := n + 1; END IF;
+  END LOOP;
+  RETURN jsonb_build_object('updated', n, 'missing', miss);
+END $$;
+
+-- their file's Created time is the one to keep (it can be re-sent more exactly)
+CREATE OR REPLACE FUNCTION public.partner_bookings_import(p_partner bigint, p_rows jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE r jsonb; m jsonb; v_new int := 0; v_upd int := 0; v_id bigint; v_was boolean;
+BEGIN
+  IF public.current_staff_role() IS NULL AND current_user NOT IN ('postgres', 'supabase_admin') THEN RAISE EXCEPTION 'Sign in first'; END IF;
+  IF jsonb_array_length(p_rows) > 500 THEN RAISE EXCEPTION 'Up to 500 rows at a time'; END IF;
+  -- who each one is (same matching as "Add our notes to a file": by address, confirmed by phone, email or name)
+  m := public.partner_file_notes(p_partner, (SELECT jsonb_agg(jsonb_build_object('i', o - 1, 'phone', x ->> 'phone', 'email', x ->> 'email', 'address', x ->> 'address',
+          'name', x ->> 'name', 'date', left(x ->> 'created', 10))) FROM jsonb_array_elements(p_rows) WITH ORDINALITY t(x, o)), 1, false);
+  FOR r IN SELECT x || coalesce((SELECT jsonb_build_object('customer_id', y -> 'customer_id', 'job_id', y -> 'job_id', 'how', y -> 'how', 'addr_ok', y -> 'addr_ok')
+                                 FROM jsonb_array_elements(m) y WHERE (y ->> 'i')::int = o - 1), '{}') FROM jsonb_array_elements(p_rows) WITH ORDINALITY t(x, o) LOOP
+    v_was := EXISTS (SELECT 1 FROM partner_bookings WHERE partner_id = p_partner AND ref = r ->> 'ref');
+    INSERT INTO partner_bookings AS b (partner_id, ref, booked_at, status, service, service_date, their_name, address, extra, email, phone, provider,
+                                       customer_id, job_id, match_how, addr_ok, source, added_by)
+    VALUES (p_partner, nullif(btrim(r ->> 'ref'), ''), (r ->> 'created')::timestamptz, nullif(btrim(r ->> 'status'), ''), nullif(btrim(r ->> 'service'), ''),
+            (r ->> 'service_date')::timestamptz, nullif(btrim(r ->> 'name'), ''), nullif(btrim(r ->> 'address'), ''), nullif(btrim(r ->> 'extra'), ''),
+            nullif(btrim(r ->> 'email'), ''), nullif(btrim(r ->> 'phone'), ''), nullif(btrim(r ->> 'provider'), ''),
+            (r ->> 'customer_id')::bigint, (r ->> 'job_id')::bigint, r ->> 'how', (r ->> 'addr_ok')::boolean, 'file', public.current_app_user_id())
+    ON CONFLICT (partner_id, ref) WHERE ref IS NOT NULL DO UPDATE SET
+      status = EXCLUDED.status, booked_at = coalesce(EXCLUDED.booked_at, b.booked_at), service = coalesce(EXCLUDED.service, b.service), service_date = coalesce(EXCLUDED.service_date, b.service_date),
+      their_name = coalesce(EXCLUDED.their_name, b.their_name), address = coalesce(EXCLUDED.address, b.address), extra = coalesce(EXCLUDED.extra, b.extra),
+      email = coalesce(EXCLUDED.email, b.email), phone = coalesce(EXCLUDED.phone, b.phone), provider = coalesce(EXCLUDED.provider, b.provider),
+      customer_id = coalesce(b.customer_id, EXCLUDED.customer_id), job_id = coalesce(b.job_id, EXCLUDED.job_id),
+      match_how = coalesce(b.match_how, EXCLUDED.match_how), addr_ok = coalesce(b.addr_ok, EXCLUDED.addr_ok), updated_at = now();
+    IF v_was THEN v_upd := v_upd + 1; ELSE v_new := v_new + 1; END IF;
+  END LOOP;
+  RETURN jsonb_build_object('added', v_new, 'updated', v_upd);
+END $function$;
+
+-- every booking on a partner's list with its full record, for the workbook download
+CREATE OR REPLACE FUNCTION public.partner_bookings_export(p_partner bigint)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE coalesce(jsonb_agg(jsonb_build_object(
+    'ref', b.ref, 'booked_at', b.booked_at, 'status', b.status, 'provider', b.provider, 'service_date', b.service_date, 'service', b.service,
+    'their_name', b.their_name, 'email', b.email, 'phone', b.phone, 'address', b.address, 'extra', b.extra, 'note', b.note, 'source', b.source,
+    'details', coalesce(b.details, '{}'::jsonb)) ORDER BY (CASE WHEN b.ref ~ '^\\d+$' THEN b.ref::bigint END) DESC NULLS LAST, b.id DESC), '[]'::jsonb) END
+  FROM partner_bookings b WHERE b.partner_id = p_partner
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.partner_booking_details_import(bigint, jsonb), public.partner_bookings_export(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.partner_booking_details_import(bigint, jsonb), public.partner_bookings_export(bigint) TO authenticated;
+NOTIFY pgrst, 'reload schema';
+
 """
 
 
@@ -2331,7 +2413,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
