@@ -1703,6 +1703,36 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
 
 REVOKE EXECUTE ON FUNCTION public.sales_people() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.sales_people() TO authenticated;
+
+-- 99zq: the Sales Dispatch Board. A sales person can only change their own calls on it (move, status, techs),
+-- and can't change board notes. Everyone else is unchanged. Safe to run more than once.
+CREATE OR REPLACE FUNCTION public._sales_own_visit(p_visit bigint) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT coalesce(public.current_staff_role(), '') <> 'sales'
+      OR EXISTS (SELECT 1 FROM visits v JOIN jobs j ON j.id = v.job_id
+                 WHERE v.id = p_visit
+                   AND (j.booked_by_user_id = public.current_app_user_id() OR j.sales_user_id = public.current_app_user_id()
+                        OR EXISTS (SELECT 1 FROM visit_assignments va WHERE va.visit_id = v.id AND va.employee_id = public._my_employee())))
+$$;
+REVOKE ALL ON FUNCTION public._sales_own_visit(bigint) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public._sales_own_visit(bigint) TO authenticated;
+
+-- add the check to the start of each board action, leaving the rest of each one exactly as it is
+DO $$ DECLARE f text; g text; d text; BEGIN
+  FOR f, g IN VALUES
+    ('move_call(bigint,date,text,text,text)', 'IF NOT public._sales_own_visit(p_visit_id) THEN RAISE EXCEPTION ''You can only change your own calls''; END IF;'),
+    ('set_call_status(bigint,text,text)',     'IF NOT public._sales_own_visit(p_visit_id) THEN RAISE EXCEPTION ''You can only change your own calls''; END IF;'),
+    ('set_call_techs(bigint,bigint[])',        'IF NOT public._sales_own_visit(p_visit_id) THEN RAISE EXCEPTION ''You can only change your own calls''; END IF;'),
+    ('save_board_note(bigint,jsonb)',          'IF public.current_staff_role() = ''sales'' THEN RAISE EXCEPTION ''Sales people can''''t change notes on the board''; END IF;'),
+    ('delete_board_note(bigint,date)',         'IF public.current_staff_role() = ''sales'' THEN RAISE EXCEPTION ''Sales people can''''t change notes on the board''; END IF;')
+  LOOP
+    IF to_regprocedure('public.' || f) IS NULL THEN CONTINUE; END IF;
+    d := pg_get_functiondef(to_regprocedure('public.' || f));
+    IF position('-- sales-guard' IN d) > 0 THEN CONTINUE; END IF;
+    d := regexp_replace(d, E'\nBEGIN\n', E'\nBEGIN\n  ' || g || E'   -- sales-guard\n');
+    EXECUTE d;
+  END LOOP;
+END $$;
 """
 
 
@@ -1732,7 +1762,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
