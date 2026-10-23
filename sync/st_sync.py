@@ -2115,18 +2115,18 @@ BEGIN
   IF NOT public._is_owner() THEN RAISE EXCEPTION 'Only owners can do this'; END IF;
   RETURN QUERY
   WITH r AS MATERIALIZED (
-    SELECT x.i, nullif(regexp_replace(btrim(coalesce(x.num, '')), '\\.0+$', ''), '') AS num, nullif(lower(btrim(coalesce(x.name, ''))), '') AS nm,
-           nullif(right(regexp_replace(coalesce(x.phone, ''), '\\D', '', 'g'), 10), '') AS ph
+    SELECT x.i, nullif(regexp_replace(btrim(coalesce(x.num, '')), '\.0+$', ''), '') AS num, nullif(lower(btrim(coalesce(x.name, ''))), '') AS nm,
+           nullif(right(regexp_replace(coalesce(x.phone, ''), '\D', '', 'g'), 10), '') AS ph
     FROM jsonb_to_recordset(p_rows) AS x(i int, num text, name text, phone text)),
   byname AS MATERIALIZED (SELECT lower(btrim(c.display_name)) AS nm, min(c.id) AS id, count(*) AS n FROM customers c
              WHERE c.merged_into_id IS NULL AND lower(btrim(c.display_name)) IN (SELECT r.nm FROM r WHERE r.nm IS NOT NULL) GROUP BY 1),
-  byphone AS MATERIALIZED (SELECT right(regexp_replace(k.value, '\\D', '', 'g'), 10) AS ph, min(k.customer_id) AS id, count(DISTINCT k.customer_id) AS n FROM customer_contacts k
-              WHERE k.kind IN ('phone', 'mobile') AND right(regexp_replace(k.value, '\\D', '', 'g'), 10) IN (SELECT r.ph FROM r WHERE length(r.ph) = 10) GROUP BY 1),
+  byphone AS MATERIALIZED (SELECT right(regexp_replace(k.value, '\D', '', 'g'), 10) AS ph, min(k.customer_id) AS id, count(DISTINCT k.customer_id) AS n FROM customer_contacts k
+              WHERE k.kind IN ('phone', 'mobile') AND right(regexp_replace(k.value, '\D', '', 'g'), 10) IN (SELECT r.ph FROM r WHERE length(r.ph) = 10) GROUP BY 1),
   m AS MATERIALIZED (
     SELECT r.i, coalesce(cn.id, cs.id) AS by_num, CASE WHEN p.n = 1 THEN p.id END AS by_phone, CASE WHEN b.n = 1 THEN b.id END AS by_name
     FROM r
     LEFT JOIN customers cn ON cn.customer_number = r.num
-    LEFT JOIN customers cs ON r.num ~ '^\\d{1,15}$' AND cs.st_id = r.num::bigint
+    LEFT JOIN customers cs ON cs.st_id = CASE WHEN r.num ~ '^[0-9]{1,15}$' THEN r.num::bigint END
     LEFT JOIN byphone p ON p.ph = r.ph
     LEFT JOIN byname b ON b.nm = r.nm)
   SELECT m.i, c.id, c.customer_number, c.display_name,
@@ -2376,7 +2376,7 @@ RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE coalesce(jsonb_agg(jsonb_build_object(
     'ref', b.ref, 'booked_at', b.booked_at, 'status', b.status, 'provider', b.provider, 'service_date', b.service_date, 'service', b.service,
     'their_name', b.their_name, 'email', b.email, 'phone', b.phone, 'address', b.address, 'extra', b.extra, 'note', b.note, 'source', b.source,
-    'details', coalesce(b.details, '{}'::jsonb)) ORDER BY (CASE WHEN b.ref ~ '^\\d+$' THEN b.ref::bigint END) DESC NULLS LAST, b.id DESC), '[]'::jsonb) END
+    'details', coalesce(b.details, '{}'::jsonb)) ORDER BY (CASE WHEN b.ref ~ '^\d+$' THEN b.ref::bigint END) DESC NULLS LAST, b.id DESC), '[]'::jsonb) END
   FROM partner_bookings b WHERE b.partner_id = p_partner
 $$;
 
@@ -2754,6 +2754,45 @@ ALTER FUNCTION public.invoice_amount_search(numeric) SET jit = off;
 REVOKE EXECUTE ON FUNCTION public.invoice_amount_search(numeric) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.invoice_amount_search(numeric) TO authenticated;
 
+-- 99zzz4_eft_people.sql
+-- =====================================================================
+-- Security page: "People in the EFT files". Everyone in the emailed EFT lists, once each (the newest file they're in),
+-- matched to the customer in the database the same way as Review (customer #, then phone, then exact name).
+-- Owners only. Needs 99zz and 99zz11. Safe to run more than once.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.pap_file_people()
+RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public SET statement_timeout = '60s' AS $$
+DECLARE v jsonb;
+BEGIN
+  IF NOT coalesce(public._is_owner(), false) THEN RETURN NULL; END IF;
+  WITH e AS (
+    SELECT i.id AS inbox_id, i.mail_id, i.file_name, i.received_at, i.pap_list AS file_list,
+           btrim(coalesce(x ->> 0, '')) AS num, btrim(coalesce(x ->> 1, '')) AS name, btrim(coalesce(x ->> 2, '')) AS phone
+    FROM pap_inbox i, jsonb_array_elements(i.rows) x
+    WHERE i.rows IS NOT NULL AND i.status <> 'ignored' AND jsonb_typeof(x) = 'array'),
+  k AS (SELECT e.*, coalesce(nullif(lower(e.num), ''), lower(e.name) || '|' || right(regexp_replace(e.phone, '\D', '', 'g'), 10)) AS key FROM e
+        WHERE e.num <> '' OR e.name <> '' OR e.phone <> ''),
+  c AS (SELECT key, count(DISTINCT inbox_id) AS files FROM k GROUP BY key),
+  r AS (SELECT DISTINCT ON (k.key) k.*, c.files, (row_number() OVER ())::int AS n
+        FROM k JOIN c USING (key) ORDER BY k.key, k.received_at DESC NULLS LAST, k.inbox_id DESC),
+  m AS (SELECT * FROM public.pap_match((SELECT coalesce(jsonb_agg(jsonb_build_object('i', r.n, 'num', r.num, 'name', r.name, 'phone', r.phone)), '[]') FROM r)))
+  SELECT jsonb_build_object(
+    'n', (SELECT count(*) FROM r),
+    'found', (SELECT count(*) FROM m),
+    'rows', coalesce(jsonb_agg(jsonb_build_object(
+       'num', r.num, 'name', r.name, 'phone', r.phone, 'file', r.file_name, 'received', r.received_at, 'mail_id', r.mail_id,
+       'file_list', r.file_list, 'files', r.files,
+       'customer_id', m.customer_id, 'customer_number', m.customer_number, 'customer_name', m.name, 'how', m.how, 'pap_list', m.pap_list,
+       'address', (SELECT concat_ws(', ', l.street, l.city) FROM locations l WHERE l.customer_id = m.customer_id ORDER BY l.active DESC, l.id LIMIT 1))
+       ORDER BY lower(coalesce(nullif(r.name, ''), m.name, r.num))), '[]'))
+  INTO v
+  FROM r LEFT JOIN m ON m.i = r.n;
+  RETURN v;
+END $$;
+REVOKE EXECUTE ON FUNCTION public.pap_file_people() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.pap_file_people() TO authenticated;
+
 NOTIFY pgrst, 'reload schema';
 """
 
@@ -2785,7 +2824,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     for attempt in range(3):   # a busy app can deadlock these changes for a moment: try again
         try:
-            cur.execute(EXTRA_SCHEMA); conn.commit(); log("Extra database pieces checked (find by amount)."); break
+            cur.execute(EXTRA_SCHEMA); conn.commit(); log("Extra database pieces checked (find by amount, EFT people)."); break
         except Exception as e:
             conn.rollback(); log(f"  Extra database pieces not added (try {attempt + 1}): {str(e)[:200]}")
             if os.environ.get("GITHUB_ACTIONS") and attempt == 2: print(f"::notice::Find by amount not added: {str(e)[:200]}", flush=True)

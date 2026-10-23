@@ -12500,8 +12500,34 @@ async function openSecurity(msg) {
   SEC.rows = data || [];
   const ib = await db.rpc("pap_inbox_list");   // emailed EFT lists (turns on after setup file 99zz11)
   SEC.inbox = ib.error ? null : ib.data;
-  await secMailLoad();
+  const [, pp] = await Promise.all([secMailLoad(), db.rpc("pap_file_people")]);
+  SEC.people = pp.error ? null : pp.data;
   renderSecurity(msg);
+}
+// ---- People in the EFT files: everyone in the emailed lists, once each, matched to the customer ----
+const SEC_PSHOW = [["all", "Everyone"], ["found", "Found"], ["missing", "Not found"], ["nopap", "Found, not on PAP"]];
+function secPeopleHtml() {
+  const P = SEC.people; if (!P) return "";
+  const all = P.rows || [], show = SEC.pshow || "all", q = (SEC.pq || "").trim().toLowerCase();
+  const cnt = k => all.filter(r => k === "all" || (k === "found" ? r.customer_id : k === "missing" ? !r.customer_id : r.customer_id && !r.pap_list)).length;
+  const rows = all.filter(r => (show === "all" || (show === "found" ? r.customer_id : show === "missing" ? !r.customer_id : r.customer_id && !r.pap_list))
+    && (!q || `${r.name} ${r.num} ${r.phone} ${r.customer_name || ""} ${r.customer_number || ""} ${r.address || ""} ${r.file || ""}`.toLowerCase().includes(q)));
+  const how = { number: "by customer #", phone: "by phone", name: "by name" };
+  return `<section class="cl-tools sec-up sec-people"><h2>People in the EFT files <span class="quiet" style="font-weight:400">(${all.length.toLocaleString()})</span></h2>
+    <p class="quiet sec-safe">Everyone in the emailed EFT lists, once each, from the newest file they're in. Click a name to open the customer.</p>
+    <div class="cl-row"><div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${SEC_PSHOW.map(([k, x]) => `<button type="button" aria-pressed="${show === k}" data-sec-pshow="${k}">${x} <span class="quiet">${cnt(k).toLocaleString()}</span></button>`).join("")}</div></div>
+      <label class="cl-group"><span class="cl-label">Find</span><input type="search" id="sec-pq" value="${esc(SEC.pq || "")}" placeholder="Name, number, phone, address or file" aria-label="Find someone in the EFT files"></label></div>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table sec-people-table"><thead><tr><th>Name</th><th>Customer # in file</th><th>Phone</th><th>Customer in the app</th><th>PAP</th><th>File</th></tr></thead><tbody>
+      ${rows.slice(0, 1500).map(r => `<tr>
+        <td>${r.customer_id ? `<button class="link" type="button" data-sec-open="${r.customer_id}"><strong>${esc(r.name || r.customer_name || "")}</strong></button>` : `<strong>${esc(r.name || "")}</strong>`}</td>
+        <td>${esc(r.num || "")}</td><td style="white-space:nowrap">${r.phone ? esc(phoneFmt(r.phone)) : ""}</td>
+        <td>${r.customer_id ? `<button class="link" type="button" data-sec-open="${r.customer_id}">${esc(r.customer_name || "")}</button><div class="quiet">#${esc(r.customer_number || "")} · ${how[r.how] || ""}${r.address ? " · " + esc(r.address) : ""}</div>`
+          : `<span class="ow-tag odd">Not found</span>`}</td>
+        <td>${r.customer_id ? (r.pap_list ? esc(papName(r.pap_list)) : `<span class="quiet">Not on PAP</span>`) : ""}</td>
+        <td>${r.mail_id ? `<button class="link" type="button" data-sec-mail="${r.mail_id}">${esc(r.file || "")}</button>` : esc(r.file || "")}<div class="quiet">${r.received ? esc(fmtDate(r.received)) : ""}${r.files > 1 ? ` · in ${r.files} files` : ""}</div></td></tr>`).join("")}
+      </tbody></table>${rows.length > 1500 ? `<p class="quiet">Showing the first 1,500. Use Find to narrow it down.</p>` : ""}</div>`
+      : `<div class="quiet">${all.length ? "Nobody matches." : "Nobody yet. Once an EFT list is emailed in, everyone in it shows here."}</div>`}
+  </section>`;
 }
 // ---- every email sent to eftupload@hsginc.ca, kept with its attachments (owners only; opening a file goes in History) ----
 async function secMailLoad() {
@@ -12655,6 +12681,7 @@ function renderSecurity(msg) {
       <div class="cl-stat s-all"><span>All PAP</span><strong>${rows.length.toLocaleString()}</strong></div>
     </div>
     ${secInboxHtml()}
+    ${secPeopleHtml()}
     ${secMailHtml()}
     <section class="cl-tools sec-up"><h2>${SEC.file?.inbox ? "Review the emailed list" : "Upload a PAP list"}</h2>
       <div class="cl-row"><div class="cl-group"><span class="cl-label">Which list is this file?</span>${seg(PAP_LISTS, SEC.list, "data-sec-list")}</div>
@@ -12704,6 +12731,8 @@ function wireSecurity() {
   document.querySelectorAll("[data-sec-off]").forEach(b => b.addEventListener("click", async () => {
     const { error } = await db.rpc("pap_set", { p_ids: [Number(b.dataset.secOff)], p_list: null, p_replace: false });
     say(error ? "Not saved: " + rpcErr(error) : "Taken off PAP."); }));
+  document.querySelectorAll("[data-sec-pshow]").forEach(b => b.addEventListener("click", () => { SEC.pshow = b.dataset.secPshow; renderSecurity(); }));
+  $("#sec-pq")?.addEventListener("input", e => { SEC.pq = e.target.value; const pos = e.target.selectionStart; renderSecurity(); const n = $("#sec-pq"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } });
   document.querySelectorAll("[data-sec-mail]").forEach(b => b.addEventListener("click", () => secMailOpen(Number(b.dataset.secMail))));
   document.querySelectorAll("[data-sec-fview]").forEach(b => b.addEventListener("click", () => secMailFile(Number(b.dataset.secFview), false, true)));
   document.querySelectorAll("[data-sec-fget]").forEach(b => b.addEventListener("click", () => secMailFile(Number(b.dataset.secFget), false, false)));
