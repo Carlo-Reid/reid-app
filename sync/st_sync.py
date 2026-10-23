@@ -2498,6 +2498,16 @@ REVOKE EXECUTE ON FUNCTION public.set_job_tank_payer(bigint, text) FROM PUBLIC, 
 GRANT EXECUTE ON FUNCTION public.set_job_tank_payer(bigint, text) TO authenticated;
 
 NOTIFY pgrst, 'reload schema';
+-- 99zz10_hvac_install_dept.sql
+-- =====================================================================
+-- An "HVAC Install" department (Book a call → Vista → a tank job goes to HVAC Install).
+-- Added only if there isn't one already. Safe to run more than once.
+-- =====================================================================
+INSERT INTO public.business_units (name, trade, sort_order, active)
+SELECT 'HVAC Install', 'HVAC', 3, true
+WHERE NOT EXISTS (SELECT 1 FROM public.business_units WHERE lower(btrim(name)) LIKE 'hvac install%');
+
+NOTIFY pgrst, 'reload schema';
 """
 
 
