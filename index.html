@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-22.220330">
+<meta name="app-version" content="2026-10-22.220808">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3491,6 +3491,26 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .pbb-bigprice { font-size: 26px; font-weight: 800; margin: 10px 0 14px; }
 .pbb-bigtxt .btn { border-radius: 999px; padding: 10px 24px; font-size: 16px; }
 @media (max-width: 800px) { .pbb-big { grid-template-columns: 1fr; } .pbb-bigpic { min-height: 220px; } }
+.est-sheet .est-lines .est-p { width: 92px; max-width: none; } .est-sheet .est-lines .est-q { width: 54px; } .est-sheet .est-lines td.r { white-space: nowrap; }
+/* estimate costing (owners only) */
+.est-wrap.with-cost { display: grid; grid-template-columns: 300px minmax(0, 8.5in); gap: 18px; justify-content: center; align-items: start; }
+.est-wrap.with-cost .est-sheet { margin: 0 0 40px; }
+.est-wrap.with-cost ~ * { }
+.est-toolbar, .est-tmsg { max-width: calc(8.5in + 318px) !important; }
+.est-cost { position: sticky; top: 64px; display: flex; flex-direction: column; gap: 10px; }
+.ec-head { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--steel); }
+.ec-head .quiet { text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 4px; }
+.ec-card { background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--line); border-radius: 12px; padding: 12px 14px; font-size: 13.5px; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 6px 16px rgba(0,0,0,.05); }
+.ec-card.ok { border-left-color: var(--green); } .ec-card.low { border-left-color: var(--red); }
+.ec-title { margin-bottom: 6px; } .ec-row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+.ec-tot { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 5px; }
+.ec-margin { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.ec-pct { font-size: 24px; font-weight: 800; } .ok .ec-pct { color: var(--green); } .low .ec-pct { color: var(--red); }
+.ec-note { margin-top: 4px; line-height: 1.4; } .ec-warn { margin-top: 6px; font-size: 12px; color: var(--amber); }
+.est-parts { margin: 2px 2px 4px 6px; font-size: 12px; color: #4a5866; } .est-parts summary { cursor: pointer; font-weight: 700; color: #1f5fa8; }
+.est-parts ul { list-style: none; margin: 4px 0 0; padding: 0; } .est-parts li { display: grid; grid-template-columns: 1fr auto 70px; gap: 8px; padding: 1px 0; } .est-parts .num { text-align: right; }
+@media print { .est-cost, .est-parts { display: none !important; } }
+@media (max-width: 1250px) { .est-wrap.with-cost { grid-template-columns: 1fr; } .est-cost { position: static; flex-direction: row; flex-wrap: wrap; } .est-cost .ec-card { flex: 1 1 240px; } .est-cost .ec-head { flex-basis: 100%; } }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -5913,7 +5933,8 @@ async function openEstEdit(id, msg) {
     lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price) })) }));
   if (!EST.opts.length) EST.opts = [{ name: "Option 1", recommended: true, lines: [] }];
   EST.dirty = false;
-  await estInfo(EST.opts.flatMap(o => o.lines.map(l => l.item_id))).catch(() => {});
+  EST.costErr = "";
+  await Promise.all([estInfo(EST.opts.flatMap(o => o.lines.map(l => l.item_id))).catch(() => {}), estCosting(EST.opts.flatMap(o => o.lines.map(l => l.item_id))).catch(() => {})]);
   renderEstEdit();
 }
 // the price book picture and description of each item on an estimate (loaded once per item)
@@ -5928,12 +5949,59 @@ async function estInfo(ids) {
 }
 const estPic = id => { const e = id && EINFO.get(id); return e && e.thumb ? `<img src="${e.thumb}" alt="">` : ""; };
 const estDesc = id => { const e = id && EINFO.get(id); if (!e) return ""; const h = pbDescHtml({ id, description: e.desc }); return h ? `<div class="est-ldesc">${h}</div>` : ""; };
+// costing (owners and anyone who can see costs): each item's cost, labour hours and the materials its kit adds
+const ECOST = new Map();
+const estCanCost = () => ME.role === "owner" || can("costs.view");
+async function estCosting(ids) {
+  if (!estCanCost()) return false;
+  const want = [...new Set(ids.filter(Boolean))].filter(id => !ECOST.has(id)); if (!want.length) return false;
+  const { data, error } = await db.rpc("est_costing", { p_ids: want }); if (error) { EST.costErr = rpcErr(error); return false; }
+  want.forEach(id => ECOST.set(id, null)); (data || []).forEach(x => ECOST.set(Number(x.id), x)); return true;
+}
+const EST_MARGIN = 0.40;   // the margin to keep
+function estLineCost(l) {   // cost of one line: the item, plus the materials its kit adds (like on invoices: a $0 kit's parts carry its cost), plus labour
+  const q = Number(l.qty) || 0, x = l.item_id ? ECOST.get(l.item_id) : null, rate = Number(COMPANY?.labour_cost_per_hour) || 55;
+  if (!x) return { mat: 0, lab: 0, hrs: 0, known: !l.item_id ? false : ECOST.has(l.item_id) };
+  const parts = x.parts || [], partsCost = parts.reduce((s, p) => s + (Number(p.qty) || 0) * (Number(p.cost) || 0), 0);
+  const own = parts.length && !(Number(l.price) > 0) ? 0 : Number(x.cost) || 0;
+  const hrs = (Number(x.hours) || 0) + parts.reduce((s, p) => s + (Number(p.qty) || 0) * (Number(p.hours) || 0), 0);
+  return { mat: q * (own + partsCost), lab: q * hrs * rate, hrs: q * hrs, known: true };
+}
+function estCostHtml() {
+  if (EST.costErr) return `<div class="ec-card"><b>Costing</b><p class="quiet">${/function|schema|PGRST202/i.test(EST.costErr) ? "This turns on after tonight's update." : esc(EST.costErr)}</p></div>`;
+  const rate = Number(COMPANY?.labour_cost_per_hour) || 55;
+  return `<div class="ec-head">Costing <span class="quiet">only you see this</span></div>` + EST.opts.map((o, i) => {
+    const price = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
+    const cs = o.lines.map(estLineCost), mat = cs.reduce((s, c) => s + c.mat, 0), lab = cs.reduce((s, c) => s + c.lab, 0), hrs = cs.reduce((s, c) => s + c.hrs, 0);
+    const cost = mat + lab, profit = price - cost, margin = price > 0 ? profit / price : null;
+    const at40 = cost / (1 - EST_MARGIN), roomUp = at40 - price, maxDisc = price - at40;
+    const own = o.lines.filter(l => !l.item_id && (Number(l.qty) || 0) * (Number(l.price) || 0)).length;
+    const ok = margin != null && margin >= EST_MARGIN - 0.0005;
+    return `<div class="ec-card ${margin == null ? "" : ok ? "ok" : "low"}">
+      <div class="ec-title">Option ${i + 1} <b>${esc(o.name || "")}</b></div>
+      <div class="ec-row"><span>Price before HST</span><b>${money(price)}</b></div>
+      <div class="ec-row"><span>Materials</span><span>${money(mat)}</span></div>
+      <div class="ec-row"><span>Labour <span class="quiet">${hrs ? (Math.round(hrs * 10) / 10) + " h × " + money(rate) : ""}</span></span><span>${money(lab)}</span></div>
+      <div class="ec-row ec-tot"><span>Total cost</span><b>${money(cost)}</b></div>
+      <div class="ec-row"><span>Profit</span><b>${money(profit)}</b></div>
+      <div class="ec-margin">${margin == null ? `<span class="quiet">Add items to see the margin.</span>` : `<span class="ec-pct">${(margin * 100).toFixed(1)}%</span> margin
+        ${ok ? `<div class="ec-note">Max discount: <b>${money(Math.max(0, maxDisc))}</b> <span class="quiet">(${price > 0 ? (Math.max(0, maxDisc) / price * 100).toFixed(1) : 0}%) and still keep ${EST_MARGIN * 100}%</span></div>`
+             : `<div class="ec-note">Below ${EST_MARGIN * 100}%. Raise the price by <b>${money(roomUp)}</b> to get there (${money(at40)} before HST).</div>`}`}</div>
+      ${own ? `<div class="ec-warn">${own} line${own === 1 ? "" : "s"} typed in by hand: no cost known, so counted as $0.</div>` : ""}
+    </div>`; }).join("");
+}
+// the materials an item's kit adds, under its line (owners only, never printed)
+const estParts = l => { if (!estCanCost() || !l.item_id) return ""; const x = ECOST.get(l.item_id); if (!x || !(x.parts || []).length) return "";
+  const q = Number(l.qty) || 1;
+  return `<details class="est-parts"><summary>Added materials (${x.parts.length})</summary><ul>${x.parts.map(p => `<li><span>${esc(pbName(p.name))}${p.sku ? ` <span class="quiet">${esc(p.sku)}</span>` : ""}</span><span class="num">× ${+(Number(p.qty) * q).toFixed(2)}</span><span class="num">${money(Number(p.qty) * q * (Number(p.cost) || 0))}</span></li>`).join("")}</ul></details>`; };
 // our logo (kept next to the app on the website); a logo set in the company settings wins
 const REID_LOGO = "https://carlo-reid.github.io/reid-app/reid-logo.png";
 const coLogo = c => (c && c.logo_url) || REID_LOGO;
 function renderEstEdit() {
   { const ids = EST.opts.flatMap(o => o.lines.map(l => l.item_id)).filter(id => id && !EINFO.has(id));
-    if (ids.length) estInfo(ids).then(n => { if (n && document.querySelector(".est-sheet") && !document.querySelector(".est-sheet input:focus")) renderEstEdit(); }); }
+    if (ids.length) estInfo(ids).then(n => { if (n && document.querySelector(".est-sheet") && !document.querySelector(".est-sheet input:focus")) renderEstEdit(); });
+    const cids = estCanCost() ? EST.opts.flatMap(o => o.lines.map(l => l.item_id)).filter(id => id && !ECOST.has(id)) : [];
+    if (cids.length) estCosting(cids).then(n => { if (n && document.querySelector(".est-sheet") && !document.querySelector(".est-sheet input:focus")) renderEstEdit(); }); }
   const x = EST.x, closed = ["accepted", "lost", "declined", "expired"].includes(x.status) || !!x.cancelled_at, HST = 0.13;
   const tot = o => o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
   const c = COMPANY || { company_name: "Reid Heating & Cooling" }, brand = x.jobs?.partners?.branding_logo_url || x.jobs?.partners?.branding_name ? x.jobs.partners : null;
@@ -5956,6 +6024,7 @@ function renderEstEdit() {
       <button class="btn quiet-btn est-cancel-btn" type="button" id="est-cancel">Cancel estimate</button>`}
     </div>
     <div class="staff-msg ${/^Not|Couldn/.test(EST.msg) ? "err" : "ok"} est-tmsg" id="est-msg" role="status">${esc(EST.msg || "")}</div>
+    <div class="est-wrap ${estCanCost() ? "with-cost" : ""}">${estCanCost() ? `<aside class="est-cost" id="est-cost">${estCostHtml()}</aside>` : ""}
     <div class="est-sheet">
       <header class="es-top">
         <div class="es-brand">${brand ? (brand.branding_logo_url ? `<img class="es-logo" src="${esc(brand.branding_logo_url)}" alt="${esc(brand.branding_name || brand.name)}">` : `<div class="es-word">${esc(brand.branding_name || brand.name)}</div>`)
@@ -5979,7 +6048,7 @@ function renderEstEdit() {
           ${EST.opts.length > 1 ? `<button class="link danger" type="button" data-odel="${i}" title="Remove this option">✕</button>` : ""}`}</div>
         <table class="est-lines"><thead><tr><th class="est-pic"></th><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th><th></th></tr></thead><tbody>${o.lines.map((l, k) => `<tr>
           <td class="est-pic">${estPic(l.item_id)}</td>
-          <td><input class="est-d" data-ld="${i}:${k}" value="${esc(l.description)}" ${closed ? "disabled" : ""} aria-label="What">${estDesc(l.item_id)}</td>
+          <td><input class="est-d" data-ld="${i}:${k}" value="${esc(l.description)}" ${closed ? "disabled" : ""} aria-label="What">${estDesc(l.item_id)}${estParts(l)}</td>
           <td class="r"><input class="est-q" data-lq="${i}:${k}" value="${l.qty}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="How many"></td>
           <td class="r"><input class="est-p" data-lp="${i}:${k}" value="${Number(l.price).toFixed(2)}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="Price each"></td>
           <td class="r num est-lt">${money((Number(l.qty) || 0) * (Number(l.price) || 0))}</td>
@@ -5990,14 +6059,14 @@ function renderEstEdit() {
       </section>`).join("")}
         ${!closed && EST.opts.length < 3 ? `<button type="button" class="est-newopt" id="est-newopt">+ Add another option <span class="quiet">(up to 3)</span></button>` : ""}</div>
       <footer class="es-foot">Prices include parts and labour as listed. HST is worked out on taxable items. Thank you for considering ${esc(brand ? brand.branding_name || brand.name : c.company_name || "Reid Heating & Cooling")}.</footer>
-    </div>
+    </div></div>
     <div id="est-dlg"></div>
   </article>`;
   wireEstEdit();
 }
 function wireEstEdit() {
   const m = $("#main"), ij = s => s.split(":").map(Number), dirty = () => { EST.dirty = true; };
-  const refreshTotals = i => { const sec = m.querySelector(`[data-oi="${i}"]`), o = EST.opts[i], tot = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
+  const refreshTotals = i => { const ec = $("#est-cost"); if (ec) ec.innerHTML = estCostHtml(); const sec = m.querySelector(`[data-oi="${i}"]`), o = EST.opts[i], tot = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
     sec.querySelectorAll(".est-lt").forEach((td, k) => { const l = o.lines[k]; td.textContent = money((Number(l.qty) || 0) * (Number(l.price) || 0)); });
     const b = sec.querySelectorAll(".est-tot b"); b[0].textContent = money(tot); b[1].textContent = money(tot * 0.13); b[2].textContent = money(tot * 1.13); };
   m.querySelectorAll("[data-oname]").forEach(el => el.addEventListener("input", () => { EST.opts[Number(el.dataset.oname)].name = el.value; dirty(); }));
