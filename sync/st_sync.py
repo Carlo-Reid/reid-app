@@ -2711,6 +2711,11 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.pap_mail_list(text, integer), public.pap_mail_get(bigint), public.pap_mail_file(bigint, boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.pap_mail_list(text, integer), public.pap_mail_get(bigint), public.pap_mail_file(bigint, boolean) TO authenticated;
 
+NOTIFY pgrst, 'reload schema';
+"""
+
+# small pieces that only add functions (no table changes), applied on their own so a lock on APP_SCHEMA can't hold them up
+EXTRA_SCHEMA = r"""
 -- 99zzz3_amount_search.sql (its indexes are in the setup file only: adding them here locked the invoices table)
 -- =====================================================================
 -- Receivables: find by amount. Type an amount and see every invoice (any date, paid or not) whose total,
@@ -2753,6 +2758,7 @@ NOTIFY pgrst, 'reload schema';
 """
 
 
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default="manual")
@@ -2777,6 +2783,13 @@ def main():
     cur.execute("INSERT INTO st_sync_runs (source) VALUES (%s) RETURNING id", (args.source,))
     run_id = cur.fetchone()[0]; conn.commit()
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
+    for attempt in range(3):   # a busy app can deadlock these changes for a moment: try again
+        try:
+            cur.execute(EXTRA_SCHEMA); conn.commit(); log("Extra database pieces checked (find by amount)."); break
+        except Exception as e:
+            conn.rollback(); log(f"  Extra database pieces not added (try {attempt + 1}): {str(e)[:200]}")
+            if os.environ.get("GITHUB_ACTIONS") and attempt == 2: print(f"::notice::Find by amount not added: {str(e)[:200]}", flush=True)
+            time.sleep(5)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
         cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL AND to_regprocedure('public.customer_partner_bookings(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_tank_payer(bigint,text)') IS NOT NULL")
