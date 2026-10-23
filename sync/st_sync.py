@@ -2474,6 +2474,30 @@ REVOKE EXECUTE ON FUNCTION public.book_partners(), public.set_job_tank_payer(big
 GRANT EXECUTE ON FUNCTION public.book_partners(), public.set_job_tank_payer(bigint, text) TO authenticated;
 
 NOTIFY pgrst, 'reload schema';
+-- 99zz9_tank_service.sql
+-- =====================================================================
+-- Book a call for Vista: "What is this call?" adds Service Call to who pays for the tank.
+-- tank_payer: 'reid' (we pay for the tank) | 'partner' (Vista pays for the tank) | 'service' (service call).
+-- Whether it's an HTIN booking is the link to the HTIN List booking. Safe to run more than once.
+-- =====================================================================
+ALTER TABLE public.jobs ADD COLUMN IF NOT EXISTS tank_payer text;
+ALTER TABLE public.jobs DROP CONSTRAINT IF EXISTS jobs_tank_payer_check;
+ALTER TABLE public.jobs ADD CONSTRAINT jobs_tank_payer_check CHECK (tank_payer IS NULL OR tank_payer IN ('reid', 'partner', 'service', 'htin'));
+
+CREATE OR REPLACE FUNCTION public.set_job_tank_payer(p_job bigint, p_who text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT public.has_permission('calls.book') AND public.current_staff_role() IS DISTINCT FROM 'owner' THEN RAISE EXCEPTION 'You don''t have permission to book calls'; END IF;
+  IF p_who IS NOT NULL AND p_who NOT IN ('reid', 'partner', 'service') THEN RAISE EXCEPTION 'Pick what the call is: we pay for the tank, Vista pays for the tank, or a service call'; END IF;
+  UPDATE jobs SET tank_payer = p_who, updated_at = now() WHERE id = p_job;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('jobs', p_job, 'update', public.current_app_user_id(), jsonb_build_object('tank_payer', p_who));
+END $$;
+
+REVOKE EXECUTE ON FUNCTION public.set_job_tank_payer(bigint, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_job_tank_payer(bigint, text) TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
 """
 
 

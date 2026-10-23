@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-23.131947">
+<meta name="app-version" content="2026-10-23.134039">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -6474,7 +6474,8 @@ function wireEstEdit() {
     if (error) { say("Not saved: " + rpcErr(error), true); return; } SALES.rows = null; openEstEdit(EST.id, "Marked as not sold."); });
 }
 let BK_SALES = null;   // partners ticked for sales calls
-let BK_PARTNERS = null;   // the active partners a call can be for (Book a call)
+let BK_PARTNERS = null;
+const BK_TANK = [["reid", "We pay for the tank"], ["partner", "Vista pays for the tank"], ["service", "Service Call"]];   // the active partners a call can be for (Book a call)
 const bkIsVista = id => /vista/i.test((BK_PARTNERS || []).find(x => x.id === Number(id))?.name || "");
 // the customer's HTIN bookings that don't have a job yet (Book a call → Vista → HTIN booking)
 async function bkLoadHtin() {
@@ -6500,7 +6501,7 @@ async function openBooking(custId, opt = {}) {
   BK = { cust: c, locs, jobs: jobs.error ? [] : jobs.data, mode: opt.jobId ? "visit" : "new", jobId: opt.jobId || null,
          loc: loc || locs[0]?.id, type: "", unit: "", prio: "normal", summary: "", note: "",
          date: opt.date || ymd(addDays(new Date(), 1)), later: false, win: ["08:00", "11:00"], start: "", end: "", dur: "", techs: opt.tech ? [opt.tech] : [], allTechs: false, load: {}, htin: opt.htin || null };
-  BK.htinFixed = !!BK.htin; BK.forP = BK.htin ? Number(BK.htin.partner) || 0 : 0; BK.tank = BK.htin ? "htin" : null;   // who the call is for (0 = Reid), and for Vista who pays for the tank
+  BK.htinFixed = !!BK.htin; BK.forP = BK.htin ? Number(BK.htin.partner) || 0 : 0; BK.tank = null; BK.isHtin = !!BK.htin;   // who the call is for (0 = Reid), and for Vista who pays for the tank
   if (!BK_PARTNERS) db.rpc("book_partners").then(({ data }) => { BK_PARTNERS = data || []; if (document.body.dataset.page === "book" && !salesBooking()) renderBooking(); });
   if (BK.htin) {   // booked from a partner's booking list (HTIN): say what it's for, and use their service date when it's still ahead
     BK.summary = [BK.htin.service, BK.htin.ref && `${BK.htin.list.replace(/ list$/i, "")} #${BK.htin.ref}`].filter(Boolean).join(" – ");
@@ -6556,7 +6557,7 @@ function renderBooking(msg) {
     <h1>${salesBooking() ? "Sales Call" : "Book a call"}</h1>
     <p class="lead"><button class="link" type="button" data-open-cust="${F.cust.id}">${esc(F.cust.display_name)}</button> · Customer ${esc(F.cust.customer_number)}
       ${F.cust.do_not_contact ? ` · <strong class="owe">Marked do not contact</strong>` : ""}</p>
-    ${F.htin ? `<div class="staff-msg ok bk-htin">For <b>${esc(F.htin.partnerName)}</b> · ${esc(F.htin.list)} booking <b>#${esc(F.htin.ref || "")}</b>. The job goes on ${esc(F.htin.partnerName)} with their booking # as its reference.</div>` : ""}
+    ${F.htin && F.htinFixed ? `<div class="staff-msg ok bk-htin">For <b>${esc(F.htin.partnerName)}</b> · ${esc(F.htin.list)} booking <b>#${esc(F.htin.ref || "")}</b>. The job goes on ${esc(F.htin.partnerName)} with their booking # as its reference.</div>` : ""}
     <form id="bk-form" class="bk-form" autocomplete="off">
       <div class="bk-row"><span class="bk-label">What</span><span class="bk-chips bk-what">
         ${salesBooking() ? (ME.role === "sales" ? `<button class="bk-main" type="button" data-bk-sk="site" aria-pressed="${F.sk === "site"}"><b>Site visit</b><span>Book a time to go see the customer</span></button>
@@ -6570,12 +6571,14 @@ function renderBooking(msg) {
           `<button class="chip small prio-${k}" type="button" data-bk-prio="${k}" aria-pressed="${F.prio === k}" title="Priority">${x}</button>`).join("")}`}</span></div>`}
       ${!salesBooking() && F.mode === "new" ? `<div class="bk-row"><span class="bk-label">Call for</span><span class="bk-chips">${[{ id: 0, name: "Reid" }].concat(BK_PARTNERS || []).map(x =>
           `<button class="chip small" type="button" data-bk-for="${x.id}" aria-pressed="${Number(F.forP || 0) === x.id}">${esc(x.name.replace(/\s*\(.*\)\s*$/, ""))}</button>`).join("")}${BK_PARTNERS ? "" : `<span class="quiet">getting the partners…</span>`}</span></div>
-        ${bkIsVista(F.forP) ? `<div class="bk-row"><span class="bk-label">Who pays for the tank?</span><span class="bk-chips">${[["reid", "We pay for the tank"], ["partner", "Vista pays for the tank"], ["htin", "This is for HTIN"]].map(([k, x]) =>
+        ${bkIsVista(F.forP) ? `<div class="bk-row"><span class="bk-label">What is this call?</span><span class="bk-chips">${BK_TANK.map(([k, x]) =>
           `<button class="chip small" type="button" data-bk-tank="${k}" aria-pressed="${F.tank === k}">${x}</button>`).join("")}</span></div>
-          ${F.tank === "htin" ? `<div class="bk-row"><span class="bk-label">HTIN booking</span><span class="bk-chips">${F.htin && !Array.isArray(F.htinRows) ? `<span><b>#${esc(F.htin.ref || "")}</b> ${esc(F.htin.service || "")}</span>`
+          <div class="bk-row"><span class="bk-label">HTIN booking?</span><span class="bk-chips">${F.htinFixed ? `<span class="quiet">Yes, from the HTIN List</span>` : [[false, "No"], [true, "Yes, it's for HTIN"]].map(([k, x]) =>
+          `<button class="chip small" type="button" data-bk-ishtin="${k}" aria-pressed="${!!F.isHtin === k}">${x}</button>`).join("")}</span></div>
+          ${F.isHtin ? `<div class="bk-row"><span class="bk-label">HTIN booking</span><span class="bk-chips">${F.htin && !Array.isArray(F.htinRows) ? `<span><b>#${esc(F.htin.ref || "")}</b> ${esc(F.htin.service || "")}</span>`
             : F.htinRows === "loading" || !F.htinRows ? `<span class="quiet">looking for this customer's HTIN bookings…</span>`
             : F.htinRows.length ? F.htinRows.map(r => `<button class="chip small" type="button" data-bk-htin="${r.id}" aria-pressed="${F.htin?.id === r.id}">#${esc(r.ref || "")} · ${esc(r.service || "")} · ${esc(htdShort(r.status))}</button>`).join("")
-            : `<span class="quiet">No open HTIN booking for this customer without a job. Add it on the HTIN List first, or pick who pays.</span>`}</span></div>` : ""}` : ""}` : ""}
+            : `<span class="quiet">No open HTIN booking for this customer without a job. Add it on the HTIN List first, or pick No.</span>`}</span></div>` : ""}` : ""}` : ""}
       ${F.mode === "sales" ? `<div class="bk-row"><span class="bk-label">Sales call for</span><span class="bk-chips">${salesForList(F).map(x =>
           `<button class="chip small" type="button" data-bk-sales="${x.id}" aria-pressed="${Number(F.salesFor || 0) === x.id}">${esc(x.name.replace(/\s*\(.*\)\s*$/, ""))} Sales Call</button>`).join("")}</span></div>` : ""}
       ${salesBooking() && ME.role !== "sales" ? `<div class="bk-row"><span class="bk-label">Sales person</span><span class="bk-chips">${(F.sellers || []).map(x =>
@@ -6629,13 +6632,14 @@ function renderBooking(msg) {
     redraw(); }));
   document.querySelectorAll("[data-bk-sales]").forEach(b => b.addEventListener("click", () => { F.salesFor = Number(b.dataset.bkSales); redraw(); }));
   document.querySelectorAll("[data-bk-for]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.bkFor); if (id === Number(F.forP || 0)) return;
-    F.forP = id; if (!bkIsVista(id)) { F.tank = null; if (F.htin && !F.htinFixed) F.htin = null; } redraw(); }));
-  document.querySelectorAll("[data-bk-tank]").forEach(b => b.addEventListener("click", () => { F.tank = b.dataset.bkTank; if (F.tank !== "htin" && !F.htinFixed) F.htin = null; redraw(); if (F.tank === "htin" && !F.htin) bkLoadHtin(); }));
+    F.forP = id; if (!bkIsVista(id)) { F.tank = null; if (!F.htinFixed) { F.isHtin = false; F.htin = null; } } redraw(); }));
+  document.querySelectorAll("[data-bk-tank]").forEach(b => b.addEventListener("click", () => { F.tank = b.dataset.bkTank; redraw(); }));
+  document.querySelectorAll("[data-bk-ishtin]").forEach(b => b.addEventListener("click", () => { F.isHtin = b.dataset.bkIshtin === "true"; if (!F.isHtin) F.htin = null; redraw(); if (F.isHtin && !F.htin) bkLoadHtin(); }));
   document.querySelectorAll("[data-bk-htin]").forEach(b => b.addEventListener("click", () => { const r = (F.htinRows || []).find(x => x.id === Number(b.dataset.bkHtin)); if (!r) return;
     const pName = (BK_PARTNERS || []).find(x => x.id === Number(F.forP))?.name || "Vista Credit";
     F.htin = { id: r.id, ref: r.ref, partner: F.forP, partnerName: pName, service: r.service, date: r.service_date, list: r.list_name || "HTIN List" };
-    if (!F.summary.trim()) F.summary = [r.service, r.ref && `${(r.list_name || "HTIN").replace(/ list$/i, "")} #${r.ref}`].filter(Boolean).join(" – ");
-    redraw(); }));
+    keep(); if (!F.summary.trim()) F.summary = [r.service, r.ref && `${(r.list_name || "HTIN").replace(/ list$/i, "")} #${r.ref}`].filter(Boolean).join(" – ");
+    renderBooking(); }));
   document.querySelectorAll("[data-bk-seller]").forEach(b => b.addEventListener("click", () => { F.seller = Number(F.seller) === Number(b.dataset.bkSeller) ? null : Number(b.dataset.bkSeller); redraw(); }));
   document.querySelectorAll("[data-bk-sk]").forEach(b => b.addEventListener("click", () => { F.sk = b.dataset.bkSk; F.later = F.sk === "est" || F.sk === "phone"; redraw(); if (F.sk === "walk") loadTechLoad(); }));
   $("#bk-job")?.addEventListener("change", e => { F.jobId = Number(e.target.value) || null; });
@@ -6670,8 +6674,8 @@ function renderBooking(msg) {
     if (F.mode !== "visit" && !F.type) return say("Pick the type of job.", true);
     if (F.mode !== "visit" && !F.unit) return say("Pick the department.", true);
     if (salesBooking() && ME.role !== "sales" && (F.sellers || []).length && !F.seller) return say("Pick the sales person this is for.", true);
-    if (!salesBooking() && F.mode === "new" && bkIsVista(F.forP) && !F.tank) return say("Pick who pays for the tank: we pay, Vista pays, or it's for HTIN.", true);
-    if (!salesBooking() && F.mode === "new" && F.tank === "htin" && !F.htin) return say("Pick the HTIN booking this call is for.", true);
+    if (!salesBooking() && F.mode === "new" && bkIsVista(F.forP) && !F.tank) return say("Pick what this call is: we pay for the tank, Vista pays for the tank, or Service Call.", true);
+    if (!salesBooking() && F.mode === "new" && bkIsVista(F.forP) && F.isHtin && !F.htin) return say("Pick the HTIN booking this call is for.", true);
     let start = null, end = null;
     if (!F.later) {
       if (!F.date) return say("Pick the day.", true);
@@ -6724,7 +6728,7 @@ function bookedScreen(F, r, start, end) {
     <div class="bk-done">
       <div class="bk-done-big">${F.later ? "Not on the schedule yet" : esc(dayText(F.date)) + ", " + esc(winText(start, end))}</div>
       <div>${esc(F.cust.display_name)} · Job ${esc(r.job_number)}${r.visit_number > 1 ? `, visit ${r.visit_number}` : ""}</div>
-      ${!salesBooking() && F.mode === "new" && Number(F.forP) ? `<div>For <b>${esc((BK_PARTNERS || []).find(x => x.id === Number(F.forP))?.name || "the partner")}</b>${F.tank ? ` · ${F.tank === "reid" ? "we pay for the tank" : F.tank === "partner" ? "Vista pays for the tank" : `HTIN booking #${esc(F.htin?.ref || "")}`}` : ""}</div>` : ""}
+      ${!salesBooking() && F.mode === "new" && Number(F.forP) ? `<div>For <b>${esc((BK_PARTNERS || []).find(x => x.id === Number(F.forP))?.name || "the partner")}</b>${F.tank ? ` · ${esc(BK_TANK.find(x => x[0] === F.tank)?.[1] || "")}` : ""}${F.htin ? ` · HTIN booking #${esc(F.htin.ref || "")}` : ""}</div>` : ""}
       <div class="quiet">${F.later ? "It's on the waiting list at the top of the Dispatch page until someone picks a day." : techs.length ? "With " + esc(techs.join(" and ")) : "No tech yet: assign one on the Dispatch page."}</div>
     </div>
     <div class="bk-actions">
