@@ -3751,6 +3751,7 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .pap-tag { display: inline-block; vertical-align: middle; margin-left: 10px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .02em; background: #e7f5ee; color: #1b6e43; border: 1px solid #b5e0c8; }
 .sec-safe { margin: 8px 0 0; font-size: 13px; }
 .sec-inbox .sec-safe { margin: 0 0 10px; }
+.sec-hirow td { background: rgba(253,230,138,.45); font-weight: 600; }
 .ow-amt .cl-row { align-items: flex-end; } .ow-amt #ow-amt { width: 150px; }
 .ow-amt-msg { margin-top: 12px; } .ow-amt-table { margin-top: 8px; }
 mark.ow-amt-hit { background: #FDE68A; color: #3b2a00; padding: 1px 5px; border-radius: 4px; font-weight: 700; }
@@ -12514,7 +12515,7 @@ function secPeopleHtml() {
     && (!q || `${r.name} ${r.num} ${r.phone} ${r.customer_name || ""} ${r.customer_number || ""} ${r.address || ""} ${r.file || ""}`.toLowerCase().includes(q)));
   const how = { number: "by customer #", phone: "by phone", name: "by name" };
   return `<section class="cl-tools sec-up sec-people"><h2>People in the EFT files <span class="quiet" style="font-weight:400">(${all.length.toLocaleString()})</span></h2>
-    <p class="quiet sec-safe">Everyone in the emailed EFT lists, once each, from the newest file they're in. Click a name to open the customer.</p>
+    <p class="quiet sec-safe">Everyone in the EFT lists you've marked (emailed or uploaded) and the emailed lists waiting, once each, from the newest file they're in. Click a name to open the customer.</p>
     <div class="cl-row"><div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${SEC_PSHOW.map(([k, x]) => `<button type="button" aria-pressed="${show === k}" data-sec-pshow="${k}">${x} <span class="quiet">${cnt(k).toLocaleString()}</span></button>`).join("")}</div></div>
       <label class="cl-group"><span class="cl-label">Find</span><input type="search" id="sec-pq" value="${esc(SEC.pq || "")}" placeholder="Name, number, phone, address or file" aria-label="Find someone in the EFT files"></label></div>
     ${rows.length ? `<div class="staff-wrap"><table class="calls-table sec-people-table"><thead><tr><th>Name</th><th>Customer # in file</th><th>Phone</th><th>Customer in the app</th><th>PAP</th><th>File</th></tr></thead><tbody>
@@ -12599,8 +12600,10 @@ function secInboxHtml() {
   const when = d => d ? esc(fmtDate(d)) + " " + esc(new Date(d).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) : "";
   const line = r => `<tr><td class="quiet">${when(r.received)}</td><td>${esc(r.from || "")}<div class="quiet">${esc(r.subject || "")}</div></td>
       <td>${esc(r.file || "")}${r.note ? `<div class="quiet">${esc(r.note)}</div>` : ""}${r.mail_id ? `<div><button class="link" type="button" data-sec-mail="${r.mail_id}">See the email</button></div>` : ""}</td><td>${esc(papName(r.list))}</td><td>${r.count ? r.count.toLocaleString() : ""}</td>
-      <td style="white-space:nowrap">${r.status === "waiting" ? `<button class="btn" type="button" data-sec-review="${r.id}" ${SEC.file?.inbox === r.id ? "disabled" : ""}>${SEC.file?.inbox === r.id ? "Reviewing below" : "Review"}</button> ` : ""}
-        ${wait.includes(r) ? `<button class="link" type="button" data-sec-ignore="${r.id}">Ignore</button>` : `<span class="quiet">${r.status === "done" ? "Marked" : "Ignored"}${r.done_by ? " by " + esc(r.done_by) : ""} ${r.done_at ? esc(fmtDate(r.done_at)) : ""}</span>`}</td></tr>`;
+      <td style="white-space:nowrap">${SEC.file?.inbox === r.id ? `<button class="btn" type="button" disabled>Reviewing below</button> `
+          : r.status === "waiting" ? `<button class="btn" type="button" data-sec-review="${r.id}">Review</button> ${r.file_id ? `<button class="link" type="button" data-sec-ofile="${r.file_id}" data-inbox="${r.id}">Pick the columns</button> ` : ""}`
+          : r.status === "unreadable" && r.file_id ? `<button class="btn" type="button" data-sec-ofile="${r.file_id}" data-inbox="${r.id}">Open and pick the columns</button> ` : ""}
+        ${wait.includes(r) ? `<button class="link" type="button" data-sec-ignore="${r.id}">Ignore</button>` : `<span class="quiet">${r.upload ? "Uploaded and marked" : r.status === "done" ? "Marked" : "Ignored"}${r.done_by ? " by " + esc(r.done_by) : ""} ${r.done_at ? esc(fmtDate(r.done_at)) : ""}</span>`}</td></tr>`;
   const head = `<thead><tr><th>Received</th><th>From</th><th>File</th><th>List</th><th>Rows</th><th></th></tr></thead>`;
   return `<section class="cl-tools sec-up sec-inbox"><h2>Emailed EFT lists${wait.length ? ` <span class="sec-badge">${wait.length}</span>` : ""}</h2>
     <p class="quiet sec-safe">Email the Excel file to <b>eftupload@hsginc.ca</b>. It goes on the Monthly billing list, unless the subject says <b>Other</b>. Nothing changes until you review it and click Mark. Every email and its file are kept under All EFT emails.
@@ -12611,22 +12614,36 @@ function secInboxHtml() {
   </section>`;
 }
 function secGuess(lc, tests, skip = []) { for (const t of tests) { const i = lc.findIndex((h, j) => !skip.includes(j) && t.test(h)); if (i >= 0) return i; } return -1; }
-async function secRead(f) {
+// read a file here in the browser (uploaded by hand, or an emailed file opened from the box above); inbox = the emailed list it came from
+async function secRead(f, inbox) {
   try {
     await loadXlsx();
     const wb = XLSX.read(await f.arrayBuffer(), { type: "array" }), all = [];
     wb.SheetNames.forEach(n => all.push(...XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", raw: false })));
-    let hi = all.slice(0, 25).findIndex(r => r.some(v => /customer|name|account|cust/i.test(String(v))));
-    if (hi < 0) hi = 0;
-    const head = (all[hi] || []).map(v => String(v).trim()), lc = head.map(h => h.toLowerCase());
-    // keep only the three columns we use; everything else in the file is dropped right here
-    const num = secGuess(lc, [/^(customer|cust\.?|client|account|acct)\s*(#|no\.?|num(ber)?|id)$/, /customer ?#|cust.*(no|num|id)|account ?(#|no|num)|^id$/]);
-    const name = secGuess(lc, [/^(customer|client)?\s*name$/, /^customer$/, /name/], [num]);
-    const phone = secGuess(lc, [/phone|mobile|cell|tel/], [num, name]);
-    SEC.file = { name: f.name, head, rows: all.slice(hi + 1).filter(r => r.some(v => String(v).trim() !== "")) };
-    SEC.col = { num, name, phone }; SEC.match = null;
+    let hi = all.slice(0, 25).findIndex(r => r.some(v => /customer|name|account|cust|client|payor|payer/i.test(String(v))));
+    SEC.file = { name: f.name, all, inbox: inbox || null }; SEC.match = null;
+    secSetHead(hi < 0 ? 0 : hi);
     renderSecurity(); secMatch();
   } catch (e) { renderSecurity("Not read: " + (e.message || e)); }
+}
+// which row has the column headings: the columns are guessed again from it (and can be picked by hand)
+function secSetHead(hi) {
+  const F = SEC.file; F.hi = hi;
+  const head = (F.all[hi] || []).map(v => String(v).trim()), lc = head.map(h => h.toLowerCase());
+  const num = secGuess(lc, [/^(customer|cust\.?|client|account|acct)\s*(#|no\.?|num(ber)?|id)$/, /customer ?#|cust.*(no|num|id)|account ?(#|no|num)|^id$/]);
+  const name = secGuess(lc, [/^(customer|client)?\s*name$/, /^customer$/, /name|payor|payer/], [num]);
+  const phone = secGuess(lc, [/phone|mobile|cell|tel/], [num, name]);
+  F.head = head; F.rows = F.all.slice(hi + 1).filter(r => r.some(v => String(v).trim() !== ""));
+  SEC.col = { num, name, phone };
+}
+// open an emailed file and read it here, to pick its columns by hand
+async function secOpenFile(fileId, inboxId) {
+  const { data, error } = await db.rpc("pap_mail_file", { p_id: fileId, p_raw: false });
+  if (error || !data?.b64) return renderSecurity("Not opened: " + (error ? rpcErr(error) : "the file is gone"));
+  const bin = atob(data.b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const row = (SEC.inbox?.rows || []).find(r => r.id === inboxId); if (row) SEC.list = row.list === "other" ? "other" : "monthly";
+  await secRead({ name: data.name || "Emailed file", arrayBuffer: async () => bytes.buffer }, inboxId);
+  document.querySelector(".sec-up:not(.sec-inbox):not(.sec-mail):not(.sec-people)")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 async function secMatch() {
   const F = SEC.file, c = SEC.col; if (!F) return;
@@ -12665,7 +12682,12 @@ function secUploadHtml() {
       <div class="sec-go"><button class="btn" type="button" id="sec-apply" ${M.ids.length ? "" : "disabled"}>Mark ${M.ids.length.toLocaleString()} customer${M.ids.length === 1 ? "" : "s"} as PAP · ${esc(papName(SEC.list))}</button>
         <button class="link" type="button" id="sec-clearfile">Start over</button></div>`;
   }
-  return `<div class="sec-cols">${pick("num", "Customer #")}${pick("name", "Name")}${pick("phone", "Phone")}<span class="quiet">${F.rows.length.toLocaleString()} rows in ${esc(F.name)}</span></div>${prev}`;
+  const cut = v => { v = String(v ?? "").trim(); return v.length > 22 ? v.slice(0, 21) + "…" : v; };
+  const headPick = F.all ? `<label>Headings are in<select id="sec-hi">${F.all.slice(0, 30).map((r, i) => `<option value="${i}" ${F.hi === i ? "selected" : ""}>Row ${i + 1}: ${esc(r.filter(v => String(v).trim()).slice(0, 4).map(cut).join(" · ") || "(empty)")}</option>`).join("")}</select></label>` : "";
+  const peek = F.all ? `<details class="sec-miss" ${c.num < 0 && c.name < 0 && c.phone < 0 ? "open" : ""}><summary>See the top of the file</summary><div class="staff-wrap"><table class="calls-table"><tbody>
+      ${F.all.slice(0, 12).map((r, i) => `<tr${i === F.hi ? ' class="sec-hirow"' : ""}><td class="quiet">${i + 1}</td>${r.slice(0, 12).map(v => `<td>${esc(cut(v))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      <p class="quiet">This is only shown here on your computer. Pick the row with the headings, then the Customer #, Name and Phone columns.</p></details>` : "";
+  return `<div class="sec-cols">${headPick}${pick("num", "Customer #")}${pick("name", "Name")}${pick("phone", "Phone")}<span class="quiet">${F.rows.length.toLocaleString()} rows in ${esc(F.name)}</span></div>${peek}${prev}`;
 }
 function renderSecurity(msg) {
   const top = $("#main").scrollTop, rows = SEC.rows || [], n = k => rows.filter(r => r.pap_list === k).length;
@@ -12686,7 +12708,7 @@ function renderSecurity(msg) {
     <section class="cl-tools sec-up"><h2>${SEC.file?.inbox ? "Review the emailed list" : "Upload a PAP list"}</h2>
       <div class="cl-row"><div class="cl-group"><span class="cl-label">Which list is this file?</span>${seg(PAP_LISTS, SEC.list, "data-sec-list")}</div>
         <label class="btn quiet-btn">📄 Choose the Excel file<input type="file" id="sec-file" accept=".xlsx,.xls,.csv" hidden></label></div>
-      <p class="quiet sec-safe">🔒 Only the customer number, name and phone columns are read, right here on your computer. Bank details or anything else in the file are never sent or saved.</p>
+      <p class="quiet sec-safe">🔒 The file is read right here on your computer. Only the customer number, name and phone columns are sent and kept (they make up People in the EFT files). Bank details or anything else in the file are never sent or saved.</p>
       <details class="rules-box"><summary>ⓘ The rules for PAP lists</summary>${PAP_RULES}</details>
       ${SEC.file ? secUploadHtml() : ""}
     </section>
@@ -12711,6 +12733,7 @@ function wireSecurity() {
   document.querySelectorAll("[data-sec-list]").forEach(b => b.addEventListener("click", () => { SEC.list = b.dataset.secList; renderSecurity(); }));
   document.querySelectorAll("[data-sec-show]").forEach(b => b.addEventListener("click", () => { SEC.show = b.dataset.secShow; renderSecurity(); }));
   $("#sec-file")?.addEventListener("change", e => { const f = e.target.files[0]; if (f) secRead(f); });
+  $("#sec-hi")?.addEventListener("change", e => { secSetHead(Number(e.target.value)); SEC.match = null; renderSecurity(); secMatch(); });
   document.querySelectorAll("[data-sec-col]").forEach(s => s.addEventListener("change", () => { SEC.col[s.dataset.secCol] = Number(s.value); secMatch(); }));
   $("#sec-replace")?.addEventListener("change", e => { SEC.replace = e.target.checked; });
   $("#sec-clearfile")?.addEventListener("click", () => { SEC.file = null; SEC.match = null; SEC.replace = false; renderSecurity(); });
@@ -12720,7 +12743,9 @@ function wireSecurity() {
     if (SEC.replace) { const k = await askChoice("Replace the whole list?", `Customers on the ${esc(papName(SEC.list))} list who aren't in this file come off PAP.`, [["yes", "Replace the list", true], ["", "Go back"]]); if (k !== "yes") return; }
     const { data, error } = await db.rpc("pap_set", { p_ids: M.ids, p_list: SEC.list, p_replace: SEC.replace });
     if (error) return say("Not saved: " + rpcErr(error));
-    if (SEC.file?.inbox) await db.rpc("pap_inbox_set", { p_id: SEC.file.inbox, p_status: "done" });
+    { const c = SEC.col || {}, head = [c.num, c.name, c.phone].map(i => i >= 0 ? (SEC.file.head[i] || null) : null);   // keep the 3 columns, so the people list has them
+      const sv = await db.rpc("pap_inbox_save", { p_id: SEC.file.inbox || null, p_file: SEC.file.name, p_list: SEC.list, p_head: head, p_rows: M.rows.map(r => [r.num, r.name, r.phone]) });
+      if (sv.error && SEC.file.inbox) await db.rpc("pap_inbox_set", { p_id: SEC.file.inbox, p_status: "done" }); }
     SEC.file = null; SEC.match = null; SEC.replace = false;
     const had = M.ids.length - data.on;
     say(`Done: ${data.on.toLocaleString()} customer${data.on === 1 ? "" : "s"} marked PAP · ${papName(SEC.list)}${had ? ` (${had.toLocaleString()} were already on it)` : ""}${data.off ? `, ${data.off} taken off` : ""}.`);
@@ -12739,6 +12764,7 @@ function wireSecurity() {
   document.querySelectorAll("[data-sec-raw]").forEach(b => b.addEventListener("click", () => secMailFile(Number(b.dataset.secRaw), true, false)));
   let mqT; $("#sec-mq")?.addEventListener("input", e => { SEC.mq = e.target.value; clearTimeout(mqT);
     mqT = setTimeout(async () => { await secMailLoad(); const pos = e.target.selectionStart; renderSecurity(); const n = $("#sec-mq"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 350); });
+  document.querySelectorAll("[data-sec-ofile]").forEach(b => b.addEventListener("click", () => secOpenFile(Number(b.dataset.secOfile), Number(b.dataset.inbox))));
   document.querySelectorAll("[data-sec-review]").forEach(b => b.addEventListener("click", () => secReview(Number(b.dataset.secReview))));
   document.querySelectorAll("[data-sec-ignore]").forEach(b => b.addEventListener("click", async () => {
     const id = Number(b.dataset.secIgnore), { error } = await db.rpc("pap_inbox_set", { p_id: id, p_status: "ignored" });

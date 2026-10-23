@@ -2793,6 +2793,56 @@ END $$;
 REVOKE EXECUTE ON FUNCTION public.pap_file_people() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.pap_file_people() TO authenticated;
 
+-- 99zzz5_pap_list_save.sql
+-- =====================================================================
+-- Security page: when an owner clicks Mark (an emailed list or a file uploaded by hand), the customer #, name and phone
+-- columns of that file are kept, so "People in the EFT files" is built from both. Nothing else from the file is sent.
+-- Also: the emailed-lists box says which file each list came from (so it can be opened and its columns picked by hand).
+-- Needs 99zz11 and 99zz12. Safe to run more than once.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.pap_inbox_save(p_id bigint, p_file text, p_list text, p_head jsonb, p_rows jsonb)
+RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_id bigint; v_me bigint := public.current_app_user_id();
+BEGIN
+  IF NOT coalesce(public._is_owner(), false) THEN RAISE EXCEPTION 'Only owners can do this'; END IF;
+  IF p_list NOT IN ('monthly', 'other') THEN RAISE EXCEPTION 'Pick a list'; END IF;
+  IF jsonb_typeof(p_rows) <> 'array' THEN RAISE EXCEPTION 'No rows'; END IF;
+  -- keep only three short text values per row, whatever was sent
+  p_rows := (SELECT coalesce(jsonb_agg(jsonb_build_array(left(coalesce(x ->> 0, ''), 60), left(coalesce(x ->> 1, ''), 200), left(coalesce(x ->> 2, ''), 40))), '[]')
+             FROM jsonb_array_elements(p_rows) x WHERE jsonb_typeof(x) = 'array');
+  IF p_id IS NOT NULL THEN
+    UPDATE pap_inbox SET head = p_head, rows = p_rows, pap_list = p_list, note = NULL, status = 'done', done_at = now(), done_by = v_me
+    WHERE id = p_id RETURNING id INTO v_id;
+  END IF;
+  IF v_id IS NULL THEN
+    INSERT INTO pap_inbox (message_id, received_at, from_name, subject, file_name, pap_list, head, rows, status, done_at, done_by)
+    VALUES ('upload:' || gen_random_uuid(), now(), coalesce(public._emp_name((SELECT employee_id FROM app_users WHERE id = v_me)), 'Uploaded'),
+            'Uploaded on the Security page', left(coalesce(p_file, 'Uploaded file'), 200), p_list, p_head, p_rows, 'done', now(), v_me)
+    RETURNING id INTO v_id;
+  END IF;
+  RETURN v_id;
+END $$;
+REVOKE EXECUTE ON FUNCTION public.pap_inbox_save(bigint, text, text, jsonb, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.pap_inbox_save(bigint, text, text, jsonb, jsonb) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.pap_inbox_list()
+RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN NOT coalesce(public._is_owner(), false) THEN NULL ELSE jsonb_build_object(
+    'last_check', (SELECT value FROM pap_inbox_state WHERE key = 'last_check'),
+    'last_error', (SELECT value FROM pap_inbox_state WHERE key = 'last_error'),
+    'rows', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', m.id, 'mail_id', m.mail_id, 'file_id', m.file_id, 'received', m.received_at,
+               'from', coalesce(nullif(m.from_name, ''), m.from_addr), 'from_addr', m.from_addr, 'subject', m.subject, 'file', m.file_name,
+               'list', m.pap_list, 'head', m.head, 'count', coalesce(jsonb_array_length(m.rows), 0), 'note', m.note, 'status', m.status,
+               'upload', m.message_id LIKE 'upload:%', 'done_at', m.done_at,
+               'done_by', public._emp_name((SELECT u.employee_id FROM app_users u WHERE u.id = m.done_by)))
+             ORDER BY (m.status IN ('waiting', 'unreadable')) DESC, m.received_at DESC NULLS LAST, m.id DESC), '[]')
+             FROM (SELECT * FROM pap_inbox WHERE status IN ('waiting', 'unreadable')
+                   UNION ALL
+                   (SELECT * FROM pap_inbox WHERE status IN ('done', 'ignored') ORDER BY coalesce(done_at, created_at) DESC LIMIT 20)) m)) END
+$$;
+
 NOTIFY pgrst, 'reload schema';
 """
 
@@ -2822,13 +2872,6 @@ def main():
     cur.execute("INSERT INTO st_sync_runs (source) VALUES (%s) RETURNING id", (args.source,))
     run_id = cur.fetchone()[0]; conn.commit()
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
-    for attempt in range(3):   # a busy app can deadlock these changes for a moment: try again
-        try:
-            cur.execute(EXTRA_SCHEMA); conn.commit(); log("Extra database pieces checked (find by amount, EFT people)."); break
-        except Exception as e:
-            conn.rollback(); log(f"  Extra database pieces not added (try {attempt + 1}): {str(e)[:200]}")
-            if os.environ.get("GITHUB_ACTIONS") and attempt == 2: print(f"::notice::Find by amount not added: {str(e)[:200]}", flush=True)
-            time.sleep(5)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
         cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL AND to_regprocedure('public.customer_partner_bookings(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_tank_payer(bigint,text)') IS NOT NULL")
@@ -2836,6 +2879,13 @@ def main():
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks not added: {str(e)[:200]}", flush=True)
+    for attempt in range(3):   # after APP_SCHEMA, so these newer versions win; a busy app can deadlock these changes for a moment: try again
+        try:
+            cur.execute(EXTRA_SCHEMA); conn.commit(); log("Extra database pieces checked (find by amount, EFT people)."); break
+        except Exception as e:
+            conn.rollback(); log(f"  Extra database pieces not added (try {attempt + 1}): {str(e)[:200]}")
+            if os.environ.get("GITHUB_ACTIONS") and attempt == 2: print(f"::notice::Find by amount not added: {str(e)[:200]}", flush=True)
+            time.sleep(5)
 
     try:
         new_state = {}
