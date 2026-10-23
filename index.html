@@ -3765,7 +3765,15 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .sec-find-go { display: flex; gap: 10px; align-items: center; flex: none; }
 .sec-find-item { cursor: pointer; border: 1px solid transparent; transition: background .12s, border-color .12s; }
 .sec-find-item:hover, .sec-find-item:focus-visible { background: rgba(31,122,77,.12); border-color: rgba(31,122,77,.45); outline: none; }
-.sec-find-item.busy { opacity: .6; pointer-events: none; } .sec-nf-btn { border: 0; cursor: pointer; font: inherit; } .sec-file-table tr.sec-nf td { background: rgba(176,58,72,.05); }
+.sec-find-item.busy { opacity: .6; pointer-events: none; }
+#sec-verify-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 9000; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; justify-content: center;
+  max-width: min(920px, calc(100vw - 24px)); padding: 12px 16px; border-radius: 14px; background: #10261c; color: #fff; box-shadow: 0 10px 30px rgba(0,0,0,.35); font-size: 14.5px; }
+#sec-verify-bar .svb-eyebrow { display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; background: rgba(255,255,255,.15); padding: 2px 7px; border-radius: 6px; margin-right: 6px; }
+#sec-verify-bar .svb-quiet { opacity: .75; } #sec-verify-bar .svb-acts { display: flex; gap: 10px; }
+#sec-verify-bar button { font: inherit; font-weight: 700; border: 0; border-radius: 10px; padding: 9px 16px; cursor: pointer; }
+#sec-verify-bar .svb-yes { background: #16a34a; color: #fff; } #sec-verify-bar .svb-yes:hover { background: #15803d; }
+#sec-verify-bar .svb-no { background: rgba(255,255,255,.12); color: #fff; } #sec-verify-bar .svb-no:hover { background: rgba(220,38,38,.75); }
+@media print { #sec-verify-bar { display: none; } } .sec-nf-btn { border: 0; cursor: pointer; font: inherit; } .sec-file-table tr.sec-nf td { background: rgba(176,58,72,.05); }
 .sec-hirow td { background: rgba(253,230,138,.45); font-weight: 600; }
 .ow-amt .cl-row { align-items: flex-end; } .ow-amt #ow-amt { width: 150px; }
 .ow-amt-msg { margin-top: 12px; } .ow-amt-table { margin-top: 8px; }
@@ -12617,6 +12625,29 @@ async function secFindRun() {
   if (SEC.find?.q !== F.q) return;
   SEC.find = { q: F.q, rows: error ? [] : (data || []), error: error ? rpcErr(error) : null, total: data?.[0] ? Number(data[0].total_count) : 0 };
 }
+// open the customer's page to check them, with a bar on top: green Connect, or Wrong customer (back to the Security page)
+async function secVerify(k, customerId) {
+  const r = SEC.view?.rows?.[k]; if (!r) return;
+  SEC.verify = { k, customerId, fv: SEC.fv, name: String(r.name || "").replace(/&amp;/g, "&"), ref: r.num || "", amount: r.amount || "" };
+  await openCustomer(customerId);
+  secVerifyBar();
+}
+function secVerifyBar() {
+  document.getElementById("sec-verify-bar")?.remove();
+  const V = SEC.verify; if (!V) return;
+  const bar = document.createElement("div"); bar.id = "sec-verify-bar"; bar.setAttribute("role", "region"); bar.setAttribute("aria-label", "Check this customer");
+  bar.innerHTML = `<div class="svb-text"><span class="svb-eyebrow">EFT file</span> Is this <b>${esc(V.name || "this person")}</b>${V.ref ? ` <span class="svb-quiet">(reference ${esc(V.ref)})</span>` : ""}${V.amount ? ` <span class="svb-quiet">· ${esc(V.amount)}</span>` : ""}?</div>
+    <div class="svb-acts"><button type="button" class="svb-yes" id="svb-yes">✓ Connect</button><button type="button" class="svb-no" id="svb-no">✗ Wrong customer, go back</button></div>`;
+  document.body.appendChild(bar);
+  const done = () => { clearInterval(SEC._vbT); bar.remove(); };
+  $("#svb-no").addEventListener("click", async () => { const v = SEC.verify; SEC.verify = null; done(); SEC.fv = v.fv; await openSecurity(); SEC.openRow = v.k; renderSecurity(); document.querySelector(".sec-open-row")?.scrollIntoView({ block: "center" }); });
+  $("#svb-yes").addEventListener("click", async e => { const v = SEC.verify; e.currentTarget.disabled = true; e.currentTarget.textContent = "Connecting…";
+    SEC.verify = null; done(); SEC.fv = v.fv; await openSecurity(); await secLink(v.k, v.customerId);
+    document.querySelector(".sec-open-row")?.scrollIntoView({ block: "center" }); });
+  // gone as soon as you leave this customer's page any other way
+  clearInterval(SEC._vbT);
+  SEC._vbT = setInterval(() => { if (document.body.dataset.page !== "customer" || !SEC.verify) { SEC.verify = null; done(); } }, 800);
+}
 async function secLink(k, customerId) {
   const r = SEC.view?.rows?.[k]; if (!r) return;
   const { error } = await db.rpc("pap_link_set", { p_ref: r.num || "", p_name: r.name || "", p_customer: customerId });
@@ -12634,12 +12665,11 @@ function secPanelHtml(r, span) {
         <button class="btn" type="submit">Search</button>${r.customer_id ? `<button class="link" type="button" id="sec-find-cancel">Cancel</button>` : ""}</form>
       ${F?.loading ? `<div class="quiet">Searching…</div>` : F?.error ? `<div class="staff-msg err">${esc(F.error)}</div>`
         : F && !F.rows?.length ? `<div class="quiet">No customers match. Try just the last name, the street name, or a phone number.</div>`
-        : F ? `<div class="sec-find-list">${F.rows.map(c => `<div class="sec-find-item" role="button" tabindex="0" data-sec-link="${c.customer_id}" title="Click to connect this line to ${esc(c.display_name || "")}"><div><strong>${esc(c.display_name || "")}</strong>${c.status && c.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}
+        : F ? `<div class="sec-find-list">${F.rows.map(c => `<div class="sec-find-item" role="button" tabindex="0" data-sec-verify="${c.customer_id}" title="Open ${esc(c.display_name || "")} to check it's them"><div><strong>${esc(c.display_name || "")}</strong>${c.status && c.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}
               <div class="quiet">${esc([c.street, c.city].filter(Boolean).join(", "))}${c.phone ? " · " + esc(phoneFmt(c.phone)) : ""}</div></div>
-              <div class="sec-find-go"><button class="link" type="button" data-sec-peek="${c.customer_id}">Open page</button>
-              <span class="btn sec-find-pick">Connect</span></div></div>`).join("")}
+              <div class="sec-find-go"><span class="btn quiet-btn sec-find-pick">Check this customer ›</span></div></div>`).join("")}
             ${F.total > F.rows.length ? `<div class="quiet">${F.total.toLocaleString()} matches, showing ${F.rows.length}. Add more words to narrow it down.</div>` : ""}</div>` : ""}
-      <p class="quiet">Click the customer to connect them to this line of the bank's file. It's remembered, so they match on their own in next month's file too.</p></div>`;
+      <p class="quiet">Click a customer to open their page and check it's them. Then click the green Connect button, or Wrong customer to come back here. A connection is remembered, so they match on their own in next month's file too.</p></div>`;
   let card = "";
   if (r.customer_id) {
     const C = SEC.cards?.[r.customer_id];
@@ -12937,11 +12967,9 @@ function wireSecurity() {
   $("#sec-find-form")?.addEventListener("submit", async e => { e.preventDefault(); SEC.find = { q: $("#sec-find-q").value, loading: true }; renderSecurity(); await secFindRun(); renderSecurity(); const n = $("#sec-find-q"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } });
   $("#sec-find-start")?.addEventListener("click", async () => { const r = SEC.view?.rows?.[SEC.openRow]; if (!r) return; SEC.find = { q: secGuessQ(r), loading: true }; renderSecurity(); await secFindRun(); renderSecurity(); });
   $("#sec-find-cancel")?.addEventListener("click", () => { SEC.find = null; renderSecurity(); });
-  document.querySelectorAll("[data-sec-link]").forEach(b => {
-    const go = e => { if (e.target.closest("[data-sec-peek]") || b.classList.contains("busy")) return;
-      b.classList.add("busy"); const t = b.querySelector(".sec-find-pick"); if (t) t.textContent = "Connecting…"; secLink(SEC.openRow, Number(b.dataset.secLink)); };
-    b.addEventListener("click", go); b.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(e); } }); });
-  document.querySelectorAll("[data-sec-peek]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); openCustomer(Number(b.dataset.secPeek)); }));
+  document.querySelectorAll("[data-sec-verify]").forEach(b => {
+    const go = () => secVerify(SEC.openRow, Number(b.dataset.secVerify));
+    b.addEventListener("click", go); b.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } }); });
   $("[data-sec-unlink]")?.addEventListener("click", () => secLink(SEC.openRow, null));
   document.querySelectorAll("[data-sec-inv]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.secInv))));
   document.querySelectorAll("[data-sec-setpap]").forEach(b => b.addEventListener("click", async () => {
