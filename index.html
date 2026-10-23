@@ -3751,6 +3751,7 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .pap-tag { display: inline-block; vertical-align: middle; margin-left: 10px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .02em; background: #e7f5ee; color: #1b6e43; border: 1px solid #b5e0c8; }
 .sec-safe { margin: 8px 0 0; font-size: 13px; }
 .sec-inbox .sec-safe { margin: 0 0 10px; }
+.sec-file-table td { white-space: nowrap; } .sec-file-table tr.sec-nf td { background: rgba(176,58,72,.05); }
 .sec-hirow td { background: rgba(253,230,138,.45); font-weight: 600; }
 .ow-amt .cl-row { align-items: flex-end; } .ow-amt #ow-amt { width: 150px; }
 .ow-amt-msg { margin-top: 12px; } .ow-amt-table { margin-top: 8px; }
@@ -12501,95 +12502,60 @@ async function openSecurity(msg) {
   SEC.rows = data || [];
   const ib = await db.rpc("pap_inbox_list");   // emailed EFT lists (turns on after setup file 99zz11)
   SEC.inbox = ib.error ? null : ib.data;
-  const [, pp] = await Promise.all([secMailLoad(), db.rpc("pap_file_people")]);
-  SEC.people = pp.error ? null : pp.data;
+  const [, fl] = await Promise.all([secMailLoad(), db.rpc("pap_file_list")]);
+  SEC.files = fl.error ? null : (fl.data || []);
+  if (SEC.files?.length && !SEC.files.some(f => f.id === SEC.fv)) SEC.fv = SEC.files[0].id;
+  await secFileLoad();
   renderSecurity(msg);
 }
-// ---- People in the EFT files: everyone in the emailed lists, once each, matched to the customer ----
-const SEC_PSHOW = [["all", "Everyone"], ["found", "Found"], ["missing", "Not found"], ["nopap", "Found, not on PAP"]];
+// ---- EFT lists: each file the way the bank sends it, every row matched to the customer (click a name to open them) ----
+async function secFileLoad() {
+  if (!SEC.fv) { SEC.view = null; return; }
+  if (SEC.view?.id === SEC.fv) return;
+  const { data, error } = await db.rpc("pap_file_view", { p_id: SEC.fv });
+  SEC.view = error ? { id: SEC.fv, error: rpcErr(error) } : data;
+}
+const SEC_PSHOW = [["all", "Everyone"], ["found", "Found"], ["missing", "Not found"], ["bad", "Not approved"], ["nopap", "Found, not on PAP"]];
+const secBad = r => r.response && !/^\s*approved\s*$/i.test(r.response);
 function secPeopleHtml() {
-  const P = SEC.people; if (!P) return "";
-  const all = P.rows || [], show = SEC.pshow || "all", q = (SEC.pq || "").trim().toLowerCase();
-  const cnt = k => all.filter(r => k === "all" || (k === "found" ? r.customer_id : k === "missing" ? !r.customer_id : r.customer_id && !r.pap_list)).length;
-  const rows = all.filter(r => (show === "all" || (show === "found" ? r.customer_id : show === "missing" ? !r.customer_id : r.customer_id && !r.pap_list))
-    && (!q || `${r.name} ${r.num} ${r.phone} ${r.customer_name || ""} ${r.customer_number || ""} ${r.address || ""} ${r.file || ""}`.toLowerCase().includes(q)));
-  const how = { number: "by customer #", phone: "by phone", name: "by name" };
-  return `<section class="cl-tools sec-up sec-people"><h2>People in the EFT files <span class="quiet" style="font-weight:400">(${all.length.toLocaleString()})</span></h2>
-    <p class="quiet sec-safe">Everyone in the EFT lists you've marked (emailed or uploaded) and the emailed lists waiting, once each, from the newest file they're in. Click a name to open the customer.</p>
-    <div class="cl-row"><div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${SEC_PSHOW.map(([k, x]) => `<button type="button" aria-pressed="${show === k}" data-sec-pshow="${k}">${x} <span class="quiet">${cnt(k).toLocaleString()}</span></button>`).join("")}</div></div>
-      <label class="cl-group"><span class="cl-label">Find</span><input type="search" id="sec-pq" value="${esc(SEC.pq || "")}" placeholder="Name, number, phone, address or file" aria-label="Find someone in the EFT files"></label></div>
-    ${rows.length ? `<div class="staff-wrap"><table class="calls-table sec-people-table"><thead><tr><th>Name</th><th>Customer # in file</th><th>Phone</th><th>Customer in the app</th><th>PAP</th><th>File</th></tr></thead><tbody>
-      ${rows.slice(0, 1500).map(r => `<tr>
-        <td>${r.customer_id ? `<button class="link" type="button" data-sec-open="${r.customer_id}"><strong>${esc(r.name || r.customer_name || "")}</strong></button>` : `<strong>${esc(r.name || "")}</strong>`}</td>
-        <td>${esc(r.num || "")}</td><td style="white-space:nowrap">${r.phone ? esc(phoneFmt(r.phone)) : ""}</td>
-        <td>${r.customer_id ? `<button class="link" type="button" data-sec-open="${r.customer_id}">${esc(r.customer_name || "")}</button><div class="quiet">#${esc(r.customer_number || "")} · ${how[r.how] || ""}${r.address ? " · " + esc(r.address) : ""}</div>`
-          : `<span class="ow-tag odd">Not found</span>`}</td>
-        <td>${r.customer_id ? (r.pap_list ? esc(papName(r.pap_list)) : `<span class="quiet">Not on PAP</span>`) : ""}</td>
-        <td>${r.mail_id ? `<button class="link" type="button" data-sec-mail="${r.mail_id}">${esc(r.file || "")}</button>` : esc(r.file || "")}<div class="quiet">${r.received ? esc(fmtDate(r.received)) : ""}${r.files > 1 ? ` · in ${r.files} files` : ""}</div></td></tr>`).join("")}
-      </tbody></table>${rows.length > 1500 ? `<p class="quiet">Showing the first 1,500. Use Find to narrow it down.</p>` : ""}</div>`
-      : `<div class="quiet">${all.length ? "Nobody matches." : "Nobody yet. Once an EFT list is emailed in, everyone in it shows here."}</div>`}
-  </section>`;
-}
-// ---- every email sent to eftupload@hsginc.ca, kept with its attachments (owners only; opening a file goes in History) ----
-async function secMailLoad() {
-  const { data, error } = await db.rpc("pap_mail_list", { p_q: SEC.mq || null, p_limit: 200 });
-  SEC.mail = error ? null : data;
-}
-async function secMailOpen(id) {
-  if (SEC.mailOpen?.id === id) { SEC.mailOpen = null; return renderSecurity(); }
-  const { data, error } = await db.rpc("pap_mail_get", { p_id: id });
-  if (error || !data) return renderSecurity("Not opened: " + (error ? rpcErr(error) : "that email is gone"));
-  SEC.mailOpen = data; renderSecurity();
-  document.querySelector(".sec-mail-open")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-}
-async function secMailFile(id, raw, view) {
-  const { data, error } = await db.rpc("pap_mail_file", { p_id: id, p_raw: !!raw });
-  if (error || !data?.b64) return renderSecurity("Not opened: " + (error ? rpcErr(error) : "the file is gone"));
-  const bin = atob(data.b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  if (view && /\.(xlsx|xlsm|xls|csv)$/i.test(data.name || "")) {   // show the spreadsheet right here in a new tab
-    await loadXlsx();
-    const wb = XLSX.read(bytes, { type: "array" }), w = window.open("", "_blank");
-    if (!w) return renderSecurity("Not opened: your browser blocked the new tab. Allow pop-ups for this page, or use Download.");
-    w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(data.name)}</title><style>body{font:13px system-ui,sans-serif;margin:16px}table{border-collapse:collapse;margin:8px 0 24px}td{border:1px solid #ccc;padding:3px 7px;white-space:nowrap}h2{font-size:15px;margin:18px 0 4px}</style><h1 style="font-size:17px">${esc(data.name)}</h1>`
-      + wb.SheetNames.map(n => `<h2>${esc(n)}</h2>` + XLSX.utils.sheet_to_html(wb.Sheets[n], { header: "", footer: "" })).join(""));
-    w.document.close(); return;
-  }
-  const url = URL.createObjectURL(new Blob([bytes], { type: data.mime || "application/octet-stream" })), a = document.createElement("a");
-  a.href = url; a.download = data.name || "file"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
-}
-function secMailHtml() {
-  const M = SEC.mail; if (!M) return "";
-  const when = d => d ? esc(fmtDate(d)) + " " + esc(new Date(d).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) : "";
-  const size = n => n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB";
-  const st = { waiting: "List waiting", done: "List marked", ignored: "List ignored", unreadable: "Couldn't read the list" };
-  const O = SEC.mailOpen, rows = M.rows || [];
-  const open = O ? `<tr class="sec-mail-open"><td colspan="5"><div class="sec-mail-box">
-      <div><b>From:</b> ${esc(O.from_name ? `${O.from_name} <${O.from_addr}>` : O.from_addr || "")}</div>
-      ${O.to ? `<div><b>To:</b> ${esc(O.to)}</div>` : ""}${O.cc ? `<div><b>Cc:</b> ${esc(O.cc)}</div>` : ""}
-      <div><b>Date:</b> ${when(O.received)}</div><div><b>Subject:</b> ${esc(O.subject || "(no subject)")}</div>
-      <pre class="sec-mail-body">${esc(O.body || "(no message)")}</pre>
-      <div class="sec-mail-files">${(O.files || []).map(f => `<span class="sec-mail-file">📎 ${esc(f.name || "file")} <span class="quiet">${size(f.size)}</span>
-          ${/\.(xlsx|xlsm|xls|csv)$/i.test(f.name || "") ? `<button class="link" type="button" data-sec-fview="${f.id}">View</button>` : ""}
-          <button class="link" type="button" data-sec-fget="${f.id}">Download</button></span>`).join("") || `<span class="quiet">No attachments.</span>`}
-        <button class="link" type="button" data-sec-raw="${O.id}">Download the original email</button></div>
-      <p class="quiet">Attachments can hold bank details. Every time one is opened it's written to History.</p></div></td></tr>` : "";
-  return `<section class="cl-tools sec-up sec-mail"><h2>All EFT emails <span class="quiet" style="font-weight:400">(${(M.total || 0).toLocaleString()})</span></h2>
-    <div class="cl-row"><label class="cl-group"><span class="cl-label">Find</span><input type="search" id="sec-mq" value="${esc(SEC.mq || "")}" placeholder="Sender, subject, words or file name" aria-label="Find an EFT email"></label></div>
-    ${rows.length ? `<div class="staff-wrap"><table class="calls-table"><thead><tr><th>Received</th><th>From</th><th>Subject</th><th>Attachments</th><th></th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td class="quiet" style="white-space:nowrap">${when(r.received)}</td><td>${esc(r.from || "")}<div class="quiet">${esc(r.from_addr || "")}</div></td>
-        <td>${esc(r.subject || "(no subject)")}${r.list_status ? `<div class="quiet">${r.list_status.split(",").map(k => st[k] || k).join(" · ")}</div>` : ""}</td>
-        <td>${(r.files || []).map(esc).join("<br>")}</td>
-        <td><button class="link" type="button" data-sec-mail="${r.id}">${O?.id === r.id ? "Close" : "Open"}</button></td></tr>${O?.id === r.id ? open : ""}`).join("")}
-      </tbody></table></div>${rows.length >= 200 ? `<p class="quiet">Showing the newest 200. Use Find to look further back.</p>` : ""}`
-      : `<div class="quiet">${SEC.mq ? "No emails match." : "No emails yet. Every email sent to eftupload@hsginc.ca shows up here."}</div>`}
+  const F = SEC.files; if (!F) return "";
+  const V = SEC.view, all = V?.rows || [], show = SEC.pshow || "all", q = (SEC.pq || "").trim().toLowerCase();
+  const ok = (r, k) => k === "all" || (k === "found" ? r.customer_id : k === "missing" ? !r.customer_id : k === "bad" ? secBad(r) : r.customer_id && !r.pap_list);
+  const rows = all.filter(r => ok(r, show) && (!q || `${(r.cells || []).join(" ")} ${r.customer_name || ""} ${r.customer_number || ""} ${r.address || ""}`.toLowerCase().includes(q)));
+  const cols = V?.cols || [], nameCol = cols.map(c => /name|payor|payer|customer/i.test(String(c))), respCol = cols.map(c => /response|status|result/i.test(String(c)));
+  const how = { number: "by customer #", address: "by address", phone: "by phone", name: "by name" };
+  const when = d => d ? esc(fmtDate(d)) : "";
+  const cellHtml = (r, v, j) => { v = String(v ?? "");
+    if (nameCol[j] && v && r.customer_id) return `<button class="link" type="button" data-sec-open="${r.customer_id}"><strong>${esc(v)}</strong></button>`;
+    if (respCol[j] && v) return /^\s*approved\s*$/i.test(v) ? esc(v) : `<span class="ow-tag odd">${esc(v)}</span>`;
+    return esc(v); };
+  return `<section class="cl-tools sec-up sec-people"><h2>EFT lists</h2>
+    ${F.length ? `<div class="cl-row"><label class="cl-group"><span class="cl-label">File</span><select id="sec-fv" aria-label="Which EFT file">${F.map(f => `<option value="${f.id}" ${f.id === SEC.fv ? "selected" : ""}>${esc(f.file || "File")} · ${when(f.received)} · ${f.count.toLocaleString()} rows${f.upload ? " · uploaded" : f.status === "waiting" ? " · waiting for review" : ""}</option>`).join("")}</select></label>
+      ${V?.mail_id ? `<button class="link" type="button" data-sec-mail="${V.mail_id}">See the email</button>` : ""}</div>` : ""}
+    ${!F.length ? `<div class="quiet">No EFT lists yet. Email the bank's file to eftupload@hsginc.ca, or upload it below and click Mark.</div>`
+      : !V ? `<div class="quiet">Loading…</div>` : V.error ? `<div class="staff-msg err" role="status">${esc(V.error)}</div>` : `
+    <div class="cl-stats sec-stats">
+      <div class="cl-stat s-all"><span>Rows</span><strong>${all.length.toLocaleString()}</strong></div>
+      <div class="cl-stat s-done"><span>Found in the app</span><strong>${all.filter(r => r.customer_id).length.toLocaleString()}</strong></div>
+      <div class="cl-stat s-cx"><span>Not found</span><strong>${all.filter(r => !r.customer_id).length.toLocaleString()}</strong></div>
+      ${all.some(secBad) ? `<div class="cl-stat s-booked"><span>Not approved</span><strong>${all.filter(secBad).length.toLocaleString()}</strong><em>NSF, account closed…</em></div>` : ""}</div>
+    <div class="cl-row"><div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${SEC_PSHOW.filter(([k]) => k !== "bad" || all.some(secBad)).map(([k, x]) => `<button type="button" aria-pressed="${show === k}" data-sec-pshow="${k}">${x} <span class="quiet">${all.filter(r => ok(r, k)).length.toLocaleString()}</span></button>`).join("")}</div></div>
+      <label class="cl-group"><span class="cl-label">Find</span><input type="search" id="sec-pq" value="${esc(SEC.pq || "")}" placeholder="Name, reference, amount…" aria-label="Find in this EFT list"></label></div>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table sec-file-table"><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}<th>Customer in the app</th></tr></thead><tbody>
+      ${rows.slice(0, 2000).map(r => `<tr${r.customer_id ? "" : ' class="sec-nf"'}>${cols.map((c, j) => `<td>${cellHtml(r, (r.cells || [])[j], j)}</td>`).join("")}
+        <td>${r.customer_id ? `<button class="link" type="button" data-sec-open="${r.customer_id}">${esc(r.customer_name || "")}</button><div class="quiet">#${esc(r.customer_number || "")} · ${how[r.how] || ""}${r.pap_list ? " · PAP " + esc(papName(r.pap_list)) : " · not on PAP"}</div>`
+          : `<span class="ow-tag odd">Not found</span>`}</td></tr>`).join("")}
+      </tbody></table>${rows.length > 2000 ? `<p class="quiet">Showing the first 2,000. Use Find to narrow it down.</p>` : ""}</div>`
+      : `<div class="quiet">Nobody matches.</div>`}
+    <p class="quiet">Click a name to open the customer. Bank account details are never kept.</p>`}
   </section>`;
 }
 async function secReview(id) {
   const { data, error } = await db.rpc("pap_inbox_rows", { p_id: id });
   if (error || !data) return renderSecurity("Not opened: " + (error ? rpcErr(error) : "that list is gone"));
-  const h = data.head || [], head = ["Customer #", "Name", "Phone"].map((x, k) => h[k] ? `${h[k]}` : x);
+  const h = data.head || [], head = ["Customer #", "Name", "Phone", "Amount", "Response"].map((x, k) => h[k] ? `${h[k]}` : x);
   SEC.file = { name: data.file || "Emailed list", head, rows: data.rows || [], inbox: id };
-  SEC.col = { num: h[0] ? 0 : -1, name: h[1] ? 1 : -1, phone: h[2] ? 2 : -1 };
+  SEC.col = { num: h[0] ? 0 : -1, name: h[1] ? 1 : -1, last: -1, phone: h[2] ? 2 : -1, amount: h[3] ? 3 : -1, resp: h[4] ? 4 : -1 };
   SEC.list = data.list === "other" ? "other" : "monthly"; SEC.match = null; SEC.replace = false;
   renderSecurity(); secMatch();
   document.querySelector(".sec-up")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -12620,21 +12586,27 @@ async function secRead(f, inbox) {
     await loadXlsx();
     const wb = XLSX.read(await f.arrayBuffer(), { type: "array" }), all = [];
     wb.SheetNames.forEach(n => all.push(...XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", raw: false })));
-    let hi = all.slice(0, 25).findIndex(r => r.some(v => /customer|name|account|cust|client|payor|payer/i.test(String(v))));
+    const HW = /customer|cust\b|client|name|reference|\bref\b|phone|amount|response|status|transaction|date|type|payor|payer|settled/i;
+    const score = all.slice(0, 25).map(r => r.filter(v => { v = String(v).trim(); return v && v.length <= 40 && HW.test(v); }).length);
+    const best = Math.max(0, ...score), hi = best ? score.indexOf(best) : 0;
     SEC.file = { name: f.name, all, inbox: inbox || null }; SEC.match = null;
-    secSetHead(hi < 0 ? 0 : hi);
+    secSetHead(hi);
     renderSecurity(); secMatch();
   } catch (e) { renderSecurity("Not read: " + (e.message || e)); }
 }
 // which row has the column headings: the columns are guessed again from it (and can be picked by hand)
+const SEC_BANK = /bank|transit|institution|routing|branch|acct|account|iban|swift|card/i;
 function secSetHead(hi) {
   const F = SEC.file; F.hi = hi;
   const head = (F.all[hi] || []).map(v => String(v).trim()), lc = head.map(h => h.toLowerCase());
-  const num = secGuess(lc, [/^(customer|cust\.?|client|account|acct)\s*(#|no\.?|num(ber)?|id)$/, /customer ?#|cust.*(no|num|id)|account ?(#|no|num)|^id$/]);
-  const name = secGuess(lc, [/^(customer|client)?\s*name$/, /^customer$/, /name|payor|payer/], [num]);
-  const phone = secGuess(lc, [/phone|mobile|cell|tel/], [num, name]);
-  F.head = head; F.rows = F.all.slice(hi + 1).filter(r => r.some(v => String(v).trim() !== ""));
-  SEC.col = { num, name, phone };
+  const bank = lc.map((h, j) => SEC_BANK.test(h) && !/customer|cust\b|client|name/.test(h) ? j : -1).filter(j => j >= 0);
+  const num = secGuess(lc, [/^(customer|cust\.?|client)\s*(#|no\.?|num(ber)?|id)$/, /customer ?#|cust.*(no|num|id)|client ?(#|no|num|id)/, /^ref(erence)?\b|\bref(erence)?\s*(#|no)/], bank);
+  const first = secGuess(lc, [/^first\s*name$|^first$|given/], bank), last = secGuess(lc, [/^last\s*name$|^last$|surname|family/], bank);
+  const name = first >= 0 ? first : secGuess(lc, [/^(customer|client)?\s*name$/, /^customer$/, /name|payor|payer/], [num, ...bank]);
+  const phone = secGuess(lc, [/phone|mobile|cell|tel/], [num, name, last, ...bank]);
+  const amount = secGuess(lc, [/^amount$|amount|total/], bank), resp = secGuess(lc, [/^response$|response|status|result/], bank);
+  F.head = head; F.bank = bank; F.rows = F.all.slice(hi + 1).filter(r => r.some(v => String(v).trim() !== ""));
+  SEC.col = { num, name, last, phone, amount, resp };
 }
 // open an emailed file and read it here, to pick its columns by hand
 async function secOpenFile(fileId, inboxId) {
@@ -12649,7 +12621,9 @@ async function secMatch() {
   const F = SEC.file, c = SEC.col; if (!F) return;
   if (c.num < 0 && c.name < 0 && c.phone < 0) { SEC.match = null; renderSecurity(); return; }
   const cell = (r, i) => i < 0 ? "" : String(r[i] ?? "").trim();
-  const rows = F.rows.map((r, i) => ({ i, num: cell(r, c.num).replace(/[,\s]/g, ""), name: cell(r, c.name), phone: cell(r, c.phone) })).filter(r => r.num || r.name || r.phone);
+  const ref = v => /^c\s*#?\s*\d/i.test(v) ? v.replace(/\s+/g, "") : (v.split(/[\s;/]+/)[0] || "").replace(/,/g, "");   // "27055 29088" -> the first one
+  const rows = F.rows.map((r, i) => ({ i, num: ref(cell(r, c.num)), name: [cell(r, c.name), cell(r, c.last ?? -1)].filter(Boolean).join(" "), phone: cell(r, c.phone),
+    amount: cell(r, c.amount ?? -1), resp: cell(r, c.resp ?? -1) })).filter(r => r.num || r.name || r.phone);
   SEC.matching = true; renderSecurity();
   const found = [];
   for (let k = 0; k < rows.length; k += 1500) {
@@ -12687,7 +12661,7 @@ function secUploadHtml() {
   const peek = F.all ? `<details class="sec-miss" ${c.num < 0 && c.name < 0 && c.phone < 0 ? "open" : ""}><summary>See the top of the file</summary><div class="staff-wrap"><table class="calls-table"><tbody>
       ${F.all.slice(0, 12).map((r, i) => `<tr${i === F.hi ? ' class="sec-hirow"' : ""}><td class="quiet">${i + 1}</td>${r.slice(0, 12).map(v => `<td>${esc(cut(v))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
       <p class="quiet">This is only shown here on your computer. Pick the row with the headings, then the Customer #, Name and Phone columns.</p></details>` : "";
-  return `<div class="sec-cols">${headPick}${pick("num", "Customer #")}${pick("name", "Name")}${pick("phone", "Phone")}<span class="quiet">${F.rows.length.toLocaleString()} rows in ${esc(F.name)}</span></div>${peek}${prev}`;
+  return `<div class="sec-cols">${headPick}${pick("num", "Customer # / Reference")}${pick("name", F.all && c.last >= 0 ? "First name" : "Name")}${F.all ? pick("last", "Last name") : ""}${pick("phone", "Phone")}${pick("amount", "Amount")}${pick("resp", "Response")}<span class="quiet">${F.rows.length.toLocaleString()} rows in ${esc(F.name)}</span></div>${peek}${prev}`;
 }
 function renderSecurity(msg) {
   const top = $("#main").scrollTop, rows = SEC.rows || [], n = k => rows.filter(r => r.pap_list === k).length;
@@ -12744,7 +12718,10 @@ function wireSecurity() {
     const { data, error } = await db.rpc("pap_set", { p_ids: M.ids, p_list: SEC.list, p_replace: SEC.replace });
     if (error) return say("Not saved: " + rpcErr(error));
     { const c = SEC.col || {}, head = [c.num, c.name, c.phone].map(i => i >= 0 ? (SEC.file.head[i] || null) : null);   // keep the 3 columns, so the people list has them
-      const sv = await db.rpc("pap_inbox_save", { p_id: SEC.file.inbox || null, p_file: SEC.file.name, p_list: SEC.list, p_head: head, p_rows: M.rows.map(r => [r.num, r.name, r.phone]) });
+      const F = SEC.file, keep = F.all ? F.head.map((x, j) => j).filter(j => !(F.bank || []).includes(j) && (F.head[j] || F.rows.some(r => String(r[j] ?? "").trim()))) : null;
+      const sv = await db.rpc("pap_inbox_save", { p_id: F.inbox || null, p_file: F.name, p_list: SEC.list, p_head: head.concat([c.amount >= 0 ? F.head[c.amount] : null, c.resp >= 0 ? F.head[c.resp] : null]),
+        p_rows: M.rows.map(r => [r.num, r.name, r.phone, r.amount || "", r.resp || ""]),
+        p_cols: keep ? keep.map(j => F.head[j] || "Column " + (j + 1)) : null, p_tbl: keep ? M.rows.map(r => keep.map(j => String(F.rows[r.i][j] ?? "").trim().slice(0, 200))) : null });
       if (sv.error && SEC.file.inbox) await db.rpc("pap_inbox_set", { p_id: SEC.file.inbox, p_status: "done" }); }
     SEC.file = null; SEC.match = null; SEC.replace = false;
     const had = M.ids.length - data.on;
@@ -12756,6 +12733,7 @@ function wireSecurity() {
   document.querySelectorAll("[data-sec-off]").forEach(b => b.addEventListener("click", async () => {
     const { error } = await db.rpc("pap_set", { p_ids: [Number(b.dataset.secOff)], p_list: null, p_replace: false });
     say(error ? "Not saved: " + rpcErr(error) : "Taken off PAP."); }));
+  $("#sec-fv")?.addEventListener("change", async e => { SEC.fv = Number(e.target.value); SEC.view = null; renderSecurity(); await secFileLoad(); renderSecurity(); });
   document.querySelectorAll("[data-sec-pshow]").forEach(b => b.addEventListener("click", () => { SEC.pshow = b.dataset.secPshow; renderSecurity(); }));
   $("#sec-pq")?.addEventListener("input", e => { SEC.pq = e.target.value; const pos = e.target.selectionStart; renderSecurity(); const n = $("#sec-pq"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } });
   document.querySelectorAll("[data-sec-mail]").forEach(b => b.addEventListener("click", () => secMailOpen(Number(b.dataset.secMail))));

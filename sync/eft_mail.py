@@ -10,7 +10,7 @@ Runs on GitHub every 10 minutes (.github/workflows/eft-mail.yml). The mailbox de
 secrets (EFT_IMAP_PASS, and IMAP_HOST / IMAP_PORT shared with supplier mail), never from the code. It only reads
 the mailbox: nothing is deleted, moved or marked as read.
 """
-import os, sys, ssl, time, imaplib, email, hashlib, re, datetime, io, csv, json
+import os, sys, ssl, time, imaplib, email, hashlib, re, datetime, io, csv, json, html
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
 
@@ -85,18 +85,18 @@ def files_of(msg):
 
 
 def cell(v):
-    """A cell as text, the way Excel shows it (12345.0 -> 12345)."""
+    """A cell as text, the way Excel shows it (12345.0 -> 12345, &amp; -> &)."""
     if v is None:
         return ""
     if isinstance(v, float) and v.is_integer():
         return str(int(v))
     if isinstance(v, (datetime.datetime, datetime.date)):
         return v.isoformat()[:10]
-    return str(v).strip()
+    return html.unescape(str(v)).strip()
 
 
 def sheets_of(name, data):
-    """Every row of every sheet, as lists of text."""
+    """Every row of every sheet, as lists of text. (Some banks send a web page named .xls: that's read too.)"""
     low = name.lower()
     if low.endswith(".csv"):
         text = data.decode("utf-8-sig", "replace")
@@ -105,14 +105,26 @@ def sheets_of(name, data):
         except Exception:
             dialect = csv.excel
         return [[cell(v) for v in r] for r in csv.reader(io.StringIO(text), dialect)]
-    if low.endswith(".xls"):
-        import xlrd
-        wb = xlrd.open_workbook(file_contents=data)
+    head = data[:2000].lstrip().lower()
+    if head.startswith((b"<", b"\xef\xbb\xbf<")) or b"<table" in data[:20000].lower():
         rows = []
-        for sh in wb.sheets():
-            for r in range(sh.nrows):
-                rows.append([cell(v) for v in sh.row_values(r)])
+        for tr in re.findall(r"(?is)<tr[^>]*>(.*?)</tr>", data.decode("utf-8", "replace")):
+            rows.append([cell(re.sub(r"(?s)<[^>]+>", " ", c)).replace("\xa0", " ").strip() for c in re.findall(r"(?is)<t[dh][^>]*>(.*?)</t[dh]>", tr)])
         return rows
+    if low.endswith(".xls"):
+        try:
+            import xlrd
+            wb = xlrd.open_workbook(file_contents=data)
+            rows = []
+            for sh in wb.sheets():
+                for r in range(sh.nrows):
+                    rows.append([cell(v) for v in sh.row_values(r)])
+            return rows
+        except Exception:
+            text = data.decode("utf-8", "replace")   # a tab-separated text file named .xls
+            if "\t" in text:
+                return [[cell(v) for v in line.split("\t")] for line in text.splitlines()]
+            raise
     import openpyxl
     wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     rows = []
@@ -130,30 +142,67 @@ def guess(lc, tests, skip=()):
     return -1
 
 
+HEADWORD = r"customer|cust\b|client|name|reference|\bref\b|phone|amount|response|status|transaction|date|type|payor|payer|settled"
+BANKCOL = r"bank|transit|institution|routing|branch|acct|account|iban|swift|card"
+
+
 def read_list(name, data):
-    """The three columns we use (same rules as the Upload button on the Security page). Everything else is dropped here."""
+    """The file's own table (every column except bank details) plus, for matching, per row:
+    customer #, name, phone, amount, response."""
     allrows = sheets_of(name, data)
-    hi = next((k for k, r in enumerate(allrows[:25]) if any(re.search(r"customer|name|account|cust", v, re.I) for v in r)), 0)
+    # the heading row: the one in the first 25 with the most heading words
+    score = [sum(1 for v in r if v and len(v) <= 40 and re.search(HEADWORD, v, re.I)) for r in allrows[:25]]
+    hi = max(range(len(score)), key=lambda k: (score[k], -k)) if score and max(score) >= 1 else 0
     head = [v.strip() for v in (allrows[hi] if allrows else [])]
     lc = [h.lower() for h in head]
-    # never a bank column: "Account #", transit, institution, branch... are skipped even if they look like a customer #
-    bank = tuple(j for j, h in enumerate(lc) if re.search(r"bank|transit|institution|routing|branch|acct|account|iban|swift|card", h)
-                 and not re.search(r"customer|cust\b|client|name", h))
-    num = guess(lc, [r"^(customer|cust\.?|client)\s*(#|no\.?|num(ber)?|id)$", r"customer ?#|cust.*(no|num|id)|client ?(#|no|num|id)"], bank)
-    nm = guess(lc, [r"^(customer|client)?\s*name$", r"^customer$", r"name"], (num,) + bank)
-    ph = guess(lc, [r"phone|mobile|cell|tel"], (num, nm) + bank)
-    if num < 0 and nm < 0 and ph < 0:
-        return None, None, "No customer #, name or phone column was found in the file."
+    bank = tuple(j for j, h in enumerate(lc) if re.search(BANKCOL, h) and not re.search(r"customer|cust\b|client|name", h))
+    num = guess(lc, [r"^(customer|cust\.?|client)\s*(#|no\.?|num(ber)?|id)$", r"customer ?#|cust.*(no|num|id)|client ?(#|no|num|id)", r"^ref(erence)?\b|\bref(erence)?\s*(#|no)"], bank)
+    first = guess(lc, [r"^first\s*name$|^first$|given"], bank)
+    last = guess(lc, [r"^last\s*name$|^last$|surname|family"], bank)
+    nm = -1 if first >= 0 else guess(lc, [r"^(customer|client)?\s*name$", r"^customer$", r"name|payor|payer"], (num,) + bank)
+    ph = guess(lc, [r"phone|mobile|cell|tel"], (num, nm, first, last) + bank)
+    amt = guess(lc, [r"^amount$|amount|total"], bank)
+    resp = guess(lc, [r"^response$|response|status|result"], bank)
+    if num < 0 and nm < 0 and first < 0 and ph < 0:
+        return None, None, "No customer #, name or phone column was found in the file.", None, None
+    keep = [j for j in range(len(head)) if j not in bank and (head[j] or any(j < len(r) and r[j] for r in allrows[hi + 1:hi + 50]))]
     pick = lambda r, i: (r[i] if 0 <= i < len(r) else "").strip()
-    out = []
+    out, tbl = [], []
     for r in allrows[hi + 1:]:
-        x = [re.sub(r"[,\s]", "", pick(r, num)), pick(r, nm), pick(r, ph)]
-        if any(x):
-            out.append(x)
-    names = [head[i] if i >= 0 else None for i in (num, nm, ph)]
+        if not any(v.strip() for v in r):
+            continue
+        who = pick(r, nm) if nm >= 0 else " ".join(x for x in (pick(r, first), pick(r, last)) if x)
+        ref = pick(r, num)
+        ref = re.sub(r"\s+", "", ref) if re.match(r"(?i)^c\s*#?\s*\d", ref) else (re.split(r"[\s;/]+", ref) or [""])[0].replace(",", "")   # "27055 29088" -> the first one
+        x = [ref, who, pick(r, ph), pick(r, amt), pick(r, resp)]
+        if not any(x[:3]):
+            continue
+        out.append(x)
+        tbl.append([pick(r, j)[:200] for j in keep])
+    names = [head[num] if num >= 0 else None,
+             head[nm] if nm >= 0 else " + ".join(head[i] for i in (first, last) if i >= 0) or None,
+             head[ph] if ph >= 0 else None, head[amt] if amt >= 0 else None, head[resp] if resp >= 0 else None]
+    cols = [head[j] or f"Column {j + 1}" for j in keep]
     if not out:
-        return names, [], "The file has no customer rows."
-    return names, out, None
+        return names, [], "The file has no customer rows.", cols, []
+    return names, out, None, cols, tbl
+
+
+def reread(cur):
+    """Emailed lists that couldn't be read (or were read before the whole table was kept): read them again from the saved file."""
+    cur.execute("""SELECT i.id, f.file_name, f.data FROM pap_inbox i JOIN pap_mail_file f ON f.id = i.file_id
+                   WHERE i.tbl IS NULL AND i.status IN ('unreadable', 'waiting') ORDER BY i.id LIMIT 50""")
+    n = 0
+    for iid, fname, fdata in cur.fetchall():
+        try:
+            head, out, note, cols, tbl = read_list(fname, bytes(fdata))
+        except Exception:
+            continue
+        if out:
+            cur.execute("UPDATE pap_inbox SET head = %s, rows = %s, cols = %s, tbl = %s, note = NULL, status = 'waiting' WHERE id = %s",
+                        (json.dumps(head), json.dumps(out), json.dumps(cols), json.dumps(tbl), iid))
+            n += 1
+    return n
 
 
 def connect_db():
@@ -258,19 +307,25 @@ def main():
             for fname, fdata in files_of(msg):
                 which = "other" if re.search(r"\bother\b", f"{subj} {fname}", re.I) else "monthly"
                 if not allowed(addr):
-                    head, out, note = None, None, "Not from an allowed sender, so the file wasn't read."
+                    head, out, note, cols, tbl = None, None, "Not from an allowed sender, so the file wasn't read.", None, None
                 else:
                     try:
-                        head, out, note = read_list(fname, fdata)
+                        head, out, note, cols, tbl = read_list(fname, fdata)
                     except Exception:
-                        head, out, note = None, None, "The file couldn't be opened (is it a real Excel file, not password-protected?)."
-                cur.execute("""INSERT INTO pap_inbox (message_id, received_at, from_addr, from_name, subject, file_name, pap_list, head, rows, note, status, mail_id, file_id)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                        head, out, note, cols, tbl = None, None, "The file couldn't be opened (is it a real Excel file, not password-protected?).", None, None
+                cur.execute("""INSERT INTO pap_inbox (message_id, received_at, from_addr, from_name, subject, file_name, pap_list, head, rows, note, status, mail_id, file_id, cols, tbl)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
                             (mid, when, addr[:200], name[:200], subj, fname, which,
                              json.dumps(head) if head else None, json.dumps(out) if out else None, note,
-                             "waiting" if out else "unreadable", mail_id, file_ids.get(fname)))
+                             "waiting" if out else "unreadable", mail_id, file_ids.get(fname),
+                             json.dumps(cols) if out else None, json.dumps(tbl) if out else None))
                 lists += cur.rowcount
             emails += 1
+        cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'pap_inbox' AND column_name = 'tbl')")
+        if cur.fetchone()[0]:
+            again = reread(cur)
+            if again:
+                say(f"Read {again} emailed list{'s' if again != 1 else ''} again: now waiting for review.")
         # a short summary for the run page: counts and the column names found (never names, numbers or bank details)
         cur.execute("""SELECT status, count(*), coalesce(sum(jsonb_array_length(rows)), 0),
                               string_agg(DISTINCT coalesce(head::text, '-') || ' / ' || coalesce(note, ''), ' | ')
