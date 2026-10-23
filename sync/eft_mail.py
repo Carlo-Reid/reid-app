@@ -1,8 +1,9 @@
 """Checks the EFT mailbox (eftupload@hsginc.ca) for PAP / EFT lists sent as Excel (or CSV) attachments.
 
-For each file it finds the customer #, name and phone columns and saves ONLY those three columns in the app's
-database. The file itself, bank details and every other column are never saved and never shown in the log.
-The list then waits on the Security page until an owner reviews it and clicks Mark: nothing changes on its own.
+Every email is kept in the app's database (pap_mail), with its attachments and the whole original message, so owners
+can look at them any time on the Security page. The attachments hold bank details: only owners can open them, and
+each time one is opened it's written to History. Nothing about the emails is ever shown in the run log.
+From each Excel / CSV file it also takes the customer #, name and phone columns as a list to review. That list waits on the Security page until an owner reviews it and clicks Mark: nothing changes on its own.
 Which list: Monthly billing, unless the email subject (or file name) says "Other".
 
 Runs on GitHub every 10 minutes (.github/workflows/eft-mail.yml). The mailbox details come from the repository's
@@ -29,6 +30,44 @@ def hdr(v):
         return str(make_header(decode_header(v or ""))).strip()
     except Exception:
         return (v or "").strip()
+
+
+def body_text(msg):
+    plain, html = [], []
+    for part in msg.walk():
+        if part.is_multipart() or part.get_filename():
+            continue
+        ct = part.get_content_type()
+        if ct not in ("text/plain", "text/html"):
+            continue
+        try:
+            t = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "replace")
+        except Exception:
+            continue
+        (plain if ct == "text/plain" else html).append(t)
+    if plain:
+        t = "\n".join(plain)
+    else:
+        t = re.sub(r"(?is)<(script|style).*?</\1>", " ", " ".join(html))
+        t = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>", "\n", t)
+        t = re.sub(r"<[^>]+>", " ", t).replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    t = re.sub(r"[ \t\r\f\v]+", " ", t)
+    return re.sub(r"\n\s*\n\s*\n+", "\n\n", t).strip()[:200000]
+
+
+def all_files(msg):
+    """Every attachment, whatever kind it is (to keep with the email)."""
+    out = []
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        name = hdr(part.get_filename() or "")
+        if not name:
+            continue
+        data = part.get_payload(decode=True) or b""
+        if data and len(data) <= MAX_FILE:
+            out.append((name[:200], part.get_content_type(), data))
+    return out
 
 
 def files_of(msg):
@@ -144,14 +183,14 @@ def main():
         say("EFT mail isn't set up yet (add EFT_IMAP_PASS to the repository secrets). Nothing to do.")
         return
     port = int(os.environ.get("EFT_IMAP_PORT") or os.environ.get("IMAP_PORT") or 993)
-    days = int(os.environ.get("IMAP_DAYS") or 30)
+    days = int(os.environ.get("EFT_IMAP_DAYS") or 3650)   # the whole mailbox the first time; after that only new emails are read
 
     db = connect_db()
     db.autocommit = True
     cur = db.cursor()
-    cur.execute("SELECT to_regclass('public.pap_inbox') IS NOT NULL")
+    cur.execute("SELECT to_regclass('public.pap_mail') IS NOT NULL")
     if not cur.fetchone()[0]:
-        say("The database isn't ready for EFT mail yet (run RUN SETUP.bat with file 99zz11). Nothing to do.")
+        say("The database isn't ready for EFT mail yet (run RUN SETUP.bat with files 99zz11 and 99zz12). Nothing to do.")
         return
 
     try:
@@ -181,7 +220,7 @@ def main():
         ids = [m for _, m in new if m]
         seen = set()
         if ids:
-            cur.execute("SELECT message_id FROM pap_inbox_seen WHERE message_id = ANY(%s)", (ids,))
+            cur.execute("SELECT message_id FROM pap_mail WHERE message_id = ANY(%s)", (ids,))
             seen = {x[0] for x in cur.fetchall()}
         emails = lists = 0
         for num, mid in new:
@@ -194,7 +233,7 @@ def main():
             msg = email.message_from_bytes(raw)
             if not mid:
                 mid = "sha:" + hashlib.sha256(raw).hexdigest()
-                cur.execute("SELECT 1 FROM pap_inbox_seen WHERE message_id = %s", (mid,))
+                cur.execute("SELECT 1 FROM pap_mail WHERE message_id = %s", (mid,))
                 if cur.fetchone():
                     continue
             name, addr = parseaddr(hdr(msg.get("From")))
@@ -203,6 +242,19 @@ def main():
             except Exception:
                 when = None
             subj = hdr(msg.get("Subject"))[:300]
+            # keep the whole email and every attachment
+            cur.execute("""INSERT INTO pap_mail (message_id, received_at, from_addr, from_name, to_addr, cc_addr, subject, body_text, raw, raw_size)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (message_id) DO NOTHING RETURNING id""",
+                        (mid, when, addr[:200], name[:200], hdr(msg.get("To"))[:1000], hdr(msg.get("Cc"))[:1000], subj, body_text(msg),
+                         raw if len(raw) <= 40 * 1024 * 1024 else None, len(raw)))
+            got = cur.fetchone()
+            if not got:
+                continue
+            mail_id, file_ids = got[0], {}
+            for fname, mime, fdata in all_files(msg):
+                cur.execute("INSERT INTO pap_mail_file (mail_id, file_name, mime, size, data) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                            (mail_id, fname, mime, len(fdata), fdata))
+                file_ids.setdefault(fname, cur.fetchone()[0])
             for fname, fdata in files_of(msg):
                 which = "other" if re.search(r"\bother\b", f"{subj} {fname}", re.I) else "monthly"
                 if not allowed(addr):
@@ -212,17 +264,16 @@ def main():
                         head, out, note = read_list(fname, fdata)
                     except Exception:
                         head, out, note = None, None, "The file couldn't be opened (is it a real Excel file, not password-protected?)."
-                cur.execute("""INSERT INTO pap_inbox (message_id, received_at, from_addr, from_name, subject, file_name, pap_list, head, rows, note, status)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                cur.execute("""INSERT INTO pap_inbox (message_id, received_at, from_addr, from_name, subject, file_name, pap_list, head, rows, note, status, mail_id, file_id)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
                             (mid, when, addr[:200], name[:200], subj, fname, which,
                              json.dumps(head) if head else None, json.dumps(out) if out else None, note,
-                             "waiting" if out else "unreadable"))
+                             "waiting" if out else "unreadable", mail_id, file_ids.get(fname)))
                 lists += cur.rowcount
-            cur.execute("INSERT INTO pap_inbox_seen (message_id) VALUES (%s) ON CONFLICT DO NOTHING", (mid,))
             emails += 1
         set_state(cur, "last_error", None)
         set_state(cur, "last_check", datetime.datetime.now(datetime.timezone.utc).isoformat())
-        say(f"EFT mail checked: {emails} new email{'s' if emails != 1 else ''}, {lists} list{'s' if lists != 1 else ''} waiting for review.")
+        say(f"EFT mail checked: {emails} new email{'s' if emails != 1 else ''}, {lists} list{'s' if lists != 1 else ''} waiting for review (all emails kept).")
     finally:
         try:
             box.logout()

@@ -3751,6 +3751,10 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .pap-tag { display: inline-block; vertical-align: middle; margin-left: 10px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .02em; background: #e7f5ee; color: #1b6e43; border: 1px solid #b5e0c8; }
 .sec-safe { margin: 8px 0 0; font-size: 13px; }
 .sec-inbox .sec-safe { margin: 0 0 10px; }
+.sec-mail-box { padding: 12px 14px; border-radius: 8px; background: rgba(127,127,127,.07); display: grid; gap: 4px; font-size: 13.5px; }
+.sec-mail-body { white-space: pre-wrap; word-break: break-word; font: inherit; margin: 8px 0; max-height: 420px; overflow: auto; padding: 10px; border-radius: 6px; background: rgba(127,127,127,.06); }
+.sec-mail-files { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+.sec-mail-file { display: inline-flex; gap: 8px; align-items: center; }
 .sec-badge { display: inline-block; min-width: 20px; padding: 1px 7px; border-radius: 10px; background: #B03A48; color: #fff; font-size: 12px; vertical-align: middle; text-align: center; }
 .sec-cols { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-top: 14px; }
 .sec-cols label { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; font-weight: 600; }
@@ -12451,7 +12455,62 @@ async function openSecurity(msg) {
   SEC.rows = data || [];
   const ib = await db.rpc("pap_inbox_list");   // emailed EFT lists (turns on after setup file 99zz11)
   SEC.inbox = ib.error ? null : ib.data;
+  await secMailLoad();
   renderSecurity(msg);
+}
+// ---- every email sent to eftupload@hsginc.ca, kept with its attachments (owners only; opening a file goes in History) ----
+async function secMailLoad() {
+  const { data, error } = await db.rpc("pap_mail_list", { p_q: SEC.mq || null, p_limit: 200 });
+  SEC.mail = error ? null : data;
+}
+async function secMailOpen(id) {
+  if (SEC.mailOpen?.id === id) { SEC.mailOpen = null; return renderSecurity(); }
+  const { data, error } = await db.rpc("pap_mail_get", { p_id: id });
+  if (error || !data) return renderSecurity("Not opened: " + (error ? rpcErr(error) : "that email is gone"));
+  SEC.mailOpen = data; renderSecurity();
+  document.querySelector(".sec-mail-open")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+async function secMailFile(id, raw, view) {
+  const { data, error } = await db.rpc("pap_mail_file", { p_id: id, p_raw: !!raw });
+  if (error || !data?.b64) return renderSecurity("Not opened: " + (error ? rpcErr(error) : "the file is gone"));
+  const bin = atob(data.b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  if (view && /\.(xlsx|xlsm|xls|csv)$/i.test(data.name || "")) {   // show the spreadsheet right here in a new tab
+    await loadXlsx();
+    const wb = XLSX.read(bytes, { type: "array" }), w = window.open("", "_blank");
+    if (!w) return renderSecurity("Not opened: your browser blocked the new tab. Allow pop-ups for this page, or use Download.");
+    w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(data.name)}</title><style>body{font:13px system-ui,sans-serif;margin:16px}table{border-collapse:collapse;margin:8px 0 24px}td{border:1px solid #ccc;padding:3px 7px;white-space:nowrap}h2{font-size:15px;margin:18px 0 4px}</style><h1 style="font-size:17px">${esc(data.name)}</h1>`
+      + wb.SheetNames.map(n => `<h2>${esc(n)}</h2>` + XLSX.utils.sheet_to_html(wb.Sheets[n], { header: "", footer: "" })).join(""));
+    w.document.close(); return;
+  }
+  const url = URL.createObjectURL(new Blob([bytes], { type: data.mime || "application/octet-stream" })), a = document.createElement("a");
+  a.href = url; a.download = data.name || "file"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+function secMailHtml() {
+  const M = SEC.mail; if (!M) return "";
+  const when = d => d ? esc(fmtDate(d)) + " " + esc(new Date(d).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) : "";
+  const size = n => n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB";
+  const st = { waiting: "List waiting", done: "List marked", ignored: "List ignored", unreadable: "Couldn't read the list" };
+  const O = SEC.mailOpen, rows = M.rows || [];
+  const open = O ? `<tr class="sec-mail-open"><td colspan="5"><div class="sec-mail-box">
+      <div><b>From:</b> ${esc(O.from_name ? `${O.from_name} <${O.from_addr}>` : O.from_addr || "")}</div>
+      ${O.to ? `<div><b>To:</b> ${esc(O.to)}</div>` : ""}${O.cc ? `<div><b>Cc:</b> ${esc(O.cc)}</div>` : ""}
+      <div><b>Date:</b> ${when(O.received)}</div><div><b>Subject:</b> ${esc(O.subject || "(no subject)")}</div>
+      <pre class="sec-mail-body">${esc(O.body || "(no message)")}</pre>
+      <div class="sec-mail-files">${(O.files || []).map(f => `<span class="sec-mail-file">📎 ${esc(f.name || "file")} <span class="quiet">${size(f.size)}</span>
+          ${/\.(xlsx|xlsm|xls|csv)$/i.test(f.name || "") ? `<button class="link" type="button" data-sec-fview="${f.id}">View</button>` : ""}
+          <button class="link" type="button" data-sec-fget="${f.id}">Download</button></span>`).join("") || `<span class="quiet">No attachments.</span>`}
+        <button class="link" type="button" data-sec-raw="${O.id}">Download the original email</button></div>
+      <p class="quiet">Attachments can hold bank details. Every time one is opened it's written to History.</p></div></td></tr>` : "";
+  return `<section class="cl-tools sec-up sec-mail"><h2>All EFT emails <span class="quiet" style="font-weight:400">(${(M.total || 0).toLocaleString()})</span></h2>
+    <div class="cl-row"><label class="cl-group"><span class="cl-label">Find</span><input type="search" id="sec-mq" value="${esc(SEC.mq || "")}" placeholder="Sender, subject, words or file name" aria-label="Find an EFT email"></label></div>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table"><thead><tr><th>Received</th><th>From</th><th>Subject</th><th>Attachments</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="quiet" style="white-space:nowrap">${when(r.received)}</td><td>${esc(r.from || "")}<div class="quiet">${esc(r.from_addr || "")}</div></td>
+        <td>${esc(r.subject || "(no subject)")}${r.list_status ? `<div class="quiet">${r.list_status.split(",").map(k => st[k] || k).join(" · ")}</div>` : ""}</td>
+        <td>${(r.files || []).map(esc).join("<br>")}</td>
+        <td><button class="link" type="button" data-sec-mail="${r.id}">${O?.id === r.id ? "Close" : "Open"}</button></td></tr>${O?.id === r.id ? open : ""}`).join("")}
+      </tbody></table></div>${rows.length >= 200 ? `<p class="quiet">Showing the newest 200. Use Find to look further back.</p>` : ""}`
+      : `<div class="quiet">${SEC.mq ? "No emails match." : "No emails yet. Every email sent to eftupload@hsginc.ca shows up here."}</div>`}
+  </section>`;
 }
 async function secReview(id) {
   const { data, error } = await db.rpc("pap_inbox_rows", { p_id: id });
@@ -12468,12 +12527,12 @@ function secInboxHtml() {
   const rows = I.rows || [], wait = rows.filter(r => r.status === "waiting" || r.status === "unreadable"), old = rows.filter(r => !wait.includes(r));
   const when = d => d ? esc(fmtDate(d)) + " " + esc(new Date(d).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) : "";
   const line = r => `<tr><td class="quiet">${when(r.received)}</td><td>${esc(r.from || "")}<div class="quiet">${esc(r.subject || "")}</div></td>
-      <td>${esc(r.file || "")}${r.note ? `<div class="quiet">${esc(r.note)}</div>` : ""}</td><td>${esc(papName(r.list))}</td><td>${r.count ? r.count.toLocaleString() : ""}</td>
+      <td>${esc(r.file || "")}${r.note ? `<div class="quiet">${esc(r.note)}</div>` : ""}${r.mail_id ? `<div><button class="link" type="button" data-sec-mail="${r.mail_id}">See the email</button></div>` : ""}</td><td>${esc(papName(r.list))}</td><td>${r.count ? r.count.toLocaleString() : ""}</td>
       <td style="white-space:nowrap">${r.status === "waiting" ? `<button class="btn" type="button" data-sec-review="${r.id}" ${SEC.file?.inbox === r.id ? "disabled" : ""}>${SEC.file?.inbox === r.id ? "Reviewing below" : "Review"}</button> ` : ""}
         ${wait.includes(r) ? `<button class="link" type="button" data-sec-ignore="${r.id}">Ignore</button>` : `<span class="quiet">${r.status === "done" ? "Marked" : "Ignored"}${r.done_by ? " by " + esc(r.done_by) : ""} ${r.done_at ? esc(fmtDate(r.done_at)) : ""}</span>`}</td></tr>`;
   const head = `<thead><tr><th>Received</th><th>From</th><th>File</th><th>List</th><th>Rows</th><th></th></tr></thead>`;
   return `<section class="cl-tools sec-up sec-inbox"><h2>Emailed EFT lists${wait.length ? ` <span class="sec-badge">${wait.length}</span>` : ""}</h2>
-    <p class="quiet sec-safe">Email the Excel file to <b>eftupload@hsginc.ca</b>. It goes on the Monthly billing list, unless the subject says <b>Other</b>. Only the customer #, name and phone columns are kept; nothing changes until you review it and click Mark.
+    <p class="quiet sec-safe">Email the Excel file to <b>eftupload@hsginc.ca</b>. It goes on the Monthly billing list, unless the subject says <b>Other</b>. Nothing changes until you review it and click Mark. Every email and its file are kept under All EFT emails.
       ${I.last_check ? `Mailbox last checked ${when(I.last_check)}.` : "The mailbox hasn't been checked yet."}</p>
     ${I.last_error ? `<div class="staff-msg err" role="status">${esc(I.last_error)}</div>` : ""}
     ${wait.length ? `<div class="staff-wrap"><table class="calls-table">${head}<tbody>${wait.map(line).join("")}</tbody></table></div>` : `<div class="quiet">No emailed lists waiting.</div>`}
@@ -12551,6 +12610,7 @@ function renderSecurity(msg) {
       <div class="cl-stat s-all"><span>All PAP</span><strong>${rows.length.toLocaleString()}</strong></div>
     </div>
     ${secInboxHtml()}
+    ${secMailHtml()}
     <section class="cl-tools sec-up"><h2>${SEC.file?.inbox ? "Review the emailed list" : "Upload a PAP list"}</h2>
       <div class="cl-row"><div class="cl-group"><span class="cl-label">Which list is this file?</span>${seg(PAP_LISTS, SEC.list, "data-sec-list")}</div>
         <label class="btn quiet-btn">📄 Choose the Excel file<input type="file" id="sec-file" accept=".xlsx,.xls,.csv" hidden></label></div>
@@ -12599,6 +12659,12 @@ function wireSecurity() {
   document.querySelectorAll("[data-sec-off]").forEach(b => b.addEventListener("click", async () => {
     const { error } = await db.rpc("pap_set", { p_ids: [Number(b.dataset.secOff)], p_list: null, p_replace: false });
     say(error ? "Not saved: " + rpcErr(error) : "Taken off PAP."); }));
+  document.querySelectorAll("[data-sec-mail]").forEach(b => b.addEventListener("click", () => secMailOpen(Number(b.dataset.secMail))));
+  document.querySelectorAll("[data-sec-fview]").forEach(b => b.addEventListener("click", () => secMailFile(Number(b.dataset.secFview), false, true)));
+  document.querySelectorAll("[data-sec-fget]").forEach(b => b.addEventListener("click", () => secMailFile(Number(b.dataset.secFget), false, false)));
+  document.querySelectorAll("[data-sec-raw]").forEach(b => b.addEventListener("click", () => secMailFile(Number(b.dataset.secRaw), true, false)));
+  let mqT; $("#sec-mq")?.addEventListener("input", e => { SEC.mq = e.target.value; clearTimeout(mqT);
+    mqT = setTimeout(async () => { await secMailLoad(); const pos = e.target.selectionStart; renderSecurity(); const n = $("#sec-mq"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 350); });
   document.querySelectorAll("[data-sec-review]").forEach(b => b.addEventListener("click", () => secReview(Number(b.dataset.secReview))));
   document.querySelectorAll("[data-sec-ignore]").forEach(b => b.addEventListener("click", async () => {
     const id = Number(b.dataset.secIgnore), { error } = await db.rpc("pap_inbox_set", { p_id: id, p_status: "ignored" });
