@@ -1658,6 +1658,51 @@ $function$;
 
 REVOKE EXECUTE ON FUNCTION public.sales_list(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.sales_list(bigint) TO authenticated;
+
+-- 99zp: which "Sales call for" choices each sales person may use (Reid = 0, or a partner). Not set = all of them.
+-- Safe to run more than once.
+ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS sales_for bigint[];
+
+CREATE OR REPLACE FUNCTION public.set_sales_for(p_user bigint, p_ids bigint[]) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT (coalesce(public.current_staff_role() = 'owner', false) OR public.has_permission('staff.manage')) THEN
+    RAISE EXCEPTION 'Only an owner can change who a sales person can book for'; END IF;
+  UPDATE app_users SET sales_for = p_ids WHERE id = p_user;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('app_users', p_user, 'update', public.current_app_user_id(), jsonb_build_object('sales_for', to_jsonb(p_ids)));
+END $$;
+REVOKE EXECUTE ON FUNCTION public.set_sales_for(bigint, bigint[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_sales_for(bigint, bigint[]) TO authenticated;
+
+-- a sales person can only make a sales call for a partner they're allowed
+CREATE OR REPLACE FUNCTION public.set_job_partner(p_job bigint, p_partner bigint)
+ RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public'
+AS $function$
+DECLARE allowed bigint[];
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  IF public.current_staff_role() = 'sales' THEN
+    SELECT sales_for INTO allowed FROM app_users WHERE id = public.current_app_user_id();
+    IF allowed IS NOT NULL AND NOT (coalesce(p_partner, 0) = ANY (allowed)) THEN RAISE EXCEPTION 'You can''t book sales calls for that partner'; END IF;
+  END IF;
+  UPDATE jobs SET partner_id = p_partner WHERE id = p_job;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('jobs', p_job, 'update', public.current_app_user_id(), jsonb_build_object('partner_id', p_partner));
+END $function$;
+
+CREATE OR REPLACE FUNCTION public.sales_people() RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH me AS (SELECT public.current_app_user_id() AS uid, public._sales_boss() AS boss)
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', u.id, 'emp', u.employee_id, 'sales_for', to_jsonb(u.sales_for), 'name', coalesce(public._emp_name(u.employee_id), u.login_email::text), 'me', u.id = me.uid,
+           'can_see', (SELECT coalesce(jsonb_agg(v.seller_user_id), '[]'::jsonb) FROM sales_viewers v WHERE v.viewer_user_id = u.id))
+         ORDER BY u.id <> me.uid, coalesce(public._emp_name(u.employee_id), u.login_email::text)), '[]'::jsonb)
+  FROM app_users u, me
+  WHERE u.role = 'sales' AND u.active AND public.current_staff_role() IS NOT NULL
+    AND (me.boss OR u.id = me.uid OR EXISTS (SELECT 1 FROM sales_viewers v WHERE v.viewer_user_id = me.uid AND v.seller_user_id = u.id)) $$;
+
+REVOKE EXECUTE ON FUNCTION public.sales_people() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.sales_people() TO authenticated;
 """
 
 
@@ -1687,7 +1732,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")

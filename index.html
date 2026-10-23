@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-22.211301">
+<meta name="app-version" content="2026-10-22.211944">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3438,6 +3438,8 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .sc-go { font: inherit; font-size: 18px; font-weight: 800; padding: 14px 34px; border-radius: 14px; border: 0; cursor: pointer; color: #fff; background: #2f9e44; box-shadow: 0 6px 18px rgba(47,158,68,.35); }
 .sc-go:hover:not([disabled]) { filter: brightness(1.06); }
 .sc-go[disabled] { background: #c3c8ce; color: #f4f5f6; box-shadow: none; cursor: not-allowed; }
+.st-sf-wrap { grid-column: 1 / -1; } .st-sf { display: flex; flex-wrap: wrap; gap: 4px 16px; } .st-sf-opt { white-space: nowrap; }
+.st-sl-row { flex-direction: column; align-items: flex-start !important; } .st-sl-line { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -5907,6 +5909,14 @@ function bookTechChips() {
       <span class="tc-load">${BK.later ? "" : L ? `${callsWord(L.calls)} · ${durText(Number(L.minutes))}` : "free"}</span></button>`; }).join("")
     + `<button class="link" type="button" data-all-techs>${BK.allTechs ? "Show only the usual techs" : "Show all techs"}</button>`;
 }
+// "Sales call for" choices: Reid and the sales partners, only the ones the sales person is allowed
+function salesForList(F) {
+  const all = [{ id: 0, name: "Reid" }].concat((BK_SALES || []).filter(x => x.sales_ok));
+  const who = ME.role === "sales" ? (F.sellers || []).find(x => x.me) : (F.sellers || []).find(x => x.id === Number(F.seller));
+  const ok = who && Array.isArray(who.sales_for) ? all.filter(x => who.sales_for.includes(x.id)) : all;
+  if (ok.length && !ok.some(x => x.id === Number(F.salesFor || 0))) F.salesFor = ok[0].id;   // keep the pick to one they're allowed
+  return ok;
+}
 function renderBooking(msg) {
   if (salesBooking()) {   // from the Sales page (or a sales person): Walk site or Create estimate, Reid or a partner, always HVAC Sales
     if (BK.mode !== "sales") { BK.mode = "sales"; BK.jobId = null; BK.salesFor = BK.salesFor ?? 0; }
@@ -5917,7 +5927,7 @@ function renderBooking(msg) {
     const un = (BOOK.units || []).find(u => /^hvac sales$/i.test(u.name)); if (un) BK.unit = String(un.id);
     BK.prio = "normal";
     if (BK.sk === "est" || BK.sk === "phone") BK.later = true;
-    if (ME.role !== "sales" && !BK.sellers) { BK.sellers = []; db.rpc("sales_people").then(({ data }) => { BK.sellers = data || []; if (document.body.dataset.page === "book") renderBooking(); }); }
+    if (!BK.sellers) { BK.sellers = []; db.rpc("sales_people").then(({ data }) => { BK.sellers = data || []; if (document.body.dataset.page === "book") renderBooking(); }); }
   }
   const F = BK, L = BOOK, visit = F.mode === "visit";
   const job = F.jobs.find(j => j.job_id === F.jobId);
@@ -5939,7 +5949,7 @@ function renderBooking(msg) {
         <button class="chip" type="button" data-bk-mode="sales" aria-pressed="${F.mode === "sales"}">Sales Call</button>
         ${visit ? "" : `<span class="bk-sep" aria-hidden="true"></span>${[["normal", "Normal"], ["high", "High"], ["emergency", "Emergency"]].map(([k, x]) =>
           `<button class="chip small prio-${k}" type="button" data-bk-prio="${k}" aria-pressed="${F.prio === k}" title="Priority">${x}</button>`).join("")}`}</span></div>`}
-      ${F.mode === "sales" ? `<div class="bk-row"><span class="bk-label">Sales call for</span><span class="bk-chips">${[{ id: 0, name: "Reid" }].concat((BK_SALES || []).filter(x => x.sales_ok)).map(x =>
+      ${F.mode === "sales" ? `<div class="bk-row"><span class="bk-label">Sales call for</span><span class="bk-chips">${salesForList(F).map(x =>
           `<button class="chip small" type="button" data-bk-sales="${x.id}" aria-pressed="${Number(F.salesFor || 0) === x.id}">${esc(x.name.replace(/\s*\(.*\)\s*$/, ""))} Sales Call</button>`).join("")}</span></div>` : ""}
       ${salesBooking() && ME.role !== "sales" ? `<div class="bk-row"><span class="bk-label">Sales person</span><span class="bk-chips">${(F.sellers || []).map(x =>
           `<button class="chip small" type="button" data-bk-seller="${x.id}" aria-pressed="${Number(F.seller) === x.id}">${esc(x.name)}</button>`).join("") || `<span class="quiet">No one has the Sales role yet (Staff page).</span>`}</span></div>` : ""}
@@ -14863,17 +14873,48 @@ function makePassword() {   // easy to read out loud: no 0/O, 1/l/I
 const TECH_KINDS = [["maintenance", "Maintenance"], ["service", "Service"], ["installs", "Installs"], ["security", "Security"]];
 let TKIND = null;
 async function loadTechKinds(force) { if (TKIND && !force) return TKIND; const { data, error } = await db.rpc("tech_kinds"); TKIND = error ? [] : data || []; return TKIND; }
+// "Sales call for": which of Reid and the sales partners each sales person can book for (nothing set = all of them)
+const SFOR = { partners: null, people: null };
+async function sfLoad() {
+  const [a, b] = await Promise.all([db.rpc("partner_sales"), db.rpc("sales_people")]);
+  SFOR.partners = [{ id: 0, name: "Reid" }].concat((a.data || []).filter(x => x.sales_ok).map(x => ({ id: x.id, name: x.name.replace(/\s*\(.*\)\s*$/, "") })));
+  SFOR.people = b.data || []; SFOR.err = b.error;
+}
+function sfHtml(uid) {
+  const u = (SFOR.people || []).find(x => x.id === uid), allowed = u?.sales_for, ed = ME.role === "owner" || can("staff.manage");
+  if (SFOR.err) return `<span class="quiet">${/function|schema|PGRST202/i.test(SFOR.err.message || "") ? "This turns on after tonight's update." : esc(rpcErr(SFOR.err))}</span>`;
+  return SFOR.partners.map(p => `<label class="check st-sf-opt"><input type="checkbox" data-sf="${uid}" data-sfp="${p.id}" ${!allowed || allowed.includes(p.id) ? "checked" : ""} ${ed ? "" : "disabled"}> ${esc(p.name)} Sales Call</label>`).join("");
+}
+async function sfFill() {
+  if (!document.querySelector("[data-sf-user]")) return;
+  await sfLoad();
+  document.querySelectorAll("[data-sf-user]").forEach(el => { el.innerHTML = sfHtml(Number(el.dataset.sfUser)); });
+}
+document.addEventListener("change", async e => {
+  const cb = e.target.closest?.("[data-sf]"); if (!cb) return;
+  const uid = Number(cb.dataset.sf), box = cb.closest("[data-sf-user]");
+  const on = [...box.querySelectorAll("input[data-sf]")].filter(x => x.checked).map(x => Number(x.dataset.sfp));
+  const ids = on.length === SFOR.partners.length ? null : on;   // all ticked = all (new sales partners included automatically)
+  const { error } = await db.rpc("set_sales_for", { p_user: uid, p_ids: ids });
+  const m = $("#staff-msg"); if (m) { m.className = "staff-msg " + (error ? "err" : "ok"); m.textContent = error ? "Not saved: " + rpcErr(error) : !on.length ? "Saved. They can't book any sales calls now." : "Saved."; }
+  if (error) { cb.checked = !cb.checked; return; }
+  const u = (SFOR.people || []).find(x => x.id === uid); if (u) u.sales_for = ids;
+  document.querySelectorAll(`[data-sf-user="${uid}"]`).forEach(el => { if (el !== box) el.innerHTML = sfHtml(uid); });   // keep both places the same
+});
 // Staff page: which other sales people's Sales page each sales person may see (owners only; owners always see them all)
 async function stSales() {
   const box = document.getElementById("st-sales"); if (!box) return;
   const { data, error } = await db.rpc("sales_people"); if (!document.getElementById("st-sales")) return;
   const P = error ? [] : (data || []);
   box.innerHTML = `<h2>Sales people <span class="count">${P.length}</span></h2>
-    <p class="quiet">Each sales person only sees their own Sales page. Tick the others whose page they may also see: they then get a drop-down with those names. Owners always see everyone's.</p>
+    <p class="quiet">Each sales person only sees their own Sales page. Tick the others whose page they may also see: they then get a drop-down with those names. Owners always see everyone's. "Sales call for" is who they can book sales calls for.</p>
     ${error ? `<p class="quiet">${/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</p>`
-      : P.length < 2 ? `<p class="quiet">${P.length ? "Only one sales person so far." : "No one has the Sales role yet. Set it in their Role above."}</p>`
-      : `<div class="st-sl">${P.map(v => `<div class="st-sl-row"><b>${esc(v.name)}</b><span class="quiet">can also see</span>
-          <span class="st-sl-chips">${P.filter(x => x.id !== v.id).map(x => `<label class="check"><input type="checkbox" data-sv-viewer="${v.id}" data-sv-seller="${x.id}" ${(v.can_see || []).includes(x.id) ? "checked" : ""}> ${esc(x.name)}</label>`).join("")}</span></div>`).join("")}</div>`}`;
+      : !P.length ? `<p class="quiet">No one has the Sales role yet. Set it in their Role above.</p>`
+      : ""}
+    ${!error && P.length ? `<div class="st-sl">${P.map(v => `<div class="st-sl-row"><b>${esc(v.name)}</b>
+          ${P.length > 1 ? `<span class="st-sl-line"><span class="quiet">can also see</span><span class="st-sl-chips">${P.filter(x => x.id !== v.id).map(x => `<label class="check"><input type="checkbox" data-sv-viewer="${v.id}" data-sv-seller="${x.id}" ${(v.can_see || []).includes(x.id) ? "checked" : ""}> ${esc(x.name)}</label>`).join("")}</span></span>` : ""}
+          <span class="st-sl-line"><span class="quiet">Sales call for</span><span class="st-sl-chips st-sf" data-sf-user="${v.id}">Loading…</span></span></div>`).join("")}</div>` : ""}`;
+  sfFill();
   box.querySelectorAll("[data-sv-viewer]").forEach(cb => cb.addEventListener("change", async () => {
     const { error } = await db.rpc("set_sales_viewer", { p_viewer: Number(cb.dataset.svViewer), p_seller: Number(cb.dataset.svSeller), p_on: cb.checked });
     const m = $("#staff-msg"); if (m) { m.className = "staff-msg " + (error ? "err" : "ok"); m.textContent = error ? "Not saved: " + rpcErr(error) : "Saved."; }
@@ -14897,7 +14938,7 @@ async function stTechs() {
   }));
 }
 function renderStaff(users, perms, note) {
-  setTimeout(stTechs, 0); setTimeout(stSales, 0);
+  setTimeout(stTechs, 0); setTimeout(stSales, 0); setTimeout(() => { if (ME.role !== "owner") sfFill(); }, 0);
   const isOwner = ME.role === "owner";
   const roleOptions = (sel, lockHigh) => ROLES.filter(([v]) => isOwner || !["owner", "admin"].includes(v) || v === sel)
     .map(([v, t]) => `<option value="${v}" ${v === sel ? "selected" : ""}>${t}</option>`).join("");
@@ -14939,6 +14980,7 @@ function renderStaff(users, perms, note) {
               ${BOOK ? `<label title="Which name on the schedule is this person? Their calls show on Tech Calls.">On the schedule as<select data-staff-tech ${highLocked ? "disabled" : ""}>
                 ${u.employee_id && !BOOK.techs.some(t => t.id === u.employee_id) ? `<option value="keep" selected>Not a tech</option>` : `<option value="">Not a tech</option>`}
                 ${BOOK.techs.map(t => `<option value="${t.id}" ${t.id === u.employee_id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>` : ""}
+              ${u.role === "sales" ? `<div class="st-sf-wrap"><span class="cl-label">Sales call for</span><div class="st-sf" data-sf-user="${u.id}">Loading…</div></div>` : ""}
               <label class="gl-act"><input type="checkbox" data-field="active" ${u.active ? "checked" : ""} ${highLocked ? "disabled" : ""}> Active</label>
               ${(PB.books || []).length ? `<label>Price book<select data-staff-book><option value="">Normal</option>${PB.books.map(b => `<option value="${b.id}" ${STAFF_BOOK.get(u.id) === b.id ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>` : ""}
               <div><span class="cl-label">Price book categories</span><div>${u.role === "owner" ? `<span class="quiet">All</span>` : `<button class="link" type="button" data-pbcats="${u.id}">${(STAFF_PBCATS.get(u.id) || []).length ? `${STAFF_PBCATS.get(u.id).length} picked` : "All"}</button>`}</div></div>
