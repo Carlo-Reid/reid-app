@@ -1960,6 +1960,110 @@ GRANT EXECUTE ON FUNCTION public.copy_addon_kit(bigint, text), public.rename_add
 
 NOTIFY pgrst, 'reload schema';
 
+
+-- =====================================================================
+-- Add-on kits: labour on the kit (hours to install × techs needed × cost per hour),
+-- delete a kit, and the sales person's name for "Provided to you by" on estimates.
+-- Equipment connected to a kit takes the kit's labour (unless the item has its own override),
+-- on the item's Labour cost box and in the estimate costing. Safe to run more than once.
+-- =====================================================================
+
+-- the labour an item uses: its own override, else the labour of a kit it's connected to
+CREATE OR REPLACE FUNCTION public._item_labour(p_item bigint)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT coalesce(
+    (SELECT jsonb_build_object('hours', i.labour_hours, 'techs', coalesce(i.labour_techs, 1),
+              'rate', coalesce(i.labour_rate, (SELECT labour_cost_per_hour FROM company_settings ORDER BY id LIMIT 1)), 'from', 'own')
+     FROM pricebook_items i WHERE i.id = p_item AND i.labour_hours IS NOT NULL),
+    (SELECT jsonb_build_object('hours', kt.labour_hours, 'techs', coalesce(kt.labour_techs, 1),
+              'rate', coalesce(kt.labour_rate, (SELECT labour_cost_per_hour FROM company_settings ORDER BY id LIMIT 1)), 'from', 'kit', 'kit', kt.name)
+     FROM pricebook_kit_items k JOIN pricebook_items kt ON kt.id = k.component_item_id
+     WHERE k.parent_item_id = p_item AND kt.labour_hours IS NOT NULL
+     ORDER BY k.sequence, k.id LIMIT 1))
+$$;
+
+-- All the add-on kits, now with their labour
+DROP FUNCTION IF EXISTS public.pb_addon_kits();
+CREATE FUNCTION public.pb_addon_kits()
+RETURNS TABLE (id bigint, sku text, name text, description text, active boolean, parts int, parts_cost numeric, equipment int, updated_at timestamptz,
+               labour_hours numeric, labour_techs int, labour_rate numeric)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT p.id, p.sku, p.name, p.description, p.active,
+         (SELECT count(*)::int FROM public.pb_kit_parts(p.id)),
+         CASE WHEN public._can_see_costs() THEN (SELECT round(sum(kp.quantity * c.unit_cost), 2) FROM public.pb_kit_parts(p.id) kp JOIN pricebook_items c ON c.id = kp.item_id) END,
+         (SELECT count(*)::int FROM pricebook_kit_items k WHERE k.component_item_id = p.id),
+         p.updated_at, p.labour_hours, p.labour_techs,
+         CASE WHEN public._can_see_costs() THEN p.labour_rate END
+  FROM pricebook_items p
+  WHERE public.current_staff_role() IS NOT NULL AND public._is_addon_kit(p.id)
+  ORDER BY p.active DESC, p.name
+$$;
+
+-- An item's labour box: a kit with its own labour gives hours, techs and rate
+CREATE OR REPLACE FUNCTION public.pb_item_labour(p_item bigint)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public SET jit = off AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE jsonb_build_object(
+    'own', (SELECT CASE WHEN i.labour_hours IS NULL AND i.labour_rate IS NULL THEN NULL ELSE jsonb_build_object(
+              'hours', i.labour_hours, 'techs', i.labour_techs, 'rate', i.labour_rate, 'at', i.labour_set_at,
+              'by', (SELECT coalesce(public._emp_name(u.employee_id), u.login_email::text) FROM app_users u WHERE u.id = i.labour_set_by)) END
+            FROM pricebook_items i WHERE i.id = p_item),
+    'kit', coalesce(
+            (SELECT jsonb_build_object('hours', kt.labour_hours, 'techs', coalesce(kt.labour_techs, 1), 'rate', kt.labour_rate, 'names', jsonb_build_array(kt.name), 'kitlab', true)
+             FROM pricebook_kit_items k JOIN pricebook_items kt ON kt.id = k.component_item_id
+             WHERE k.parent_item_id = p_item AND kt.labour_hours IS NOT NULL ORDER BY k.sequence, k.id LIMIT 1),
+            (SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_build_object(
+              'hours', round(sum(k.quantity * coalesce(c.est_labour_hours, 0)), 2),
+              'names', (SELECT jsonb_agg(c2.name ORDER BY x.sequence) FROM pricebook_kit_items x JOIN pricebook_items c2 ON c2.id = x.component_item_id WHERE x.parent_item_id = p_item)) END
+             FROM public.pb_kit_parts(p_item) k JOIN pricebook_items c ON c.id = k.item_id)),
+    'rate', (SELECT labour_cost_per_hour FROM company_settings ORDER BY id LIMIT 1)) END
+$$;
+
+-- Estimate costing: each item also says which labour it uses (hours × techs × rate)
+CREATE OR REPLACE FUNCTION public.est_costing(p_ids bigint[])
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL OR NOT public._can_see_costs() THEN '[]'::jsonb ELSE coalesce(jsonb_agg(jsonb_build_object(
+           'id', i.id, 'cost', i.unit_cost, 'hours', i.est_labour_hours, 'price', i.unit_price, 'lab', public._item_labour(i.id),
+           'parts', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'name', p.name, 'sku', p.sku, 'qty', kp.quantity, 'cost', p.unit_cost, 'hours', p.est_labour_hours) ORDER BY kp.seq), '[]'::jsonb)
+                     FROM public.pb_kit_parts(i.id) kp JOIN pricebook_items p ON p.id = kp.item_id))), '[]'::jsonb) END
+  FROM pricebook_items i WHERE i.id = ANY (p_ids[1:300])
+$$;
+
+-- Delete an add-on kit: takes it off all equipment and empties it; removed for good if nothing used it, else retired
+CREATE OR REPLACE FUNCTION public.delete_addon_kit(p_kit bigint)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_name text;
+BEGIN
+  IF NOT public.has_permission('pricebook.edit') THEN RAISE EXCEPTION 'You don''t have permission to change the price book'; END IF;
+  IF NOT public._is_addon_kit(p_kit) THEN RAISE EXCEPTION 'That is not an add-on kit'; END IF;
+  SELECT name INTO v_name FROM pricebook_items WHERE id = p_kit;
+  DELETE FROM pricebook_kit_items WHERE parent_item_id = p_kit OR component_item_id = p_kit;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values, new_values)
+  VALUES ('pricebook_items', p_kit, 'delete', public.current_app_user_id(), jsonb_build_object('name', v_name), jsonb_build_object('change', 'deleted add-on kit'));
+  BEGIN
+    DELETE FROM pricebook_items WHERE id = p_kit;
+    RETURN 'deleted';
+  EXCEPTION WHEN foreign_key_violation THEN
+    -- used on an old invoice or estimate: keep the row for those, but it's no longer a kit
+    UPDATE pricebook_items SET active = false, sku = 'X' || sku, updated_at = now() WHERE id = p_kit;
+    RETURN 'retired';
+  END;
+END $$;
+
+-- The sales person on an estimate: the job's sales person, else who made it
+CREATE OR REPLACE FUNCTION public.est_seller(p_id bigint)
+RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE coalesce(
+    (SELECT nullif(btrim(coalesce(em.first_name, '') || ' ' || coalesce(em.last_name, '')), '')
+     FROM estimates e JOIN jobs j ON j.id = e.job_id JOIN app_users u ON u.id = j.sales_user_id JOIN employees em ON em.id = u.employee_id WHERE e.id = p_id),
+    (SELECT nullif(btrim(coalesce(em.first_name, '') || ' ' || coalesce(em.last_name, '')), '')
+     FROM estimates e JOIN employees em ON em.id = e.sold_by_employee_id WHERE e.id = p_id)) END
+$$;
+
+REVOKE EXECUTE ON FUNCTION public._item_labour(bigint), public.pb_addon_kits(), public.delete_addon_kit(bigint), public.est_seller(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._item_labour(bigint), public.pb_addon_kits(), public.delete_addon_kit(bigint), public.est_seller(bigint) TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
+
 """
 
 
@@ -1989,7 +2093,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
