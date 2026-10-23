@@ -3283,7 +3283,7 @@ BEGIN
       AND (length(q) >= 2 OR c.nm LIKE q || '%' OR (' ' || c.nm) LIKE '% ' || q || '%')),   -- one letter: only names (or words) starting with it
   other AS (   -- phone, address, customer #
     SELECT k.customer_id AS id, 4 AS rank FROM customer_contacts k
-      WHERE length(digits) >= 3 AND length(digits) >= length(regexp_replace(q, '[\s()+.-]', '', 'g')) - 1
+      WHERE length(digits) >= 4 AND length(digits) >= length(regexp_replace(q, '[\s()+.-]', '', 'g')) - 1   -- 4+ digits: 613 alone is nearly everyone
         AND regexp_replace(k.value, '\D', '', 'g') LIKE '%' || digits || '%'
     UNION SELECT l.customer_id, 4 FROM locations l WHERE length(q) >= 3 AND lower(l.street) LIKE '%' || q || '%'
     UNION SELECT c.id, 4 FROM c WHERE length(q) >= 2 AND lower(coalesce(c.customer_number, '')) LIKE q || '%'),
