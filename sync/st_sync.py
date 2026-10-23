@@ -2410,6 +2410,36 @@ REVOKE EXECUTE ON FUNCTION public.customer_partner_bookings(bigint) FROM PUBLIC,
 GRANT EXECUTE ON FUNCTION public.customer_partner_bookings(bigint) TO authenticated;
 NOTIFY pgrst, 'reload schema';
 
+-- 99zz7_htin_list_cols.sql
+-- =====================================================================
+-- HTIN List laid out like the HITN portal: the list also gives each booking's sales channel,
+-- contract # and service variant (from its full record). Safe to run more than once.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.partner_bookings_list(p_partner bigint, p_tab text DEFAULT 'all'::text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  WITH b AS (SELECT b.*, public._pb_closed(b) closed FROM partner_bookings b WHERE b.partner_id = p_partner)
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE jsonb_build_object(
+    'all', (SELECT count(*) FROM b), 'closed', (SELECT count(*) FROM b WHERE closed),
+    'statuses', (SELECT coalesce(jsonb_agg(jsonb_build_object('status', status, 'n', n) ORDER BY n DESC), '[]') FROM (SELECT status, count(*) n FROM b WHERE status IS NOT NULL GROUP BY 1) s),
+    'closed_statuses', (SELECT to_jsonb(closed_statuses) FROM partners WHERE id = p_partner),
+    'list_name', (SELECT list_name FROM partners WHERE id = p_partner),
+    'rows', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', b.id, 'ref', b.ref, 'booked_at', b.booked_at, 'status', b.status, 'status_at', b.status_at, 'service', b.service, 'service_date', b.service_date,
+        'their_name', b.their_name, 'address', b.address, 'extra', b.extra, 'email', b.email, 'provider', b.provider, 'phone', b.phone, 'channel', b.details ->> 'channel', 'contract', b.details ->> 'contract', 'variant', b.details ->> 'variant', 'closed', b.closed, 'override', b.closed_override, 'note', b.note, 'source', b.source,
+        'customer_id', b.customer_id, 'customer', c.display_name, 'how', b.match_how, 'addr_ok', b.addr_ok,
+        'job_id', b.job_id, 'job', j.job_number, 'job_status', j.status,
+        'visit', (SELECT min(v.scheduled_date) FROM visits v WHERE v.job_id = b.job_id AND v.status <> 'cancelled'),
+        'invoice_id', coalesce(b.invoice_id, i.id), 'invoice', coalesce(bi.invoice_number, i.invoice_number), 'balance', coalesce(bi.balance_due, i.balance_due),
+        'added_by', public._staff_name(b.added_by)) ORDER BY coalesce(b.booked_at, b.created_at) DESC, b.id DESC), '[]')
+      FROM b LEFT JOIN customers c ON c.id = b.customer_id LEFT JOIN jobs j ON j.id = b.job_id
+      LEFT JOIN invoices bi ON bi.id = b.invoice_id
+      LEFT JOIN LATERAL (SELECT i.id, i.invoice_number, i.balance_due FROM invoices i WHERE b.invoice_id IS NULL AND i.job_id = b.job_id AND i.status <> 'void' ORDER BY i.invoice_date DESC LIMIT 1) i ON true
+      WHERE coalesce(p_tab, 'all') = 'all' OR (p_tab = 'closed' AND b.closed) OR (p_tab = 'open' AND NOT b.closed))) END
+$function$;
+NOTIFY pgrst, 'reload schema';
 """
 
 
