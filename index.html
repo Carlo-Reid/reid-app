@@ -3546,7 +3546,17 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .sec-up h2 { margin: 0 0 10px; font-size: 17px; }
 /* printed estimate: logo | our company | the estimate (with bill to, job address, work), each in an outlined box */
 .est-print { zoom: .93; }   /* every font one size smaller */
-.est-hd { display: grid; grid-template-columns: 1fr 1fr 1.35fr; gap: 10px; align-items: stretch; }
+.est-hd { display: grid; grid-template-columns: 1.15fr 1.1fr .9fr; gap: 10px; align-items: stretch; }
+.est-hlogoco .inv-logo, .est-hlogoco .es-logo { display: block; width: 100%; max-width: 2.1in; max-height: .95in; object-fit: contain; margin: 0 0 6px; }
+.est-hlogoco .es-word { font-size: 18px; font-weight: 800; margin-bottom: 6px; } .est-hlogoco .es-by { margin-top: 4px; font-size: 11.5px; }
+.est-hbill b, .est-hbill .es-name { display: block; font-size: 12.5px; font-weight: 700; color: #1c2630; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.est-hbill .inv-label, .est-hlogoco .inv-label { font-size: 9.5px; margin-bottom: 0; }
+.est-sheet .es-hd { margin-bottom: 10px; } .est-sheet .es-hd .est-hbox { background: #fff; color: #33414d; }
+.est-ldesc-edit { min-height: 1.6em; border: 1px dashed #c9d2da; border-radius: 6px; padding: 4px 6px; margin-top: 3px; cursor: text; outline: none; }
+.est-ldesc-edit:hover { border-color: #9fb0bd; } .est-ldesc-edit:focus { border: 1px solid #1f5fa8; background: #f7fbff; }
+.est-ldesc-edit:empty::before { content: attr(data-ph); color: #8a99a6; font-style: italic; }
+.est-ldesc-reset { font-size: 11.5px; margin-top: 2px; }
+@media print { .est-ldesc-edit { border: 0; padding: 0; } .est-ldesc-edit:empty, .est-ldesc-reset { display: none; } }
 .est-hbox { border: 1px solid #c9d2da; border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.4; color: #33414d; min-width: 0; }
 .est-hlogo { display: grid; place-items: center; } .est-hlogo .inv-logo { width: 100%; max-width: 2.1in; margin: 0; }
 .est-hco b { display: block; font-size: 13px; color: #1c2630; margin-bottom: 2px; } .est-hco .es-tag { margin-top: 4px; font-size: 11.5px; }
@@ -6261,7 +6271,7 @@ async function openEstEdit(id, msg) {
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the estimate</h2>${esc(error ? rpcErr(error) : "It's not there any more.")}</div></div>`; return; }
   EST.x = data;
   EST.opts = (data.estimate_options || []).sort((a, b) => a.sequence - b.sequence).map(o => ({ id: o.id, name: o.name, recommended: o.is_recommended,
-    lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price), skip: (l.kit_skip || []).map(Number), disc: Number(l.unit_price) < 0 })) }));
+    lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price), skip: (l.kit_skip || []).map(Number), disc: Number(l.unit_price) < 0, ldesc: l.long_desc || "" })) }));
   if (!EST.opts.length) EST.opts = [{ name: "Option 1", recommended: true, lines: [] }];
   EST.dirty = false;
   EST.costErr = "";
@@ -6294,6 +6304,13 @@ function estBillTo(cust, partner) {
   return { name: cust.display_name || "", lines: L ? [[L.street, L.unit && "Unit " + L.unit].filter(Boolean).join(", "), [L.city, L.province, L.postal_code].filter(Boolean).join(", ")].filter(Boolean) : [] };
 }
 const estPic = id => { const e = id && EINFO.get(id); return e && e.thumb ? `<img src="${e.thumb}" alt="">` : ""; };
+// the text under an item on the estimate: the line's own text if it was changed, else the price book's. Editable while the estimate is open.
+const estLineHtml = l => l.ldesc ? rteClean(l.ldesc) : (() => { const e = l.item_id && EINFO.get(l.item_id); return e ? pbDescHtml({ id: l.item_id, description: e.desc }) : ""; })();
+function estLineText(l, i, k, closed) {
+  const h = estLineHtml(l);
+  if (closed) return h ? `<div class="est-ldesc">${h}</div>` : "";
+  return `<div class="est-ldesc est-ldesc-edit" contenteditable="true" data-ltext="${i}:${k}" data-ph="Add a description for the customer (optional)…" aria-label="Description under this item">${h}</div>${l.ldesc ? `<button class="link est-ldesc-reset" type="button" data-ltreset="${i}:${k}" title="Put back the price book's text">↺ Price book text</button>` : ""}`;
+}
 const estDesc = id => { const e = id && EINFO.get(id); if (!e) return ""; const h = pbDescHtml({ id, description: e.desc }); return h ? `<div class="est-ldesc">${h}</div>` : ""; };
 // costing (owners and anyone who can see costs): each item's cost, labour hours and the materials its kit adds
 const ECOST = new Map();
@@ -6424,19 +6441,21 @@ function renderEstEdit() {
     <div class="staff-msg ${/^Not|Couldn/.test(EST.msg) ? "err" : "ok"} est-tmsg" id="est-msg" role="status">${esc(EST.msg || "")}</div>
     <div class="est-wrap ${estCanCost() ? "with-cost" : ""}">
     <div class="est-sheet">
-      <header class="es-top">
-        <div class="es-brand">${brand ? (brand.branding_logo_url ? `<img class="es-logo" src="${esc(brand.branding_logo_url)}" alt="${esc(brand.branding_name || brand.name)}">` : `<div class="es-word">${esc(brand.branding_name || brand.name)}</div>`)
+      <div class="est-hd es-hd">
+        <div class="est-hbox est-hco est-hlogoco">${brand ? (brand.branding_logo_url ? `<img class="es-logo" src="${esc(brand.branding_logo_url)}" alt="${esc(brand.branding_name || brand.name)}">` : `<div class="es-word">${esc(brand.branding_name || brand.name)}</div>`)
             : `<img class="es-logo" src="${esc(coLogo(c))}" alt="${esc(c.company_name || "Reid Heating & Cooling")}" crossorigin="anonymous">`}
-          <div class="es-co">${[...coAddr, c.phone && phoneFmt(c.phone), c.email, c.website && c.website.replace(/^https?:\/\//, "").replace(/\/$/, ""), c.hst_number && "HST # " + c.hst_number].filter(Boolean).map(esc).join("<br>")}${c.tagline ? `<div class="es-tag">${esc(c.tagline)}</div>` : ""}${EST.seller ? `<div class="es-by">Provided to you by <b>${esc(EST.seller)}</b></div>` : ""}</div></div>
-        <div class="es-title"><div class="es-h">Estimate</div>
-          <table class="es-meta"><tr><td>Estimate #</td><td>${esc(x.estimate_number)}</td></tr><tr><td>Date</td><td>${fmtDate(x.created_at)}</td></tr>
-            ${x.expires_on ? `<tr><td>Valid until</td><td>${fmtDate(x.expires_on)}</td></tr>` : ""}${x.jobs?.job_number ? `<tr><td>Job #</td><td>${esc(x.jobs.job_number)}</td></tr>` : ""}</table></div>
-      </header>
-      <div class="es-parties">
-        ${(() => { const B = estBillTo(cust, x.jobs?.partners?.name); return `<div><div class="es-lab">Bill to</div><button class="link es-name" type="button" data-est-cust="${x.customer_id}">${esc(B.name)}</button>
-          ${B.lines.length ? `<div>${esc(B.lines.join(", "))}</div>` : ""}${phone || email ? `<div>${esc([phone && phoneFmt(phone), email].filter(Boolean).join(" · "))}</div>` : ""}</div>`; })()}
-        <div><div class="es-lab">Job address</div><div>${esc(addr.join(", ")) || "—"}</div></div>
-        <div><div class="es-lab">Quote for</div><div>${esc(x.jobs?.summary || x.jobs?.job_types?.name || "")}</div></div>
+          <b>${esc(c.company_name || "Reid Heating & Cooling")}</b><div class="es-co">${[...coAddr, c.phone && phoneFmt(c.phone), c.email, c.website && c.website.replace(/^https?:\/\//, "").replace(/\/$/, ""), c.hst_number && "HST # " + c.hst_number].filter(Boolean).map(esc).join("<br>")}</div>
+          ${c.tagline ? `<div class="es-tag">${esc(c.tagline)}</div>` : ""}${EST.seller ? `<div class="es-by">Provided to you by <b class="es-by-n">${esc(EST.seller)}</b></div>` : ""}</div>
+        <div class="est-hbox est-hbill">
+          ${(() => { const B = estBillTo(cust, x.jobs?.partners?.name); return `<div class="inv-label">Bill to</div><button class="link es-name" type="button" data-est-cust="${x.customer_id}">${esc(B.name)}</button>
+            ${B.lines.length ? `<div>${esc(B.lines.join(", "))}</div>` : ""}${phone || email ? `<div>${esc([phone && phoneFmt(phone), email].filter(Boolean).join(" · "))}</div>` : ""}`; })()}
+          <div class="est-hsec"><div class="inv-label">Job address</div><div>${esc(addr.join(", ")) || "—"}</div></div>
+          ${x.jobs?.summary || x.jobs?.job_types?.name ? `<div class="est-hsec"><div class="inv-label">Quote for</div><div>${esc(x.jobs?.summary || x.jobs?.job_types?.name || "")}</div></div>` : ""}
+        </div>
+        <div class="est-hbox est-hest"><div class="est-htitle">ESTIMATE</div><table class="inv-meta">
+          <tr><td>Estimate #</td><td>${esc(x.estimate_number)}</td></tr><tr><td>Date</td><td>${fmtDate(x.created_at)}</td></tr>
+          ${x.expires_on ? `<tr><td>Valid until</td><td>${fmtDate(x.expires_on)}</td></tr>` : ""}${x.jobs?.job_number ? `<tr><td>Job #</td><td>${esc(x.jobs.job_number)}</td></tr>` : ""}
+          <tr><td>Status</td><td>${x.cancelled_at ? "Cancelled" : esc(STATUS[x.status] || x.status)}</td></tr></table></div>
       </div>
       ${closed ? `<p class="es-hint">This estimate is ${x.cancelled_at ? "cancelled" : x.status === "accepted" ? "sold" : "closed"}, so it can't be changed.</p>`
         : `<p class="es-hint no-print">Add parts and equipment from the price book to each option. Up to 3 options (for example Good, Better, Best); the customer picks one.</p>`}
@@ -6446,7 +6465,7 @@ function renderEstEdit() {
           ${EST.opts.length > 1 ? `<button class="link danger" type="button" data-odel="${i}" title="Remove this option">✕</button>` : ""}`}</div>
         <table class="est-lines"><thead><tr><th class="est-pic"></th><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th><th></th></tr></thead><tbody>${o.lines.map((l, k) => l.disc ? "" : `<tr>
           <td class="est-pic">${estPic(l.item_id)}</td>
-          <td><input class="est-d" data-ld="${i}:${k}" value="${esc(l.description)}" ${closed ? "disabled" : ""} aria-label="What" style="${esc(pbNmCss(l.item_id))}">${estCode(l.item_id)}${estDesc(l.item_id)}${estParts(l, i, k, closed)}</td>
+          <td><input class="est-d" data-ld="${i}:${k}" value="${esc(l.description)}" ${closed ? "disabled" : ""} aria-label="What" style="${esc(pbNmCss(l.item_id))}">${estCode(l.item_id)}${estLineText(l, i, k, closed)}${estParts(l, i, k, closed)}</td>
           <td class="r"><input class="est-q" data-lq="${i}:${k}" value="${l.qty}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="How many"></td>
           <td class="r"><input class="est-p" data-lp="${i}:${k}" value="${Number(l.price).toFixed(2)}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="Price each"></td>
           <td class="r num est-lt" data-lt="${k}">${money((Number(l.qty) || 0) * (Number(l.price) || 0))}</td>
@@ -6490,6 +6509,10 @@ function wireEstEdit() {
     const [i, k, pid] = (b.dataset.pskip || b.dataset.punskip).split(":").map(Number), l = EST.opts[i].lines[k];
     l.skip = (l.skip || []).filter(x => x !== pid); if (b.dataset.pskip) l.skip.push(pid);
     EST.partsOpen = EST.partsOpen || new Set(); EST.partsOpen.add(i + ":" + k); dirty(); renderEstEdit(); }));
+  m.querySelectorAll("[data-ltext]").forEach(d => d.addEventListener("input", () => { const [i, k] = d.dataset.ltext.split(":").map(Number), l = EST.opts[i]?.lines[k]; if (!l) return;
+    const pb = (() => { const e = l.item_id && EINFO.get(l.item_id); return e ? pbDescHtml({ id: l.item_id, description: e.desc }) : ""; })();
+    const now = d.innerHTML.replace(/<br\s*\/?>\s*$/i, "").trim(); l.ldesc = now === pb.trim() ? "" : d.textContent.trim() ? now : (pb ? "<p></p>" : ""); dirty(); }));   // emptied on purpose: keep it empty (not the price book's text)
+  m.querySelectorAll("[data-ltreset]").forEach(b => b.addEventListener("click", () => { const [i, k] = b.dataset.ltreset.split(":").map(Number); EST.opts[i].lines[k].ldesc = ""; dirty(); renderEstEdit(); }));
   m.querySelectorAll("[data-obrowse]").forEach(b => b.addEventListener("click", () => openPbBrowse(Number(b.dataset.obrowse))));
   m.querySelectorAll("[data-opics]").forEach(b => b.addEventListener("click", () => openPbBrowse(Number(b.dataset.opics), "pics")));
   $("#est-newopt")?.addEventListener("click", () => { const names = ["Good", "Better", "Best"]; if (EST.opts.length === 1 && /^option 1$/i.test(EST.opts[0].name)) EST.opts[0].name = "Good";
@@ -6503,7 +6526,7 @@ function wireEstEdit() {
         res.querySelectorAll("[data-hit]").forEach(b => b.addEventListener("click", () => { const h = JSON.parse(b.dataset.hit); EST.opts[i].lines.push({ item_id: h.id, description: h.name, qty: 1, price: h.price }); dirty(); renderEstEdit();
           m.querySelector(`[data-ofind="${i}"]`)?.focus(); })); }, 250); }); });
   const say = (t, err) => { const el = $("#est-msg"); if (el) { el.className = "staff-msg " + (err ? "err" : "ok"); el.textContent = t; } };
-  const save = async sent => { const p = { options: EST.opts.map(o => ({ name: o.name, recommended: !!o.recommended, lines: o.lines.filter(l => String(l.description).trim() || l.item_id).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.qty) || 1, price: Number(l.price) || 0, skip: l.skip || [] })) })) };
+  const save = async sent => { const p = { options: EST.opts.map(o => ({ name: o.name, recommended: !!o.recommended, lines: o.lines.filter(l => String(l.description).trim() || l.item_id).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.qty) || 1, price: Number(l.price) || 0, skip: l.skip || [], ldesc: l.ldesc || null })) })) };
     if (sent) p.sent = true;
     say("Saving…"); const { error } = await db.rpc("est_save", { p_id: EST.id, p });
     if (error) { say("Not saved: " + rpcErr(error), true); return false; } EST.dirty = false; return true; };
@@ -17013,7 +17036,7 @@ async function openEstimate(id) {
         <div class="num est-opt-total">${money(sub + tax)}</div></div>
       ${o.description ? `<div class="est-desc">${esc(o.description)}</div>` : ""}
       <table class="inv-lines est-plines"><thead><tr><th class="est-pic"></th><th>Description</th><th class="r est-n">Qty</th><th class="r est-n">Price</th><th class="r est-n">Amount</th></tr></thead><tbody>
-        ${lines.filter(k => Number(k.unit_price) >= 0).length ? lines.filter(k => Number(k.unit_price) >= 0).map(k => `<tr class="${k.parent_line_id ? "est-sub" : ""}"><td class="est-pic">${estPic(k.item_id)}</td><td>${pbNmTxt(k.item_id, k.description || "")}${estCode(k.item_id)}${estDesc(k.item_id)}${k.supplied_by === "customer" ? ' <span class="inv-small">(customer supplies)</span>' : k.supplied_by === "partner" ? ' <span class="inv-small">(partner supplies)</span>' : ""}</td>
+        ${lines.filter(k => Number(k.unit_price) >= 0).length ? lines.filter(k => Number(k.unit_price) >= 0).map(k => `<tr class="${k.parent_line_id ? "est-sub" : ""}"><td class="est-pic">${estPic(k.item_id)}</td><td>${pbNmTxt(k.item_id, k.description || "")}${estCode(k.item_id)}${k.long_desc && !k.parent_line_id ? `<div class="est-ldesc">${rteClean(k.long_desc)}</div>` : estDesc(k.item_id)}${k.supplied_by === "customer" ? ' <span class="inv-small">(customer supplies)</span>' : k.supplied_by === "partner" ? ' <span class="inv-small">(partner supplies)</span>' : ""}</td>
           <td class="r num est-n">${Number(k.quantity).toLocaleString("en-CA", { maximumFractionDigits: 2 })}</td>
           <td class="r num est-n">${money(k.unit_price)}</td><td class="r num est-n">${money(k.line_total)}</td></tr>`).join("")
         : `<tr><td colspan="6" class="quiet">No line items came over from ServiceTitan for this option.</td></tr>`}
@@ -17028,18 +17051,19 @@ async function openEstimate(id) {
   const quoted = (() => { const w = String(provBy || "").trim().split(/\s+/).filter(Boolean); return w.length ? w[0] + (w.length > 1 ? " " + w[w.length - 1][0].toUpperCase() : "") : ""; })();   // "Randall M"
   $("#inv-paper").innerHTML = `<div class="est-print">
     <div class="est-hd">
-      <div class="est-hbox est-hlogo">${x.jobs?.partners?.branding_logo_url ? `<img class="inv-logo" src="${esc(x.jobs.partners.branding_logo_url)}" alt="" crossorigin="anonymous">` : `<img class="inv-logo" src="${esc(coLogo(c))}" alt="${esc(c.company_name || "Reid Heating & Cooling")}" crossorigin="anonymous">`}</div>
-      <div class="est-hbox est-hco"><b>${esc(c.company_name || "Reid Heating & Cooling")}</b>${coAddr.map(a => `<div>${esc(a)}</div>`).join("")}${c.phone ? `<div>${esc(phoneFmt(c.phone))}</div>` : ""}${c.email ? `<div>${esc(c.email)}</div>` : ""}${c.website ? `<div>${esc(c.website.replace(/^https?:\/\//, "").replace(/\/$/, ""))}</div>` : ""}${c.tagline ? `<div class="es-tag">${esc(c.tagline)}</div>` : ""}</div>
+      <div class="est-hbox est-hco est-hlogoco">${x.jobs?.partners?.branding_logo_url ? `<img class="inv-logo" src="${esc(x.jobs.partners.branding_logo_url)}" alt="" crossorigin="anonymous">` : `<img class="inv-logo" src="${esc(coLogo(c))}" alt="${esc(c.company_name || "Reid Heating & Cooling")}" crossorigin="anonymous">`}<b>${esc(c.company_name || "Reid Heating & Cooling")}</b>${coAddr.map(a => `<div>${esc(a)}</div>`).join("")}${c.phone ? `<div>${esc(phoneFmt(c.phone))}</div>` : ""}${c.email ? `<div>${esc(c.email)}</div>` : ""}${c.website ? `<div>${esc(c.website.replace(/^https?:\/\//, "").replace(/\/$/, ""))}</div>` : ""}${c.tagline ? `<div class="es-tag">${esc(c.tagline)}</div>` : ""}</div>
+      <div class="est-hbox est-hbill">
+        ${(() => { const B = estBillTo(cust, null), ct = [phone && phoneFmt(phone), email].filter(Boolean);
+          return `<div><div class="inv-label">Bill to</div><b>${esc(B.name)}</b>${B.lines.length ? `<div>${esc(B.lines.join(", "))}</div>` : ""}${ct.length ? `<div>${esc(ct.join(" · "))}</div>` : ""}</div>`; })()}
+        <div class="est-hsec"><div class="inv-label">Job address</div><div>${esc(addr.join(", ")) || "—"}</div></div>
+        <div class="est-hsec"><div class="inv-label">Work</div><div>${esc(x.jobs?.job_types?.name || "")}${x.business_units?.name ? ` <span class="inv-small">· ${esc(x.business_units.name)}</span>` : ""}</div></div>
+      </div>
       <div class="est-hbox est-hest"><div class="est-htitle">ESTIMATE</div><table class="inv-meta">
         <tr><td>Estimate #</td><td>${esc(x.estimate_number)}</td></tr>
         <tr><td>Date</td><td>${fmtDate(x.created_at)}</td></tr>
         ${x.expires_on ? `<tr><td>Valid until</td><td>${fmtDate(x.expires_on)}</td></tr>` : ""}
         ${x.jobs?.job_number ? `<tr><td>Job #</td><td>${esc(x.jobs.job_number)}</td></tr>` : ""}
         <tr><td>Status</td><td>${esc(EST_STATUS[x.status] || x.status)}</td></tr></table>
-        ${(() => { const B = estBillTo(cust, null), ct = [phone && phoneFmt(phone), email].filter(Boolean);
-          return `<div class="est-hsec"><div class="inv-label">Bill to</div><b>${esc(B.name)}</b>${B.lines.length ? `<div>${esc(B.lines.join(", "))}</div>` : ""}${ct.length ? `<div>${esc(ct.join(" · "))}</div>` : ""}</div>`; })()}
-        <div class="est-hsec"><div class="inv-label">Job address</div><div>${esc(addr.join(", ")) || "—"}</div></div>
-        <div class="est-hsec"><div class="inv-label">Work</div><div>${esc(x.jobs?.job_types?.name || "")}${x.business_units?.name ? ` <span class="inv-small">· ${esc(x.business_units.name)}</span>` : ""}</div></div>
       </div>
     </div>
     ${quoted ? `<div class="est-quoted">Quoted As Per ${esc(quoted)}, Senior Comfort Advisor</div>` : ""}
