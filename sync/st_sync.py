@@ -1824,7 +1824,8 @@ REVOKE EXECUTE ON FUNCTION public.sales_list(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.sales_list(bigint) TO authenticated;
 
 -- 99zs: the price book descriptions of the items on an estimate (shown under each line). Safe to run more than once.
-CREATE OR REPLACE FUNCTION public.est_item_info(p_ids bigint[]) RETURNS TABLE(id bigint, description text, has_picture boolean)
+DROP FUNCTION IF EXISTS public.est_item_info(bigint[]);
+CREATE FUNCTION public.est_item_info(p_ids bigint[]) RETURNS TABLE(id bigint, description text, has_picture boolean)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT i.id, i.description, EXISTS (SELECT 1 FROM pricebook_pictures p WHERE p.item_id = i.id)
   FROM pricebook_items i
@@ -1882,6 +1883,33 @@ END $$;
 
 REVOKE EXECUTE ON FUNCTION public.est_save(bigint, jsonb) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.est_save(bigint, jsonb) TO authenticated;
+
+-- 99zv: estimates like the ServiceTitan proposal: part codes and maker on each line, tagline, REG number,
+-- financing estimate, and the customer authorization wording. Safe to run more than once.
+ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS tagline text;
+ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS reg_number text;
+ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS finance_apr numeric;
+ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS finance_months integer;
+ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS estimate_terms text;
+-- fill only what's empty, from the ServiceTitan proposal
+UPDATE public.company_settings SET
+  street = coalesce(nullif(btrim(street), ''), '36 Capital Dr.'), city = coalesce(nullif(btrim(city), ''), 'Nepean'),
+  province = coalesce(nullif(btrim(province), ''), 'ON'), postal_code = coalesce(nullif(btrim(postal_code), ''), 'K2G 0E9'),
+  phone = coalesce(nullif(btrim(phone), ''), '6132331115'),
+  tagline = coalesce(tagline, 'SERVICE, You Can Trust !'), reg_number = coalesce(reg_number, '855889721'),
+  finance_apr = coalesce(finance_apr, 10.5), finance_months = coalesce(finance_months, 120),
+  estimate_terms = coalesce(estimate_terms, 'THIS IS AN ESTIMATE, NOT A CONTRACT FOR SERVICES. The summary above is furnished by Reid Heating and Cooling, A Division of Home Service Group Inc. as a good faith estimate of work to be performed at the location described above and is based on our evaluation and does not include material price increases or additional labor and materials which may be required should unforeseen problems arise after the work has started. I understand that the final cost of the work may differ from the estimate, perhaps materially. THIS IS NOT A GUARANTEE OF THE FINAL PRICE OF WORK TO BE PERFORMED. I agree and authorize the work as summarized on these estimated terms, and I agree to pay the full amount for all work performed.');
+
+-- each item's part code and maker too
+DROP FUNCTION IF EXISTS public.est_item_info(bigint[]);
+CREATE FUNCTION public.est_item_info(p_ids bigint[]) RETURNS TABLE(id bigint, description text, has_picture boolean, sku text, manufacturer text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT i.id, i.description, EXISTS (SELECT 1 FROM pricebook_pictures p WHERE p.item_id = i.id), i.sku, i.manufacturer
+  FROM pricebook_items i
+  WHERE public.current_staff_role() IS NOT NULL AND i.id = ANY (p_ids[1:300])
+$$;
+REVOKE EXECUTE ON FUNCTION public.est_item_info(bigint[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.est_item_info(bigint[]) TO authenticated;
 """
 
 
