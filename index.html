@@ -3766,6 +3766,8 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .sec-find-item { cursor: pointer; border: 1px solid transparent; transition: background .12s, border-color .12s; }
 .sec-find-item:hover, .sec-find-item:focus-visible { background: rgba(31,122,77,.12); border-color: rgba(31,122,77,.45); outline: none; }
 .sec-find-item.busy { opacity: .6; pointer-events: none; }
+.cust-group { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; opacity: .6; padding: 8px 10px 2px; }
+#results .result mark, .stk-pick mark { background: #fde68a; color: inherit; padding: 0 1px; border-radius: 3px; }
 .sec-find-group { font-size: 11.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; opacity: .6; margin: 6px 2px 0; }
 .sec-find-item mark { background: #fde68a; color: inherit; padding: 0 1px; border-radius: 3px; }
 .sec-badge-s { display: inline-block; margin-left: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; vertical-align: 1px; white-space: nowrap; }
@@ -4313,7 +4315,7 @@ const fieldsInUse = () => FIELDS.some(s => $(s).value.trim());
 $("#q").addEventListener("input", () => {
   clearTimeout(searchTimer);
   // the small boxes are in use: what's typed here narrows them down too
-  searchTimer = setTimeout(fieldsInUse() ? runFieldSearch : runSearch, 220);
+  searchTimer = setTimeout(fieldsInUse() ? runFieldSearch : runSearch, 150);
 });
 // the small boxes and the big box are all used together; nothing is moved or cleared
 FIELDS.forEach(sel => $(sel).addEventListener("input", () => {
@@ -4328,7 +4330,7 @@ async function runFieldSearch() {
   const extra = $("#q").value.trim();   // the big box: serial, invoice, job, anything on the file — it narrows down too
   if (!fieldsInUse()) return runSearch();
   const seq = ++searchSeq, box = $("#results");
-  const any = name.length >= 2 || phone.replace(/\D/g, "").length >= 3 || addr.length >= 2 || last.length >= 2 || email.length >= 2 || model.length >= 2;
+  const any = name.length >= 1 || phone.replace(/\D/g, "").length >= 3 || addr.length >= 2 || last.length >= 2 || email.length >= 2 || model.length >= 2;
   $("#f-clear").classList.toggle("hidden", !fieldsInUse());
   if (!any) { box.innerHTML = ""; return; }
   box.innerHTML = `<div class="hint quiet" style="padding:10px">Searching…</div>`;
@@ -4340,7 +4342,7 @@ async function runFieldSearch() {
   const total = Number(data[0].total_count);
   box.innerHTML = `<div class="hint quiet" style="padding:4px 10px 6px">${total.toLocaleString()} ${total === 1 ? "match" : "matches"}${total > data.length ? `, showing the first ${data.length}. Add more to narrow it down.` : ""}</div>`
     + data.map(r => `<button class="result" role="listitem" data-id="${r.customer_id}">
-      <div class="name">${esc(r.display_name)}${r.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}</div>
+      <div class="name">${custMark(r.display_name, name || last)}${r.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}</div>
       <div class="sub">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>
       ${r.phone ? `<div class="why">${esc(phoneFmt(r.phone))}</div>` : ""}</button>`).join("");
   box.querySelectorAll(".result").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.id))));
@@ -4358,29 +4360,46 @@ $("#results").addEventListener("keydown", e => {
 const WHY = { job: "Job", invoice: "Invoice", estimate: "Estimate", equipment: "Equipment", payment: "Payment",
               permit: "Permit", manufacturer_claim: "Manufacturer claim", supplier_claim: "Supplier claim" };
 
+// what was typed, highlighted in a name (the search is the same everywhere: see custFindGroups)
+function custMark(name, q) {
+  let h = esc(name || "");
+  String(q || "").toLowerCase().split(/\s+/).filter(Boolean).forEach(w => {
+    const rx = new RegExp("(" + esc(w).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "ig"); h = h.replace(rx, "<mark>$1</mark>"); });
+  return h;
+}
+const CUST_GROUPS = { 1: "Starts with", 2: "A word starts with", 3: "Has it in the name", 4: "Phone, address or customer #" };
 async function runSearch() {
   const q = $("#q").value.trim(), seq = ++searchSeq, box = $("#results");
-  if (q.length < 2) { box.innerHTML = ""; return; }
-  box.innerHTML = `<div class="hint quiet" style="padding:10px">Searching…</div>`;
-  const { data, error } = await db.rpc("global_search", { q, max_results: 40 });
+  if (!q.length) { box.innerHTML = ""; return; }
+  if (!box.querySelector(".result")) box.innerHTML = `<div class="hint quiet" style="padding:10px">Searching…</div>`;
+  // customers by name first (best matches at the top), and from 2 letters on, anything else on a file (invoice, serial, job…)
+  const [cf, gs] = await Promise.all([db.rpc("customer_find", { p_q: q, p_limit: 40 }), q.length >= 2 ? db.rpc("global_search", { q, max_results: 40 }) : Promise.resolve({ data: [] })]);
   if (seq !== searchSeq) return;
+  const error = cf.error && gs.error ? gs.error : null;
   if (error) { box.innerHTML = `<div class="error" style="padding:10px">Search failed: ${esc(error.message)}</div>`; return; }
-  const ids = [...new Set(data.map(r => r.customer_id).filter(Boolean))];
-  if (!ids.length) { box.innerHTML = `<div class="hint quiet" style="padding:10px">Nothing matches "${esc(q)}". Try part of a name, a phone number, or a street.</div>`; return; }
-  const { data: custs } = await db.from("customers")
-    .select("id, display_name, status, locations(street, city)").in("id", ids.slice(0, 40));
-  if (seq !== searchSeq) return;
-  const byId = Object.fromEntries((custs || []).map(c => [c.id, c]));
-  const why = {};
-  data.forEach(r => { if (r.entity_type !== "customer" && r.customer_id && !why[r.customer_id]) why[r.customer_id] = `${WHY[r.entity_type] || r.entity_type}: ${r.title.replace(/^(Job|Invoice|Estimate|Payment|PO|Permit) /, "")}${r.subtitle && r.entity_type === "equipment" ? " " + r.subtitle : ""}`; });
-  box.innerHTML = ids.filter(id => byId[id]).map(id => {
-    const c = byId[id], l = (c.locations || [])[0];
-    return `<button class="result" role="listitem" data-id="${id}">
+  const ranked = cf.error ? [] : (cf.data?.rows || []), seen = new Set(ranked.map(c => c.customer_id));
+  const data = gs.data || [], why = {};
+  data.forEach(r => { if (r.entity_type !== "customer" && r.customer_id && !why[r.customer_id]) why[r.customer_id] = `${WHY[r.entity_type] || r.entity_type}: ${r.title.replace(/^(Job|Invoice|Estimate|Payment|PO|Permit) /, "")}${r.subtitle && r.entity_type === "equipment" ? " · " + r.subtitle : ""}`; });
+  const extraIds = [...new Set(data.map(r => r.customer_id).filter(id => id && !seen.has(id)))].slice(0, 25);
+  let extra = [];
+  if (extraIds.length) { const { data: custs } = await db.from("customers").select("id, display_name, status, locations(street, city)").in("id", extraIds);
+    if (seq !== searchSeq) return; const byId = Object.fromEntries((custs || []).map(c => [c.id, c])); extra = extraIds.filter(id => byId[id]).map(id => byId[id]); }
+  if (!ranked.length && !extra.length) { box.innerHTML = `<div class="hint quiet" style="padding:10px">Nothing matches "${esc(q)}". Try part of a name, a phone number, or a street.</div>`; return; }
+  let last = 0;
+  const total = Number(cf.data?.total || 0);
+  box.innerHTML = ranked.map(c => { const g = Number(c.rank) !== last ? (last = Number(c.rank), `<div class="cust-group">${CUST_GROUPS[c.rank] || ""} “${esc(q)}”</div>`) : "";
+      return g + `<button class="result" role="listitem" data-id="${c.customer_id}">
+      <div class="name">${custMark(c.display_name, q)}${c.status && c.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}</div>
+      <div class="sub">${esc([c.street, c.city].filter(Boolean).join(", "))}${c.phone ? " · " + esc(phoneFmt(c.phone)) : ""}</div>
+      ${why[c.customer_id] ? `<div class="why">${esc(why[c.customer_id])}</div>` : ""}</button>`; }).join("")
+    + (total > ranked.length ? `<div class="hint quiet" style="padding:4px 10px 6px">${total.toLocaleString()} names match, showing the best ${ranked.length}. Keep typing to narrow it down.</div>` : "")
+    + (extra.length ? `<div class="cust-group">Also found on an invoice, job, equipment…</div>` + extra.map(c => { const l = (c.locations || [])[0];
+      return `<button class="result" role="listitem" data-id="${c.id}">
       <div class="name">${esc(c.display_name)}${c.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}</div>
-      <div class="sub">${l ? esc(l.street + ", " + l.city) : ""}</div>
-      ${why[id] ? `<div class="why">${esc(why[id])}</div>` : ""}</button>`;
-  }).join("");
+      <div class="sub">${l ? esc([l.street, l.city].filter(Boolean).join(", ")) : ""}</div>
+      ${why[c.id] ? `<div class="why">${esc(why[c.id])}</div>` : ""}</button>`; }).join("") : "");
   box.querySelectorAll(".result").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.id))));
+  document.querySelectorAll("#results .result").forEach(b => b.setAttribute("aria-current", b.dataset.id == lastCustomer));
 }
 
 /* ---------------- customer file ---------------- */
@@ -11971,10 +11990,10 @@ async function addToPartnerList(o = {}) {
     d.querySelector("[data-apl-x]").addEventListener("click", () => d.remove());
     d.addEventListener("click", e => { if (e.target === d) d.remove(); });
     const fi = d.querySelector("[name=find]"); let t;
-    fi?.addEventListener("input", () => { clearTimeout(t); t = setTimeout(async () => { const q = fi.value.trim(), out = d.querySelector(".apl-found"); if (q.length < 2) { out.innerHTML = ""; return; }
-      const { data } = await db.rpc("global_search", { q, max_results: 8 }); const cs = (data || []).filter(x => x.entity_type === "customer");
-      out.innerHTML = cs.map(x => `<button type="button" class="stk-pick" data-apl-c="${x.entity_id}"><b>${esc(x.title)}</b> <span class="quiet">${esc(x.subtitle || "")}</span></button>`).join("") || `<span class="quiet">No customer found.</span>`;
-      out.querySelectorAll("[data-apl-c]").forEach(b => b.addEventListener("click", () => { o.customer = Number(b.dataset.aplC); o.custName = b.querySelector("b").textContent; draw(); })); }, 250); });
+    fi?.addEventListener("input", () => { clearTimeout(t); t = setTimeout(async () => { const q = fi.value.trim(), out = d.querySelector(".apl-found"); if (!q.length) { out.innerHTML = ""; return; }
+      const { data } = await db.rpc("customer_find", { p_q: q, p_limit: 10 }); if (fi.value.trim() !== q) return; const cs = data?.rows || [];
+      out.innerHTML = cs.map(x => `<button type="button" class="stk-pick" data-apl-c="${x.customer_id}"><b>${custMark(x.display_name, q)}</b> <span class="quiet">${esc([x.street, x.city].filter(Boolean).join(", "))}</span></button>`).join("") || `<span class="quiet">No customer found.</span>`;
+      out.querySelectorAll("[data-apl-c]").forEach(b => b.addEventListener("click", () => { o.customer = Number(b.dataset.aplC); o.custName = b.querySelector("b").textContent; draw(); })); }, 180); });
     d.querySelector("form").addEventListener("submit", async e => { e.preventDefault(); const f = e.target;
       if (!o.customer) return draw("Pick the customer first.", true);
       if (!f.partner.value) return draw("Pick the partner.", true);
