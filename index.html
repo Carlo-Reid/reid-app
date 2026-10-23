@@ -12550,6 +12550,60 @@ function secPeopleHtml() {
     <p class="quiet">Click a name to open the customer. Bank account details are never kept.</p>`}
   </section>`;
 }
+// ---- every email sent to eftupload@hsginc.ca, kept with its attachments (owners only; opening a file goes in History) ----
+async function secMailLoad() {
+  const { data, error } = await db.rpc("pap_mail_list", { p_q: SEC.mq || null, p_limit: 200 });
+  SEC.mail = error ? null : data;
+}
+async function secMailOpen(id) {
+  if (SEC.mailOpen?.id === id) { SEC.mailOpen = null; return renderSecurity(); }
+  const { data, error } = await db.rpc("pap_mail_get", { p_id: id });
+  if (error || !data) return renderSecurity("Not opened: " + (error ? rpcErr(error) : "that email is gone"));
+  SEC.mailOpen = data; renderSecurity();
+  document.querySelector(".sec-mail-open")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+async function secMailFile(id, raw, view) {
+  const { data, error } = await db.rpc("pap_mail_file", { p_id: id, p_raw: !!raw });
+  if (error || !data?.b64) return renderSecurity("Not opened: " + (error ? rpcErr(error) : "the file is gone"));
+  const bin = atob(data.b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  if (view && /\.(xlsx|xlsm|xls|csv)$/i.test(data.name || "")) {   // show the spreadsheet right here in a new tab
+    await loadXlsx();
+    const wb = XLSX.read(bytes, { type: "array" }), w = window.open("", "_blank");
+    if (!w) return renderSecurity("Not opened: your browser blocked the new tab. Allow pop-ups for this page, or use Download.");
+    w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(data.name)}</title><style>body{font:13px system-ui,sans-serif;margin:16px}table{border-collapse:collapse;margin:8px 0 24px}td{border:1px solid #ccc;padding:3px 7px;white-space:nowrap}h2{font-size:15px;margin:18px 0 4px}</style><h1 style="font-size:17px">${esc(data.name)}</h1>`
+      + wb.SheetNames.map(n => `<h2>${esc(n)}</h2>` + XLSX.utils.sheet_to_html(wb.Sheets[n], { header: "", footer: "" })).join(""));
+    w.document.close(); return;
+  }
+  const url = URL.createObjectURL(new Blob([bytes], { type: data.mime || "application/octet-stream" })), a = document.createElement("a");
+  a.href = url; a.download = data.name || "file"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+function secMailHtml() {
+  const M = SEC.mail; if (!M) return "";
+  const when = d => d ? esc(fmtDate(d)) + " " + esc(new Date(d).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) : "";
+  const size = n => n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB";
+  const st = { waiting: "List waiting", done: "List marked", ignored: "List ignored", unreadable: "Couldn't read the list" };
+  const O = SEC.mailOpen, rows = M.rows || [];
+  const open = O ? `<tr class="sec-mail-open"><td colspan="5"><div class="sec-mail-box">
+      <div><b>From:</b> ${esc(O.from_name ? `${O.from_name} <${O.from_addr}>` : O.from_addr || "")}</div>
+      ${O.to ? `<div><b>To:</b> ${esc(O.to)}</div>` : ""}${O.cc ? `<div><b>Cc:</b> ${esc(O.cc)}</div>` : ""}
+      <div><b>Date:</b> ${when(O.received)}</div><div><b>Subject:</b> ${esc(O.subject || "(no subject)")}</div>
+      <pre class="sec-mail-body">${esc(O.body || "(no message)")}</pre>
+      <div class="sec-mail-files">${(O.files || []).map(f => `<span class="sec-mail-file">📎 ${esc(f.name || "file")} <span class="quiet">${size(f.size)}</span>
+          ${/\.(xlsx|xlsm|xls|csv)$/i.test(f.name || "") ? `<button class="link" type="button" data-sec-fview="${f.id}">View</button>` : ""}
+          <button class="link" type="button" data-sec-fget="${f.id}">Download</button></span>`).join("") || `<span class="quiet">No attachments.</span>`}
+        <button class="link" type="button" data-sec-raw="${O.id}">Download the original email</button></div>
+      <p class="quiet">Attachments can hold bank details. Every time one is opened it's written to History.</p></div></td></tr>` : "";
+  return `<section class="cl-tools sec-up sec-mail"><h2>All EFT emails <span class="quiet" style="font-weight:400">(${(M.total || 0).toLocaleString()})</span></h2>
+    <div class="cl-row"><label class="cl-group"><span class="cl-label">Find</span><input type="search" id="sec-mq" value="${esc(SEC.mq || "")}" placeholder="Sender, subject, words or file name" aria-label="Find an EFT email"></label></div>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table"><thead><tr><th>Received</th><th>From</th><th>Subject</th><th>Attachments</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="quiet" style="white-space:nowrap">${when(r.received)}</td><td>${esc(r.from || "")}<div class="quiet">${esc(r.from_addr || "")}</div></td>
+        <td>${esc(r.subject || "(no subject)")}${r.list_status ? `<div class="quiet">${r.list_status.split(",").map(k => st[k] || k).join(" · ")}</div>` : ""}</td>
+        <td>${(r.files || []).map(esc).join("<br>")}</td>
+        <td><button class="link" type="button" data-sec-mail="${r.id}">${O?.id === r.id ? "Close" : "Open"}</button></td></tr>${O?.id === r.id ? open : ""}`).join("")}
+      </tbody></table></div>${rows.length >= 200 ? `<p class="quiet">Showing the newest 200. Use Find to look further back.</p>` : ""}`
+      : `<div class="quiet">${SEC.mq ? "No emails match." : "No emails yet. Every email sent to eftupload@hsginc.ca shows up here."}</div>`}
+  </section>`;
+}
 async function secReview(id) {
   const { data, error } = await db.rpc("pap_inbox_rows", { p_id: id });
   if (error || !data) return renderSecurity("Not opened: " + (error ? rpcErr(error) : "that list is gone"));
