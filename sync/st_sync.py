@@ -1508,6 +1508,48 @@ GRANT EXECUTE ON FUNCTION public.stock_match_items(text[]) TO authenticated;
 -- (2) older POs were stamped with the day they were copied over; put back the day they were ordered
 UPDATE public.purchase_orders SET created_at = ordered_at
  WHERE st_id IS NOT NULL AND ordered_at IS NOT NULL AND ordered_at < created_at - interval '1 day';
+
+-- 99zm: equipment details (Section 3: missing details and yearly parts) never go on a sales job or its estimate.
+-- Safe to run more than once.
+CREATE OR REPLACE FUNCTION public._attach_requests(p_job_id bigint)
+ RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public'
+AS $function$
+DECLARE r tech_requests; v_loc bigint; n int := 0;
+BEGIN
+  -- sales jobs (walk sites, estimates) never get the equipment requests
+  IF EXISTS (SELECT 1 FROM jobs j JOIN job_types t ON t.id = j.job_type_id WHERE j.id = p_job_id AND t.job_class = 'sales') THEN RETURN 0; END IF;
+  SELECT location_id INTO v_loc FROM jobs WHERE id = p_job_id;
+  FOR r IN SELECT * FROM tech_requests WHERE location_id = v_loc AND status = 'open' ORDER BY id LOOP
+    UPDATE tech_requests SET status = 'added', job_id = p_job_id, added_at = now(),
+           note_id = public._job_note(p_job_id, r.body, 'tech_request')
+    WHERE id = r.id;
+    n := n + 1;
+  END LOOP;
+  RETURN n;
+END $function$;
+
+CREATE OR REPLACE FUNCTION public._next_visit(p_location_id bigint, p_maintenance_only boolean)
+ RETURNS TABLE(job_id bigint, scheduled_date date, job_number text, job_type text)
+ LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public'
+AS $function$
+  SELECT j.id, v.scheduled_date, j.job_number, t.name
+  FROM visits v JOIN jobs j ON j.id = v.job_id JOIN job_types t ON t.id = j.job_type_id
+  WHERE j.location_id = p_location_id
+    AND v.status IN ('unscheduled', 'scheduled', 'dispatched')
+    AND j.status NOT IN ('completed', 'cancelled')
+    AND (v.scheduled_date IS NULL OR v.scheduled_date >= current_date)
+    AND (NOT p_maintenance_only OR t.job_class = 'maintenance')
+    AND t.job_class <> 'sales'                       -- never a sales visit
+  ORDER BY v.scheduled_date NULLS LAST, v.id
+  LIMIT 1
+$function$;
+
+-- any that already went onto a sales job go back to waiting for a real visit
+UPDATE public.tech_requests r SET status = 'open', job_id = NULL, added_at = NULL, note_id = NULL
+  FROM public.jobs j JOIN public.job_types t ON t.id = j.job_type_id
+ WHERE r.job_id = j.id AND t.job_class = 'sales' AND r.status = 'added';
+DELETE FROM public.notes n USING public.jobs j, public.job_types t
+ WHERE n.entity_type = 'job' AND n.entity_id = j.id AND t.id = j.job_type_id AND t.job_class = 'sales' AND n.source IN ('tech_request', 'yearly_parts');
 """
 
 
