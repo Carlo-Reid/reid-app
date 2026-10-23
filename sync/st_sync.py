@@ -2085,6 +2085,102 @@ RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $
 $$;
 NOTIFY pgrst, 'reload schema';
 
+
+-- =====================================================================
+-- Security page (owners only): mark customers as PAP (pre-authorized payment) from an Excel list.
+-- Two lists: 'monthly' (monthly billing) and 'other' (every other PAP customer).
+-- Only the customer number, name and phone from the file are used; nothing else in the file
+-- (like bank details) is read or stored. Safe to run more than once.
+-- =====================================================================
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS pap_list text;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS pap_set_at timestamptz;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS pap_set_by bigint;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customers_pap_list_check') THEN
+    ALTER TABLE public.customers ADD CONSTRAINT customers_pap_list_check CHECK (pap_list IS NULL OR pap_list IN ('monthly', 'other'));
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS customers_pap_idx ON public.customers (pap_list) WHERE pap_list IS NOT NULL;
+CREATE INDEX IF NOT EXISTS customers_name_lc_idx ON public.customers (lower(btrim(display_name)));
+
+CREATE OR REPLACE FUNCTION public._is_owner() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$ SELECT public.current_staff_role() = 'owner' $$;
+
+-- Match the rows of the file to customers: by customer number, then phone, then the exact name (only when one customer has it)
+-- p_rows: [{"i": row number, "num": "...", "name": "...", "phone": "..."}]
+CREATE OR REPLACE FUNCTION public.pap_match(p_rows jsonb)
+RETURNS TABLE (i int, customer_id bigint, customer_number text, name text, how text, pap_list text)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public SET statement_timeout = '60s' AS $$
+BEGIN
+  IF NOT public._is_owner() THEN RAISE EXCEPTION 'Only owners can do this'; END IF;
+  RETURN QUERY
+  WITH r AS MATERIALIZED (
+    SELECT x.i, nullif(regexp_replace(btrim(coalesce(x.num, '')), '\\.0+$', ''), '') AS num, nullif(lower(btrim(coalesce(x.name, ''))), '') AS nm,
+           nullif(right(regexp_replace(coalesce(x.phone, ''), '\\D', '', 'g'), 10), '') AS ph
+    FROM jsonb_to_recordset(p_rows) AS x(i int, num text, name text, phone text)),
+  byname AS MATERIALIZED (SELECT lower(btrim(c.display_name)) AS nm, min(c.id) AS id, count(*) AS n FROM customers c
+             WHERE c.merged_into_id IS NULL AND lower(btrim(c.display_name)) IN (SELECT r.nm FROM r WHERE r.nm IS NOT NULL) GROUP BY 1),
+  byphone AS MATERIALIZED (SELECT right(regexp_replace(k.value, '\\D', '', 'g'), 10) AS ph, min(k.customer_id) AS id, count(DISTINCT k.customer_id) AS n FROM customer_contacts k
+              WHERE k.kind IN ('phone', 'mobile') AND right(regexp_replace(k.value, '\\D', '', 'g'), 10) IN (SELECT r.ph FROM r WHERE length(r.ph) = 10) GROUP BY 1),
+  m AS MATERIALIZED (
+    SELECT r.i, coalesce(cn.id, cs.id) AS by_num, CASE WHEN p.n = 1 THEN p.id END AS by_phone, CASE WHEN b.n = 1 THEN b.id END AS by_name
+    FROM r
+    LEFT JOIN customers cn ON cn.customer_number = r.num
+    LEFT JOIN customers cs ON r.num ~ '^\\d{1,15}$' AND cs.st_id = r.num::bigint
+    LEFT JOIN byphone p ON p.ph = r.ph
+    LEFT JOIN byname b ON b.nm = r.nm)
+  SELECT m.i, c.id, c.customer_number, c.display_name,
+         CASE WHEN m.by_num IS NOT NULL THEN 'number' WHEN m.by_phone IS NOT NULL THEN 'phone' ELSE 'name' END,
+         c.pap_list
+  FROM m
+  JOIN customers c0 ON c0.id = coalesce(m.by_num, m.by_phone, m.by_name)
+  JOIN customers c ON c.id = coalesce(c0.merged_into_id, c0.id);
+END $$;
+
+-- Put customers on a list (and, if asked, take everyone else off that list)
+CREATE OR REPLACE FUNCTION public.pap_set(p_ids bigint[], p_list text, p_replace boolean DEFAULT false)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_on int; v_off int := 0; v_me bigint := public.current_app_user_id();
+BEGIN
+  IF NOT public._is_owner() THEN RAISE EXCEPTION 'Only owners can do this'; END IF;
+  IF p_list IS NOT NULL AND p_list NOT IN ('monthly', 'other') THEN RAISE EXCEPTION 'Pick a list'; END IF;
+  IF p_list IS NULL THEN   -- take these customers off PAP
+    UPDATE customers SET pap_list = NULL, pap_set_at = now(), pap_set_by = v_me WHERE id = ANY (p_ids) AND pap_list IS NOT NULL;
+    GET DIAGNOSTICS v_off = ROW_COUNT;
+    INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+    VALUES ('customers', 0, 'update', v_me, jsonb_build_object('change', 'taken off PAP', 'count', v_off));
+    RETURN jsonb_build_object('on', 0, 'off', v_off);
+  END IF;
+  UPDATE customers SET pap_list = p_list, pap_set_at = now(), pap_set_by = v_me
+  WHERE id = ANY (p_ids) AND pap_list IS DISTINCT FROM p_list;
+  GET DIAGNOSTICS v_on = ROW_COUNT;
+  IF p_replace THEN
+    UPDATE customers SET pap_list = NULL, pap_set_at = now(), pap_set_by = v_me
+    WHERE pap_list = p_list AND NOT (id = ANY (p_ids));
+    GET DIAGNOSTICS v_off = ROW_COUNT;
+  END IF;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('customers', 0, 'update', v_me, jsonb_build_object('change', 'PAP list ' || p_list, 'added', v_on, 'removed', v_off));
+  RETURN jsonb_build_object('on', v_on, 'off', v_off);
+END $$;
+
+-- Who is on the PAP lists
+CREATE OR REPLACE FUNCTION public.pap_list_rows()
+RETURNS TABLE (id bigint, customer_number text, name text, pap_list text, pap_set_at timestamptz, phone text, address text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT c.id, c.customer_number, c.display_name, c.pap_list, c.pap_set_at,
+         (SELECT k.value FROM customer_contacts k WHERE k.customer_id = c.id AND k.kind <> 'email' ORDER BY k.is_primary DESC, k.id LIMIT 1),
+         (SELECT concat_ws(', ', l.street, l.city) FROM locations l WHERE l.customer_id = c.id ORDER BY l.active DESC, l.id LIMIT 1)
+  FROM customers c
+  WHERE public._is_owner() AND c.pap_list IS NOT NULL
+  ORDER BY c.display_name
+$$;
+
+REVOKE EXECUTE ON FUNCTION public._is_owner(), public.pap_match(jsonb), public.pap_set(bigint[], text, boolean), public.pap_list_rows() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._is_owner(), public.pap_match(jsonb), public.pap_set(bigint[], text, boolean), public.pap_list_rows() TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
+
 """
 
 
@@ -2114,7 +2210,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
