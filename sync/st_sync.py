@@ -1822,6 +1822,16 @@ $function$;
 
 REVOKE EXECUTE ON FUNCTION public.sales_list(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.sales_list(bigint) TO authenticated;
+
+-- 99zs: the price book descriptions of the items on an estimate (shown under each line). Safe to run more than once.
+CREATE OR REPLACE FUNCTION public.est_item_info(p_ids bigint[]) RETURNS TABLE(id bigint, description text, has_picture boolean)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT i.id, i.description, EXISTS (SELECT 1 FROM pricebook_pictures p WHERE p.item_id = i.id)
+  FROM pricebook_items i
+  WHERE public.current_staff_role() IS NOT NULL AND i.id = ANY (p_ids[1:300])
+$$;
+REVOKE EXECUTE ON FUNCTION public.est_item_info(bigint[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.est_item_info(bigint[]) TO authenticated;
 """
 
 
@@ -1851,7 +1861,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
