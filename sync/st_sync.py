@@ -2711,15 +2711,12 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.pap_mail_list(text, integer), public.pap_mail_get(bigint), public.pap_mail_file(bigint, boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.pap_mail_list(text, integer), public.pap_mail_get(bigint), public.pap_mail_file(bigint, boolean) TO authenticated;
 
--- 99zzz3_amount_search.sql
+-- 99zzz3_amount_search.sql (its indexes are in the setup file only: adding them here locked the invoices table)
 -- =====================================================================
 -- Receivables: find by amount. Type an amount and see every invoice (any date, paid or not) whose total,
 -- amount paid or balance owing is exactly that amount, to the cent. Same people as Receivables.
 -- Safe to run more than once.
 -- =====================================================================
-CREATE INDEX IF NOT EXISTS invoices_total_idx ON public.invoices (total);
-CREATE INDEX IF NOT EXISTS invoices_balance_idx ON public.invoices (balance_due);
-CREATE INDEX IF NOT EXISTS invoices_paid_idx ON public.invoices (amount_paid);
 
 CREATE OR REPLACE FUNCTION public.invoice_amount_search(p_amount numeric)
 RETURNS jsonb
