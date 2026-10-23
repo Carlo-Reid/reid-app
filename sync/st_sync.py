@@ -1910,6 +1910,56 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
 $$;
 REVOKE EXECUTE ON FUNCTION public.est_item_info(bigint[]) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.est_item_info(bigint[]) TO authenticated;
+
+-- =====================================================================
+-- Add-on kits page: duplicate a kit's parts list under a new name, and rename a kit.
+-- The copy gets the same parts and quantities but is not connected to any equipment
+-- (so an install never posts both kits). Safe to run more than once.
+-- =====================================================================
+
+CREATE OR REPLACE FUNCTION public.copy_addon_kit(p_kit bigint, p_name text)
+RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_id bigint;
+BEGIN
+  IF NOT public.has_permission('pricebook.edit') THEN RAISE EXCEPTION 'You don''t have permission to change the price book'; END IF;
+  IF NOT public._is_addon_kit(p_kit) THEN RAISE EXCEPTION 'That is not an add-on kit'; END IF;
+  v_id := public.new_addon_kit(p_name);
+  INSERT INTO pricebook_kit_items (parent_item_id, component_item_id, quantity, is_optional, sequence)
+  SELECT v_id, k.component_item_id, k.quantity, k.is_optional, k.sequence
+  FROM pricebook_kit_items k WHERE k.parent_item_id = p_kit
+  ON CONFLICT DO NOTHING;
+  UPDATE pricebook_items n SET description = o.description
+  FROM pricebook_items o WHERE n.id = v_id AND o.id = p_kit AND coalesce(o.description, '') <> '' AND o.description <> o.name;
+  PERFORM public.pb_kit_cost_refresh(v_id);
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('pricebook_items', v_id, 'update', public.current_app_user_id(), jsonb_build_object('change', 'copied from kit ' || p_kit));
+  RETURN v_id;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.rename_addon_kit(p_kit bigint, p_name text)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_name text := btrim(p_name); v_old text;
+BEGIN
+  IF NOT public.has_permission('pricebook.edit') THEN RAISE EXCEPTION 'You don''t have permission to change the price book'; END IF;
+  IF NOT public._is_addon_kit(p_kit) THEN RAISE EXCEPTION 'That is not an add-on kit'; END IF;
+  IF coalesce(v_name, '') = '' THEN RAISE EXCEPTION 'Give the kit a name'; END IF;
+  IF v_name !~* 'kit' THEN v_name := v_name || ' Add-on Kit'; END IF;
+  SELECT name INTO v_old FROM pricebook_items WHERE id = p_kit;
+  UPDATE pricebook_items SET name = v_name,
+         description = CASE WHEN description IS NULL OR description = v_old THEN v_name ELSE description END,
+         updated_at = now()
+  WHERE id = p_kit;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values, new_values)
+  VALUES ('pricebook_items', p_kit, 'update', public.current_app_user_id(), jsonb_build_object('name', v_old), jsonb_build_object('name', v_name, 'change', 'renamed add-on kit'));
+END $$;
+
+REVOKE EXECUTE ON FUNCTION public.copy_addon_kit(bigint, text), public.rename_addon_kit(bigint, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.copy_addon_kit(bigint, text), public.rename_addon_kit(bigint, text) TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
+
 """
 
 
@@ -1939,7 +1989,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
