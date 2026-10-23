@@ -518,13 +518,14 @@ def sync_purchase_orders(cur, st, state, new_state):
                coalesce((SELECT id FROM suppliers WHERE st_id = p.vendor LIMIT 1), (SELECT id FROM suppliers WHERE name = 'Unknown supplier' LIMIT 1)),
                CASE WHEN j.id IS NULL THEN 'other' ELSE 'job' END, j.id, p.status, e.id,
                nullif(p.ordered, '')::timestamptz, nullif(p.expected, '')::date, p.ref, p.summary, p.summary, p.total, p.st_id,
-               coalesce(nullif(p.created, '')::timestamptz, now())
+               coalesce(nullif(p.created, '')::timestamptz, nullif(p.ordered, '')::timestamptz, now())
         FROM (SELECT DISTINCT ON (st_id) * FROM _s_po ORDER BY st_id) p
         LEFT JOIN jobs j ON j.id = p.job LEFT JOIN employees e ON e.id = p.tech
         ON CONFLICT (st_id) WHERE st_id IS NOT NULL DO UPDATE SET supplier_id = EXCLUDED.supplier_id, purpose = EXCLUDED.purpose,
           job_id = EXCLUDED.job_id, status = EXCLUDED.status, ordered_by_employee_id = EXCLUDED.ordered_by_employee_id,
           ordered_at = EXCLUDED.ordered_at, expected_on = EXCLUDED.expected_on, supplier_reference = EXCLUDED.supplier_reference,
-          notes = EXCLUDED.notes, description = EXCLUDED.description, amount = EXCLUDED.amount""")
+          notes = EXCLUDED.notes, description = EXCLUDED.description, amount = EXCLUDED.amount,
+          created_at = least(purchase_orders.created_at, EXCLUDED.created_at, coalesce(EXCLUDED.ordered_at, EXCLUDED.created_at))""")
     saved = cur.rowcount
     cur.execute("""DELETE FROM purchase_order_lines l USING purchase_orders po
                    WHERE l.purchase_order_id = po.id AND po.st_id IN (SELECT st_id FROM _s_po)
@@ -1481,6 +1482,32 @@ $function$;
 
 REVOKE EXECUTE ON FUNCTION public.sales_list(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.sales_list(bigint) TO authenticated;
+
+-- 99zl: (1) the stock import matches item codes fast (it timed out on the full price book)
+--       (2) purchase orders from ServiceTitan keep the date they were made, so older years show on the POs page
+-- Safe to run more than once.
+
+-- (1) look items up by code or name with an index, instead of reading the whole price book for every line
+CREATE INDEX IF NOT EXISTS pricebook_items_lsku_idx ON public.pricebook_items (lower(btrim(sku)));
+CREATE INDEX IF NOT EXISTS pricebook_items_lname_idx ON public.pricebook_items (lower(btrim(name)));
+CREATE OR REPLACE FUNCTION public.stock_match_items(p_codes text[])
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH k AS (SELECT DISTINCT ON (lower(btrim(code))) code, lower(btrim(code)) lc FROM unnest(p_codes) code WHERE btrim(coalesce(code, '')) <> '')
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb
+              ELSE coalesce(jsonb_agg(jsonb_build_object('code', k.code, 'id', m.id, 'name', m.name)), '[]') END
+  FROM k JOIN LATERAL (
+    SELECT x.id, x.name FROM (
+      SELECT p.id, p.name, p.track_inventory, p.item_type, 0 AS pri FROM pricebook_items p WHERE lower(btrim(p.sku)) = k.lc AND p.active IS NOT FALSE
+      UNION ALL
+      SELECT p.id, p.name, p.track_inventory, p.item_type, 1 FROM pricebook_items p WHERE lower(btrim(p.name)) = k.lc AND p.active IS NOT FALSE) x
+    ORDER BY x.pri, x.track_inventory DESC, (x.item_type = 'material') DESC, x.id LIMIT 1) m ON true
+$$;
+REVOKE EXECUTE ON FUNCTION public.stock_match_items(text[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.stock_match_items(text[]) TO authenticated;
+
+-- (2) older POs were stamped with the day they were copied over; put back the day they were ordered
+UPDATE public.purchase_orders SET created_at = ordered_at
+ WHERE st_id IS NOT NULL AND ordered_at IS NOT NULL AND ordered_at < created_at - interval '1 day';
 """
 
 
@@ -1610,6 +1637,8 @@ def main():
                 if os.environ.get("GITHUB_ACTIONS"):   # counts only, for the Actions page
                     cur.execute("SELECT coalesce(string_agg(y || ': ' || n, ', ' ORDER BY y), 'none') FROM (SELECT extract(year FROM coalesce(ordered_at, created_at))::int y, count(*) n FROM purchase_orders GROUP BY 1) t")
                     print(f"::notice::Purchase orders in the app by year: {cur.fetchone()[0]}", flush=True)
+                    cur.execute("SELECT coalesce(string_agg(y || ': ' || n, ', ' ORDER BY y), 'none') FROM (SELECT extract(year FROM created_at)::int y, count(*) n FROM purchase_orders GROUP BY 1) t")
+                    print(f"::notice::Purchase orders by the date the POs page uses: {cur.fetchone()[0]}", flush=True)
                     if "po-backfill" not in new_state and not (state.get("po-backfill") or {}).get("since"):
                         print("::notice::Older purchase orders: ServiceTitan's PO list didn't answer this time; it will try again next run.", flush=True)
                 cur.execute("RELEASE SAVEPOINT pos")
