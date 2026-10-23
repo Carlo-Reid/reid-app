@@ -2238,6 +2238,70 @@ REVOKE EXECUTE ON FUNCTION public.partner_booking_edit(bigint, jsonb) FROM PUBLI
 GRANT EXECUTE ON FUNCTION public.partner_booking_edit(bigint, jsonb) TO authenticated;
 NOTIFY pgrst, 'reload schema';
 
+
+-- =====================================================================
+-- HTIN List: the full booking record from the bookings board (contract #, rental equipment, issue,
+-- costs, products, status history with tech notes and signatures, alerts...) kept with each booking.
+-- Loaded from the board file ("Update from the board"), and edited from the booking's side panel.
+-- Safe to run more than once.
+-- =====================================================================
+ALTER TABLE public.partner_bookings ADD COLUMN IF NOT EXISTS details jsonb;
+
+-- one booking's full record, for its side panel
+CREATE OR REPLACE FUNCTION public.partner_booking_details(p_id bigint)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE coalesce(details, '{}'::jsonb) END
+  FROM partner_bookings WHERE id = p_id
+$$;
+
+-- load the board's records: p_rows = [{ref, details}] (the bookings themselves come in first, the same way as their Excel)
+CREATE OR REPLACE FUNCTION public.partner_booking_details_import(p_partner bigint, p_rows jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE r jsonb; n int := 0; miss int := 0;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Sign in first'; END IF;
+  IF jsonb_array_length(p_rows) > 200 THEN RAISE EXCEPTION 'Up to 200 at a time'; END IF;
+  FOR r IN SELECT * FROM jsonb_array_elements(p_rows) LOOP
+    UPDATE partner_bookings SET details = r -> 'details', updated_at = now()
+    WHERE partner_id = p_partner AND ref = btrim(r ->> 'ref') AND details IS DISTINCT FROM (r -> 'details');
+    IF FOUND THEN n := n + 1;
+    ELSIF NOT EXISTS (SELECT 1 FROM partner_bookings WHERE partner_id = p_partner AND ref = btrim(r ->> 'ref')) THEN miss := miss + 1; END IF;
+  END LOOP;
+  RETURN jsonb_build_object('updated', n, 'missing', miss);
+END $$;
+
+-- the side panel's Save also keeps the full record
+CREATE OR REPLACE FUNCTION public.partner_booking_edit(p_id bigint, p jsonb)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE old partner_bookings;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Sign in first'; END IF;
+  SELECT * INTO old FROM partner_bookings WHERE id = p_id;
+  IF old.id IS NULL THEN RAISE EXCEPTION 'That booking is no longer on the list'; END IF;
+  IF p ? 'their_name' AND coalesce(btrim(p ->> 'their_name'), '') = '' THEN RAISE EXCEPTION 'Add the client''s name'; END IF;
+  UPDATE partner_bookings SET
+    status       = CASE WHEN p ? 'status'       THEN nullif(btrim(p ->> 'status'), '')       ELSE status END,
+    provider     = CASE WHEN p ? 'provider'     THEN nullif(btrim(p ->> 'provider'), '')     ELSE provider END,
+    service_date = CASE WHEN p ? 'service_date' THEN nullif(p ->> 'service_date', '')::timestamptz ELSE service_date END,
+    service      = CASE WHEN p ? 'service'      THEN nullif(btrim(p ->> 'service'), '')      ELSE service END,
+    their_name   = CASE WHEN p ? 'their_name'   THEN nullif(btrim(p ->> 'their_name'), '')   ELSE their_name END,
+    phone        = CASE WHEN p ? 'phone'        THEN nullif(btrim(p ->> 'phone'), '')        ELSE phone END,
+    email        = CASE WHEN p ? 'email'        THEN nullif(btrim(p ->> 'email'), '')        ELSE email END,
+    address      = CASE WHEN p ? 'address'      THEN nullif(btrim(p ->> 'address'), '')      ELSE address END,
+    extra        = CASE WHEN p ? 'extra'        THEN nullif(btrim(p ->> 'extra'), '')        ELSE extra END,
+    note         = CASE WHEN p ? 'note'         THEN nullif(btrim(p ->> 'note'), '')         ELSE note END,
+    details      = CASE WHEN p ? 'details' AND jsonb_typeof(p -> 'details') = 'object' THEN p -> 'details' ELSE details END,
+    updated_at = now()
+  WHERE id = p_id;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values, new_values)
+  VALUES ('partner_bookings', p_id, 'update', public.current_app_user_id(),
+          jsonb_build_object('status', old.status, 'service_date', old.service_date, 'provider', old.provider), p - 'details');
+END $$;
+
+REVOKE EXECUTE ON FUNCTION public.partner_booking_details(bigint), public.partner_booking_details_import(bigint, jsonb), public.partner_booking_edit(bigint, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.partner_booking_details(bigint), public.partner_booking_details_import(bigint, jsonb), public.partner_booking_edit(bigint, jsonb) TO authenticated;
+NOTIFY pgrst, 'reload schema';
+
 """
 
 
@@ -2267,7 +2331,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
