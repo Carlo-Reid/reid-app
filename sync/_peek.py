@@ -6,11 +6,13 @@ for fid, fn, data in cur.fetchall():
     data = bytes(data)
     kind = "html" if b"<table" in data[:20000].lower() else ("ole" if data[:4] == b"\xd0\xcf\x11\xe0" else "other:" + repr(data[:8]))
     rows = m.sheets_of(fn, data)
-    print(f"::notice::file {fid} kind={kind} rows={len(rows)} widths={[len(r) for r in rows[:12]]}")
-    for k, r in enumerate(rows[:14]):
+    out = [f"file {fid} {kind} rows={len(rows)}"]
+    for k, r in enumerate(rows[:60]):
         shape = []
         for v in r:
             if not v: shape.append("."); continue
             if len(v) <= 40 and re.search(m.HEADWORD + r"|^id$|first|last|settled|process|return", v, re.I): shape.append(re.sub(r"\d", "9", v))
             else: shape.append(re.sub(r"[A-Za-z]", "a", re.sub(r"\d", "9", v))[:6])
-        print(f"::notice::file {fid} row {k + 1}: " + " | ".join(shape)[:900])
+        cells = [f"{j + 1}={x}" for j, x in enumerate(shape) if x != "."]
+        if cells: out.append(f"r{k + 1}: " + " ".join(cells))
+    print("::notice::" + " // ".join(out)[:4000])
