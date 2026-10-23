@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-23.090531">
+<meta name="app-version" content="2026-10-23.091848">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -6270,7 +6270,11 @@ async function openBooking(custId, opt = {}) {
   if (!loc && current?.c?.id === c.id && locs.some(l => l.id === current.loc)) loc = current.loc;
   BK = { cust: c, locs, jobs: jobs.error ? [] : jobs.data, mode: opt.jobId ? "visit" : "new", jobId: opt.jobId || null,
          loc: loc || locs[0]?.id, type: "", unit: "", prio: "normal", summary: "", note: "",
-         date: opt.date || ymd(addDays(new Date(), 1)), later: false, win: ["08:00", "11:00"], start: "", end: "", dur: "", techs: opt.tech ? [opt.tech] : [], allTechs: false, load: {} };
+         date: opt.date || ymd(addDays(new Date(), 1)), later: false, win: ["08:00", "11:00"], start: "", end: "", dur: "", techs: opt.tech ? [opt.tech] : [], allTechs: false, load: {}, htin: opt.htin || null };
+  if (BK.htin) {   // booked from a partner's booking list (HTIN): say what it's for, and use their service date when it's still ahead
+    BK.summary = [BK.htin.service, BK.htin.ref && `${BK.htin.list.replace(/ list$/i, "")} #${BK.htin.ref}`].filter(Boolean).join(" – ");
+    const d = BK.htin.date ? String(BK.htin.date).slice(0, 10) : ""; if (d && d >= ymd(new Date())) BK.date = d;
+  }
   if (opt.time) { const w = (BOOK.windows || []).find(([a]) => a === opt.time);   // picked on the dispatch board
     if (w) BK.win = w; else { const [h, m] = opt.time.split(":").map(Number), e = Math.min(23 * 60 + 45, h * 60 + m + 120); BK.win = "other"; BK.start = opt.time; BK.end = String(Math.floor(e / 60)).padStart(2, "0") + ":" + String(e % 60).padStart(2, "0"); } }
   nameCurrentPage("booking for " + c.display_name);
@@ -6321,6 +6325,7 @@ function renderBooking(msg) {
     <h1>${salesBooking() ? "Sales Call" : "Book a call"}</h1>
     <p class="lead"><button class="link" type="button" data-open-cust="${F.cust.id}">${esc(F.cust.display_name)}</button> · Customer ${esc(F.cust.customer_number)}
       ${F.cust.do_not_contact ? ` · <strong class="owe">Marked do not contact</strong>` : ""}</p>
+    ${F.htin ? `<div class="staff-msg ok bk-htin">For <b>${esc(F.htin.partnerName)}</b> · ${esc(F.htin.list)} booking <b>#${esc(F.htin.ref || "")}</b>. The job goes on ${esc(F.htin.partnerName)} with their booking # as its reference.</div>` : ""}
     <form id="bk-form" class="bk-form" autocomplete="off">
       <div class="bk-row"><span class="bk-label">What</span><span class="bk-chips bk-what">
         ${salesBooking() ? (ME.role === "sales" ? `<button class="bk-main" type="button" data-bk-sk="site" aria-pressed="${F.sk === "site"}"><b>Site visit</b><span>Book a time to go see the customer</span></button>
@@ -6435,6 +6440,10 @@ function renderBooking(msg) {
     $("#bk-save").disabled = true; say("Booking…");
     const { data, error } = await db.rpc("book_call", { p });
     if (error) { $("#bk-save").disabled = false; return say("Not booked: " + rpcErr(error), true); }
+    if (F.htin && data?.job_id) {   // from the partner's booking list: the job is theirs, and the booking is linked to it
+      const { error: e5 } = await db.rpc("htin_book_link", { p_booking: F.htin.id, p_job: data.job_id });
+      if (e5) alertMsg("Booked, but not linked to the booking list: " + rpcErr(e5));
+    }
     if (F.mode === "sales" && Number(F.salesFor) && data?.job_id) {   // a partner's sales call: the job is theirs
       const { error: e2 } = await db.rpc("set_job_partner", { p_job: data.job_id, p_partner: Number(F.salesFor) });
       if (e2) alertMsg("Booked, but not marked as the partner's sales call: " + rpcErr(e2)); }
@@ -11049,12 +11058,15 @@ function htinHead(f, open, tick, total) {
       <span class="htin-cust"><b>${esc(f.customer || r.customer || r.their_name || "")}</b><span class="quiet">${esc(String(r.address || "").split(",")[0])}</span>${badge}</span>
       <span class="htin-job">${f.job || r.job ? `Job ${esc(f.job || r.job)}<span class="quiet">${esc(String(f.job_status || r.job_status || "").replace(/_/g, " "))}${r.visit ? ` · ${fmtDate(r.visit)}` : ""}</span>` : `<span class="quiet">No job yet</span>`}</span>
       <span class="nfp-hn">${f.pending ? `<span class="quiet">…</span>` : `${tick} of ${total} notes`}</span></button>
-    <span class="pbl-acts">${r.invoice_id ? `<button class="link" type="button" data-pbl-inv="${r.invoice_id}" title="${Number(r.balance) > 0.004 ? "owes " + money(r.balance) : "paid"}">Invoice ${esc(r.invoice || "")}</button>` : ""}
+    <span class="pbl-acts">${!(f.job || r.job) && (f.customer_id || r.customer_id) && !r.closed && can("calls.book") ? `<button class="link" type="button" data-pbl-book="${r.id}" data-cust="${f.customer_id || r.customer_id}" title="Book a call for this booking; the job goes on ${esc((PP.stores || []).find(x => x.id === PBL.partner)?.name || "the partner")} with their booking #">Book a job</button>` : ""}${r.invoice_id ? `<button class="link" type="button" data-pbl-inv="${r.invoice_id}" title="${Number(r.balance) > 0.004 ? "owes " + money(r.balance) : "paid"}">Invoice ${esc(r.invoice || "")}</button>` : ""}
       ${r.closed ? `<button class="link" type="button" data-pbl-open="${r.id}">Reopen</button>` : `<button class="link" type="button" data-pbl-close="${r.id}">Close</button>`}
       ${r.override != null ? `<button class="link" type="button" data-pbl-auto="${r.id}" title="Open or closed by their status again">By their status</button>` : ""}
       ${r.source === "added" ? `<button class="link danger" type="button" data-pbl-rm="${r.id}">Remove</button>` : ""}</span></div>`;
 }
 function htinWireRow(el) {
+  el.querySelectorAll("[data-pbl-book]").forEach(b => b.addEventListener("click", () => {
+    const r = (PBL.data?.rows || []).find(x => x.id === Number(b.dataset.pblBook)) || {};
+    openBooking(Number(b.dataset.cust), { htin: { id: r.id, ref: r.ref, partner: PBL.partner, partnerName: (PP.stores || []).find(x => x.id === PBL.partner)?.name || "", service: r.service, date: r.service_date, list: PBL.data?.list_name || "booking list" } }); }));
   el.querySelectorAll("[data-pbl-inv]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.pblInv))));
   const set = async (id, args, m) => { const { error } = await db.rpc("partner_booking_set", { p_id: id, ...args }); if (error) return pblSay("Not saved: " + rpcErr(error), true); PBL.msg = m; await pblLoad(); };
   el.querySelectorAll("[data-pbl-close]").forEach(b => b.addEventListener("click", () => set(Number(b.dataset.pblClose), { p_closed: true }, "Closed.")));

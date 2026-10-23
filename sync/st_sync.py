@@ -2181,6 +2181,29 @@ GRANT EXECUTE ON FUNCTION public._is_owner(), public.pap_match(jsonb), public.pa
 
 NOTIFY pgrst, 'reload schema';
 
+
+-- =====================================================================
+-- HTIN List: "Book a job" for a booking with no job yet. After the call is booked, the new job
+-- becomes the partner's job (with their booking # as its reference) and the booking is linked to it.
+-- Safe to run more than once.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.htin_book_link(p_booking bigint, p_job bigint)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE b partner_bookings;
+BEGIN
+  IF NOT public.has_permission('calls.book') AND public.current_staff_role() IS DISTINCT FROM 'owner' THEN RAISE EXCEPTION 'You don''t have permission to book calls'; END IF;
+  SELECT * INTO b FROM partner_bookings WHERE id = p_booking;
+  IF b.id IS NULL THEN RAISE EXCEPTION 'That booking is not on the list any more'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM jobs WHERE id = p_job) THEN RAISE EXCEPTION 'That job is not there'; END IF;
+  UPDATE jobs SET partner_id = b.partner_id, partner_reference = coalesce(partner_reference, b.ref), updated_at = now() WHERE id = p_job;
+  UPDATE partner_bookings SET job_id = p_job, customer_id = coalesce(customer_id, (SELECT customer_id FROM jobs WHERE id = p_job)), updated_at = now() WHERE id = p_booking;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('partner_bookings', p_booking, 'update', public.current_app_user_id(), jsonb_build_object('change', 'booked job from the list', 'job_id', p_job));
+END $$;
+REVOKE EXECUTE ON FUNCTION public.htin_book_link(bigint, bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.htin_book_link(bigint, bigint) TO authenticated;
+NOTIFY pgrst, 'reload schema';
+
 """
 
 
@@ -2210,7 +2233,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
