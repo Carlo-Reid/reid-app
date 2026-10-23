@@ -3777,6 +3777,7 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .sec-hirow td { background: rgba(253,230,138,.45); font-weight: 600; }
 .ow-amt .cl-row { align-items: flex-end; } .ow-amt #ow-amt { width: 150px; }
 .ow-amt-msg { margin-top: 12px; } .ow-amt-table { margin-top: 8px; }
+.ow-amt-th { cursor: pointer; user-select: none; white-space: nowrap; } .ow-amt-th:hover { text-decoration: underline; }
 tr.ow-pair-head td { background: rgba(127,127,127,.08); border-top: 2px solid rgba(127,127,127,.3); font-size: 13px; }
 .ow-pair-same { background: #DCFCE7; color: #14532d; }
 mark.ow-amt-hit { background: #FDE68A; color: #3b2a00; padding: 1px 5px; border-radius: 4px; font-weight: 700; }
@@ -9240,7 +9241,15 @@ function owAmtHtml() {
   const custCell = r => `<td><button class="link" type="button" data-ow-amt-cust="${r.customer_id}">${esc(r.customer_name || "")}</button><div class="quiet">${esc([r.customer_number ? "#" + r.customer_number : "", [r.street, r.city].filter(Boolean).join(", ")].filter(Boolean).join(" · "))}</div></td>`;
   const invCell = r => `<td><button class="link" type="button" data-ow-amt-inv="${r.invoice_id}"><strong>${esc(r.invoice_number || "#" + r.invoice_id)}</strong></button>${Number(r.balance) <= 0.004 ? `<div><span class="ow-tag">Paid</span></div>` : ""}</td>`;
   const dateCell = r => `<td style="white-space:nowrap">${r.invoice_date ? esc(fmtDate(r.invoice_date)) : ""}</td>`;
-  const head = extra => `<thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Job type</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Owing</th>${extra || ""}</tr></thead>`;
+  // click a heading to sort by it (click again to flip it)
+  const S = OW.amtSort || {}, sortable = A && !A.loading && !A.error && A.mode !== "pair";
+  const th = (k, t, cls) => sortable ? `<th class="${cls || ""} ow-amt-th" data-ow-amt-sort="${k}" aria-sort="${S.k === k ? (S.dir < 0 ? "descending" : "ascending") : "none"}" title="Sort by ${t.toLowerCase()}">${t}${S.k === k ? (S.dir < 0 ? " ▼" : " ▲") : ""}</th>` : `<th class="${cls || ""}">${t}</th>`;
+  const head = extra => `<thead><tr>${th("inv", "Invoice")}${th("date", "Date")}${th("cust", "Customer")}${th("job", "Job type")}${th("total", "Total", "r")}${th("paid", "Paid", "r")}${th("bal", "Owing", "r")}${extra ? th("diff", "Off by", "r") : ""}</tr></thead>`;
+  const sorted = list => { if (!sortable || !S.k) return list;
+    const num = v => Number(v) || 0, txt = v => String(v || "").toLowerCase();
+    const key = { inv: r => num(String(r.invoice_number || "").replace(/\D/g, "")) || txt(r.invoice_number), date: r => r.invoice_date || "", cust: r => txt(r.customer_name), job: r => txt(r.job_type),
+      total: r => num(r.total), paid: r => num(r.paid), bal: r => num(r.balance), diff: r => num(r.diff) }[S.k];
+    return [...list].sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * S.dir || (b.invoice_date || "").localeCompare(a.invoice_date || ""); }); };
   let res = "";
   if (!A) res = "";
   else if (A.loading) res = `<div class="quiet ow-amt-msg">Looking for ${money(A.amount)}…</div>`;
@@ -9258,8 +9267,8 @@ function owAmtHtml() {
   } else if (A.mode === "near") {
     res = !rows.length ? `<div class="quiet ow-amt-msg">No invoices within ${money(A.range)} of ${money(A.amount)}.</div>`
       : `<div class="ow-amt-msg"><b>${A.n.toLocaleString()} invoice${A.n === 1 ? "" : "s"}</b> within ${money(A.range)} of ${money(A.amount)} (${money(A.amount - A.range)} to ${money(Number(A.amount) + Number(A.range))})${A.n > rows.length ? `, showing the closest ${rows.length}` : ""}. Closest first; the highlighted amount is the close one.</div>
-      <div class="staff-wrap"><table class="calls-table ow-amt-table">${head('<th class="r">Off by</th>')}<tbody>
-      ${rows.map(r => `<tr>${invCell(r)}${dateCell(r)}${custCell(r)}<td>${esc(r.job_type || "")}</td>
+      <div class="staff-wrap"><table class="calls-table ow-amt-table">${head(true)}<tbody>
+      ${sorted(rows).map(r => `<tr>${invCell(r)}${dateCell(r)}${custCell(r)}<td>${esc(r.job_type || "")}</td>
         <td class="r num">${hit(r.on_total, r.total)}</td><td class="r num">${hit(r.on_paid, r.paid)}</td><td class="r num">${hit(r.on_balance, r.balance)}</td>
         <td class="r num">${Number(r.diff) < 0.005 ? "exact" : money(r.diff)}</td></tr>`).join("")}
       </tbody></table></div>`;
@@ -9267,7 +9276,7 @@ function owAmtHtml() {
     res = !rows.length ? `<div class="quiet ow-amt-msg">No invoices for exactly ${money(A.amount)}.</div>`
       : `<div class="ow-amt-msg"><b>${A.n.toLocaleString()} invoice${A.n === 1 ? "" : "s"}</b> for exactly ${money(A.amount)}${A.n > rows.length ? ` (showing the newest ${rows.length})` : ""}. The highlighted amount is the one that matches.</div>
       <div class="staff-wrap"><table class="calls-table ow-amt-table">${head()}<tbody>
-      ${rows.map(r => `<tr>${invCell(r)}${dateCell(r)}${custCell(r)}<td>${esc(r.job_type || "")}</td>
+      ${sorted(rows).map(r => `<tr>${invCell(r)}${dateCell(r)}${custCell(r)}<td>${esc(r.job_type || "")}</td>
         <td class="r num">${hit(r.on_total, r.total)}</td><td class="r num">${hit(r.on_paid, r.paid)}</td><td class="r num">${hit(r.on_balance, r.balance)}</td></tr>`).join("")}
       </tbody></table></div>`;
   }
@@ -9293,6 +9302,8 @@ function wireOwAmt() {
   document.querySelectorAll("[data-ow-amt-mode]").forEach(b => b.addEventListener("click", () => { if (OW.amtMode === b.dataset.owAmtMode) return; OW.amtMode = b.dataset.owAmtMode;
     if (OW.amtQ && owAmtParse(OW.amtQ) != null) owAmtFind(); else { OW.amt = null; renderOwing(); } }));
   $("#ow-amt-clear")?.addEventListener("click", () => { OW.amt = null; OW.amtQ = ""; renderOwing(); });
+  document.querySelectorAll("[data-ow-amt-sort]").forEach(t => t.addEventListener("click", () => { const k = t.dataset.owAmtSort, S = OW.amtSort || {};
+    OW.amtSort = { k, dir: S.k === k ? -S.dir : (["date", "total", "paid", "bal"].includes(k) ? -1 : 1) }; renderOwing(); }));
   document.querySelectorAll("[data-ow-amt-inv]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.owAmtInv))));
   document.querySelectorAll("[data-ow-amt-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.owAmtCust))));
 }
