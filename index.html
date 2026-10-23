@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-22.220808">
+<meta name="app-version" content="2026-10-22.222402">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1795,7 +1795,7 @@
   .inv-em-btns { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .inv-em-sends { display: grid; gap: 4px; font-size: 13px; border-top: 1px solid var(--dz-d0d9e6, #d0d9e6); padding-top: 8px; }
   .inv-em-send.failed b { color: #c92a2a; } .inv-em-send.sent b { color: #2b8a3e; } .inv-em-open { color: var(--dz-1864ab, #1864ab); font-weight: 700; } .inv-em-view { color: #2b8a3e; font-weight: 700; }
-  .inv-view { position: fixed; inset: 0; z-index: 50; background: rgba(15, 20, 25, .55); overflow-y: auto; padding: 24px 16px 48px; }
+  .inv-view { position: fixed; inset: 0; z-index: 1200; background: rgba(15, 20, 25, .55); overflow-y: auto; padding: 24px 16px 48px; }
   body.inv-open { overflow: hidden; }
   .inv-cost { position: fixed !important; top: 24px; right: 16px; bottom: 24px; width: 340px; overflow-y: auto; z-index: 51; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
   .inv-cost-head { display: flex; justify-content: flex-end; margin-bottom: -8px; }
@@ -3511,6 +3511,15 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .est-parts ul { list-style: none; margin: 4px 0 0; padding: 0; } .est-parts li { display: grid; grid-template-columns: 1fr auto 70px; gap: 8px; padding: 1px 0; } .est-parts .num { text-align: right; }
 @media print { .est-cost, .est-parts { display: none !important; } }
 @media (max-width: 1250px) { .est-wrap.with-cost { grid-template-columns: 1fr; } .est-cost { position: static; flex-direction: row; flex-wrap: wrap; } .est-cost .ec-card { flex: 1 1 240px; } .est-cost .ec-head { flex-basis: 100%; } }
+/* costing cards beside each option (they float down with the option until the next one) */
+.est-wrap.with-cost { grid-template-columns: minmax(0, 8.5in) 300px !important; }
+.est-sheet .est-opt { position: relative; overflow: visible; }
+.ec-float { position: absolute; top: 0; bottom: 0; left: calc(100% + .65in + 20px); width: 300px; }
+.ec-stick { position: sticky; top: 70px; }
+.est-parts li { grid-template-columns: 1fr auto 74px 22px !important; align-items: center; } .est-parts li.off { opacity: .55; } .est-parts li.off span:first-child { text-decoration: line-through; }
+.est-parts li .link { padding: 0 4px; font-size: 12px; }
+@media print { .ec-float { display: none !important; } }
+@media (max-width: 1350px) { .est-wrap.with-cost { grid-template-columns: 1fr !important; } .ec-float { position: static; width: auto; margin: 0 0 10px; } .ec-stick { position: static; } }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -5930,7 +5939,7 @@ async function openEstEdit(id, msg) {
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the estimate</h2>${esc(error ? rpcErr(error) : "It's not there any more.")}</div></div>`; return; }
   EST.x = data;
   EST.opts = (data.estimate_options || []).sort((a, b) => a.sequence - b.sequence).map(o => ({ id: o.id, name: o.name, recommended: o.is_recommended,
-    lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price) })) }));
+    lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price), skip: (l.kit_skip || []).map(Number) })) }));
   if (!EST.opts.length) EST.opts = [{ name: "Option 1", recommended: true, lines: [] }];
   EST.dirty = false;
   EST.costErr = "";
@@ -5962,15 +5971,15 @@ const EST_MARGIN = 0.40;   // the margin to keep
 function estLineCost(l) {   // cost of one line: the item, plus the materials its kit adds (like on invoices: a $0 kit's parts carry its cost), plus labour
   const q = Number(l.qty) || 0, x = l.item_id ? ECOST.get(l.item_id) : null, rate = Number(COMPANY?.labour_cost_per_hour) || 55;
   if (!x) return { mat: 0, lab: 0, hrs: 0, known: !l.item_id ? false : ECOST.has(l.item_id) };
-  const parts = x.parts || [], partsCost = parts.reduce((s, p) => s + (Number(p.qty) || 0) * (Number(p.cost) || 0), 0);
+  const parts = (x.parts || []).filter(p => !(l.skip || []).includes(Number(p.id))), partsCost = parts.reduce((s, p) => s + (Number(p.qty) || 0) * (Number(p.cost) || 0), 0);
   const own = parts.length && !(Number(l.price) > 0) ? 0 : Number(x.cost) || 0;
   const hrs = (Number(x.hours) || 0) + parts.reduce((s, p) => s + (Number(p.qty) || 0) * (Number(p.hours) || 0), 0);
   return { mat: q * (own + partsCost), lab: q * hrs * rate, hrs: q * hrs, known: true };
 }
-function estCostHtml() {
+function estCostCard(o, i) {
   if (EST.costErr) return `<div class="ec-card"><b>Costing</b><p class="quiet">${/function|schema|PGRST202/i.test(EST.costErr) ? "This turns on after tonight's update." : esc(EST.costErr)}</p></div>`;
   const rate = Number(COMPANY?.labour_cost_per_hour) || 55;
-  return `<div class="ec-head">Costing <span class="quiet">only you see this</span></div>` + EST.opts.map((o, i) => {
+  return [o].map(o => {
     const price = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
     const cs = o.lines.map(estLineCost), mat = cs.reduce((s, c) => s + c.mat, 0), lab = cs.reduce((s, c) => s + c.lab, 0), hrs = cs.reduce((s, c) => s + c.hrs, 0);
     const cost = mat + lab, profit = price - cost, margin = price > 0 ? profit / price : null;
@@ -5978,7 +5987,7 @@ function estCostHtml() {
     const own = o.lines.filter(l => !l.item_id && (Number(l.qty) || 0) * (Number(l.price) || 0)).length;
     const ok = margin != null && margin >= EST_MARGIN - 0.0005;
     return `<div class="ec-card ${margin == null ? "" : ok ? "ok" : "low"}">
-      <div class="ec-title">Option ${i + 1} <b>${esc(o.name || "")}</b></div>
+      <div class="ec-title">Costing <b>${esc(o.name || "Option " + (i + 1))}</b> <span class="quiet">only you see this</span></div>
       <div class="ec-row"><span>Price before HST</span><b>${money(price)}</b></div>
       <div class="ec-row"><span>Materials</span><span>${money(mat)}</span></div>
       <div class="ec-row"><span>Labour <span class="quiet">${hrs ? (Math.round(hrs * 10) / 10) + " h × " + money(rate) : ""}</span></span><span>${money(lab)}</span></div>
@@ -5991,9 +6000,11 @@ function estCostHtml() {
     </div>`; }).join("");
 }
 // the materials an item's kit adds, under its line (owners only, never printed)
-const estParts = l => { if (!estCanCost() || !l.item_id) return ""; const x = ECOST.get(l.item_id); if (!x || !(x.parts || []).length) return "";
-  const q = Number(l.qty) || 1;
-  return `<details class="est-parts"><summary>Added materials (${x.parts.length})</summary><ul>${x.parts.map(p => `<li><span>${esc(pbName(p.name))}${p.sku ? ` <span class="quiet">${esc(p.sku)}</span>` : ""}</span><span class="num">× ${+(Number(p.qty) * q).toFixed(2)}</span><span class="num">${money(Number(p.qty) * q * (Number(p.cost) || 0))}</span></li>`).join("")}</ul></details>`; };
+const estParts = (l, i, k, closed) => { if (!estCanCost() || !l.item_id) return ""; const x = ECOST.get(l.item_id); if (!x || !(x.parts || []).length) return "";
+  const q = Number(l.qty) || 1, skip = l.skip || [], on = x.parts.filter(p => !skip.includes(Number(p.id))).length;
+  return `<details class="est-parts" data-pk="${i}:${k}" ${(EST.partsOpen || new Set()).has(i + ":" + k) ? "open" : ""}><summary>Added materials (${on}${on < x.parts.length ? ` of ${x.parts.length}` : ""})</summary><ul>${x.parts.map(p => { const off = skip.includes(Number(p.id));
+    return `<li class="${off ? "off" : ""}"><span>${esc(pbName(p.name))}${p.sku ? ` <span class="quiet">${esc(p.sku)}</span>` : ""}</span><span class="num">× ${+(Number(p.qty) * q).toFixed(2)}</span><span class="num">${off ? "taken off" : money(Number(p.qty) * q * (Number(p.cost) || 0))}</span>
+      ${closed ? "" : off ? `<button type="button" class="link" data-punskip="${i}:${k}:${p.id}" title="Put it back">↺</button>` : `<button type="button" class="link danger" data-pskip="${i}:${k}:${p.id}" title="Take it off this estimate">✕</button>`}</li>`; }).join("")}</ul></details>`; };
 // our logo (kept next to the app on the website); a logo set in the company settings wins
 const REID_LOGO = "https://carlo-reid.github.io/reid-app/reid-logo.png";
 const coLogo = c => (c && c.logo_url) || REID_LOGO;
@@ -6024,7 +6035,7 @@ function renderEstEdit() {
       <button class="btn quiet-btn est-cancel-btn" type="button" id="est-cancel">Cancel estimate</button>`}
     </div>
     <div class="staff-msg ${/^Not|Couldn/.test(EST.msg) ? "err" : "ok"} est-tmsg" id="est-msg" role="status">${esc(EST.msg || "")}</div>
-    <div class="est-wrap ${estCanCost() ? "with-cost" : ""}">${estCanCost() ? `<aside class="est-cost" id="est-cost">${estCostHtml()}</aside>` : ""}
+    <div class="est-wrap ${estCanCost() ? "with-cost" : ""}">
     <div class="est-sheet">
       <header class="es-top">
         <div class="es-brand">${brand ? (brand.branding_logo_url ? `<img class="es-logo" src="${esc(brand.branding_logo_url)}" alt="${esc(brand.branding_name || brand.name)}">` : `<div class="es-word">${esc(brand.branding_name || brand.name)}</div>`)
@@ -6042,13 +6053,13 @@ function renderEstEdit() {
       </div>
       ${closed ? `<p class="es-hint">This estimate is ${x.cancelled_at ? "cancelled" : x.status === "accepted" ? "sold" : "closed"}, so it can't be changed.</p>`
         : `<p class="es-hint no-print">Add parts and equipment from the price book to each option. Up to 3 options (for example Good, Better, Best); the customer picks one.</p>`}
-      <div class="est-opts">${EST.opts.map((o, i) => `<section class="est-opt ${o.recommended ? "rec" : ""}" data-oi="${i}">
+      <div class="est-opts">${EST.opts.map((o, i) => `<section class="est-opt ${o.recommended ? "rec" : ""}" data-oi="${i}">${estCanCost() ? `<div class="ec-float" data-ec="${i}"><div class="ec-stick">${estCostCard(o, i)}</div></div>` : ""}
         <div class="est-oh"><span class="es-on">Option ${i + 1}</span><input class="est-oname" data-oname="${i}" value="${esc(o.name)}" maxlength="60" ${closed ? "disabled" : ""} aria-label="Option name">
           ${closed ? (x.accepted_option_id && x.accepted_option_id === o.id ? `<span class="est-won">✓ Picked</span>` : "") : `<label class="est-rec"><input type="radio" name="est-rec" data-orec="${i}" ${o.recommended ? "checked" : ""}> Recommended</label>
           ${EST.opts.length > 1 ? `<button class="link danger" type="button" data-odel="${i}" title="Remove this option">✕</button>` : ""}`}</div>
         <table class="est-lines"><thead><tr><th class="est-pic"></th><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th><th></th></tr></thead><tbody>${o.lines.map((l, k) => `<tr>
           <td class="est-pic">${estPic(l.item_id)}</td>
-          <td><input class="est-d" data-ld="${i}:${k}" value="${esc(l.description)}" ${closed ? "disabled" : ""} aria-label="What">${estDesc(l.item_id)}${estParts(l)}</td>
+          <td><input class="est-d" data-ld="${i}:${k}" value="${esc(l.description)}" ${closed ? "disabled" : ""} aria-label="What">${estDesc(l.item_id)}${estParts(l, i, k, closed)}</td>
           <td class="r"><input class="est-q" data-lq="${i}:${k}" value="${l.qty}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="How many"></td>
           <td class="r"><input class="est-p" data-lp="${i}:${k}" value="${Number(l.price).toFixed(2)}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="Price each"></td>
           <td class="r num est-lt">${money((Number(l.qty) || 0) * (Number(l.price) || 0))}</td>
@@ -6066,7 +6077,7 @@ function renderEstEdit() {
 }
 function wireEstEdit() {
   const m = $("#main"), ij = s => s.split(":").map(Number), dirty = () => { EST.dirty = true; };
-  const refreshTotals = i => { const ec = $("#est-cost"); if (ec) ec.innerHTML = estCostHtml(); const sec = m.querySelector(`[data-oi="${i}"]`), o = EST.opts[i], tot = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
+  const refreshTotals = i => { const ec = m.querySelector(`[data-ec="${i}"] .ec-stick`); if (ec) ec.innerHTML = estCostCard(EST.opts[i], i); const sec = m.querySelector(`[data-oi="${i}"]`), o = EST.opts[i], tot = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
     sec.querySelectorAll(".est-lt").forEach((td, k) => { const l = o.lines[k]; td.textContent = money((Number(l.qty) || 0) * (Number(l.price) || 0)); });
     const b = sec.querySelectorAll(".est-tot b"); b[0].textContent = money(tot); b[1].textContent = money(tot * 0.13); b[2].textContent = money(tot * 1.13); };
   m.querySelectorAll("[data-oname]").forEach(el => el.addEventListener("input", () => { EST.opts[Number(el.dataset.oname)].name = el.value; dirty(); }));
@@ -6078,6 +6089,11 @@ function wireEstEdit() {
   m.querySelectorAll("[data-ldel]").forEach(el => el.addEventListener("click", () => { const [i, k] = ij(el.dataset.ldel); EST.opts[i].lines.splice(k, 1); dirty(); renderEstEdit(); }));
   m.querySelectorAll("[data-oline]").forEach(el => el.addEventListener("click", () => { const i = Number(el.dataset.oline); EST.opts[i].lines.push({ item_id: null, description: "", qty: 1, price: 0 }); dirty(); renderEstEdit();
     const ins = m.querySelectorAll(`[data-oi="${i}"] .est-d`); ins[ins.length - 1]?.focus(); }));
+  m.querySelectorAll(".est-parts").forEach(d => d.addEventListener("toggle", () => { EST.partsOpen = EST.partsOpen || new Set(); d.open ? EST.partsOpen.add(d.dataset.pk) : EST.partsOpen.delete(d.dataset.pk); }));
+  m.querySelectorAll("[data-pskip], [data-punskip]").forEach(b => b.addEventListener("click", () => {
+    const [i, k, pid] = (b.dataset.pskip || b.dataset.punskip).split(":").map(Number), l = EST.opts[i].lines[k];
+    l.skip = (l.skip || []).filter(x => x !== pid); if (b.dataset.pskip) l.skip.push(pid);
+    EST.partsOpen = EST.partsOpen || new Set(); EST.partsOpen.add(i + ":" + k); dirty(); renderEstEdit(); }));
   m.querySelectorAll("[data-obrowse]").forEach(b => b.addEventListener("click", () => openPbBrowse(Number(b.dataset.obrowse))));
   m.querySelectorAll("[data-opics]").forEach(b => b.addEventListener("click", () => openPbBrowse(Number(b.dataset.opics), "pics")));
   $("#est-newopt")?.addEventListener("click", () => { const names = ["Good", "Better", "Best"]; if (EST.opts.length === 1 && /^option 1$/i.test(EST.opts[0].name)) EST.opts[0].name = "Good";
@@ -6091,7 +6107,7 @@ function wireEstEdit() {
         res.querySelectorAll("[data-hit]").forEach(b => b.addEventListener("click", () => { const h = JSON.parse(b.dataset.hit); EST.opts[i].lines.push({ item_id: h.id, description: h.name, qty: 1, price: h.price }); dirty(); renderEstEdit();
           m.querySelector(`[data-ofind="${i}"]`)?.focus(); })); }, 250); }); });
   const say = (t, err) => { const el = $("#est-msg"); if (el) { el.className = "staff-msg " + (err ? "err" : "ok"); el.textContent = t; } };
-  const save = async sent => { const p = { options: EST.opts.map(o => ({ name: o.name, recommended: !!o.recommended, lines: o.lines.filter(l => String(l.description).trim() || l.item_id).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.qty) || 1, price: Number(l.price) || 0 })) })) };
+  const save = async sent => { const p = { options: EST.opts.map(o => ({ name: o.name, recommended: !!o.recommended, lines: o.lines.filter(l => String(l.description).trim() || l.item_id).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.qty) || 1, price: Number(l.price) || 0, skip: l.skip || [] })) })) };
     if (sent) p.sent = true;
     say("Saving…"); const { error } = await db.rpc("est_save", { p_id: EST.id, p });
     if (error) { say("Not saved: " + rpcErr(error), true); return false; } EST.dirty = false; return true; };
@@ -15682,6 +15698,7 @@ document.addEventListener("keydown", e => {
 let COMPANY = null;
 const PAY_NAMES = { cash: "Cash", cheque: "Cheque", card: "Card", credit: "Credit card", e_transfer: "e-Transfer", eft: "EFT", autopay: "Auto-pay", financing: "Financing" };
 function closeInvoice() { $("#inv-view").classList.add("hidden"); document.body.classList.remove("inv-open"); }
+document.addEventListener("keydown", e => { if (e.key === "Escape" && document.body.classList.contains("inv-open") && !document.querySelector(".ask-back, .askc-back")) closeInvoice(); });
 let INV_COST_OPEN = false;
 try { INV_COST_OPEN = sessionStorage.getItem("invCostOpen") === "1"; } catch (e) {}
 async function showInvoiceCosting(inv, msg) {
