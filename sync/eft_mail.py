@@ -271,6 +271,16 @@ def main():
                              "waiting" if out else "unreadable", mail_id, file_ids.get(fname)))
                 lists += cur.rowcount
             emails += 1
+        # a short summary for the run page: counts and the column names found (never names, numbers or bank details)
+        cur.execute("""SELECT status, count(*), coalesce(sum(jsonb_array_length(rows)), 0),
+                              string_agg(DISTINCT coalesce(head::text, '-') || ' / ' || coalesce(note, ''), ' | ')
+                       FROM pap_inbox GROUP BY status""")
+        for st, n, r, h in cur.fetchall():
+            say(f"Lists {st}: {n} file(s), {r} row(s). Columns found / note: {h[:400]}")
+        cur.execute("SELECT count(*), count(*) FILTER (WHERE EXISTS (SELECT 1 FROM pap_mail_file f WHERE f.mail_id = m.id)) FROM pap_mail m")
+        n, nf = cur.fetchone()
+        cur.execute("SELECT string_agg(DISTINCT lower(substring(file_name from '\\.[^.]+$')), ', ') FROM pap_mail_file")
+        say(f"Emails kept: {n} ({nf} with attachments; attachment types: {cur.fetchone()[0]})")
         set_state(cur, "last_error", None)
         set_state(cur, "last_check", datetime.datetime.now(datetime.timezone.utc).isoformat())
         say(f"EFT mail checked: {emails} new email{'s' if emails != 1 else ''}, {lists} list{'s' if lists != 1 else ''} waiting for review (all emails kept).")
