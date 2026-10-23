@@ -3766,6 +3766,8 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .sec-find-item { cursor: pointer; border: 1px solid transparent; transition: background .12s, border-color .12s; }
 .sec-find-item:hover, .sec-find-item:focus-visible { background: rgba(31,122,77,.12); border-color: rgba(31,122,77,.45); outline: none; }
 .sec-find-item.busy { opacity: .6; pointer-events: none; }
+.sec-find-group { font-size: 11.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; opacity: .6; margin: 6px 2px 0; }
+.sec-find-item mark { background: #fde68a; color: inherit; padding: 0 1px; border-radius: 3px; }
 .sec-badge-s { display: inline-block; margin-left: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; vertical-align: 1px; white-space: nowrap; }
 .sec-badge-s.mon { background: #1e3a8a; color: #fff; } .sec-badge-s.sec { background: #dbeafe; color: #1e3a8a; } .sec-badge-s.pap { background: #dcfce7; color: #14532d; }
 .sec-find-item.sec-has-sec { box-shadow: inset 4px 0 0 #1e3a8a; }
@@ -12633,15 +12635,39 @@ function secGuessQ(r) {
 }
 async function secFindRun() {
   const F = SEC.find; if (!F) return;
-  const q = F.q.trim(); if (q.length < 2) { SEC.find = { q: F.q, rows: [] }; return; }
-  const digits = q.replace(/\D/g, ""), isPhone = digits.length >= 7 && !/[a-z]/i.test(q);
-  const { data, error } = await db.rpc("search_customers", isPhone ? { p_phone: digits, p_limit: 25 } : { p_any: q, p_limit: 25 });
-  if (SEC.find?.q !== F.q) return;
-  const rows = error ? [] : (data || []);
-  // which of them have a security account (badges)
-  const fl = rows.length ? await db.rpc("pap_security_flags", { p_ids: rows.map(c => Number(c.customer_id)) }) : null;
-  if (SEC.find?.q !== F.q) return;
-  SEC.find = { q: F.q, rows, flags: fl && !fl.error ? (fl.data || {}) : {}, error: error ? rpcErr(error) : null, total: rows[0] ? Number(rows[0].total_count) : 0 };
+  const q = F.q.trim(); if (!q) { SEC.find = { q: F.q, rows: [], total: 0 }; return; }
+  const { data, error } = await db.rpc("pap_find_customers", { p_q: q, p_limit: 25 });
+  if (SEC.find?.q !== F.q) return;   // they've typed more since
+  const rows = error ? [] : (data?.rows || []), flags = {}; rows.forEach(c => { flags[c.customer_id] = c.flags; });
+  SEC.find = { q: F.q, rows, flags, error: error ? rpcErr(error) : null, total: Number(data?.total || 0) };
+}
+// the results list on its own, so it can update while you type without redrawing the page
+function secFindListHtml(F) {
+  if (!F) return "";
+  if (F.loading && !F.rows) return `<div class="quiet">Searching…</div>`;
+  if (F.error) return `<div class="staff-msg err">${esc(F.error)}</div>`;
+  if (!F.q.trim()) return `<div class="quiet">Start typing a name, phone, street or customer #.</div>`;
+  if (!F.rows?.length) return F.loading ? `<div class="quiet">Searching…</div>` : `<div class="quiet">No customers match. Try just the last name, the street name, or a phone number.</div>`;
+  const q = F.q.trim().toLowerCase(), words = q.split(/\s+/).filter(Boolean);
+  const mark = name => { let h = esc(name || ""); words.forEach(w => { if (w.length) h = h.replace(new RegExp("(" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/&/g, "&amp;") + ")", "ig"), "<mark>$1</mark>"); }); return h; };
+  const groups = { 1: "Starts with", 2: "A word starts with", 3: "Has it in the name", 4: "Phone, address or customer #" };
+  let last = 0;
+  return `<div class="sec-find-list">${F.rows.map(c => { const g = Number(c.rank) !== last ? (last = Number(c.rank), `<div class="sec-find-group">${groups[c.rank] || ""} “${esc(F.q.trim())}”</div>`) : "";
+      return g + `<div class="sec-find-item${F.flags?.[c.customer_id]?.security ? " sec-has-sec" : ""}" role="button" tabindex="0" data-sec-verify="${c.customer_id}" title="Open ${esc(c.display_name || "")} to check it's them"><div><strong>${mark(c.display_name)}</strong> ${secBadges(F.flags?.[c.customer_id])}${c.status && c.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}
+        <div class="quiet">${esc([c.customer_number ? "#" + c.customer_number : "", [c.street, c.city].filter(Boolean).join(", "), c.phone ? phoneFmt(c.phone) : ""].filter(Boolean).join(" · "))}</div></div>
+        <div class="sec-find-go"><span class="btn quiet-btn sec-find-pick">Check this customer ›</span></div></div>`; }).join("")}
+    ${F.total > F.rows.length ? `<div class="quiet">${F.total.toLocaleString()} matches, showing the best ${F.rows.length}. Keep typing to narrow it down.</div>` : ""}</div>`;
+}
+function secFindWire() {
+  document.querySelectorAll("#sec-find-res [data-sec-verify]").forEach(b => {
+    const go = () => secVerify(SEC.openRow, Number(b.dataset.secVerify));
+    b.addEventListener("click", go); b.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } }); });
+}
+// typing: search right away (a short pause between keys so it isn't once per letter)
+function secFindType(val) {
+  SEC.find = { ...(SEC.find || {}), q: val, loading: true, error: null };
+  clearTimeout(SEC._findT);
+  SEC._findT = setTimeout(async () => { await secFindRun(); const box = document.getElementById("sec-find-res"); if (box && SEC.find) { box.innerHTML = secFindListHtml(SEC.find); secFindWire(); } }, 180);
 }
 // the badges: Monitoring (Security Monitoring invoices), Security (any security work), PAP
 function secBadges(f) {
@@ -12687,14 +12713,9 @@ function secPanelHtml(r, span) {
   const F = SEC.find, wantFind = !r.customer_id || F;
   const find = !wantFind ? "" : `<div class="sec-find">
       <div class="sec-find-title">${r.customer_id ? "Not the right customer? Find the right one:" : "Not found automatically. Find this customer:"}</div>
-      <form class="sec-find-bar" id="sec-find-form"><input type="search" id="sec-find-q" value="${esc(F?.q ?? secGuessQ(r))}" placeholder="Name, phone, address, customer #…" aria-label="Find a customer">
-        <button class="btn" type="submit">Search</button>${r.customer_id ? `<button class="link" type="button" id="sec-find-cancel">Cancel</button>` : ""}</form>
-      ${F?.loading ? `<div class="quiet">Searching…</div>` : F?.error ? `<div class="staff-msg err">${esc(F.error)}</div>`
-        : F && !F.rows?.length ? `<div class="quiet">No customers match. Try just the last name, the street name, or a phone number.</div>`
-        : F ? `<div class="sec-find-list">${F.rows.map(c => `<div class="sec-find-item${F.flags?.[c.customer_id]?.security ? " sec-has-sec" : ""}" role="button" tabindex="0" data-sec-verify="${c.customer_id}" title="Open ${esc(c.display_name || "")} to check it's them"><div><strong>${esc(c.display_name || "")}</strong> ${secBadges(F.flags?.[c.customer_id])}${c.status && c.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}
-              <div class="quiet">${esc([c.street, c.city].filter(Boolean).join(", "))}${c.phone ? " · " + esc(phoneFmt(c.phone)) : ""}</div></div>
-              <div class="sec-find-go"><span class="btn quiet-btn sec-find-pick">Check this customer ›</span></div></div>`).join("")}
-            ${F.total > F.rows.length ? `<div class="quiet">${F.total.toLocaleString()} matches, showing ${F.rows.length}. Add more words to narrow it down.</div>` : ""}</div>` : ""}
+      <form class="sec-find-bar" id="sec-find-form" autocomplete="off"><input type="search" id="sec-find-q" value="${esc(F?.q ?? secGuessQ(r))}" placeholder="Start typing a name, phone, street or customer #…" aria-label="Find a customer">
+        ${r.customer_id ? `<button class="link" type="button" id="sec-find-cancel">Cancel</button>` : ""}</form>
+      <div id="sec-find-res">${secFindListHtml(F || { q: secGuessQ(r), loading: true })}</div>
       <p class="quiet">Click a customer to open their page and check it's them. Then click the green Connect button, or Wrong customer to come back here. A connection is remembered, so they match on their own in next month's file too.</p></div>`;
   let card = "";
   if (r.customer_id) {
@@ -12990,12 +13011,11 @@ function wireSecurity() {
   $("#sec-fv")?.addEventListener("change", async e => { SEC.fv = Number(e.target.value); SEC.view = null; SEC.openRow = null; SEC.find = null; renderSecurity(); await secFileLoad(); renderSecurity(); });
   document.querySelectorAll("[data-sec-row]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); secToggleRow(Number(b.dataset.secRow)); }));
   document.querySelectorAll("[data-sec-rowclick]").forEach(tr => tr.addEventListener("click", e => { if (e.target.closest("button, a, input, select")) return; secToggleRow(Number(tr.dataset.secRowclick)); }));
-  $("#sec-find-form")?.addEventListener("submit", async e => { e.preventDefault(); SEC.find = { q: $("#sec-find-q").value, loading: true }; renderSecurity(); await secFindRun(); renderSecurity(); const n = $("#sec-find-q"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } });
+  $("#sec-find-form")?.addEventListener("submit", e => { e.preventDefault(); secFindType($("#sec-find-q").value); });
+  $("#sec-find-q")?.addEventListener("input", e => secFindType(e.target.value));
   $("#sec-find-start")?.addEventListener("click", async () => { const r = SEC.view?.rows?.[SEC.openRow]; if (!r) return; SEC.find = { q: secGuessQ(r), loading: true }; renderSecurity(); await secFindRun(); renderSecurity(); });
   $("#sec-find-cancel")?.addEventListener("click", () => { SEC.find = null; renderSecurity(); });
-  document.querySelectorAll("[data-sec-verify]").forEach(b => {
-    const go = () => secVerify(SEC.openRow, Number(b.dataset.secVerify));
-    b.addEventListener("click", go); b.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } }); });
+  secFindWire();
   $("[data-sec-unlink]")?.addEventListener("click", () => secLink(SEC.openRow, null));
   document.querySelectorAll("[data-sec-inv]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.secInv))));
   document.querySelectorAll("[data-sec-setpap]").forEach(b => b.addEventListener("click", async () => {
