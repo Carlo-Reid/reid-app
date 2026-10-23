@@ -118,7 +118,16 @@ def sheets_of(name, data):
             rows = []
             for sh in wb.sheets():
                 for r in range(sh.nrows):
-                    rows.append([cell(v) for v in sh.row_values(r)])
+                    out = []
+                    for c in range(sh.ncols):
+                        x = sh.cell(r, c)
+                        if x.ctype == xlrd.XL_CELL_DATE:   # Excel keeps dates as numbers: show them like the bank does
+                            try:
+                                out.append(xlrd.xldate_as_datetime(x.value, wb.datemode).strftime("%d-%b-%Y")); continue
+                            except Exception:
+                                pass
+                        out.append(cell(x.value))
+                    rows.append(out)
             return rows
         except Exception:
             text = data.decode("utf-8", "replace")   # a tab-separated text file named .xls
@@ -142,6 +151,7 @@ def guess(lc, tests, skip=()):
     return -1
 
 
+READER = "2"
 HEADWORD = r"customer|cust\b|client|name|reference|\bref\b|phone|amount|response|status|transaction|date|type|payor|payer|settled"
 BANKCOL = r"bank|transit|institution|routing|branch|acct|account|iban|swift|card"
 
@@ -150,8 +160,8 @@ def read_list(name, data):
     """The file's own table (every column except bank details) plus, for matching, per row:
     customer #, name, phone, amount, response."""
     allrows = sheets_of(name, data)
-    # the heading row: the one in the first 25 with the most heading words
-    score = [sum(1 for v in r if v and len(v) <= 40 and re.search(HEADWORD, v, re.I)) for r in allrows[:25]]
+    # the heading row: the one near the top with the most heading words (bank reports put totals above the table)
+    score = [sum(1 for v in r if v and len(v) <= 40 and re.search(HEADWORD, v, re.I)) for r in allrows[:200]]
     hi = max(range(len(score)), key=lambda k: (score[k], -k)) if score and max(score) >= 1 else 0
     head = [v.strip() for v in (allrows[hi] if allrows else [])]
     lc = [h.lower() for h in head]
@@ -190,8 +200,11 @@ def read_list(name, data):
 
 def reread(cur):
     """Emailed lists that couldn't be read (or were read before the whole table was kept): read them again from the saved file."""
+    # READER: bump it when the reader gets better, so lists still waiting are read again once
+    cur.execute("SELECT coalesce((SELECT value FROM pap_inbox_state WHERE key = 'reader'), '0')")
+    again = cur.fetchone()[0] != READER
     cur.execute("""SELECT i.id, f.file_name, f.data FROM pap_inbox i JOIN pap_mail_file f ON f.id = i.file_id
-                   WHERE i.tbl IS NULL AND i.status IN ('unreadable', 'waiting') ORDER BY i.id LIMIT 50""")
+                   WHERE (i.tbl IS NULL OR %s) AND i.status IN ('unreadable', 'waiting') ORDER BY i.id LIMIT 50""", (again,))
     n = 0
     for iid, fname, fdata in cur.fetchall():
         try:
@@ -202,6 +215,10 @@ def reread(cur):
             cur.execute("UPDATE pap_inbox SET head = %s, rows = %s, cols = %s, tbl = %s, note = NULL, status = 'waiting' WHERE id = %s",
                         (json.dumps(head), json.dumps(out), json.dumps(cols), json.dumps(tbl), iid))
             n += 1
+        elif note:
+            cur.execute("UPDATE pap_inbox SET head = %s, rows = NULL, cols = NULL, tbl = NULL, note = %s, status = 'unreadable' WHERE id = %s",
+                        (json.dumps(head) if head else None, note, iid))
+    set_state(cur, "reader", READER)
     return n
 
 
