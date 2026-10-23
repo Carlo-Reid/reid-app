@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-22.225602">
+<meta name="app-version" content="2026-10-22.230938">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -6007,15 +6007,25 @@ async function estCosting(ids) {
 const EST_MARGIN = 0.40;   // the margin to keep
 function estLineCost(l) {   // cost of one line: the item, plus the materials its kit adds (like on invoices: a $0 kit's parts carry its cost), plus labour
   const q = Number(l.qty) || 0, x = l.item_id ? ECOST.get(l.item_id) : null, rate = Number(COMPANY?.labour_cost_per_hour) || 55;
-  if (!x) return { mat: 0, lab: 0, hrs: 0, known: !l.item_id ? false : ECOST.has(l.item_id) };
+  if (!x) return { mat: 0, lab: 0, hrs: 0, war: 0, off: 0, known: !l.item_id ? false : ECOST.has(l.item_id) };
   const parts = (x.parts || []).filter(p => !(l.skip || []).includes(Number(p.id))), partsCost = parts.reduce((s, p) => s + (Number(p.qty) || 0) * (Number(p.cost) || 0), 0);
   const own = parts.length && !(Number(l.price) > 0) ? 0 : Number(x.cost) || 0;
+  // priced by a formula (Pricing formulas page): add its thermostat/coil, warranty and office; its material and labour
+  // stand in when the item has no kit parts / no labour of its own
+  // parts in the kit that stand for warranty or the thermostat are counted as those (not twice with the formula's amounts)
+  const f = x.formula, fx = n => f ? Number(f[n]) || 0 : 0, pc = p => (Number(p.qty) || 0) * (Number(p.cost) || 0);
+  const isWar = p => /warrant/i.test(p.name || ""), isStat = p => /thermostat|\bstat\b/i.test(p.name || "") && !/wire|wiring|guard|cover|plate|base/i.test(p.name || "") && Number(p.cost) >= 50;
+  const allParts = x.parts || [], warParts = parts.filter(isWar).reduce((s, p) => s + pc(p), 0);
+  const hasWar = allParts.some(isWar), hasStat = allParts.some(isStat);
+  const mat = own + (f && !hasStat ? fx("addon") : 0) + (f && !allParts.length ? fx("material") : partsCost - warParts);
+  const war = (f && !hasWar ? fx("warranty") : 0) + warParts, off = fx("office");
   if (x.lab && x.lab.hours != null) {   // the kit's labour (hours to install × techs × cost per hour), or the item's own override
     const h = (Number(x.lab.hours) || 0) * (Number(x.lab.techs) || 1), r = x.lab.rate != null ? Number(x.lab.rate) : rate;
-    return { mat: q * (own + partsCost), lab: q * h * r, hrs: q * h, known: true };
+    return { mat: q * mat, lab: q * h * r, hrs: q * h, war: q * war, off: q * off, known: true };
   }
+  if (f) return { mat: q * mat, lab: q * fx("labour"), hrs: 0, war: q * war, off: q * off, known: true };
   const hrs = (Number(x.hours) || 0) + parts.reduce((s, p) => s + (Number(p.qty) || 0) * (Number(p.hours) || 0), 0);
-  return { mat: q * (own + partsCost), lab: q * hrs * rate, hrs: q * hrs, known: true };
+  return { mat: q * mat, lab: q * hrs * rate, hrs: q * hrs, war: 0, off: 0, known: true };
 }
 function estCostCard(o, i) {
   if (EST.costErr) return `<div class="ec-card"><b>Costing</b><p class="quiet">${/function|schema|PGRST202/i.test(EST.costErr) ? "This turns on after tonight's update." : esc(EST.costErr)}</p></div>`;
@@ -6023,7 +6033,8 @@ function estCostCard(o, i) {
   return [o].map(o => {
     const price = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
     const cs = o.lines.map(estLineCost), mat = cs.reduce((s, c) => s + c.mat, 0), lab = cs.reduce((s, c) => s + c.lab, 0), hrs = cs.reduce((s, c) => s + c.hrs, 0);
-    const cost = mat + lab, profit = price - cost, margin = price > 0 ? profit / price : null;
+    const war = cs.reduce((s, c) => s + (c.war || 0), 0), off = cs.reduce((s, c) => s + (c.off || 0), 0);
+    const cost = mat + lab + war + off, profit = price - cost, margin = price > 0 ? profit / price : null;
     const at40 = cost / (1 - EST_MARGIN), roomUp = at40 - price, maxDisc = price - at40;
     const own = o.lines.filter(l => !l.item_id && !l.disc && (Number(l.qty) || 0) * (Number(l.price) || 0)).length;
     const ok = margin != null && margin >= EST_MARGIN - 0.0005;
@@ -6031,7 +6042,9 @@ function estCostCard(o, i) {
       <div class="ec-title">Costing <b>${esc(o.name || "Option " + (i + 1))}</b> <span class="quiet">only you see this</span></div>
       <div class="ec-row"><span>Price before HST</span><b>${money(price)}</b></div>
       <div class="ec-row"><span>Materials</span><span>${money(mat)}</span></div>
-      <div class="ec-row"><span>Labour <span class="quiet">${hrs ? (Math.round(hrs * 10) / 10) + " tech-hours" : ""}</span></span><span>${money(lab)}</span></div>
+      <div class="ec-row"><span>Labour <span class="quiet">${hrs ? (Math.round(hrs * 10) / 10) + " tech-hours" : lab ? "from the pricing formula" : ""}</span></span><span>${money(lab)}</span></div>
+      ${war ? `<div class="ec-row"><span>Warranty</span><span>${money(war)}</span></div>` : ""}
+      ${off ? `<div class="ec-row"><span>Office <span class="quiet">from the pricing formula</span></span><span>${money(off)}</span></div>` : ""}
       <div class="ec-row ec-tot"><span>Total cost</span><b>${money(cost)}</b></div>
       <div class="ec-row"><span>Profit</span><b>${money(profit)}</b></div>
       <div class="ec-margin">${margin == null ? `<span class="quiet">Add items to see the margin.</span>` : `<span class="ec-pct">${(margin * 100).toFixed(1)}%</span> margin

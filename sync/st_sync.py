@@ -2064,6 +2064,27 @@ GRANT EXECUTE ON FUNCTION public._item_labour(bigint), public.pb_addon_kits(), p
 
 NOTIFY pgrst, 'reload schema';
 
+
+-- =====================================================================
+-- Estimate costing matches the Pricing formulas page: an item priced by a formula also carries
+-- the formula's thermostat/coil, material, warranty, labour and office amounts.
+-- (The estimate uses the real kit parts for material and the kit's labour when those are set.)
+-- Safe to run more than once.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.est_costing(p_ids bigint[])
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL OR NOT public._can_see_costs() THEN '[]'::jsonb ELSE coalesce(jsonb_agg(jsonb_build_object(
+           'id', i.id, 'cost', i.unit_cost, 'hours', i.est_labour_hours, 'price', i.unit_price, 'lab', public._item_labour(i.id),
+           'formula', (SELECT jsonb_build_object('name', f.name, 'material', f.material, 'warranty', f.warranty, 'labour', f.labour, 'office', f.office,
+                         'addon', coalesce((SELECT a.unit_cost FROM pricebook_items a WHERE a.id = coalesce(i.formula_addon_item_id, f.addon_item_id)), 0),
+                         'addon_name', (SELECT a.name FROM pricebook_items a WHERE a.id = coalesce(i.formula_addon_item_id, f.addon_item_id)))
+                       FROM price_formulas f WHERE f.id = i.price_formula_id),
+           'parts', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'name', p.name, 'sku', p.sku, 'qty', kp.quantity, 'cost', p.unit_cost, 'hours', p.est_labour_hours) ORDER BY kp.seq), '[]'::jsonb)
+                     FROM public.pb_kit_parts(i.id) kp JOIN pricebook_items p ON p.id = kp.item_id))), '[]'::jsonb) END
+  FROM pricebook_items i WHERE i.id = ANY (p_ids[1:300])
+$$;
+NOTIFY pgrst, 'reload schema';
+
 """
 
 
