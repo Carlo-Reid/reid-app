@@ -3766,6 +3766,9 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .sec-find-item { cursor: pointer; border: 1px solid transparent; transition: background .12s, border-color .12s; }
 .sec-find-item:hover, .sec-find-item:focus-visible { background: rgba(31,122,77,.12); border-color: rgba(31,122,77,.45); outline: none; }
 .sec-find-item.busy { opacity: .6; pointer-events: none; }
+.sec-badge-s { display: inline-block; margin-left: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; vertical-align: 1px; white-space: nowrap; }
+.sec-badge-s.mon { background: #1e3a8a; color: #fff; } .sec-badge-s.sec { background: #dbeafe; color: #1e3a8a; } .sec-badge-s.pap { background: #dcfce7; color: #14532d; }
+.sec-find-item.sec-has-sec { box-shadow: inset 4px 0 0 #1e3a8a; }
 #sec-verify-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 9000; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; justify-content: center;
   max-width: min(920px, calc(100vw - 24px)); padding: 12px 16px; border-radius: 14px; background: #10261c; color: #fff; box-shadow: 0 10px 30px rgba(0,0,0,.35); font-size: 14.5px; }
 #sec-verify-bar .svb-eyebrow { display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; background: rgba(255,255,255,.15); padding: 2px 7px; border-radius: 6px; margin-right: 6px; }
@@ -12611,8 +12614,8 @@ async function secFileLoad() {
 async function secCard(id) {
   SEC.cards = SEC.cards || {};
   if (SEC.cards[id]) return SEC.cards[id];
-  const { data, error } = await db.rpc("pap_customer_card", { p_id: id });
-  SEC.cards[id] = error ? { error: rpcErr(error) } : data;
+  const [{ data, error }, fl] = await Promise.all([db.rpc("pap_customer_card", { p_id: id }), db.rpc("pap_security_flags", { p_ids: [Number(id)] })]);
+  SEC.cards[id] = error ? { error: rpcErr(error) } : { ...data, flags: fl.error ? null : fl.data?.[id] };
   return SEC.cards[id];
 }
 async function secToggleRow(k) {
@@ -12634,7 +12637,19 @@ async function secFindRun() {
   const digits = q.replace(/\D/g, ""), isPhone = digits.length >= 7 && !/[a-z]/i.test(q);
   const { data, error } = await db.rpc("search_customers", isPhone ? { p_phone: digits, p_limit: 25 } : { p_any: q, p_limit: 25 });
   if (SEC.find?.q !== F.q) return;
-  SEC.find = { q: F.q, rows: error ? [] : (data || []), error: error ? rpcErr(error) : null, total: data?.[0] ? Number(data[0].total_count) : 0 };
+  const rows = error ? [] : (data || []);
+  // which of them have a security account (badges)
+  const fl = rows.length ? await db.rpc("pap_security_flags", { p_ids: rows.map(c => Number(c.customer_id)) }) : null;
+  if (SEC.find?.q !== F.q) return;
+  SEC.find = { q: F.q, rows, flags: fl && !fl.error ? (fl.data || {}) : {}, error: error ? rpcErr(error) : null, total: rows[0] ? Number(rows[0].total_count) : 0 };
+}
+// the badges: Monitoring (Security Monitoring invoices), Security (any security work), PAP
+function secBadges(f) {
+  if (!f) return "";
+  const yr = d => d ? String(d).slice(0, 4) : "";
+  return (f.monitoring ? `<span class="sec-badge-s mon" title="Has Security Monitoring invoices${f.last_monitoring ? ", the last on " + esc(fmtDate(f.last_monitoring)) : ""}">🛡 Monitoring${f.last_monitoring ? " · " + yr(f.last_monitoring) : ""}</span>`
+    : f.security ? `<span class="sec-badge-s sec" title="Has had security work${f.last ? ", the last invoice on " + esc(fmtDate(f.last)) : ""}">🛡 Security${f.last ? " · " + yr(f.last) : ""}</span>` : "")
+    + (f.pap_list ? `<span class="sec-badge-s pap" title="On the ${esc(papName(f.pap_list))} PAP list">PAP · ${esc(papName(f.pap_list))}</span>` : "");
 }
 // open the customer's page to check them, with a bar on top: green Connect, or Wrong customer (back to the Security page)
 async function secVerify(k, customerId) {
@@ -12676,7 +12691,7 @@ function secPanelHtml(r, span) {
         <button class="btn" type="submit">Search</button>${r.customer_id ? `<button class="link" type="button" id="sec-find-cancel">Cancel</button>` : ""}</form>
       ${F?.loading ? `<div class="quiet">Searching…</div>` : F?.error ? `<div class="staff-msg err">${esc(F.error)}</div>`
         : F && !F.rows?.length ? `<div class="quiet">No customers match. Try just the last name, the street name, or a phone number.</div>`
-        : F ? `<div class="sec-find-list">${F.rows.map(c => `<div class="sec-find-item" role="button" tabindex="0" data-sec-verify="${c.customer_id}" title="Open ${esc(c.display_name || "")} to check it's them"><div><strong>${esc(c.display_name || "")}</strong>${c.status && c.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}
+        : F ? `<div class="sec-find-list">${F.rows.map(c => `<div class="sec-find-item${F.flags?.[c.customer_id]?.security ? " sec-has-sec" : ""}" role="button" tabindex="0" data-sec-verify="${c.customer_id}" title="Open ${esc(c.display_name || "")} to check it's them"><div><strong>${esc(c.display_name || "")}</strong> ${secBadges(F.flags?.[c.customer_id])}${c.status && c.status !== "active" ? ' <span class="quiet">(inactive)</span>' : ""}
               <div class="quiet">${esc([c.street, c.city].filter(Boolean).join(", "))}${c.phone ? " · " + esc(phoneFmt(c.phone)) : ""}</div></div>
               <div class="sec-find-go"><span class="btn quiet-btn sec-find-pick">Check this customer ›</span></div></div>`).join("")}
             ${F.total > F.rows.length ? `<div class="quiet">${F.total.toLocaleString()} matches, showing ${F.rows.length}. Add more words to narrow it down.</div>` : ""}</div>` : ""}
@@ -12685,7 +12700,7 @@ function secPanelHtml(r, span) {
   if (r.customer_id) {
     const C = SEC.cards?.[r.customer_id];
     card = !C ? `<div class="quiet">Loading the customer…</div>` : C.error ? `<div class="staff-msg err">${esc(C.error)}</div>` : `<div class="sec-card">
-      <div class="sec-card-head"><div><strong class="sec-card-name">${esc(C.name || "")}</strong> <span class="quiet">#${esc(C.number || "")}${C.status && C.status !== "active" ? " · " + esc(C.status) : ""}</span>
+      <div class="sec-card-head"><div><strong class="sec-card-name">${esc(C.name || "")}</strong> ${secBadges(C.flags ? { ...C.flags, pap_list: null } : null)} <span class="quiet">#${esc(C.number || "")}${C.status && C.status !== "active" ? " · " + esc(C.status) : ""}</span>
           <div class="quiet">Matched ${({ manual: "by hand", number: "by customer #", address: "by address", phone: "by phone", name: "by name" })[r.how] || ""}${r.how === "manual" ? ` · <button class="link" type="button" data-sec-unlink>Unlink</button>` : ""}</div></div>
         <div class="sec-card-acts"><button class="btn" type="button" data-sec-open="${C.id}">Open customer page</button>${!F ? `<button class="link" type="button" id="sec-find-start">Wrong customer?</button>` : ""}</div></div>
       <div class="sec-card-grid">
