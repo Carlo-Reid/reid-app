@@ -3751,6 +3751,9 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .pap-tag { display: inline-block; vertical-align: middle; margin-left: 10px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .02em; background: #e7f5ee; color: #1b6e43; border: 1px solid #b5e0c8; }
 .sec-safe { margin: 8px 0 0; font-size: 13px; }
 .sec-inbox .sec-safe { margin: 0 0 10px; }
+.ow-amt .cl-row { align-items: flex-end; } .ow-amt #ow-amt { width: 150px; }
+.ow-amt-msg { margin-top: 12px; } .ow-amt-table { margin-top: 8px; }
+mark.ow-amt-hit { background: #FDE68A; color: #3b2a00; padding: 1px 5px; border-radius: 4px; font-weight: 700; }
 .sec-mail-box { padding: 12px 14px; border-radius: 8px; background: rgba(127,127,127,.07); display: grid; gap: 4px; font-size: 13.5px; }
 .sec-mail-body { white-space: pre-wrap; word-break: break-word; font: inherit; margin: 8px 0; max-height: 420px; overflow: auto; padding: 10px; border-radius: 6px; background: rgba(127,127,127,.06); }
 .sec-mail-files { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
@@ -9177,6 +9180,46 @@ function renderOwList() {
   const qi = $("#owl-q"); qi.addEventListener("input", () => { OWL.q = qi.value; clearTimeout(OWL.t); OWL.t = setTimeout(() => { renderOwList(); const x = $("#owl-q"); x.focus(); x.setSelectionRange(x.value.length, x.value.length); }, 250); });
 }
 
+// ---- Find by amount: every invoice (any date, paid or not) with that exact total, amount paid or balance owing ----
+function owAmtParse(v) { const t = String(v || "").replace(/[$,\s]/g, ""); if (!/^-?\d*\.?\d{0,2}$/.test(t) || !/\d/.test(t)) return null; return Math.round(Number(t) * 100) / 100; }
+async function owAmtFind() {
+  const v = owAmtParse(OW.amtQ);
+  if (v == null) { OW.amt = { error: "Type an amount, like 523.45" }; return renderOwing(); }
+  OW.amt = { loading: true, amount: v }; renderOwing();
+  const { data, error } = await db.rpc("invoice_amount_search", { p_amount: v });
+  if (OW.amt?.amount !== v) return;
+  OW.amt = error ? { amount: v, error: /PGRST202|could not find the function/i.test(error.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(error) } : { amount: v, ...data };
+  if (document.querySelector(".owing")) renderOwing();
+}
+function owAmtHtml() {
+  const A = OW.amt, rows = A?.rows || [];
+  const hit = (on, val) => on ? `<mark class="ow-amt-hit">${money(val)}</mark>` : money(val);
+  const res = !A ? "" : A.loading ? `<div class="quiet ow-amt-msg">Looking for ${money(A.amount)}…</div>`
+    : A.error ? `<div class="staff-msg err ow-amt-msg" role="status">${esc(A.error)}</div>`
+    : !rows.length ? `<div class="quiet ow-amt-msg">No invoices for exactly ${money(A.amount)}.</div>`
+    : `<div class="ow-amt-msg"><b>${A.n.toLocaleString()} invoice${A.n === 1 ? "" : "s"}</b> for exactly ${money(A.amount)}${A.n > rows.length ? ` (showing the newest ${rows.length})` : ""}. The highlighted amount is the one that matches.</div>
+      <div class="staff-wrap"><table class="calls-table ow-amt-table"><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Job type</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Owing</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><button class="link" type="button" data-ow-amt-inv="${r.invoice_id}"><strong>${esc(r.invoice_number || "#" + r.invoice_id)}</strong></button>${r.balance <= 0.004 ? `<div><span class="ow-tag">Paid</span></div>` : ""}</td>
+        <td style="white-space:nowrap">${r.invoice_date ? esc(fmtDate(r.invoice_date)) : ""}</td>
+        <td><button class="link" type="button" data-ow-amt-cust="${r.customer_id}">${esc(r.customer_name || "")}</button><div class="quiet">${esc([r.customer_number ? "#" + r.customer_number : "", [r.street, r.city].filter(Boolean).join(", ")].filter(Boolean).join(" · "))}</div></td>
+        <td>${esc(r.job_type || "")}</td>
+        <td class="r num">${hit(r.on_total, r.total)}</td><td class="r num">${hit(r.on_paid, r.paid)}</td><td class="r num">${hit(r.on_balance, r.balance)}</td></tr>`).join("")}
+      </tbody></table></div>`;
+  return `<section class="cl-tools ow-amt" aria-label="Find by amount">
+      <h2 class="ow-sec-title">Find by amount</h2>
+      <form class="cl-row" id="ow-amt-form" autocomplete="off"><label class="cl-group"><span class="cl-label">Amount</span>
+        <input type="text" inputmode="decimal" id="ow-amt" value="${esc(OW.amtQ || "")}" placeholder="e.g. 523.45" aria-label="Amount to find"></label>
+        <button class="btn" type="submit">Find invoices</button>${A ? `<button class="link" type="button" id="ow-amt-clear">Clear</button>` : ""}
+        <span class="quiet">Every invoice, any date, paid or not, where the total, amount paid or balance owing is exactly this amount.</span></form>
+      ${res}</section>`;
+}
+function wireOwAmt() {
+  $("#ow-amt-form")?.addEventListener("submit", e => { e.preventDefault(); OW.amtQ = $("#ow-amt").value; owAmtFind(); });
+  $("#ow-amt")?.addEventListener("input", e => { OW.amtQ = e.target.value; });
+  $("#ow-amt-clear")?.addEventListener("click", () => { OW.amt = null; OW.amtQ = ""; renderOwing(); });
+  document.querySelectorAll("[data-ow-amt-inv]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.owAmtInv))));
+  document.querySelectorAll("[data-ow-amt-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.owAmtCust))));
+}
 async function openOwing() {
   // the "choose the invoices" filters were taken off this page: always show everything
   OW.kind = "all"; OW.jtype = "all"; OW.paid = "all"; OW.partner = "all"; OW.group = "none"; saveOw();
@@ -9223,6 +9266,7 @@ function renderOwing(msg) {
       <div class="cl-hero-range"><span>Total owing</span><b class="ow-hero-when" title="${esc(owRangeLabel())}">${esc(owRangeLabel())}</b><strong class="ow-hero-amt">${money(m("todo") + m("checked"))}</strong>
         <em>${(n("todo") + n("checked")).toLocaleString()} invoices${OW.kind === "all" ? "" : " · " + esc(OW_KIND.find(x => x[0] === OW.kind)[1].toLowerCase())}</em></div>
     </header>
+    ${owAmtHtml()}
     <section class="cl-tools ow-dates" aria-label="Dates">
       <h2 class="ow-sec-title">Dates</h2>
       <div class="cl-row">
@@ -9306,6 +9350,7 @@ function renderOwing(msg) {
   $("#ow-fullpage")?.addEventListener("click", () => { OWL.acct = OW.acct || ""; OWL.keepAcct = true; openOwList(); });
   document.querySelectorAll("#main [data-owl-acct]").forEach(b => b.addEventListener("click", () => { if (OW.acct === b.dataset.owlAcct) return; OW.acct = b.dataset.owlAcct; OW.closed = []; renderOwing(); }));
   $("#ow-cleanup")?.addEventListener("click", () => openCleanup());
+  wireOwAmt();
   $("#ow-copy")?.addEventListener("click", async e => owCopyDone(e.currentTarget, await owCopyRows(owSorted(OW.rows || []), scope)));
   document.querySelectorAll("[data-ow-period]").forEach(b => b.addEventListener("click", () => { OW.period = b.dataset.owPeriod; OW.closed = []; saveOw(); renderOwing(); }));
   document.querySelectorAll("[data-ow-step]").forEach(b => b.addEventListener("click", () => { owStep(Number(b.dataset.owStep)); renderOwing(); }));
