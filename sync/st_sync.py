@@ -2384,6 +2384,32 @@ REVOKE EXECUTE ON FUNCTION public.partner_booking_details_import(bigint, jsonb),
 GRANT EXECUTE ON FUNCTION public.partner_booking_details_import(bigint, jsonb), public.partner_bookings_export(bigint) TO authenticated;
 NOTIFY pgrst, 'reload schema';
 
+
+-- =====================================================================
+-- Customer page: the HTIN (partner booking list) bookings for one customer, so the
+-- booking panel can open beside the customer's Vista notes. Safe to run more than once.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.customer_partner_bookings(p_customer bigint)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE jsonb_build_object(
+    'rows', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', b.id, 'partner_id', b.partner_id, 'partner', p.name, 'list_name', p.list_name,
+        'ref', b.ref, 'booked_at', b.booked_at, 'status', b.status, 'status_at', b.status_at, 'service', b.service, 'service_date', b.service_date,
+        'their_name', b.their_name, 'address', b.address, 'extra', b.extra, 'email', b.email, 'provider', b.provider, 'phone', b.phone, 'note', b.note, 'source', b.source,
+        'customer_id', b.customer_id, 'customer', c.display_name, 'job_id', b.job_id, 'job', j.job_number, 'job_status', j.status,
+        'invoice_id', coalesce(b.invoice_id, i.id), 'invoice', coalesce(bi.invoice_number, i.invoice_number)) ORDER BY coalesce(b.booked_at, b.created_at) DESC, b.id DESC), '[]'::jsonb)
+      FROM partner_bookings b JOIN partners p ON p.id = b.partner_id LEFT JOIN customers c ON c.id = b.customer_id LEFT JOIN jobs j ON j.id = b.job_id
+      LEFT JOIN invoices bi ON bi.id = b.invoice_id
+      LEFT JOIN LATERAL (SELECT i.id, i.invoice_number FROM invoices i WHERE b.invoice_id IS NULL AND i.job_id = b.job_id AND i.status <> 'void' ORDER BY i.invoice_date DESC LIMIT 1) i ON true
+      WHERE b.customer_id = p_customer),
+    'statuses', (SELECT coalesce(jsonb_agg(DISTINCT jsonb_build_object('status', b2.status)), '[]'::jsonb) FROM partner_bookings b2
+      WHERE b2.status IS NOT NULL AND b2.partner_id IN (SELECT partner_id FROM partner_bookings WHERE customer_id = p_customer)),
+    'techs', (SELECT coalesce(jsonb_agg(DISTINCT b3.provider), '[]'::jsonb) FROM partner_bookings b3
+      WHERE b3.provider IS NOT NULL AND b3.provider <> '-' AND b3.partner_id IN (SELECT partner_id FROM partner_bookings WHERE customer_id = p_customer))) END
+$$;
+REVOKE EXECUTE ON FUNCTION public.customer_partner_bookings(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.customer_partner_bookings(bigint) TO authenticated;
+NOTIFY pgrst, 'reload schema';
+
 """
 
 
@@ -2413,7 +2439,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL AND to_regprocedure('public.customer_partner_bookings(bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")

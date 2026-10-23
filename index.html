@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-23.113740">
+<meta name="app-version" content="2026-10-23.114510">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3582,6 +3582,18 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .htd-links { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13.5px; } .htd-meta { margin: 0; font-size: 12.5px; }
 .htd footer { display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); flex-wrap: wrap; align-items: center; } .htd footer .grow { margin-right: auto; }
 .htd-confirm[hidden] { display: none; }
+/* docked beside the customer page (split screen) */
+:root { --htd-w: min(760px, 46vw); }
+.htd-wrap.docked { inset: var(--htd-top, 0px) 0 0 auto; width: var(--htd-w); z-index: 60; }
+.htd-wrap.docked .htd { position: absolute; inset: 0; width: 100%; box-shadow: -6px 0 18px rgba(20,30,45,.14); border-left: 1px solid var(--line); animation: none; }
+body.htd-docked #main { margin-right: var(--htd-w); }
+/* the customer page while a booking is docked beside it: no "On this file" column, one-column card */
+body.htd-docked[data-page="customer"] .file-wrap { grid-template-columns: minmax(0, 1fr) !important; }
+body.htd-docked[data-page="customer"] .file-nav { display: none !important; }
+body.htd-docked .file .s1-body { grid-template-columns: 1fr; } body.htd-docked .file .s1-body > * { grid-column: 1 !important; }
+body.htd-docked .file .sec1a { width: auto !important; max-width: none !important; }
+@media (max-width: 860px) { :root { --htd-w: 100vw; } body.htd-docked #main { margin-right: 0; } }
+.htd-pick { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper, #fff); color: var(--ink); max-width: 100%; margin-top: 4px; }
 .htd-ttl { margin-right: auto; min-width: 0; display: grid; } .htd-ttl .quiet { font-size: 12px; } .htd header .htd-pill { margin-right: 0; }
 .htd-steps { display: flex; list-style: none; margin: 0; padding: 10px 18px 4px; }
 .htd-steps li { flex: 1; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--steel); min-width: 0; }
@@ -4661,6 +4673,7 @@ let SALES_CTX = false, SALES_FIND = false;   // true after opening the Sales pag
 const salesBooking = () => ME.role === "sales" || SALES_CTX;
 function setPage(hash, kind, label) {
   spHome();
+  try { if (HTD.ctx?.docked && !(kind === "customer" && HTD.ctx.custId === current?.c?.id)) htdClose(); } catch {}   // a booking docked beside the customer page closes when you leave it
   if (kind === "sales") SALES_CTX = true; else if (!["customer", "book"].includes(kind) && !(kind === "search" && SALES_FIND)) SALES_CTX = false;
   SALES_FIND = false;
   const h = hash ? "#" + hash : "";
@@ -5086,7 +5099,7 @@ function renderFile() {
       ${tab === "podium" ? `<div class="notes-foot">Texts, calls and review requests that Podium logged in ServiceTitan.</div>` : ""}
       ${can("notes.add") && tab !== "podium" && tab !== "emails" ? `<form class="note-add" id="note-add">
         <label for="note-text" class="${tab === "job" ? "" : ""}">${{ location: "Add a note for this address", customer: "Add a note to this customer", vista: "Add a Vista note", job: "Add a note to a job" }[tab]}</label>
-        <textarea id="note-text" maxlength="10000" placeholder="${{ location: "Gate code, where the furnace is, parking, pets…", customer: "Billing preferences, how they like to be contacted…", job: "What was done, what to check next visit…" }[tab]}"></textarea>
+        <textarea id="note-text" maxlength="10000" placeholder="${{ location: "Gate code, where the furnace is, parking, pets…", customer: "Billing preferences, how they like to be contacted…", vista: "What to tell Vista: what was found, what was done, what's next…", job: "What was done, what to check next visit…" }[tab] || ""}"></textarea>
         <div class="row">
           <span class="msg" id="note-msg" role="status"></span>
           ${tab === "job" ? `<select id="note-job" aria-label="Job">${jobs.filter(j => !l || j.location_id === l.id).slice(0, 100).map(j =>
@@ -5221,7 +5234,8 @@ function renderFile() {
     try { localStorage.setItem("reid.noteRange", NOTE_RANGE); } catch {}
     redrawKeepingPlace();
   }));
-  document.querySelectorAll(".note-tab").forEach(b => b.addEventListener("click", () => { current.notesTab = b.dataset.tab; renderFile(); }));
+  document.querySelectorAll(".note-tab").forEach(b => b.addEventListener("click", () => { const sec = b.closest("section"), keep = { tag: sec?.dataset.tag, y0: sec?.getBoundingClientRect().top };
+    current.notesTab = b.dataset.tab; renderFile(); if (b.dataset.tab === "vista") htinDockForCustomer(current.c.id, null, keep); }));
   document.querySelectorAll("[data-more-notes]").forEach(b => b.addEventListener("click", () => {
     b.closest("section").querySelectorAll(".note.hidden").forEach(n => n.classList.remove("hidden")); b.remove();
   }));
@@ -11280,11 +11294,29 @@ const htdLocal = v => { if (!v) return ""; const d = new Date(v); if (isNaN(d)) 
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
 const htdWhen = v => { if (!v) return ""; const d = new Date(v); return isNaN(d) ? String(v) : d.toLocaleString("en-CA", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }); };
 const HTD = { tab: "basic", alerts: "all" };
-function htdClose() { document.querySelector(".htd-wrap")?.remove(); document.removeEventListener("keydown", htdKey); }
+function htdClose() { document.querySelector(".htd-wrap")?.remove(); document.removeEventListener("keydown", htdKey); document.body.classList.remove("htd-docked"); HTD.ctx = null; }
 function htdKey(e) { if (e.key === "Escape") htdClose(); }
 async function htdOpen(id) {
   const r = (PBL.data?.rows || []).find(x => x.id === id); if (!r) return;
-  htdClose(); HTD.r = r; HTD.tab = "basic"; HTD.alerts = "all"; HTD.det = null; HTD.typed = null;
+  return htdOpenRow(r, null);
+}
+// customer page → the customer's booking-list (HTIN) booking, docked beside the page
+async function htinDockForCustomer(custId, pickId, keepSec) {
+  const main = $("#main"), tag = keepSec?.tag, y0 = keepSec?.y0 ?? null;
+  const { data, error } = await db.rpc("customer_partner_bookings", { p_customer: custId });
+  if (current?.c?.id !== custId) return;
+  if (error) { if (!/PGRST202|could not find|function/i.test(error.message || "")) alertMsg("Couldn't open the HTIN booking: " + rpcErr(error)); return; }
+  const R = data?.rows || []; if (!R.length) { htdClose(); return; }
+  const ctx = { docked: true, rows: R, statuses: data.statuses || [], techs: data.techs || [], custId,
+    reload: () => { if (current?.c?.id === custId) htinDockForCustomer(custId, ctx.lastId); } };
+  const r = R.find(x => x.id === pickId) || R.find(x => !/accomplish|cancel|done/i.test(x.status || "")) || R[0]; ctx.lastId = r.id;
+  htdOpenRow(r, ctx);
+  if (tag && y0 != null) requestAnimationFrame(() => { const sec = document.querySelector(`.file section[data-tag="${tag}"]`); if (sec) main.scrollTop += sec.getBoundingClientRect().top - y0; });   // the Notes stay where they were
+}
+// ctx (from the customer page): { docked: true, rows, statuses, techs, reload } — the panel sits beside the page instead of over it
+async function htdOpenRow(r, ctx) {
+  const keepTab = ctx && HTD.ctx && HTD.ctx.docked ? HTD.tab : "basic";
+  htdClose(); HTD.ctx = ctx; HTD.r = r; HTD.tab = keepTab; HTD.alerts = "all"; HTD.det = null; HTD.typed = null; const id = r.id;
   htdDraw();
   const { data, error } = await db.rpc("partner_booking_details", { p_id: id });
   if (HTD.r !== r || !document.querySelector(".htd-wrap")) return;
@@ -11301,9 +11333,9 @@ function htdDraw() {
   const r = HTD.r, d = HTD.det || {}, t = HTD.typed || {}, v = (k, base) => k in t ? t[k] : base ?? "";
   const top = document.querySelector(".htd-body")?.scrollTop || 0;
   document.querySelector(".htd-wrap")?.remove();
-  const st = [...new Set([...HTD_STATUS, ...(PBL.data.statuses || []).map(s => s.status), r.status].filter(Boolean))];
+  const C0 = HTD.ctx, st = [...new Set([...HTD_STATUS, ...((C0 ? C0.statuses : PBL.data?.statuses) || []).map(s => s.status), r.status].filter(Boolean))];
   const sv = [...new Set([...HTD_SVC, r.service].filter(Boolean))];
-  const techs = [...new Set((PBL.data.rows || []).map(x => x.provider).filter(x => x && x !== "-"))];
+  const techs = [...new Set(C0 ? (C0.techs || []) : (PBL.data?.rows || []).map(x => x.provider).filter(x => x && x !== "-"))];
   const cur = v("status", r.status), kind = pblKind(cur), H = d.history || [], hasH = s => H.some(h => h.status === s);
   const steps = [["Creation", true], ["Scheduling", hasH("Accepted") || ["ok", "route", "site", "left", "done"].includes(kind)],
     ["Displacement", hasH("On the way to the destination") || hasH("At destination") || ["route", "site", "left", "done"].includes(kind)], ["Finalizing", kind === "done"]];
@@ -11354,10 +11386,12 @@ function htdDraw() {
           return L.length ? L.map(a => `<div class="htd-alert"><div><b>${esc(a.title || "")}</b><div class="quiet">${a.status === "resolved" ? "Resolved" : "Pending"} · ${esc(htdWhen(a.created))}</div></div>
             <span><button type="button" class="htd-x" data-htd-ares="${a.i}">${a.status === "resolved" ? "Reopen" : "Resolve"}</button> <button type="button" class="htd-x" data-htd-adel="${a.i}" aria-label="Delete alert">✕</button></span></div>`).join("") : `<div class="quiet htd-empty">No alerts found</div>`; })()}
         <div class="htd-add"><label class="htd-f">New alert<input id="htd-atitle" placeholder="e.g. Waiting on Bosch replacement unit"></label><button type="button" class="btn quiet-btn" id="htd-adda">Add alert</button></div>`) };
-  const w = document.createElement("div"); w.className = "htd-wrap";
-  w.innerHTML = `<div class="htd-scrim" data-htd-x></div>
+  const w = document.createElement("div"); w.className = "htd-wrap" + (C0?.docked ? " docked" : "");
+  if (C0?.docked) { document.body.classList.add("htd-docked"); const pb = document.getElementById("page-bar"); document.documentElement.style.setProperty("--htd-top", (pb && innerWidth > 860 ? Math.max(0, pb.getBoundingClientRect().bottom) : 0) + "px"); }
+  w.innerHTML = `${C0?.docked ? "" : `<div class="htd-scrim" data-htd-x></div>`}
     <aside class="htd" role="dialog" aria-modal="true" aria-label="Booking ${esc(r.ref || "")}">
-      <header><div class="htd-ttl"><h2>Booking details ${esc(r.ref || "")}</h2><span class="quiet">Created ${esc(htdWhen(r.booked_at) || "—")}${r.source === "file" ? " · from their Excel" : r.source === "added" ? " · added here" : ""}</span></div>
+      <header><div class="htd-ttl"><h2>${C0?.docked ? `${esc((r.list_name || "Booking list").replace(/ list$/i, ""))} · ` : ""}Booking details ${esc(r.ref || "")}</h2>
+        ${C0?.rows?.length > 1 ? `<select class="htd-pick" id="htd-pick" aria-label="Pick the booking">${C0.rows.map(x => `<option value="${x.id}" ${x.id === r.id ? "selected" : ""}>#${esc(x.ref || "")} · ${esc(x.service || "")} · ${esc(htdShort(x.status))}</option>`).join("")}</select>` : ""}<span class="quiet">Created ${esc(htdWhen(r.booked_at) || "—")}${r.source === "file" ? " · from their Excel" : r.source === "added" ? " · added here" : ""}</span></div>
         <span class="ow-tag htd-pill pk-${kind}">${esc(htdShort(cur))}</span><button class="btn quiet-btn" type="button" data-htd-x>Close</button></header>
       <ol class="htd-steps">${steps.map((s, i) => { const c = kind === "cancel" && i === (firstOpen < 0 ? 3 : firstOpen) ? "cancel" : s[1] ? "done" : i === firstOpen ? "now" : "";
         return `<li class="${c}"><span class="b">${c === "done" ? "✓" : c === "cancel" ? "✕" : i + 1}</span><span class="t">${s[0]}</span></li>`; }).join("")}</ol>
@@ -11396,12 +11430,15 @@ async function htdSave(m, close) {
   if (b) b.disabled = false; if (error) { say("Not saved: " + rpcErr(error), true); return false; }
   Object.assign(r, { status: p.status, provider: p.provider, service_date: p.service_date || null, service: p.service, their_name: p.their_name, phone: p.phone, email: p.email, address: p.address, extra: p.extra, note: p.note });
   if (p.details) HTD.det = p.details;
+  const ctx = HTD.ctx;
+  if (ctx) { if (close) { htdClose(); ctx.reload?.(`Booking #${r.ref || ""} saved.`); } else { HTD.typed = null; htdDraw(); say(m || "Saved."); } return true; }
   if (close) { htdClose(); PBL.msg = `Booking #${r.ref || ""} saved.`; PBL.err = false; await pblLoad(); }
   else { HTD.typed = null; htdDraw(); say(m || "Saved."); pblLoad(); }
   return true;
 }
 function htdWire(w) {
   const f = w.querySelector("#htd-form"), r = HTD.r;
+  w.querySelector("#htd-pick")?.addEventListener("change", e => { const x = HTD.ctx.rows.find(y => y.id === Number(e.target.value)); if (x) htdOpenRow(x, HTD.ctx); });
   w.querySelectorAll("[data-htd-x]").forEach(b => b.addEventListener("click", htdClose));
   w.querySelectorAll("[data-htd-tab]").forEach(b => b.addEventListener("click", () => { if (!HTD.det) return; htdKeep(); HTD.tab = b.dataset.htdTab;
     w.querySelectorAll("[data-htd-tab]").forEach(x => x.setAttribute("aria-selected", x === b)); w.querySelectorAll("[data-htd-panel]").forEach(p => p.hidden = p.dataset.htdPanel !== HTD.tab); w.querySelector(".htd-body").scrollTop = 0; }));
@@ -11428,7 +11465,8 @@ function htdWire(w) {
   w.querySelector("#htd-del-no").addEventListener("click", () => { w.querySelector("#htd-conf").hidden = true; });
   w.querySelector("#htd-del-yes").addEventListener("click", async () => {
     const { error } = await db.rpc("partner_booking_remove", { p_id: r.id }); if (error) { const el = w.querySelector("#htd-msg"); el.className = "staff-msg err"; el.textContent = "Not deleted: " + rpcErr(error); return; }
-    htdClose(); PBL.msg = `Booking #${r.ref || ""} deleted from the list.`; PBL.err = false; await pblLoad(); });
+    const ctx = HTD.ctx; htdClose(); if (ctx) return ctx.reload?.(`Booking #${r.ref || ""} deleted from the list.`);
+    PBL.msg = `Booking #${r.ref || ""} deleted from the list.`; PBL.err = false; await pblLoad(); });
 }
 function htinWireRow(el) {
   el.querySelectorAll("[data-pbl-book]").forEach(b => b.addEventListener("click", () => {
