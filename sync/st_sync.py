@@ -1550,6 +1550,20 @@ UPDATE public.tech_requests r SET status = 'open', job_id = NULL, added_at = NUL
  WHERE r.job_id = j.id AND t.job_class = 'sales' AND r.status = 'added';
 DELETE FROM public.notes n USING public.jobs j, public.job_types t
  WHERE n.entity_type = 'job' AND n.entity_id = j.id AND t.id = j.job_type_id AND t.job_class = 'sales' AND n.source IN ('tech_request', 'yearly_parts');
+
+-- 99zn: the sales people list also says which staff record each one is, so a sales call can be put on them. Safe to run more than once.
+CREATE OR REPLACE FUNCTION public.sales_people() RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH me AS (SELECT public.current_app_user_id() AS uid, public._sales_boss() AS boss)
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', u.id, 'emp', u.employee_id, 'name', coalesce(public._emp_name(u.employee_id), u.login_email::text), 'me', u.id = me.uid,
+           'can_see', (SELECT coalesce(jsonb_agg(v.seller_user_id), '[]'::jsonb) FROM sales_viewers v WHERE v.viewer_user_id = u.id))
+         ORDER BY u.id <> me.uid, coalesce(public._emp_name(u.employee_id), u.login_email::text)), '[]'::jsonb)
+  FROM app_users u, me
+  WHERE u.role = 'sales' AND u.active AND public.current_staff_role() IS NOT NULL
+    AND (me.boss OR u.id = me.uid OR EXISTS (SELECT 1 FROM sales_viewers v WHERE v.viewer_user_id = me.uid AND v.seller_user_id = u.id)) $$;
+
+REVOKE EXECUTE ON FUNCTION public.sales_people() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.sales_people() TO authenticated;
 """
 
 
