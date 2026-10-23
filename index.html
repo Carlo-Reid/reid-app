@@ -3779,6 +3779,17 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .sec-find-item.busy { opacity: .6; pointer-events: none; }
 .cust-group { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; opacity: .6; padding: 8px 10px 2px; }
 #results .result mark, .stk-pick mark { background: #fde68a; color: inherit; padding: 0 1px; border-radius: 3px; }
+.doc-send { margin: 0 0 16px; padding: 14px 16px; border: 2px solid #1f6fd1; border-radius: 12px; background: #f5f9ff; color: #1c2630; font-size: 13.5px; display: grid; gap: 10px; }
+.doc-send h3 { margin: 0; font-size: 16px; } .ds-test { background: #fff3bf; padding: 7px 10px; border-radius: 8px; }
+.ds-row { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; } .ds-lab { font-weight: 800; font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: #5b6b78; min-width: 70px; }
+.ds-pick { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.ds-sec { border: 1px solid #c9d7e8; border-radius: 10px; padding: 8px 12px 12px; display: grid; gap: 6px; background: #fff; } .ds-sec legend { font-weight: 700; padding: 0 4px; }
+.ds-other, .ds-full { display: grid; gap: 3px; font-size: 12.5px; font-weight: 600; } .ds-other input, .ds-full input, .ds-full textarea { font: inherit; font-weight: 400; width: 100%; box-sizing: border-box; }
+.ds-btns { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; } .ds-go { background: #16a34a !important; border-color: #16a34a !important; color: #fff !important; }
+.ds-sends { display: grid; gap: 6px; } .ds-sends-h { font-weight: 800; font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: #5b6b78; }
+.ds-send { display: flex; gap: 8px; align-items: flex-start; background: #fff; border: 1px solid #dde6ef; border-radius: 8px; padding: 6px 10px; } .ds-send.failed { border-color: #f1b5b5; background: #fff6f6; }
+.ds-ch { font-size: 16px; } .ds-open { color: #1f6fd1; font-weight: 600; } .ds-view { color: #15803d; font-weight: 700; }
+@media print { .doc-send { display: none !important; } }
 .sec-find-group { font-size: 11.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; opacity: .6; margin: 6px 2px 0; }
 .sec-find-item mark { background: #fde68a; color: inherit; padding: 0 1px; border-radius: 3px; }
 .sec-badge-s { display: inline-block; margin-left: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; vertical-align: 1px; white-space: nowrap; }
@@ -6434,6 +6445,7 @@ function renderEstEdit() {
       <button class="link" type="button" id="est-back">← Back to Sales</button>
       <span class="est-st est-${esc(x.status)}">${x.cancelled_at ? "Cancelled" : esc(STATUS[x.status] || x.status)}</span>
       <span class="est-tb-gap"></span>
+      <button class="btn est-send-btn" type="button" id="est-send" title="Email or text it to the customer: a link, or a link and the PDF">✉ Email / Text</button>
       ${closed ? `<button class="btn quiet-btn" type="button" id="est-preview">🖨 Print preview</button>` : `
       <button class="btn" type="button" id="est-save">Save</button>
       <button class="btn quiet-btn" type="button" id="est-preview" title="See it the way the customer gets it, then print it or come back and change it">🖨 Print preview</button>
@@ -6534,6 +6546,7 @@ function wireEstEdit() {
     say("Saving…"); const { error } = await db.rpc("est_save", { p_id: EST.id, p });
     if (error) { say("Not saved: " + rpcErr(error), true); return false; } EST.dirty = false; return true; };
   $("#est-save")?.addEventListener("click", async () => { if (await save(false)) openEstEdit(EST.id, "Saved."); });
+  $("#est-send")?.addEventListener("click", async () => { if (!$("#est-save") || !EST.dirty || await save(false)) { EST_SEND_NOW = true; openEstimate(EST.id); } });
   $("#est-preview")?.addEventListener("click", async () => { if (!$("#est-save") || !EST.dirty || await save(false)) { if ($("#est-save")) say("Saved."); openEstimate(EST.id); } });
   $("#est-cancel")?.addEventListener("click", async () => {
     const k = await askChoice("Cancel this estimate?", "It comes off the Sales page, and its sales job is cancelled. You can't undo this here.", [["yes", "Cancel the estimate", true], ["", "Keep it"]]);
@@ -17006,8 +17019,9 @@ function equipmentHtml(list) {
 
 /* ---------------- view an estimate (every option, with its lines) ---------------- */
 const EST_STATUS = { draft: "Draft", sent: "Sent", viewed: "Viewed", accepted: "Accepted", declined: "Declined", lost: "Lost", expired: "Expired", dismissed: "Dismissed", open: "Open", sold: "Sold" };
+let EST_SEND_NOW = false;   // open the sending panel as soon as the estimate preview opens
 async function openEstimate(id) {
-  $("#inv-emailbtn")?.classList.add("hidden"); INV_EMAIL_CUR = null;
+  $("#inv-emailbtn")?.classList.add("hidden"); INV_EMAIL_CUR = null; $("#doc-send")?.remove();
   const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open");
   $("#inv-paper").innerHTML = `<div class="quiet" style="padding:40px">Opening estimate…</div>`;
   const [est, co] = await Promise.all([
@@ -17075,6 +17089,18 @@ async function openEstimate(id) {
     ${opts.map(optHtml).join("") || `<div class="quiet" style="padding:20px 0">No options came over from ServiceTitan for this estimate.</div>`}
     <div class="inv-thanks est-thanks">Prices include parts and labour as listed. HST is worked out on taxable items. ${esc(estFinNote())} Thank you for considering ${esc(c.company_name || "Reid Heating & Cooling")}.${c.reg_number ? `<br>REG: ${esc(c.reg_number)}` : ""}</div>
     ${estAuthHtml()}</div>`;
+  { const first = (cust.display_name || "").split(/[\s,&/]+/)[0], co = c.company_name || "Reid Heating & Cooling", work = x.jobs?.summary || x.jobs?.job_types?.name || "";
+    const names = opts.map(o2 => o2.name).filter(Boolean);
+    docSendSetup({ kind: "estimate", refId: x.id, title: `Estimate ${x.estimate_number}`, label: "estimate", fileName: `Reid estimate ${x.estimate_number}.pdf`,
+      partnerFirst: !!x.jobs?.partners?.name, hidden: !!x.cancelled_at, openNow: EST_SEND_NOW,
+      subject: `Your estimate ${x.estimate_number} from ${co}`,
+      body: [`Hello${first ? " " + first : ""},`, "", `Thank you for having us out. Here is your estimate${work ? " for " + work : ""}.`, "",
+        `Estimate #: ${x.estimate_number}`, `Date:       ${fmtDate(x.created_at)}`, addr.length ? `Address:    ${addr.join(", ")}` : null,
+        names.length > 1 ? `Options:    ${names.join(", ")}` : null, "",
+        "If you have any questions, or you're ready to go ahead, just reply to this email or call us" + (c.phone ? " at " + phoneFmt(c.phone) : "") + ".", "",
+        "Thank you,", (provBy || "").trim() || co, co].filter(x2 => x2 !== null).join("\n"),
+      sms: `Hi${first ? " " + first : ""}, here is your estimate ${x.estimate_number} from ${co}${work ? " for " + work : ""}. Questions? Call us${c.phone ? " at " + phoneFmt(c.phone) : ""}.` });
+    EST_SEND_NOW = false; }
   // printed pages: "Estimate # … / Page 1 of 2" at the bottom
   { let st = document.getElementById("est-page-foot"); if (!st) { st = document.createElement("style"); st.id = "est-page-foot"; document.head.appendChild(st); }
     st.textContent = `@page { @bottom-left { content: "Estimate #${String(x.estimate_number).replace(/["\\]/g, "")}"; font: 10px Arial, sans-serif; } @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 10px Arial, sans-serif; } }`; }
@@ -17128,7 +17154,125 @@ function invEmailStatus(sends) {
     ${s.status === "sent" ? ` · ${s.opened_at ? `<span class="inv-em-open">Opened ${fmtWhen(s.opened_at)}${s.open_count > 1 ? ` (${s.open_count}×)` : ""}</span>` : `<span class="quiet">not opened yet</span>`}${s.viewed_at ? ` · <span class="inv-em-view">Viewed ${fmtWhen(s.viewed_at)}${s.view_count > 1 ? ` (${s.view_count}×)` : ""}</span>` : ""}` : ""}
     ${s.error ? `<div class="quiet">${esc(s.error)}</div>` : ""}</div>`).join("")}</div>`;
 }
+/* ---------- send anything to a customer: email and/or text, a link or a link + PDF, with open / view tracking ----------
+   docSendSetup({ kind, refId, customerId, title, label, fileName, subject, body, sms, openNow, legacy })
+   Used by the invoice and estimate previews (both draw in #inv-paper); anything else that can show a page there can use it too. */
+const SEND = { open: false, key: null, draft: {}, info: null, opt: null };
+const sendWhen = d => d ? fmtWhen(d) : "";
+function sendStatusHtml(sends) {
+  if (!sends?.length) return "";
+  return `<div class="ds-sends"><div class="ds-sends-h">Sent so far</div>${sends.map(x => `<div class="ds-send ${x.status}">
+    <span class="ds-ch">${x.channel === "text" ? "💬" : "✉"}</span>
+    <div><b>${x.status === "failed" ? "✗ Not sent" : x.status === "sending" ? "… Sending" : x.channel === "text" ? "✓ Texted" : "✓ Emailed"}</b> ${sendWhen(x.sent_at)} to ${esc(x.channel === "text" ? phoneFmt(x.sent_to) : x.sent_to)}${x.test ? ` <span class="quiet">(test, meant for ${esc(x.channel === "text" ? phoneFmt(x.to) : x.to)})</span>` : ""}
+      ${x.with_pdf ? ` <span class="quiet">· link + PDF</span>` : ` <span class="quiet">· link</span>`}${x.by ? ` <span class="quiet">· by ${esc(x.by)}</span>` : ""}
+      ${x.status === "sent" ? `<div>${x.channel === "email" ? (x.opened_at ? `<span class="ds-open">Opened ${sendWhen(x.opened_at)}${x.open_count > 1 ? ` · ${x.open_count} times, last ${sendWhen(x.last_opened_at)}` : ""}</span>` : `<span class="quiet">Not opened yet</span>`) + " · " : ""}${x.viewed_at ? `<span class="ds-view">Viewed ${sendWhen(x.viewed_at)}${x.view_count > 1 ? ` · ${x.view_count} times, last ${sendWhen(x.last_viewed_at)}` : ""}</span>` : `<span class="quiet">Not viewed yet</span>`}</div>` : ""}
+      ${x.error ? `<div class="quiet">${esc(x.error)}</div>` : ""}</div></div>`).join("")}</div>`;
+}
+async function docSendSetup(o) {
+  const btn = $("#inv-emailbtn"); if (!btn) return;
+  const allowed = can("email.send") && !o.hidden;
+  btn.classList.toggle("hidden", !allowed); btn.textContent = "✉ Email / Text";
+  if (!allowed) { $("#doc-send")?.remove(); return; }
+  const key = o.kind + ":" + (o.refId ?? "c" + o.customerId);
+  if (SEND.key !== key) { SEND.key = key; SEND.draft = {}; SEND.open = !!o.openNow; } else if (o.openNow) SEND.open = true;
+  SEND.opt = o;
+  const { data: info, error } = await db.rpc("doc_send_info", { p_kind: o.kind, p_ref: o.refId ?? null, p_customer: o.customerId ?? null });
+  if (SEND.key !== key || $("#inv-view").classList.contains("hidden")) return;
+  SEND.info = error ? { error } : info;
+  const last = info?.sends?.find(x => x.status === "sent");
+  btn.textContent = last ? (last.viewed_at ? "✉ Email / Text · viewed" : last.opened_at ? "✉ Email / Text · opened" : "✉ Email / Text · sent") : "✉ Email / Text";
+  btn.onclick = () => { SEND.open = !SEND.open; docSendDraw(null, false, true); };
+  docSendDraw(null, false, SEND.open);
+}
+function docSendDraw(msg, bad, jump) {
+  $("#doc-send")?.remove(); if (!SEND.open) return;
+  const o = SEND.opt, info = SEND.info || {}, D = SEND.draft;
+  if (D.email === undefined) {   // first time: tick the main email (or the partner's), and the first cell phone
+    D.email = !!(info.emails?.length || info.partner_email); D.text = !D.email && !!info.phones?.length;
+    D.emails = new Set(info.partner_email && o.partnerFirst ? [info.partner_email.value] : (info.emails || []).filter(x => x.pri).map(x => x.value).slice(0, 1));
+    if (!D.emails.size && info.emails?.[0]) D.emails.add(info.emails[0].value);
+    D.phones = new Set((info.phones || []).filter(x => x.mob).map(x => x.value).slice(0, 1)); if (!D.phones.size && info.phones?.[0]) D.phones.add(info.phones[0].value);
+    D.otherEmail = ""; D.otherPhone = ""; D.pdf = true; D.subject = o.subject || ""; D.body = o.body || ""; D.sms = o.sms || "";
+  }
+  const box = document.createElement("form"); box.id = "doc-send"; box.className = "doc-send no-print"; box.autocomplete = "off";
+  if (info.error) box.innerHTML = `<div class="staff-msg err">${esc(/PGRST202|could not find/i.test(info.error.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(info.error))}</div>`;
+  else {
+    const chk = (set, v, label, sub) => `<label class="ds-pick"><input type="checkbox" data-ds-set="${set}" value="${esc(v)}" ${D[set].has(v) ? "checked" : ""}> <span>${label}${sub ? ` <span class="quiet">${sub}</span>` : ""}</span></label>`;
+    box.innerHTML = `<h3>Send this ${esc(o.label || "document")}${info.customer_name ? ` to ${esc(info.customer_name)}` : ""}</h3>
+      ${info.test_to ? `<div class="ds-test">🧪 Test mode: emails go to <b>${esc(info.test_to)}</b> and texts to your cell <b>${info.my_cell ? esc(phoneFmt(info.my_cell)) : "(none on your employee record yet)"}</b>, marked with who they were meant for.</div>` : ""}
+      <div class="ds-row"><span class="ds-lab">Send by</span>
+        <label class="ds-pick"><input type="checkbox" id="ds-email" ${D.email ? "checked" : ""}> ✉ Email</label>
+        <label class="ds-pick"><input type="checkbox" id="ds-text" ${D.text ? "checked" : ""}> 💬 Text</label></div>
+      <div class="ds-row"><span class="ds-lab">Send as</span>
+        <label class="ds-pick"><input type="radio" name="ds-as" value="link" ${!D.pdf ? "checked" : ""}> A link only</label>
+        <label class="ds-pick"><input type="radio" name="ds-as" value="pdf" ${D.pdf ? "checked" : ""}> A link and the PDF</label>
+        <span class="quiet">${D.pdf ? "Email: the PDF is attached. Text: a second link opens the PDF." : "They click the link to see it."}</span></div>
+      ${D.email ? `<fieldset class="ds-sec"><legend>✉ Email to</legend>
+        ${info.partner_email ? chk("emails", info.partner_email.value, esc(info.partner_email.value), `${esc(info.partner_email.name)}'s billing email`) : ""}
+        ${(info.emails || []).map(x => chk("emails", x.value, esc(x.value), [x.name, x.pri ? "main" : ""].filter(Boolean).join(" · "))).join("") || (info.partner_email ? "" : `<div class="quiet">No email on the customer's file.</div>`)}
+        <label class="ds-other">Another email <input type="text" id="ds-oemail" value="${esc(D.otherEmail)}" placeholder="name@example.com (several: separate with commas)"></label>
+        <label class="ds-full">Subject <input type="text" id="ds-subject" maxlength="300" value="${esc(D.subject)}"></label>
+        <label class="ds-full">Message <textarea id="ds-body" rows="8">${esc(D.body)}</textarea></label></fieldset>` : ""}
+      ${D.text ? `<fieldset class="ds-sec"><legend>💬 Text to</legend>
+        ${(info.phones || []).map(x => chk("phones", x.value, esc(phoneFmt(x.value)), [x.kind === "mobile" ? "cell" : "phone (may not take texts)", x.name, x.pri ? "main" : ""].filter(Boolean).join(" · "))).join("") || `<div class="quiet">No phone on the customer's file.</div>`}
+        <label class="ds-other">Another cell <input type="text" id="ds-ophone" value="${esc(D.otherPhone)}" placeholder="613-555-1234 (several: separate with commas)"></label>
+        <label class="ds-full">Text message <textarea id="ds-sms" rows="3" maxlength="600">${esc(D.sms)}</textarea></label>
+        <div class="quiet">The link${D.pdf ? "s are" : " is"} added at the end of the text.</div></fieldset>` : ""}
+      <div class="ds-btns"><button class="btn ds-go" type="submit">Send</button> <button class="link" type="button" data-ds-x>Close</button>
+        <span class="staff-msg ${bad ? "err" : "ok"}" role="status">${msg ? esc(msg) : ""}</span></div>
+      ${sendStatusHtml(info.sends)}${o.legacy || ""}
+      <p class="quiet">"Opened" comes from a tiny picture in the email, so it's a hint, not proof: some phones load it by themselves and Outlook may block it. "Viewed" means they clicked the link.</p>`;
+  }
+  const v = $("#inv-view"), sc = v.scrollTop; $("#inv-paper").prepend(box); v.scrollTop = jump ? 0 : sc;
+  const keep = () => { D.otherEmail = $("#ds-oemail")?.value ?? D.otherEmail; D.otherPhone = $("#ds-ophone")?.value ?? D.otherPhone;
+    D.subject = $("#ds-subject")?.value ?? D.subject; D.body = $("#ds-body")?.value ?? D.body; D.sms = $("#ds-sms")?.value ?? D.sms; };
+  box.querySelector("[data-ds-x]")?.addEventListener("click", () => { SEND.open = false; docSendDraw(); });
+  box.querySelector("#ds-email")?.addEventListener("change", e => { keep(); D.email = e.target.checked; docSendDraw(); });
+  box.querySelector("#ds-text")?.addEventListener("change", e => { keep(); D.text = e.target.checked; docSendDraw(); });
+  box.querySelectorAll("[name=ds-as]").forEach(r => r.addEventListener("change", () => { keep(); D.pdf = r.value === "pdf"; docSendDraw(); }));
+  box.querySelectorAll("[data-ds-set]").forEach(c => c.addEventListener("change", () => { const S = D[c.dataset.dsSet]; c.checked ? S.add(c.value) : S.delete(c.value); }));
+  box.querySelectorAll("input[type=text], textarea").forEach(el => el.addEventListener("input", keep));
+  box.addEventListener("submit", async e => { e.preventDefault(); keep();
+    const st = box.querySelector(".staff-msg"), sb = box.querySelector(".ds-go"), say = (t, b) => { st.className = "staff-msg " + (b ? "err" : "ok"); st.textContent = t; };
+    const split = t => String(t || "").split(/[,;\s]+/).map(x => x.trim()).filter(Boolean);
+    const emails = D.email ? [...new Set([...D.emails, ...split(D.otherEmail).map(x => x.toLowerCase())])] : [];
+    const phones = D.text ? [...new Set([...D.phones, ...split(D.otherPhone.replace(/[()\-.]/g, " ").replace(/(\d)\s+(?=\d)/g, "$1")).map(x => x.replace(/\D/g, "").slice(-10))])].filter(x => x.length === 10) : [];
+    if (!D.email && !D.text) return say("Tick Email, Text or both.", true);
+    if (!emails.length && !phones.length) return say("Pick who to send it to.", true);
+    if (D.email && emails.length && (!D.subject.trim() || !D.body.trim())) return say("The email needs a subject and a message.", true);
+    if (D.text && phones.length && !D.sms.trim()) return say("Write the text message.", true);
+    sb.disabled = true; say("Making the PDF…");
+    let pdf = ""; try { pdf = await invoicePdfB64(); } catch (x) { sb.disabled = false; return say("Couldn't make the PDF: " + (x?.message || x), true); }
+    const sends = [...emails.map(to => ({ channel: "email", to })), ...phones.map(to => ({ channel: "text", to }))], done = [], failed = [];
+    for (const [n, x] of sends.entries()) {
+      say(`Sending ${n + 1} of ${sends.length}…`);
+      const { data, error: er } = await db.functions.invoke("send-doc", { body: { kind: o.kind, ref_id: o.refId ?? null, customer_id: o.customerId ?? null, title: o.title, label: o.label,
+        channel: x.channel, to: x.to, subject: D.subject, body: x.channel === "email" ? D.body : D.sms, with_pdf: D.pdf, pdf_b64: pdf, file_name: o.fileName } });
+      if (er) { let t = er.message || String(er); try { const j = await er.context?.json?.(); if (j?.error) t = j.error; } catch {}
+        if (/Failed to send a request|not found|404/i.test(t)) t = "Sending isn't connected yet: the send-doc function needs to be added in Supabase.";
+        failed.push(`${x.channel === "text" ? phoneFmt(x.to) : x.to}: ${t}`); }
+      else done.push(`${x.channel === "text" ? "texted " + phoneFmt(data?.sent_to || x.to) : "emailed " + (data?.sent_to || x.to)}${data?.test ? " (test)" : ""}`);
+    }
+    const again = await db.rpc("doc_send_info", { p_kind: o.kind, p_ref: o.refId ?? null, p_customer: o.customerId ?? null }); if (!again.error) SEND.info = again.data;
+    if (!failed.length) { const keepD = { email: D.email, text: D.text }; SEND.draft = {}; Object.assign(SEND.draft, {}); }
+    const lastSent = SEND.info?.sends?.find(x => x.status === "sent"); if (lastSent) $("#inv-emailbtn").textContent = "✉ Email / Text · sent";
+    docSendDraw((done.length ? "Done: " + done.join(", ") + ". " : "") + (failed.length ? "Not sent: " + failed.join("; ") : ""), failed.length > 0);
+  });
+}
 async function invEmailSetup(D) {
+  // invoices use the shared sending panel (email and/or text, link or link + PDF); earlier invoice emails still show under it
+  if (!D.void) {
+    const first = (D.custName || "").split(/[\s,&/]+/)[0], old = await db.rpc("invoice_email_info", { p_invoice: D.id });
+    docSendSetup({ kind: "invoice", refId: D.id, title: `Invoice ${D.number}`, label: "invoice", fileName: `Reid invoice ${D.number}.pdf`, partnerFirst: !!D.partner,
+      subject: `Invoice ${D.number} from ${D.coName}`, body: invoiceEmailText(D), openNow: INV_EMAIL_OPEN,
+      sms: `Hi${first && !D.partner ? " " + first : ""}, here is your invoice ${D.number} from ${D.coName}${D.balance > 0.004 ? ` (balance ${money(D.balance)})` : ""}.`,
+      legacy: old.data?.sends?.length ? `<div class="ds-legacy"><div class="ds-sends-h">Earlier invoice emails</div>${invEmailStatus(old.data.sends)}</div>` : "" });
+    return;
+  }
+  $("#doc-send")?.remove();
+  return invEmailSetupOld(D);
+}
+async function invEmailSetupOld(D) {
   const btn = $("#inv-emailbtn"); if (!btn) return;
   btn.classList.toggle("hidden", !can("email.send") || D.void);
   if (!can("email.send") || D.void) { $("#inv-email")?.remove(); return; }
