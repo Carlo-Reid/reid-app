@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-22.215501">
+<meta name="app-version" content="2026-10-22.215913">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3465,6 +3465,13 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .pbb-in { display: flex; flex-direction: column; min-width: 0; } .pbb-in .quiet { font-size: 12.5px; }
 .pbb-it .btn { border-radius: 999px; padding: 5px 16px; min-width: 84px; } .pbb-it .btn.pbb-added { background: var(--green) !important; border-color: var(--green) !important; color: var(--on-accent) !important; }
 @media (max-width: 700px) { .pbb-body { grid-template-columns: 1fr; grid-template-rows: 40% 60%; } .pbb-tree { border-right: 0; border-bottom: 1px solid var(--line); } }
+/* estimate lines: the item's picture on the left, its price book description under the name */
+.est-pic { width: 64px; padding-right: 6px !important; vertical-align: top !important; }
+.est-pic img { width: 56px; height: 56px; object-fit: contain; display: block; background: #fff; border: 1px solid #e3e8ed; border-radius: 6px; }
+.est-sheet .est-lines td { vertical-align: top; }
+.est-ldesc { font-size: 12.5px; line-height: 1.45; color: #4a5866; margin: 3px 2px 4px 6px; white-space: normal; }
+.est-plines .est-ldesc { margin-left: 0; }
+.est-plines td { vertical-align: top; }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -5851,12 +5858,28 @@ async function openEstEdit(id, msg) {
   EST.opts = (data.estimate_options || []).sort((a, b) => a.sequence - b.sequence).map(o => ({ id: o.id, name: o.name, recommended: o.is_recommended,
     lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price) })) }));
   if (!EST.opts.length) EST.opts = [{ name: "Option 1", recommended: true, lines: [] }];
-  EST.dirty = false; renderEstEdit();
+  EST.dirty = false;
+  await estInfo(EST.opts.flatMap(o => o.lines.map(l => l.item_id))).catch(() => {});
+  renderEstEdit();
 }
+// the price book picture and description of each item on an estimate (loaded once per item)
+const EINFO = new Map();   // item id -> { desc, thumb }
+async function estInfo(ids) {
+  const want = [...new Set(ids.filter(Boolean))].filter(id => !EINFO.has(id)); if (!want.length) return false;
+  const [info, pics] = await Promise.all([db.rpc("est_item_info", { p_ids: want }), db.rpc("pb_pictures", { p_ids: want.slice(0, 120) }), pbLoadLooks(want).catch(() => {})]);
+  want.forEach(id => EINFO.set(id, { desc: "", thumb: null }));
+  (info.data || []).forEach(r => EINFO.get(Number(r.id)).desc = r.description || "");
+  (pics.data || []).forEach(p => { const e = EINFO.get(Number(p.item_id)); if (e) e.thumb = "data:image/jpeg;base64," + p.thumb; });
+  return true;
+}
+const estPic = id => { const e = id && EINFO.get(id); return e && e.thumb ? `<img src="${e.thumb}" alt="">` : ""; };
+const estDesc = id => { const e = id && EINFO.get(id); if (!e) return ""; const h = pbDescHtml({ id, description: e.desc }); return h ? `<div class="est-ldesc">${h}</div>` : ""; };
 // our logo (kept next to the app on the website); a logo set in the company settings wins
 const REID_LOGO = "https://carlo-reid.github.io/reid-app/reid-logo.png";
 const coLogo = c => (c && c.logo_url) || REID_LOGO;
 function renderEstEdit() {
+  { const ids = EST.opts.flatMap(o => o.lines.map(l => l.item_id)).filter(id => id && !EINFO.has(id));
+    if (ids.length) estInfo(ids).then(n => { if (n && document.querySelector(".est-sheet") && !document.querySelector(".est-sheet input:focus")) renderEstEdit(); }); }
   const x = EST.x, closed = ["accepted", "lost", "declined", "expired"].includes(x.status) || !!x.cancelled_at, HST = 0.13;
   const tot = o => o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
   const c = COMPANY || { company_name: "Reid Heating & Cooling" }, brand = x.jobs?.partners?.branding_logo_url || x.jobs?.partners?.branding_name ? x.jobs.partners : null;
@@ -5900,12 +5923,13 @@ function renderEstEdit() {
         <div class="est-oh"><span class="es-on">Option ${i + 1}</span><input class="est-oname" data-oname="${i}" value="${esc(o.name)}" maxlength="60" ${closed ? "disabled" : ""} aria-label="Option name">
           ${closed ? (x.accepted_option_id && x.accepted_option_id === o.id ? `<span class="est-won">✓ Picked</span>` : "") : `<label class="est-rec"><input type="radio" name="est-rec" data-orec="${i}" ${o.recommended ? "checked" : ""}> Recommended</label>
           ${EST.opts.length > 1 ? `<button class="link danger" type="button" data-odel="${i}" title="Remove this option">✕</button>` : ""}`}</div>
-        <table class="est-lines"><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th><th></th></tr></thead><tbody>${o.lines.map((l, k) => `<tr>
-          <td><input class="est-d" data-ld="${i}:${k}" value="${esc(l.description)}" ${closed ? "disabled" : ""} aria-label="What"></td>
+        <table class="est-lines"><thead><tr><th class="est-pic"></th><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th><th></th></tr></thead><tbody>${o.lines.map((l, k) => `<tr>
+          <td class="est-pic">${estPic(l.item_id)}</td>
+          <td><input class="est-d" data-ld="${i}:${k}" value="${esc(l.description)}" ${closed ? "disabled" : ""} aria-label="What">${estDesc(l.item_id)}</td>
           <td class="r"><input class="est-q" data-lq="${i}:${k}" value="${l.qty}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="How many"></td>
           <td class="r"><input class="est-p" data-lp="${i}:${k}" value="${Number(l.price).toFixed(2)}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="Price each"></td>
           <td class="r num est-lt">${money((Number(l.qty) || 0) * (Number(l.price) || 0))}</td>
-          <td>${closed ? "" : `<button class="link danger" type="button" data-ldel="${i}:${k}" title="Take it off">✕</button>`}</td></tr>`).join("") || `<tr><td colspan="5" class="quiet">Nothing in this option yet.</td></tr>`}</tbody></table>
+          <td>${closed ? "" : `<button class="link danger" type="button" data-ldel="${i}:${k}" title="Take it off">✕</button>`}</td></tr>`).join("") || `<tr><td colspan="6" class="quiet">Nothing in this option yet.</td></tr>`}</tbody></table>
         ${closed ? "" : `<div class="est-add"><div class="est-add-row"><input type="search" class="est-find" data-ofind="${i}" placeholder="Add from the price book: model, name or code…" autocomplete="off"><button class="btn quiet-btn est-browse" type="button" data-obrowse="${i}" title="Open the price book and pick items from it">📖 Price book</button></div><div class="est-res hidden" data-ores="${i}"></div>
           <button class="link" type="button" data-oline="${i}">+ Add a line of my own</button></div>`}
         <div class="est-tot"><span>Subtotal <b>${money(tot(o))}</b></span><span>HST (13%) <b>${money(tot(o) * HST)}</b></span><span class="est-big">Total <b>${money(tot(o) * (1 + HST))}</b></span></div>
@@ -15378,6 +15402,7 @@ async function openEstimate(id) {
   const coAddr = [c.street, [c.city, c.province, c.postal_code].filter(Boolean).join(", ")].filter(Boolean);
   const seller = x.employees ? `${x.employees.first_name || ""} ${x.employees.last_name || ""}`.trim() : "";
   const opts = (x.estimate_options || []).sort((a, b) => a.sequence - b.sequence || a.id - b.id);
+  await estInfo(opts.flatMap(o => (o.estimate_lines || []).map(k => k.item_id))).catch(() => {});
   const HST = 0.13;
   const optHtml = (o, n) => {
     const lines = (o.estimate_lines || []).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0) || a.id - b.id);
@@ -15389,11 +15414,11 @@ async function openEstimate(id) {
         ${o.is_recommended ? '<span class="est-tag rec">Recommended</span>' : ""}${accepted ? `<span class="est-tag acc">✓ Accepted${x.accepted_at ? " " + fmtDate(x.accepted_at) : ""}</span>` : ""}</div>
         <div class="num est-opt-total">${money(sub + tax)}</div></div>
       ${o.description ? `<div class="est-desc">${esc(o.description)}</div>` : ""}
-      <table class="inv-lines"><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th></tr></thead><tbody>
-        ${lines.length ? lines.map(k => `<tr class="${k.parent_line_id ? "est-sub" : ""}"><td>${esc(k.description || "")}${k.supplied_by === "customer" ? ' <span class="inv-small">(customer supplies)</span>' : k.supplied_by === "partner" ? ' <span class="inv-small">(partner supplies)</span>' : ""}</td>
+      <table class="inv-lines est-plines"><thead><tr><th class="est-pic"></th><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th></tr></thead><tbody>
+        ${lines.length ? lines.map(k => `<tr class="${k.parent_line_id ? "est-sub" : ""}"><td class="est-pic">${estPic(k.item_id)}</td><td>${esc(k.description || "")}${estDesc(k.item_id)}${k.supplied_by === "customer" ? ' <span class="inv-small">(customer supplies)</span>' : k.supplied_by === "partner" ? ' <span class="inv-small">(partner supplies)</span>' : ""}</td>
           <td class="r num">${Number(k.quantity).toLocaleString("en-CA", { maximumFractionDigits: 2 })}</td>
           <td class="r num">${money(k.unit_price)}</td><td class="r num">${money(k.line_total)}</td></tr>`).join("")
-        : `<tr><td colspan="4" class="quiet">No line items came over from ServiceTitan for this option.</td></tr>`}
+        : `<tr><td colspan="5" class="quiet">No line items came over from ServiceTitan for this option.</td></tr>`}
       </tbody></table>
       <table class="inv-totals est-totals"><tr><td>Subtotal</td><td class="r num">${money(sub)}</td></tr>
         <tr><td>HST (13%)</td><td class="r num">${money(tax)}</td></tr>
