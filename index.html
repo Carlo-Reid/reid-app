@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-22.214736">
+<meta name="app-version" content="2026-10-22.215501">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3443,6 +3443,28 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .sc-go[disabled] { background: #c3c8ce; color: #f4f5f6; box-shadow: none; cursor: not-allowed; }
 .st-sf-wrap { grid-column: 1 / -1; } .st-sf { display: flex; flex-wrap: wrap; gap: 4px 16px; } .st-sf-opt { white-space: nowrap; }
 .st-sl-row { flex-direction: column; align-items: flex-start !important; } .st-sl-line { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+/* estimate: pick from the price book */
+.est-add-row { display: flex; gap: 8px; } .est-add-row .est-find { flex: 1; min-width: 0; }
+.est-sheet .est-browse { white-space: nowrap; border-radius: 8px; background: #fff !important; color: #1f454c !important; border: 1px solid #d5dde3 !important; }
+.pbb-back { position: fixed; inset: 0; z-index: 2100; background: rgba(10,20,30,.45); display: grid; place-items: center; padding: 16px; }
+.pbb-back[hidden] { display: none; }
+.pbb { width: min(1040px, 100%); height: min(82vh, 820px); background: var(--panel); color: var(--ink); border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,.3); display: flex; flex-direction: column; overflow: hidden; }
+.pbb-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.pbb-head > div { flex: 1; min-width: 180px; font-size: 16px; }
+.pbb-head input { flex: 2; min-width: 200px; font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); }
+.pbb-head .btn { border-radius: 999px; }
+.pbb-body { flex: 1; display: grid; grid-template-columns: minmax(220px, 320px) 1fr; min-height: 0; }
+.pbb-tree { overflow: auto; border-right: 1px solid var(--line); padding: 6px 0; background: var(--paper); }
+.pbb-cat { display: flex; align-items: center; gap: 2px; } .pbb-cat.on { background: var(--blue-wash); }
+.pbb-tw { width: 22px; flex: none; border: 0; background: none; color: var(--steel); cursor: pointer; font-size: 12px; padding: 4px 0; }
+.pbb-cn { flex: 1; text-align: left; border: 0; background: none; font: inherit; font-size: 14px; color: var(--ink); cursor: pointer; padding: 6px 8px 6px 2px; }
+.pbb-cat.on .pbb-cn { font-weight: 800; color: var(--blue); } .pbb-cn:hover { color: var(--blue); }
+.pbb-items { overflow: auto; padding: 4px 0; }
+.pbb-hint { padding: 20px; }
+.pbb-it { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.pbb-in { display: flex; flex-direction: column; min-width: 0; } .pbb-in .quiet { font-size: 12.5px; }
+.pbb-it .btn { border-radius: 999px; padding: 5px 16px; min-width: 84px; } .pbb-it .btn.pbb-added { background: var(--green) !important; border-color: var(--green) !important; color: var(--on-accent) !important; }
+@media (max-width: 700px) { .pbb-body { grid-template-columns: 1fr; grid-template-rows: 40% 60%; } .pbb-tree { border-right: 0; border-bottom: 1px solid var(--line); } }
 /* ===== DESERT look on every page (Settings → colour theme "Desert") ===== */
 :root[data-theme="desert"] #page-bar { background: linear-gradient(180deg, #102428 0%, #142f36 100%) !important; color: #f2d29b; border-bottom: 2px solid #dcb386; }
 :root[data-theme="desert"] #page-bar #page-bar-name { color: #f2d29b; letter-spacing: .08em; }
@@ -5697,6 +5719,66 @@ function renderSales(msg) {
     SALES.rows = null; openSales(`Sales job ${r?.job_number || ""} was cancelled.`); }));
 }
 
+// ----- pick items straight from the price book (your own price book: the categories and items you're allowed to see) -----
+const PBB = { cats: null, open: new Set(), cat: null, items: null, q: "", oi: 0, added: new Set(), seq: 0 };
+async function openPbBrowse(oi) {
+  PBB.oi = oi; PBB.added = new Set();
+  let back = document.getElementById("pbb-back");
+  if (!back) { back = document.createElement("div"); back.id = "pbb-back"; back.className = "pbb-back"; document.body.appendChild(back);
+    back.addEventListener("click", e => { if (e.target === back) closePbBrowse(); }); }
+  back.hidden = false;
+  if (!PBB.cats) { back.innerHTML = `<div class="pbb"><div class="quiet" style="padding:30px">Opening the price book…</div></div>`;
+    const { data, error } = await db.rpc("pb_categories");
+    PBB.cats = error ? [] : (data || []).filter(c => c.active !== false); PBB.err = error ? rpcErr(error) : ""; }
+  drawPbBrowse();
+}
+function closePbBrowse() { const b = document.getElementById("pbb-back"); if (b) b.hidden = true; if (PBB.added.size) { EST.dirty = true; renderEstEdit(); } }
+function pbbTotals() {   // items in a category and everything under it, so empty branches can be hidden
+  const kids = new Map(); PBB.cats.forEach(c => { const k = c.parent_id || 0; if (!kids.has(k)) kids.set(k, []); kids.get(k).push(c); });
+  const tot = new Map(); const sum = c => { if (tot.has(c.id)) return tot.get(c.id); const t = Number(c.items || 0) + (kids.get(c.id) || []).reduce((s, x) => s + sum(x), 0); tot.set(c.id, t); return t; };
+  PBB.cats.forEach(sum); return { kids, tot };
+}
+function drawPbBrowse() {
+  const back = document.getElementById("pbb-back"); if (!back) return;
+  const o = EST.opts[PBB.oi] || {}, { kids, tot } = pbbTotals();
+  const ids = new Set(PBB.cats.map(c => c.id));
+  const tree = (pid, depth) => (kids.get(pid) || []).filter(c => tot.get(c.id) > 0).map(c => {
+    const has = (kids.get(c.id) || []).some(x => tot.get(x.id) > 0), open = PBB.open.has(c.id);
+    return `<div class="pbb-cat ${PBB.cat === c.id ? "on" : ""}" style="padding-left:${8 + depth * 14}px"><button type="button" class="pbb-tw" data-pbb-tw="${c.id}" ${has ? "" : "disabled"} aria-label="${open ? "Close" : "Open"}">${has ? (open ? "▾" : "▸") : ""}</button><button type="button" class="pbb-cn" data-pbb-cat="${c.id}">${esc(c.name)} <span class="quiet">${tot.get(c.id)}</span></button></div>${has && open ? tree(c.id, depth + 1) : ""}`; }).join("");
+  const roots = PBB.cats.filter(c => !c.parent_id || !ids.has(c.parent_id)); kids.set(0, roots);
+  const items = PBB.items;
+  back.innerHTML = `<div class="pbb" role="dialog" aria-label="Price book">
+    <div class="pbb-head"><div><b>Price book</b> <span class="quiet">adding to ${esc(o.name || "Option " + (PBB.oi + 1))}</span></div>
+      <input type="search" id="pbb-q" placeholder="Search: model, name or code…" value="${esc(PBB.q)}" autocomplete="off">
+      <button class="btn" type="button" id="pbb-done">Done${PBB.added.size ? ` (${PBB.added.size} added)` : ""}</button></div>
+    <div class="pbb-body">
+      <div class="pbb-tree">${PBB.err ? `<p class="staff-msg err">${esc(PBB.err)}</p>` : tree(0, 0) || `<p class="quiet" style="padding:10px">No categories in your price book.</p>`}</div>
+      <div class="pbb-items">${items == null ? `<p class="quiet pbb-hint">Pick a category on the left, or search above.</p>`
+        : items === "loading" ? `<p class="quiet pbb-hint">Loading…</p>`
+        : items.length ? items.map(r => `<div class="pbb-it"><div class="pbb-in"><b>${esc(pbName(r.name))}</b><span class="quiet">${esc([r.sku, r.manufacturer].filter(Boolean).join(" · "))}</span></div>
+            <span class="num">${money(r.unit_price)}</span>
+            <button type="button" class="btn ${PBB.added.has(r.id) ? "pbb-added" : ""}" data-pbb-add="${r.id}">${PBB.added.has(r.id) ? "Added ✓" : "Add"}</button></div>`).join("")
+        : `<p class="quiet pbb-hint">Nothing here.</p>`}</div>
+    </div></div>`;
+  const q = $("#pbb-q"); let tm;
+  q.addEventListener("input", () => { clearTimeout(tm); tm = setTimeout(() => { PBB.q = q.value.trim(); if (PBB.q.length >= 2) { PBB.cat = null; pbbLoad({ p_search: PBB.q }); } }, 300); });
+  $("#pbb-done").addEventListener("click", closePbBrowse);
+  back.querySelectorAll("[data-pbb-tw]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.pbbTw); PBB.open.has(id) ? PBB.open.delete(id) : PBB.open.add(id); drawPbBrowse(); }));
+  back.querySelectorAll("[data-pbb-cat]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.pbbCat); PBB.cat = id; PBB.q = ""; PBB.open.add(id); pbbLoad({ p_category: id }); }));
+  back.querySelectorAll("[data-pbb-add]").forEach(b => b.addEventListener("click", () => {
+    const r = (PBB.items || []).find(x => x.id === Number(b.dataset.pbbAdd)); if (!r) return;
+    EST.opts[PBB.oi].lines.push({ item_id: r.id, description: pbName(r.name), qty: 1, price: Number(r.unit_price) || 0 }); EST.dirty = true;
+    PBB.added.add(r.id); b.textContent = "Added ✓"; b.classList.add("pbb-added"); $("#pbb-done").textContent = `Done (${PBB.added.size} added)`; }));
+}
+async function pbbLoad(args) {
+  const my = ++PBB.seq; PBB.items = "loading"; drawPbBrowse(); if (PBB.q) $("#pbb-q")?.focus();
+  const { data, error } = await db.rpc("pb_list", Object.assign({ p_search: null, p_type: "all", p_active: true, p_category: null, p_flag: null, p_limit: 200 }, args));
+  if (my !== PBB.seq) return;
+  PBB.items = error ? [] : data || []; drawPbBrowse();
+  if (PBB.q) { const q = $("#pbb-q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !document.getElementById("pbb-back")?.hidden && document.getElementById("pbb-back")) closePbBrowse(); });
+
 // ----- a sales call (site visit): "Are you on site?", then Create estimate turns green; or change it to a phone booking -----
 async function openSalesCall(jobId, msg) {
   setPage("scall=" + jobId, "sales", "Sales call");
@@ -5824,7 +5906,7 @@ function renderEstEdit() {
           <td class="r"><input class="est-p" data-lp="${i}:${k}" value="${Number(l.price).toFixed(2)}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="Price each"></td>
           <td class="r num est-lt">${money((Number(l.qty) || 0) * (Number(l.price) || 0))}</td>
           <td>${closed ? "" : `<button class="link danger" type="button" data-ldel="${i}:${k}" title="Take it off">✕</button>`}</td></tr>`).join("") || `<tr><td colspan="5" class="quiet">Nothing in this option yet.</td></tr>`}</tbody></table>
-        ${closed ? "" : `<div class="est-add"><input type="search" class="est-find" data-ofind="${i}" placeholder="Add from the price book: model, name or code…" autocomplete="off"><div class="est-res hidden" data-ores="${i}"></div>
+        ${closed ? "" : `<div class="est-add"><div class="est-add-row"><input type="search" class="est-find" data-ofind="${i}" placeholder="Add from the price book: model, name or code…" autocomplete="off"><button class="btn quiet-btn est-browse" type="button" data-obrowse="${i}" title="Open the price book and pick items from it">📖 Price book</button></div><div class="est-res hidden" data-ores="${i}"></div>
           <button class="link" type="button" data-oline="${i}">+ Add a line of my own</button></div>`}
         <div class="est-tot"><span>Subtotal <b>${money(tot(o))}</b></span><span>HST (13%) <b>${money(tot(o) * HST)}</b></span><span class="est-big">Total <b>${money(tot(o) * (1 + HST))}</b></span></div>
       </section>`).join("")}
@@ -5849,6 +5931,7 @@ function wireEstEdit() {
   m.querySelectorAll("[data-ldel]").forEach(el => el.addEventListener("click", () => { const [i, k] = ij(el.dataset.ldel); EST.opts[i].lines.splice(k, 1); dirty(); renderEstEdit(); }));
   m.querySelectorAll("[data-oline]").forEach(el => el.addEventListener("click", () => { const i = Number(el.dataset.oline); EST.opts[i].lines.push({ item_id: null, description: "", qty: 1, price: 0 }); dirty(); renderEstEdit();
     const ins = m.querySelectorAll(`[data-oi="${i}"] .est-d`); ins[ins.length - 1]?.focus(); }));
+  m.querySelectorAll("[data-obrowse]").forEach(b => b.addEventListener("click", () => openPbBrowse(Number(b.dataset.obrowse))));
   $("#est-newopt")?.addEventListener("click", () => { const names = ["Good", "Better", "Best"]; if (EST.opts.length === 1 && /^option 1$/i.test(EST.opts[0].name)) EST.opts[0].name = "Good";
     EST.opts.push({ name: names[EST.opts.length] || "Option " + (EST.opts.length + 1), recommended: false, lines: [] }); dirty(); renderEstEdit(); });
   // price book search for each option
