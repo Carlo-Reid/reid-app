@@ -151,7 +151,7 @@ def guess(lc, tests, skip=()):
     return -1
 
 
-READER = "2"
+READER = "3"
 HEADWORD = r"customer|cust\b|client|name|reference|\bref\b|phone|amount|response|status|transaction|date|type|payor|payer|settled"
 BANKCOL = r"bank|transit|institution|routing|branch|acct|account|iban|swift|card"
 
@@ -162,7 +162,9 @@ def read_list(name, data):
     allrows = sheets_of(name, data)
     # the heading row: the one near the top with the most heading words (bank reports put totals above the table)
     score = [sum(1 for v in r if v and len(v) <= 40 and re.search(HEADWORD, v, re.I)) for r in allrows[:200]]
-    hi = max(range(len(score)), key=lambda k: (score[k], -k)) if score and max(score) >= 1 else 0
+    if not score or max(score) < 3:   # a real heading row has several headings (Transaction ID, First Name, Amount...)
+        return None, None, "No list of customers was found in the file (it may have no transactions this time).", None, None
+    hi = max(range(len(score)), key=lambda k: (score[k], -k))
     head = [v.strip() for v in (allrows[hi] if allrows else [])]
     lc = [h.lower() for h in head]
     bank = tuple(j for j, h in enumerate(lc) if re.search(BANKCOL, h) and not re.search(r"customer|cust\b|client|name", h))
