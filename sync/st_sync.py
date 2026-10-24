@@ -2837,6 +2837,56 @@ REVOKE EXECUTE ON FUNCTION public.partner_booking_link_customer(bigint, bigint),
 GRANT EXECUTE ON FUNCTION public.partner_booking_link_customer(bigint, bigint), public.htin_stats(bigint) TO authenticated;
 
 NOTIFY pgrst, 'reload schema';
+-- 99zz12_partner_rates.sql
+-- =====================================================================
+-- Partner rates (Vista): labour per hour and the service call, saved on the partner.
+-- The invoice for a partner's job reads them with the job's tank answer:
+--   we pay for the tank  → bill the tank and labour;  Vista pays for the tank → labour only (tank no charge);
+--   service call → the service call rate (+ labour). Parts and materials added by hand keep their price.
+-- Safe to run more than once.
+-- =====================================================================
+ALTER TABLE public.partners ADD COLUMN IF NOT EXISTS rate_labour numeric(10,2);
+ALTER TABLE public.partners ADD COLUMN IF NOT EXISTS rate_service_call numeric(10,2);
+UPDATE public.partners SET rate_labour = 100, rate_service_call = 110
+WHERE name ILIKE 'vista%' AND rate_labour IS NULL AND rate_service_call IS NULL;
+
+CREATE OR REPLACE FUNCTION public.partner_rates(p_partner bigint)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE
+    (SELECT jsonb_build_object('partner', id, 'name', name, 'labour', rate_labour, 'service_call', rate_service_call) FROM partners WHERE id = p_partner) END
+$$;
+
+CREATE OR REPLACE FUNCTION public.partner_rates_set(p_partner bigint, p_labour numeric, p_service_call numeric)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_old jsonb;
+BEGIN
+  IF public.current_staff_role() IS DISTINCT FROM 'owner' AND NOT public.has_permission('pricebook.edit') THEN RAISE EXCEPTION 'Only owners can change partner rates'; END IF;
+  IF p_labour < 0 OR p_service_call < 0 THEN RAISE EXCEPTION 'Rates can''t be below zero'; END IF;
+  SELECT jsonb_build_object('labour', rate_labour, 'service_call', rate_service_call) INTO v_old FROM partners WHERE id = p_partner;
+  UPDATE partners SET rate_labour = p_labour, rate_service_call = p_service_call, updated_at = now() WHERE id = p_partner;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values, new_values)
+  VALUES ('partners', p_partner, 'update', public.current_app_user_id(), v_old, jsonb_build_object('labour', p_labour, 'service_call', p_service_call, 'change', 'partner rates'));
+END $$;
+
+-- what the invoice needs: the job's partner, its rates and the tank answer
+CREATE OR REPLACE FUNCTION public.inv_partner_rule(p_invoice bigint)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE
+    (SELECT jsonb_build_object('partner', p.id, 'name', p.name, 'labour', p.rate_labour, 'service_call', p.rate_service_call, 'tank', j.tank_payer,
+       'lines', (SELECT coalesce(jsonb_object_agg(x.id, CASE
+                  WHEN pi.item_type = 'equipment' THEN 'tank'
+                  WHEN x.description ~* '^(diagnostic service call|service-business hours)' OR pi.name ~* '^service-business hours' THEN 'service_call'
+                  WHEN (x.description ~* '^labou?r charge' AND x.description !~* '^labou?r charge helper') OR pi.name ~* '^labou?r charge tech' THEN 'labour'
+                  ELSE 'other' END), '{}')
+                 FROM invoice_lines x LEFT JOIN pricebook_items pi ON pi.id = x.item_id WHERE x.invoice_id = i.id AND x.kit_parent_line_id IS NULL))
+     FROM invoices i JOIN jobs j ON j.id = i.job_id JOIN partners p ON p.id = coalesce(j.partner_id, i.bill_to_partner_id)
+     WHERE i.id = p_invoice AND (p.rate_labour IS NOT NULL OR p.rate_service_call IS NOT NULL)) END
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.partner_rates(bigint), public.partner_rates_set(bigint, numeric, numeric), public.inv_partner_rule(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.partner_rates(bigint), public.partner_rates_set(bigint, numeric, numeric), public.inv_partner_rule(bigint) TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
 """
 
 # small pieces that only add functions (no table changes), applied on their own so a lock on APP_SCHEMA can't hold them up
@@ -4171,7 +4221,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL AND to_regprocedure('public.customer_partner_bookings(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_tank_payer(bigint,text)') IS NOT NULL AND to_regprocedure('public.htin_stats(bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_link_customer(bigint,bigint)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL AND to_regprocedure('public.customer_partner_bookings(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_tank_payer(bigint,text)') IS NOT NULL AND to_regprocedure('public.htin_stats(bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_link_customer(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.inv_partner_rule(bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")

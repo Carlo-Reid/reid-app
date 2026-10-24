@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-24.101013">
+<meta name="app-version" content="2026-10-24.125657">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3721,6 +3721,9 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .htin-go:hover, .nfp-go:hover { text-decoration-style: solid; color: #075a63 !important; }
 .htin-go::after, .nfp-go::after { content: " ↗"; font-size: .85em; font-weight: 400; text-decoration: none; display: inline-block; margin-left: 1px; }
 .nfp-go { text-align: left; font: inherit; }
+.ie-prule { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; background: #fdf6e7; border: 1px solid #ecd9a8; border-radius: 10px; padding: 10px 14px; margin: 8px 0 12px; color: #4a3a12; }
+.ie-prule .quiet { color: #6b5a30; font-size: 12.5px; margin-top: 2px; } .ie-prule-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.pbl-rates b small { font-size: 12px; font-weight: 600; } .pbl-rates-f input { width: 64px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; }
 .htin-late { color: #b02a2a; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
 .htin-cb { font-size: 11.5px; font-weight: 600; color: #0b7480; white-space: nowrap; } .htin-cb.due { color: #fff; background: #c2410c; border-radius: 5px; padding: 1px 6px; }
 .htin-tank { font-size: 11.5px; font-weight: 600; color: #5a3d00; background: #fdf0d9; border-radius: 5px; padding: 1px 6px; width: fit-content; }
@@ -11478,16 +11481,28 @@ async function openPartnerPage(id) {
 // ----- the booking list on a partner's page
 const PBL = { partner: null, data: null, tab: "all", q: "", msg: "", err: false, nf: null };
 try { PBL.tab = localStorage.getItem("reid.pblTab") || "all"; } catch {}
+function pblRatesWire() {   // owners change the partner's labour and service call rates
+  $("#pbl-rates-edit")?.addEventListener("click", e => { const box = e.currentTarget.closest(".pbl-rates"), R = PBL.rates || {};
+    box.innerHTML = `<span class="pbl-rates-f">Labour $<input id="pr-l" inputmode="decimal" value="${R.labour ?? ""}" aria-label="Labour per hour">/hr · Service call $<input id="pr-s" inputmode="decimal" value="${R.service_call ?? ""}" aria-label="Service call"></span>
+      <span><button class="link" type="button" id="pr-save">Save</button> · <button class="link" type="button" id="pr-x">Cancel</button></span>`;
+    $("#pr-x").addEventListener("click", () => { $(".pbl-stats").outerHTML = pblStatsHtml(); pblRatesWire(); });
+    $("#pr-save").addEventListener("click", async () => { const l = Number($("#pr-l").value.replace(/[$,]/g, "")), s2 = Number($("#pr-s").value.replace(/[$,]/g, ""));
+      if (!isFinite(l) || !isFinite(s2)) return pblSay("Type the rates as numbers.", true);
+      const { error } = await db.rpc("partner_rates_set", { p_partner: PBL.partner, p_labour: l, p_service_call: s2 }); if (error) return pblSay("Not saved: " + rpcErr(error), true);
+      PBL.rates = { ...PBL.rates, labour: l, service_call: s2 }; $(".pbl-stats").outerHTML = pblStatsHtml(); pblRatesWire(); pblSay("Rates saved. New invoices use them with \"Use rates\"."); }); });
+}
 function pblStatsHtml() {   // #10: the partner's numbers
   const T = PBL.stats || { avg_days: "…", new_month: "…", done_month: "…", waiting_2d: "…", owed: PBL.statsOwed ? "…" : null };
   const box = (n, l, t) => `<span class="pbl-stat" ${t ? `title="${esc(t)}"` : ""}><b>${n}</b><span>${l}</span></span>`;
   return `<div class="pbl-stats" aria-label="Numbers">${box(T.avg_days ?? "—", "avg days to schedule", T.avg_days_90 != null ? `Last 90 days: ${T.avg_days_90} days` : "")}
     ${box(T.new_month ?? 0, "new this month")}${box(T.done_month ?? 0, "done this month", `Last month: ${T.done_last_month ?? 0}`)}
     ${box(T.waiting_2d ?? 0, "waiting 2+ days for a date", `${T.waiting ?? 0} need a date in all`)}
+    ${PBL.rates ? `<span class="pbl-stat pbl-rates"><b>${PBL.rates.labour != null ? money(PBL.rates.labour) : "—"}<small>/hr</small> · ${PBL.rates.service_call != null ? money(PBL.rates.service_call) : "—"}</b><span>labour · service call rate${ME.role === "owner" ? ` · <button class="link" type="button" id="pbl-rates-edit">change</button>` : ""}</span></span>` : ""}
     ${T.owed != null ? box(typeof T.owed === "number" ? money(T.owed) : T.owed, "owed on HTIN jobs", `${T.owed_n ?? 0} invoice${T.owed_n === 1 ? "" : "s"} with a balance`) : ""}</div>`;
 }
 async function pblLoad() {
-  db.rpc("htin_stats", { p_partner: PBL.partner }).then(({ data }) => { PBL.stats = data || null; PBL.statsOwed = data?.owed != null; const el = document.querySelector(".pbl-stats"); if (el && data) el.outerHTML = pblStatsHtml(); });
+  db.rpc("partner_rates", { p_partner: PBL.partner }).then(({ data }) => { PBL.rates = data && (data.labour != null || data.service_call != null) ? data : null; const el = document.querySelector(".pbl-stats"); if (el) { el.outerHTML = pblStatsHtml(); pblRatesWire(); } });
+  db.rpc("htin_stats", { p_partner: PBL.partner }).then(({ data }) => { PBL.stats = data || null; PBL.statsOwed = data?.owed != null; const el = document.querySelector(".pbl-stats"); if (el && data) { el.outerHTML = pblStatsHtml(); pblRatesWire(); } });
   const { data, error } = await db.rpc("partner_bookings_list", { p_partner: PBL.partner, p_tab: "all" });   // the whole list; Open / Closed just hide rows
   PBL.data = error ? { error: /PGRST202|could not find/i.test(error.message || "") ? "Run RUN SETUP NOW.bat first (file 99r)." : rpcErr(error) } : data;
   htinBuild();
@@ -12004,6 +12019,7 @@ function pblShow() {
   host.querySelectorAll("[data-pbl-pg]").forEach(b => b.addEventListener("click", () => { PBL.pg = Number(b.dataset.pblPg); pblShow(); host.querySelector(".htin-tbl")?.scrollIntoView({ block: "start" }); }));
   host.querySelector("#pbl-per")?.addEventListener("change", e => { PBL.per = Number(e.target.value) || 0; PBL.pg = 0; try { localStorage.setItem("reid.pblPer", PBL.per); } catch {} pblShow(); });
   host.querySelector("#pbl-refresh")?.addEventListener("click", () => { PBL.msg = ""; pblLoad(); });
+  pblRatesWire();
   host.querySelectorAll("[data-pbl-st]").forEach(b => b.addEventListener("click", () => { if (PBL.st === b.dataset.pblSt) return; PBL.st = b.dataset.pblSt; PBL.msg = ""; PBL.pg = 0;
     try { localStorage.setItem("reid.pblSt", PBL.st); } catch {} pblShow(); }));
   host.querySelectorAll("[data-pbl-tab]").forEach(b => b.addEventListener("click", () => { if (PBL.tab === b.dataset.pblTab) return; PBL.tab = b.dataset.pblTab; PBL.msg = ""; PBL.pg = 0;
@@ -13233,8 +13249,8 @@ const alertMsg = m => { const t = document.createElement("div"); t.className = "
 async function openInvoiceEditor(id, msg) {
   if (location.hash !== "#invoice-edit=" + id) setPage("invoice-edit=" + id, "invoice", "invoice");
   if (!document.querySelector(".ie")) $("#main").innerHTML = `<div class="loading">Opening the invoice…</div>`;
-  const [{ data, error }, cost, bill] = await Promise.all([db.rpc("inv_editor", { p_invoice: id }), db.rpc("inv_costing", { p_invoice: id }), db.rpc("inv_bill_info", { p_invoice: id })]);
-  if (data) { data.cost = cost.error ? null : cost.data; data.bill = bill.error || !bill.data ? null : { ...bill.data, invoice_id: id }; }
+  const [{ data, error }, cost, bill, prule] = await Promise.all([db.rpc("inv_editor", { p_invoice: id }), db.rpc("inv_costing", { p_invoice: id }), db.rpc("inv_bill_info", { p_invoice: id }), db.rpc("inv_partner_rule", { p_invoice: id })]);
+  if (data) { data.cost = cost.error ? null : cost.data; data.bill = bill.error || !bill.data ? null : { ...bill.data, invoice_id: id }; data.prule = prule.error ? null : prule.data; }
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the invoice</h2>${esc(error ? rpcErr(error) : "It no longer exists")}</div></div>`; return; }
   IE = { ...(IE?.id === id ? IE : {}), ...data, id };
   await pbLoadLooks((data.lines || []).map(l => l.item_id).filter(Boolean)).catch(() => {});
@@ -13410,6 +13426,7 @@ function renderInvoiceEditor(msg) {
         <div class="seg" role="group"><button type="button" data-ie-look="" aria-pressed="${!I.look_partner_id}">Reid Heating &amp; Cooling</button>${I.looks.map(l =>
           `<button type="button" data-ie-look="${l.id}" aria-pressed="${I.look_partner_id === l.id}">${esc(l.name)} <span class="ie-look-sub">installed by Reid</span></button>`).join("")}</div></div>` : ""}
       ${billToHtml(I.bill, "ie")}
+      ${I.prule ? iePartnerRuleHtml(I, edit) : ""}
       <table class="ie-table"><thead><tr><th>Description</th><th class="r">Qty</th>${seeCost() ? `<th class="r">Cost</th>` : ""}<th class="r">Price</th><th class="r">HST</th><th class="r">Amount</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
         ${I.lines.length ? I.lines.map((l, n) => `<tr data-ie-line="${l.id}" class="${l.hidden ? "ie-hid" : ""} ${l.kit_parent ? "ie-kitline" : ""}" ${l.kit_parent && !IE.kitOpen?.has(l.kit_parent) && I.lines.some(x => x.id === l.kit_parent) ? "hidden" : ""}>
           <td>${l.kit_parent ? `<div class="ie-kitof">Add-on kit</div><div>${pbNmTxt(l.item_id, pbName(l.description))}</div>` : edit ? `<textarea class="ie-desc" data-ie-f="description" style="${esc(pbNmCss(l.item_id))}" rows="${Math.min(6, Math.max(1, Math.ceil((l.description || "").length / 70), (l.description || "").split("\n").length))}">${esc(l.description)}</textarea>`
@@ -13474,8 +13491,37 @@ function renderInvoiceEditor(msg) {
   $("#main").scrollTop = top;
   wireInvoiceEditor();
 }
+// a partner's job (Vista): their rates and the tank answer from booking
+const IE_LABOUR = l => /^labou?r charge(?! helper)/i.test(l.description || "") || /^labou?r charge tech/i.test(l.pbname || "");
+const IE_SVC = l => /^(diagnostic service call|service-business hours)/i.test(l.description || "") || /^service-business hours/i.test(l.pbname || "");
+function iePartnerRuleHtml(I, edit) {
+  const R = I.prule, nm = esc(String(R.name || "Partner").replace(/\s*\(.*\)\s*$/, "").replace(/ credit$/i, "")), m = v => v != null ? money(v) : "—";
+  const rule = { reid: `We pay for the tank: bill ${nm} for the tank and the labour.`, partner: `${nm} pays for the tank: ${nm} pays you the labour and pays your supplier for the tank (pick the supplier in "Who pays for the tank" above).`, service: `Service call: the service call rate, plus labour if needed.` }[R.tank]
+    || `Who pays for the tank wasn't picked when this was booked.`;
+  return `<div class="ie-prule"><div><b>${nm} job</b> · ${esc(rule)}<div class="quiet">${nm} rates: labour ${m(R.labour)}/hr · service call ${m(R.service_call)}. Parts and materials you add keep the price you type.</div></div>
+    ${edit ? `<div class="ie-prule-acts">${R.tank ? "" : BK_TANK.map(([k, x]) => `<button class="btn quiet-btn small" type="button" data-ie-tpick="${k}">${esc(x)}</button>`).join("")}
+      <button class="btn" type="button" id="ie-prates">Use ${nm} rates</button></div>` : ""}</div>`;
+}
+async function ieApplyPartnerRates() {
+  const I = IE, R = I.prule, lines = I.lines.filter(l => !l.kit_parent), K = R.lines || {};   // each line's kind comes from the price book: tank, labour, service_call
+  let n = 0; const fail = [];
+  for (const l of lines) {
+    const kind = K[l.id] || (IE_SVC(l) ? "service_call" : IE_LABOUR(l) ? "labour" : "other"), it = { item_type: kind === "tank" ? "equipment" : "" };
+    let rate = null; if (kind === "service_call" && R.service_call != null) rate = R.service_call; else if (kind === "labour" && R.labour != null) rate = R.labour;
+    if (rate != null && Math.abs(Number(l.unit_price) - Number(rate)) > 0.004 && !l.no_charge) {
+      const { error } = await db.rpc("inv_update_line", { p_line: l.id, p: { unit_price: String(rate) } }); error ? fail.push(rpcErr(error)) : n++; }
+  }
+  // the tank: Vista pays the supplier → open "pays me the labour, pays my supplier for the tank" (the supplier still has to be picked); we pay → "pays me everything"
+  let tk = "";
+  if (R.tank === "partner" && !I.bill?.supplier_pay && lines.some(l => K[l.id] === "tank")) { TANK_OPEN.add(I.id); tk = ` Now pick the supplier ${String(R.name || "the partner").replace(/ credit$/i, "")} pays for the tank (Who pays for the tank).`; }
+  if (R.tank === "reid" && I.bill?.supplier_pay) { const { error } = await db.rpc("inv_set_supplier_pay", { p_invoice: I.id, p_supplier: null, p_amount: null }); if (!error) tk = " The tank is billed to them (they pay you everything)."; }
+  return fail.length ? "Not all saved: " + fail[0] : (n ? `${n} line${n === 1 ? "" : "s"} set to the ${String(R.name || "partner").replace(/ credit$/i, "")} rates.` : "Labour and service call already match the rates.") + tk;
+}
 function wireInvoiceEditor() {
   const I = IE, reload = m => openInvoiceEditor(I.id, m);
+  $("#ie-prates")?.addEventListener("click", async e => { e.currentTarget.disabled = true; reload(await ieApplyPartnerRates()); });
+  document.querySelectorAll("[data-ie-tpick]").forEach(b => b.addEventListener("click", async () => {
+    const { error } = await db.rpc("set_job_tank_payer", { p_job: I.job_id, p_who: b.dataset.ieTpick }); reload(error ? "Not saved: " + rpcErr(error) : "Saved: " + b.textContent + "."); }));
   const call = async (fn, args, m) => { const { error } = await db.rpc(fn, args); if (error) { reload("Not saved: " + rpcErr(error)); return false; } await reload(m); return true; };
   document.querySelectorAll("[data-ie-f]").forEach(el => el.addEventListener("change", () => {
     const tr = el.closest("tr"), k = el.dataset.ieF; let v = el.type === "checkbox" ? el.checked : el.value;
