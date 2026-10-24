@@ -3863,6 +3863,9 @@ mark.ow-amt-hit { background: #FDE68A; color: #3b2a00; padding: 1px 5px; border-
 .ovd-b b{font-size:18px}.ovd-b.on{border-color:var(--blue);background:var(--blue-wash)}
 .err-bar{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:9999;display:flex;gap:12px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 32px);
   background:var(--red-wash);color:var(--ink);border:1px solid var(--red);border-radius:12px;padding:10px 14px;box-shadow:0 6px 24px rgba(0,0,0,.18)}
+.td-day{font-size:17px;margin:0 0 12px}.td-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:0 0 16px}
+.td-card{display:flex;flex-direction:column;gap:3px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.td-card b{font-size:22px}.td-t{color:var(--steel);font-size:13px}.td-warn{border-color:var(--amber);background:var(--amber-wash)}.td-card .link{align-self:flex-start;margin-top:4px}
 .ss-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px;max-width:820px}
 .ss-card h2{margin:0 0 6px;font-size:18px}.ss-test{border-color:var(--amber);background:var(--amber-wash)}.ss-live{border-color:var(--green);background:var(--green-wash)}
 .ss-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0}.ss-row input{min-width:260px}
@@ -13144,6 +13147,37 @@ function xpShell(hash, eyebrow, title, intro) {
 }
 const xpErr = e => /PGRST202|could not find/i.test(e?.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(e);
 const xpHere = hash => document.querySelector(`.xp-page[data-xp="${hash}"]`);
+// ---------- Today: the owner's morning look (improvement 10) ----------
+xpAdd({ link: "today-link", hash: "today", show: () => ME.role === "owner", open: openToday });
+async function openToday() {
+  const body = xpShell("today", "Owner", "Today", "");
+  const { data: T, error } = await db.rpc("owner_today");
+  if (!xpHere("today")) return;
+  if (error || !T) { body.innerHTML = `<div class="staff-msg err">${esc(error ? xpErr(error) : "Owners only.")}</div>`; return; }
+  const go = (fn, label) => typeof window[fn] === "function" || typeof globalThis[fn] === "function" ? `<button class="link" type="button" data-today-go="${fn}">${label} ›</button>` : "";
+  const card = (title, big, sub, link, warn) => `<div class="td-card ${warn ? "td-warn" : ""}"><span class="td-t">${title}</span><b>${big}</b>${sub ? `<span class="quiet">${sub}</span>` : ""}${link || ""}</div>`;
+  const pct = (a, b) => b > 0 ? ` (${a >= b ? "+" : ""}${Math.round((a - b) / b * 100)}% vs same time last month)` : "";
+  const day = new Date(T.today + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" });
+  const sync = T.sync, timer = T.timer;
+  body.innerHTML = `<p class="td-day">Good morning. It's ${esc(day)}.</p>
+    ${T.test_mode ? `<div class="ds-test">🧪 Sending is in test mode: everything goes to ${esc(T.test_mode)}. ${go("openSendSettings", "Sending")}</div>` : ""}
+    <div class="td-grid">
+      ${card("Invoiced yesterday", money(T.invoiced?.total || 0), `${T.invoiced?.n || 0} invoices`)}
+      ${card("Paid yesterday", money(T.paid?.total || 0), `${T.paid?.n || 0} payments`)}
+      ${card("This month so far", money(T.month?.month || 0), pct(Number(T.month?.month || 0), Number(T.month?.last_month || 0)).replace(/^ \(|\)$/g, ""))}
+      ${card("Calls today", Number(T.calls?.n || 0), `${T.calls?.done || 0} done${T.calls?.cancelled ? ` · ${T.calls.cancelled} cancelled` : ""}`, go("openDispatch", "Dispatch"))}
+      ${card("Owing", money(T.owing?.all || 0), `${money(T.owing?.over90 || 0)} is 90+ days (${T.owing?.over90_n || 0} invoices)`, go("openOverdue", "Overdue"), Number(T.owing?.over90 || 0) > 0)}
+      ${card("Estimates yesterday", `${T.estimates?.sent || 0} sent · ${T.estimates?.sold || 0} sold`, `${Number(T.estimates?.open30 || 0).toLocaleString()} still open after 30 days`, go("openOldEstimates", "Old estimates"))}
+      ${card("Sent to customers yesterday", Number(T.sends?.sent || 0), `${T.sends?.opened || 0} opened · ${T.sends?.viewed || 0} viewed${T.sends?.forwarded ? ` · ${T.sends.forwarded} forwarded` : ""}${T.sends?.failed ? ` · ${T.sends.failed} not sent` : ""}`, go("openSent", "Sent"), T.sends?.failed > 0)}
+      ${card("EFT lists waiting", Number(T.eft_waiting || 0), T.eft_waiting ? "waiting for you to approve" : "nothing waiting", go("openSecurity", "Security"), T.eft_waiting > 0)}
+      ${card("Open tasks", Number(T.tasks?.open || 0), `${T.tasks?.mine || 0} are yours`, go("openFollowUps", "Tasks"))}
+      ${T.errors != null ? card("App errors (24 hours)", Number(T.errors), T.errors ? "something broke on someone's screen" : "nothing broke", go("openAppErrors", "App errors"), T.errors > 0) : ""}
+      ${T.no_cell ? card("Staff with no cell", T.no_cell, "texts can't reach them", go("openSendSettings", "Fix"), true) : ""}
+    </div>
+    <p class="quiet">${sync ? `Last ServiceTitan sync: ${esc(fmtWhen(sync.started_at))}${sync.ok === false ? ` · <b>it failed</b>${sync.error ? ": " + esc(sync.error) : ""}` : sync.finished_at ? " · finished" : " · still running or stopped"}.` : ""}
+      ${timer ? ` Email checkers every 10 minutes: ${timer.timer && timer.key ? "on" : timer.timer ? "waiting for the GitHub key" : "not available"}.` : ""}</p>`;
+  body.querySelectorAll("[data-today-go]").forEach(b => b.addEventListener("click", () => { const f = globalThis[b.dataset.todayGo]; if (typeof f === "function") f(); }));
+}
 // ---------- Safety net: a break shows "Something went wrong · Try again" and is written down for the owner (improvement 8) ----------
 const ERRS = { seen: new Map(), shown: 0 };
 function errNoise(m) { return !m || /ResizeObserver loop|^Script error\.?$|AbortError|The user aborted|Load failed$|NetworkError when attempting|Failed to fetch dynamically/i.test(m); }
