@@ -3858,6 +3858,11 @@ mark.ow-amt-hit { background: #FDE68A; color: #3b2a00; padding: 1px 5px; border-
 :root[data-theme="desert"] body:not([data-page="dispatch"]):not([data-page="dispatchmap"]) :is(#main, #search-page) .seg button[aria-pressed="true"] { color: #f2d29b !important; }
 :root[data-theme="desert"] .calls-table th { background: #193840; color: #dcb386; }
 /* ===== END DESERT ===== */
+.ss-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px;max-width:820px}
+.ss-card h2{margin:0 0 6px;font-size:18px}.ss-test{border-color:var(--amber);background:var(--amber-wash)}.ss-live{border-color:var(--green);background:var(--green-wash)}
+.ss-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0}.ss-row input{min-width:260px}
+.ss-confirm{margin-top:10px;padding:10px;border-radius:8px;background:var(--red-wash);border:1px solid var(--red)}.ss-miss td:first-child{color:var(--red);font-weight:600}
+.ss-cell{display:flex;gap:6px;align-items:center}.ss-cell input{width:150px}
 </style>
 </head>
 <body>
@@ -13134,6 +13139,42 @@ function xpShell(hash, eyebrow, title, intro) {
 }
 const xpErr = e => /PGRST202|could not find/i.test(e?.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(e);
 const xpHere = hash => document.querySelector(`.xp-page[data-xp="${hash}"]`);
+// ---------- Sending: Test or Live, the test address, staff cells (improvement 4) ----------
+xpAdd({ link: "sendset-link", hash: "sending", show: () => ME.role === "owner", open: openSendSettings });
+async function openSendSettings(msg, bad) {
+  const body = xpShell("sending", "Settings", "Sending", "How estimates, invoices and anything else go out by email and text.");
+  const { data: D, error } = await db.rpc("send_settings");
+  if (!xpHere("sending")) return;
+  if (error || !D) { body.innerHTML = `<div class="staff-msg err">${esc(error ? xpErr(error) : "Owners only.")}</div>`; return; }
+  const test = !!D.test_to, staff = D.staff || [], noCell = staff.filter(x => !x.cell), me = staff.find(x => x.employee_id === D.me);
+  body.innerHTML = `${msg ? `<div class="staff-msg ${bad ? "err" : "ok"}">${esc(msg)}</div>` : ""}
+    <section class="ss-card ${test ? "ss-test" : "ss-live"}">
+      <h2>${test ? "🧪 Test mode" : "✅ Live"}</h2>
+      <p>${test ? `Everything goes to <b>${esc(D.test_to)}</b>, and texts to the sender's own cell, marked with who they were meant for. Customers get nothing.`
+               : "Emails and texts go to the customers you pick."}</p>
+      <p class="quiet">Sent so far: ${Number(D.sent?.test || 0)} test, ${Number(D.sent?.live || 0)} live.</p>
+      ${test ? `<form id="ss-test" class="ss-row" autocomplete="off"><label>Test address <input type="email" id="ss-to" value="${esc(D.test_to)}" required></label> <button class="btn quiet-btn" type="submit">Save</button></form>
+        <div class="ss-row"><button class="btn" type="button" id="ss-live">Go live: send to customers</button></div>`
+             : `<div class="ss-row"><button class="btn quiet-btn" type="button" id="ss-back">Back to test mode (send everything to me)</button></div>`}
+      <div class="ss-confirm hidden" id="ss-confirm"><b>Go live?</b> From now on, what staff send goes to customers. <button class="btn" type="button" id="ss-yes">Yes, go live</button> <button class="link" type="button" id="ss-no">Cancel</button></div>
+    </section>
+    <section class="ss-card"><h2>Staff cell numbers</h2>
+      <p>${noCell.length ? `<b>${noCell.length} of ${staff.length}</b> people have no cell${me && !me.cell ? `, <b>including you</b> (in test mode your texts come to it)` : ""}.` : "Everyone has a cell. 👍"}</p>
+      <table class="calls-table"><thead><tr><th>Name</th><th>Role</th><th>Cell</th></tr></thead><tbody>
+      ${staff.map(x => `<tr class="${x.cell ? "" : "ss-miss"}"><td>${esc(x.name)}${x.employee_id === D.me ? ` <span class="quiet">(you)</span>` : ""}</td><td>${esc(x.role || "")}</td>
+        <td><form class="ss-cell" data-ss-emp="${x.employee_id}" autocomplete="off"><input type="tel" value="${esc(x.cell ? phoneFmt(x.cell) : "")}" placeholder="613-555-1234"> <button class="link" type="submit">Save</button> <span class="quiet" role="status"></span></form></td></tr>`).join("")}
+      </tbody></table></section>`;
+  const setMode = async to => { const { error: e } = await db.rpc("set_send_mode", { p_test_to: to }); openSendSettings(e ? "Not saved: " + xpErr(e) : to ? "Test mode: everything comes to " + to + "." : "Live: sending goes to customers now.", !!e); };
+  $("#ss-test")?.addEventListener("submit", e => { e.preventDefault(); setMode($("#ss-to").value.trim()); });
+  $("#ss-live")?.addEventListener("click", () => $("#ss-confirm").classList.remove("hidden"));
+  $("#ss-no")?.addEventListener("click", () => $("#ss-confirm").classList.add("hidden"));
+  $("#ss-yes")?.addEventListener("click", () => setMode(""));
+  $("#ss-back")?.addEventListener("click", () => setMode(ME.email || "carlo@homeservicegroup.ca"));
+  body.querySelectorAll("[data-ss-emp]").forEach(f => f.addEventListener("submit", async e => { e.preventDefault();
+    const st = f.querySelector("[role=status]"), inp = f.querySelector("input");
+    const { data, error: er } = await db.rpc("set_staff_cell", { p_employee: Number(f.dataset.ssEmp), p_cell: inp.value });
+    st.textContent = er ? xpErr(er) : "Saved ✓"; if (!er) { inp.value = data ? phoneFmt(data) : ""; f.closest("tr").classList.toggle("ss-miss", !data); } }));
+}
 // ---------- No phone or email: customers to fix, newest first (improvement 3) ----------
 const NOC = { what: "none", years: 3 };
 xpAdd({ link: "nocontact-link", hash: "missing-contacts", show: () => can("customers.edit"), open: openNoContact });
