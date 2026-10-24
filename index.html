@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-24.175804">
+<meta name="app-version" content="2026-10-24.183646">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3724,6 +3724,7 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .ie-prule { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; background: #fdf6e7; border: 1px solid #ecd9a8; border-radius: 10px; padding: 10px 14px; margin: 8px 0 12px; color: #4a3a12; }
 .ie-prule .quiet { color: #6b5a30; font-size: 12.5px; margin-top: 2px; } .ie-prule-acts { display: flex; flex-wrap: wrap; gap: 6px; }
 .pbl-rates b small { font-size: 12px; font-weight: 600; } .pbl-rates-f input { width: 64px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; }
+.est-sold-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; } .est-sold-acts .btn { padding: 3px 8px; font-size: 12px; min-height: 0; }
 .est-walk-f { display: grid; gap: 10px; } .est-walk-f label { display: grid; gap: 4px; font-weight: 600; font-size: 13px; }
 .est-walk-f input, .est-walk-f select { font: inherit; font-weight: 400; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper, #fff); color: var(--ink); }
 .htin-late { color: #b02a2a; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
@@ -5071,7 +5072,7 @@ async function openCustomer(id) {
       .eq("customer_id", id).order("created_at", { ascending: false }).limit(300),
     db.from("invoices").select("*")
       .eq("customer_id", id).order("invoice_date", { ascending: false }).limit(300),
-    db.from("estimates").select("id, estimate_number, status, created_at, job_id, location_id, estimate_options!estimate_options_estimate_id_fkey(name, estimate_lines(line_total))")
+    db.from("estimates").select("id, estimate_number, status, created_at, job_id, location_id, st_id, cancelled_at, estimate_options!estimate_options_estimate_id_fkey(name, estimate_lines(line_total))")
       .eq("customer_id", id).order("created_at", { ascending: false }).limit(100),
     db.from("equipment").select("*, equipment_types(name), manufacturers(name), warranty_coverages(*), locations!inner(customer_id)")
       .eq("locations.customer_id", id).order("install_date", { ascending: false, nullsFirst: false }),
@@ -6122,7 +6123,7 @@ function renderSales(msg) {
           : r.stage === "booked" ? `<button class="btn" type="button" data-sl-est="${r.job_id}">Make the estimate</button>`
           : r.stage === "estimate" ? `<button class="btn" type="button" data-sl-open="${r.est_id}">Open the estimate</button>`
           : r.stage === "install" ? `<button class="btn quiet-btn" type="button" data-sl-cust="${r.customer_id}">Open the file</button>`
-          : r.est_id ? `<button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>` : ""}${["booked", "estimate"].includes(r.stage) ? `<button class="btn quiet-btn sl-cancel" type="button" data-sl-cancel="${r.job_id}" title="Cancel this sales job and its estimate">Cancel</button>` : ""}</td></tr>`).join("")}</tbody></table>`
+          : r.est_id ? `<button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>` : ""}${(r.stage === "closed" || r.stage === "install") && r.est_id ? `<button class="btn quiet-btn" type="button" data-sl-open="${r.est_id}">Open the estimate</button>${estSoldBtns(r.est_id, !!r.st_id)}` : ""}${["booked", "estimate"].includes(r.stage) ? `<button class="btn quiet-btn sl-cancel" type="button" data-sl-cancel="${r.job_id}" title="Cancel this sales job and its estimate">Cancel</button>` : ""}</td></tr>`).join("")}</tbody></table>`
       : `<p class="quiet">${SALES.tab === "open" ? "No open sales jobs. Press + New sales job to start one." : "Nothing here."}</p>`}
   </article>`;
   document.querySelectorAll("[data-sl-tab]").forEach(b => b.addEventListener("click", () => { SALES.tab = b.dataset.slTab; salesSave(); renderSales(); }));
@@ -6611,15 +6612,33 @@ function wireEstEdit() {
     if (!k) return; const { error } = await db.rpc("est_lost", { p_id: EST.id, p_reason: k, p_note: null });
     if (error) { say("Not saved: " + rpcErr(error), true); return; } SALES.rows = null; openEstEdit(EST.id, "Marked as not sold."); });
 }
+// a sold estimate's after-sale buttons, for lists (Sales page, customer page)
+const estSoldBtns = (id, st, inv) => `<span class="est-sold-acts"><button class="btn quiet-btn small" type="button" data-esa="walk" data-esid="${id}" title="Book a visit to walk the site before the install">📅 Walk</button>`
+  + `<button class="btn quiet-btn small" type="button" data-esa="inv" data-esid="${id}" title="Make the invoice from the sold option, or open it">🧾 Invoice</button>`
+  + (st ? "" : `<button class="btn quiet-btn small" type="button" data-esa="unsell" data-esid="${id}" title="Closed by mistake? Put it back to not sold">↩ Un-sell</button>`) + `</span>`;
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-esa]"); if (!b) return;
+  e.stopPropagation(); e.preventDefault();
+  const id = Number(b.dataset.esid), act = b.dataset.esa, onSales = document.body.dataset.page === "sales" && !location.hash.startsWith("#est="), custId = current?.c?.id;
+  const back = m => { if (onSales) { SALES.rows = null; openSales(m); } else if (custId) { openCustomer(custId); alertMsg(m); } else openEstEdit(id, m); };
+  EST.id = id; const r = await db.rpc("est_install_job", { p_id: id }); EST.ij = r.data || null;
+  if (act === "walk") return estBookWalk(back);
+  if (act === "inv") return estMakeInvoice();
+  const k = await askChoice("Un-sell this estimate?", `It goes back to not sold so it can be closed again with the right option.${EST.ij?.id ? ` Install job <b>${esc(EST.ij.number)}</b> is cancelled${EST.ij.invoice_id ? " and its unfinished invoice is removed" : ""}.` : ""}`, [["yes", "↩ Un-sell it", true], ["", "Keep it sold"]]);
+  if (k !== "yes") return;
+  const { error } = await db.rpc("est_unsell", { p_id: id });
+  error ? alertMsg("Not undone: " + rpcErr(error)) : back("Sale undone. The estimate is open again.");
+}, true);
 // after a sale: make the invoice from the sold option (on the install job)
 async function estMakeInvoice() {
   if (EST.ij?.invoice_id) return openInvoiceEditor(EST.ij.invoice_id);   // already invoiced (here or in ServiceTitan): open it
   const { data, error } = await db.rpc("est_sold_invoice", { p_id: EST.id });
-  if (error) { const el = $("#est-msg"); if (el) { el.className = "staff-msg err est-tmsg"; el.textContent = "No invoice: " + (/PGRST202|could not find/i.test(error.message || "") ? "this turns on after the next database update." : rpcErr(error)); } return; }
+  if (error) { const t = "No invoice: " + (/PGRST202|could not find/i.test(error.message || "") ? "this turns on after the next database update." : rpcErr(error)), el = $("#est-msg");
+    if (el) { el.className = "staff-msg err est-tmsg"; el.textContent = t; } else alertMsg(t); return; }
   openInvoiceEditor(data, "The invoice has the sold option's lines and prices. Check it, then finish it.");
 }
 // after a sale: book a visit to walk the site, on the install job
-async function estBookWalk() {
+async function estBookWalk(back) {
   let IJ = EST.ij || (await db.rpc("est_install_job", { p_id: EST.id })).data;
   if (!IJ?.id) {   // sold before (e.g. in ServiceTitan): make the install job for this sale first
     const { error } = await db.rpc("est_ensure_install_job", { p_id: EST.id }); if (error) return alertMsg("Couldn't make the install job: " + rpcErr(error));
@@ -6644,7 +6663,7 @@ async function estBookWalk() {
         date: W.date, start: W.win[0], end: W.win[1], duration: 60, techs: W.who ? [W.who] : [] };
       f.querySelector("[type=submit]").disabled = true;
       const { error } = await db.rpc("book_call", { p }); if (error) return draw("Not booked: " + rpcErr(error));
-      d.remove(); openEstEdit(EST.id, `Walk booked: ${dayText(W.date)}, ${winText(W.win[0], W.win[1])}.`); }); };
+      d.remove(); const m = `Walk booked: ${dayText(W.date)}, ${winText(W.win[0], W.win[1])}.`; back ? back(m) : openEstEdit(EST.id, m); }); };
   draw(); d.addEventListener("click", e => { if (e.target === d) d.remove(); }); document.body.append(d); d.querySelector("[name=date]").focus();
 }
 let BK_SALES = null;   // partners ticked for sales calls
@@ -18163,7 +18182,7 @@ function estimatesHtml(list) {
   return `<div class="scroll-box" tabindex="0" aria-label="Estimates"><table><thead><tr><th>Date</th><th>Estimate</th><th>Option</th><th class="r">Amount</th><th>Status</th></tr></thead><tbody>
     ${list.map((e, n) => { const opts = e.estimate_options || [], o = opts[0] || {}; const amt = (o.estimate_lines || []).reduce((s, l) => s + Number(l.line_total || 0), 0);
       return `<tr class="inv-row" tabindex="0" data-estimate="${e.id}" title="Open estimate"><td class="num">${fmtDate(e.created_at)}</td><td class="num"><span class="inv-link">${esc(e.estimate_number)}</span></td>
-      <td>${esc(o.name || "")}${opts.length > 1 ? ` <span class="quiet">+ ${opts.length - 1} more ${opts.length === 2 ? "option" : "options"}</span>` : ""}</td><td class="r num">${money(amt)}</td><td>${badge(e.status)}</td></tr>`; }).join("")}
+      <td>${esc(o.name || "")}${opts.length > 1 ? ` <span class="quiet">+ ${opts.length - 1} more ${opts.length === 2 ? "option" : "options"}</span>` : ""}</td><td class="r num">${money(amt)}</td><td>${badge(e.status)}${e.status === "accepted" && !e.cancelled_at && ME.role ? estSoldBtns(e.id, !!e.st_id) : ""}</td></tr>`; }).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} estimates.</div>` : ""}`;
 }
 
