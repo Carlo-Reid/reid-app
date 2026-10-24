@@ -13142,6 +13142,56 @@ function xpShell(hash, eyebrow, title, intro) {
 }
 const xpErr = e => /PGRST202|could not find/i.test(e?.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(e);
 const xpHere = hash => document.querySelector(`.xp-page[data-xp="${hash}"]`);
+// ---------- Old estimates: still open after 30+ days; close the dead ones, follow up the rest (improvement 7) ----------
+const OLDE = { days: 90, pick: new Set() };
+xpAdd({ link: "oldest-link", hash: "old-estimates", show: () => ME.role === "owner" || ME.role === "sales", open: openOldEstimates });
+async function openOldEstimates(msg, bad) {
+  const body = xpShell("old-estimates", "Sales", "Old estimates", "Estimates still open (sent or draft) after a while, oldest first. Tick the dead ones and mark them not sold, or make a task to call.");
+  const { data, error } = await db.rpc("old_estimates", { p_days: OLDE.days, p_limit: 1000 });
+  if (!xpHere("old-estimates")) return;
+  if (error || !data) { body.innerHTML = `<div class="staff-msg err">${esc(error ? xpErr(error) : "Not for you.")}</div>`; return; }
+  OLDE.data = data; OLDE.pick = new Set(); oldeDraw(msg, bad);
+}
+function oldeDraw(msg, bad) {
+  const body = xpHere("old-estimates")?.querySelector(".xp-body"); if (!body) return;
+  const n = OLDE.data.counts || {}, rows = OLDE.data.rows || [];
+  body.innerHTML = `${msg ? `<div class="staff-msg ${bad ? "err" : "ok"}">${esc(msg)}</div>` : ""}
+    <div class="ovd-buckets">${[["30", "30–89 days"], ["90", "90–179 days"], ["180", "180–364 days"], ["365", "A year or more"]].map(([k, t]) =>
+      `<button type="button" class="ovd-b ${OLDE.days === Number(k) ? "on" : ""}" data-olde-days="${k}"><span>${t}</span><b>${Number(n[k] || 0).toLocaleString()}</b></button>`).join("")}</div>
+    <section class="cl-tools"><div class="cl-row">
+      <label class="cl-group"><span class="cl-label">Open at least</span><select id="olde-days">${[30, 60, 90, 180, 365, 730].map(d => `<option value="${d}" ${OLDE.days === d ? "selected" : ""}>${d} days</option>`).join("")}</select></label>
+      <div class="cl-group"><span class="cl-label">Showing</span><b>${Number(OLDE.data.n || 0).toLocaleString()}</b>${rows.length < (OLDE.data.n || 0) ? ` <span class="quiet">(oldest ${rows.length})</span>` : ""}</div>
+      <div class="cl-group"><span class="cl-label">Ticked: ${OLDE.pick.size}</span><div><button class="btn" type="button" id="olde-close" ${OLDE.pick.size ? "" : "disabled"}>Mark not sold: no answer</button></div></div>
+    </div><div class="ss-confirm hidden" id="olde-confirm">Mark <b>${OLDE.pick.size}</b> estimate${OLDE.pick.size === 1 ? "" : "s"} as not sold (no answer)? <button class="btn" type="button" id="olde-yes">Yes</button> <button class="link" type="button" id="olde-no">Cancel</button></div></section>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table"><thead><tr><th><input type="checkbox" id="olde-all" aria-label="Tick all" ${OLDE.pick.size === rows.length ? "checked" : ""}></th><th>Estimate</th><th>Customer</th><th>Open for</th><th>Best option</th><th>Sold by</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><input type="checkbox" data-olde-pick="${r.id}" ${OLDE.pick.has(r.id) ? "checked" : ""}></td>
+        <td><button class="link" type="button" data-olde-est="${r.id}">#${esc(r.number || r.id)}</button><div class="quiet">${r.status === "draft" ? "draft" : "sent"} ${esc(fmtDate(r.date))}${r.job_type ? " · " + esc(r.job_type) : ""}</div></td>
+        <td>${r.customer_id ? `<button class="link" type="button" data-olde-cust="${r.customer_id}">${esc(r.customer || "")}</button>` : ""}</td>
+        <td>${r.days} days${r.sent ? `<div class="quiet">emailed ${esc(fmtWhen(r.sent))}</div>` : ""}</td>
+        <td>${r.total != null ? money(r.total) : `<span class="quiet">—</span>`}</td><td>${esc(r.seller || "")}</td>
+        <td><button class="link" type="button" data-olde-task="${r.id}">Make a task</button>${r.tasks ? `<div class="quiet">${r.tasks} open task${r.tasks > 1 ? "s" : ""}</div>` : ""}</td></tr>`).join("")}
+      </tbody></table></div>` : `<p class="quiet" style="padding:20px 0">Nothing that old is still open. 🎉</p>`}
+    <p class="quiet">"Best option" is the biggest option before tax. Estimates under 30 days old are never closed from here.</p>`;
+  const redraw = () => oldeDraw();
+  body.querySelectorAll("[data-olde-days]").forEach(b => b.addEventListener("click", () => { OLDE.days = Number(b.dataset.oldeDays); openOldEstimates(); }));
+  $("#olde-days")?.addEventListener("change", e => { OLDE.days = Number(e.target.value); openOldEstimates(); });
+  body.querySelectorAll("[data-olde-pick]").forEach(c => c.addEventListener("change", () => { const id = Number(c.dataset.oldePick); c.checked ? OLDE.pick.add(id) : OLDE.pick.delete(id); redraw(); }));
+  $("#olde-all")?.addEventListener("change", e => { OLDE.pick = new Set(e.target.checked ? rows.map(r => r.id) : []); redraw(); });
+  $("#olde-close")?.addEventListener("click", () => $("#olde-confirm").classList.remove("hidden"));
+  $("#olde-no")?.addEventListener("click", () => $("#olde-confirm").classList.add("hidden"));
+  $("#olde-yes")?.addEventListener("click", async () => {
+    const { data, error } = await db.rpc("old_estimates_close", { p_ids: [...OLDE.pick] });
+    try { SALES.rows = null; } catch {}
+    openOldEstimates(error ? "Not saved: " + xpErr(error) : `Marked ${data} as not sold (no answer).`, !!error); });
+  body.querySelectorAll("[data-olde-est]").forEach(b => b.addEventListener("click", () => openEstimate(Number(b.dataset.oldeEst))));
+  body.querySelectorAll("[data-olde-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.oldeCust))));
+  body.querySelectorAll("[data-olde-task]").forEach(b => b.addEventListener("click", async () => {
+    const r = rows.find(x => x.id === Number(b.dataset.oldeTask)); if (!r?.customer_id) return; b.disabled = true;
+    const { error } = await db.rpc("add_task", { p_customer_id: r.customer_id, p_visit_id: null, p_priority: 3,
+      p_note: `Follow up estimate #${r.number || r.id}${r.total != null ? " (" + money(r.total) + ")" : ""}: open ${r.days} days. Still interested?` });
+    if (error) { b.disabled = false; b.textContent = "Not made: " + xpErr(error); return; }
+    r.tasks = (r.tasks || 0) + 1; oldeDraw(`Task made for ${r.customer}. It's on your Tasks page.`); }));
+}
 // ---------- Monitoring: who's billed for monitoring, who's on EFT, returned payments (improvement 6) ----------
 const MON = { show: "all", q: "" };
 const MON_SHOW = [["all", "Everyone"], ["returned", "Payment returned"], ["no_eft", "Billed, not on EFT"], ["not_billed", "On EFT, no monitoring bill this year"], ["ok", "All good"]];
