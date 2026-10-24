@@ -3973,6 +3973,15 @@ const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const money = n => (n == null ? "" : Number(n).toLocaleString("en-CA", { style: "currency", currency: "CAD" }));
 const fmtDate = d => d ? new Date(d.length === 10 ? d + "T12:00:00" : d).toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" }) : "";
 const monthYear = d => d ? new Date(d + "T12:00:00").toLocaleDateString("en-CA", { year: "numeric", month: "short" }) : "";
+// each phone or email once (ServiceTitan often has the same one twice), main ones first, a cell beats a plain phone; skip ones already shown in "already"
+const contactKey = x => x.kind === "email" ? "e:" + String(x.value || "").trim().toLowerCase() : (x.kind === "fax" ? "f:" : "p:") + String(x.value || "").replace(/\D/g, "").slice(-10);
+function uniqContacts(list, already) {
+  const seen = new Set((already || []).map(contactKey)), out = [];
+  for (const x of (list || []).slice().sort((a, b) => b.is_primary - a.is_primary || (b.kind === "mobile") - (a.kind === "mobile") || (a.id || 0) - (b.id || 0))) {
+    const k = contactKey(x); if (k.length > 2 && seen.has(k)) continue; seen.add(k); out.push(x);
+  }
+  return out;
+}
 const phoneFmt = v => { const d = String(v).replace(/\D/g, ""); return d.length === 10 ? `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}` : v; };
 const STATUS = {
   completed: ["Completed", "s-done"], invoiced: ["Invoiced", "s-done"], closed: ["Closed", "s-done"],
@@ -5205,7 +5214,7 @@ function renderFile() {
   if (plans.some(p => p.status === "active")) flags.push(`<span class="flag blue">Plan member</span>`);
   if (c.status !== "active") flags.push(`<span class="flag amber">${c.status === "warranty_contact" ? "Warranty contact, not yet our customer" : "Inactive account"}</span>`);
 
-  const contacts = (c.customer_contacts || []).filter(x => !x.location_id).sort((a, b) => b.is_primary - a.is_primary);
+  const contacts = uniqContacts((c.customer_contacts || []).filter(x => !x.location_id));
   const contactHtml = contacts.map(x => {
     const kind = { phone: "Phone", mobile: "Mobile", email: "Email", fax: "Fax" }[x.kind];
     const shown = x.kind === "email" ? x.value : phoneFmt(x.value);
@@ -5217,7 +5226,7 @@ function renderFile() {
   const l = locs.find(x => x.id === loc) || locs[0];
   const locJobs = jobs.filter(j => !l || j.location_id === l.id);
   const locEquip = equipment.filter(e => !l || e.location_id === l.id);
-  const locContacts = (c.customer_contacts || []).filter(x => l && x.location_id === l.id);
+  const locContacts = uniqContacts((c.customer_contacts || []).filter(x => l && x.location_id === l.id), contacts);
   const custNotes = notes.filter(n => n.entity_type === "customer" && n.source !== "podium" && n.source !== "vista");
   const vistaNotes = notes.filter(n => n.entity_type === "customer" && n.source === "vista");
   const podNotes = notes.filter(n => n.entity_type === "customer" && n.source === "podium");
@@ -6239,7 +6248,7 @@ async function openSalesCall(jobId, msg) {
     db.from("customers").select("customer_contacts(kind, value, is_primary, location_id)").eq("id", r.customer_id).maybeSingle(),
     db.from("notes").select("body, created_at").eq("entity_type", "job").eq("entity_id", jobId).order("created_at")]);
   if (document.body.dataset.page !== "sales" || location.hash !== "#scall=" + jobId) return;
-  const cs = (cu.data?.customer_contacts || []).filter(k => !k.location_id).sort((a, b) => b.is_primary - a.is_primary);
+  const cs = uniqContacts((cu.data?.customer_contacts || []).filter(k => !k.location_id));
   const phone = cs.find(k => k.kind !== "email" && k.kind !== "fax")?.value, email = cs.find(k => k.kind === "email")?.value;
   const t = x => x ? new Date(x).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\s?([ap])\.?m\.?/i, "$1") : "";
   const here = !!r.on_site;
@@ -6447,7 +6456,7 @@ function renderEstEdit() {
   const tot = o => o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
   const c = COMPANY || { company_name: "Reid Heating & Cooling" }, brand = x.jobs?.partners?.branding_logo_url || x.jobs?.partners?.branding_name ? x.jobs.partners : null;
   const l = x.locations || {}, cust = x.customers || {};
-  const contacts = (cust.customer_contacts || []).filter(k => !k.location_id).sort((a, b) => b.is_primary - a.is_primary);
+  const contacts = uniqContacts((cust.customer_contacts || []).filter(k => !k.location_id));
   const phone = contacts.find(k => k.kind !== "email" && k.kind !== "fax")?.value, email = contacts.find(k => k.kind === "email")?.value;
   const addr = [[l.street, l.unit && "Unit " + l.unit].filter(Boolean).join(", "), [l.city, l.province, l.postal_code].filter(Boolean).join(", ")].filter(Boolean);
   const coAddr = [c.street, [c.city, c.province, c.postal_code].filter(Boolean).join(", ")].filter(Boolean);
@@ -13125,6 +13134,30 @@ function xpShell(hash, eyebrow, title, intro) {
 }
 const xpErr = e => /PGRST202|could not find/i.test(e?.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(e);
 const xpHere = hash => document.querySelector(`.xp-page[data-xp="${hash}"]`);
+// ---------- No phone or email: customers to fix, newest first (improvement 3) ----------
+const NOC = { what: "none", years: 3 };
+xpAdd({ link: "nocontact-link", hash: "missing-contacts", show: () => can("customers.edit"), open: openNoContact });
+async function openNoContact() {
+  const body = xpShell("missing-contacts", "Customers", "No phone or email", "Customers we can't reach: no phone, no email, or neither. Newest first. Open one and add what's missing.");
+  const { data, error } = await db.rpc("customers_missing_contacts", { p_what: NOC.what, p_years: NOC.years, p_limit: 300 });
+  if (!xpHere("missing-contacts")) return;
+  if (error || !data) { body.innerHTML = `<div class="staff-msg err">${esc(error ? xpErr(error) : "Not for you.")}</div>`; return; }
+  const n = data.counts || {}, rows = data.rows || [];
+  body.innerHTML = `<section class="cl-tools"><div class="cl-row">
+      <div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${[["none", "No phone and no email"], ["no_email", "No email"], ["no_phone", "No phone"]].map(([k, t]) =>
+        `<button type="button" aria-pressed="${NOC.what === k}" data-noc-what="${k}">${t} <span class="quiet">${Number(n[k] || 0).toLocaleString()}</span></button>`).join("")}</div></div>
+      <label class="cl-group"><span class="cl-label">Customers from</span><select id="noc-years">${[[1, "the last year"], [3, "the last 3 years"], [10, "the last 10 years"], [0, "any time"]].map(([y, t]) => `<option value="${y}" ${NOC.years === y ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+    </div></section>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table"><thead><tr><th>Customer</th><th>Address</th><th>Last invoice</th><th>Has</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><button class="link" type="button" data-noc-open="${r.customer_id}">${esc(r.name || "(no name)")}</button>${r.number ? `<div class="quiet">#${esc(r.number)}</div>` : ""}${r.dnc ? ` <span class="ow-tag odd">Do not contact</span>` : ""}</td>
+        <td>${esc(r.address || "")}</td><td>${r.last ? esc(fmtDate(r.last)) : `<span class="quiet">none</span>`}</td>
+        <td>${r.phone ? "📞 phone" : ""}${r.phone && r.email ? " · " : ""}${r.email ? "✉ email" : ""}${!r.phone && !r.email ? `<span class="quiet">nothing</span>` : ""}</td></tr>`).join("")}
+      </tbody></table></div>${rows.length >= 300 ? `<p class="quiet">Showing the newest 300.</p>` : ""}` : `<p class="quiet" style="padding:20px 0">Nobody here. 🎉</p>`}
+    <p class="quiet">The same phone or email listed twice on a customer now shows once. Nothing was deleted: the copies come from ServiceTitan.</p>`;
+  body.querySelectorAll("[data-noc-what]").forEach(b => b.addEventListener("click", () => { NOC.what = b.dataset.nocWhat; openNoContact(); }));
+  $("#noc-years")?.addEventListener("change", e => { NOC.years = Number(e.target.value); openNoContact(); });
+  body.querySelectorAll("[data-noc-open]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.nocOpen))));
+}
 
 $("#dupes-link").addEventListener("click", () => openDupes());
 
@@ -17059,7 +17092,7 @@ async function openEstimate(id) {
   if (e.error) { $("#inv-paper").innerHTML = `<div class="staff-msg err" style="padding:40px">Couldn't open this estimate: ${esc(e.error.message)}</div>`; return; }
   COMPANY = co.data || COMPANY || { company_name: "Reid Heating & Cooling" };
   const x = e.data, c = COMPANY, l = x.locations || {}, cust = x.customers || {};
-  const contact = (cust.customer_contacts || []).filter(k => !k.location_id).sort((a, b) => b.is_primary - a.is_primary);
+  const contact = uniqContacts((cust.customer_contacts || []).filter(k => !k.location_id));
   const email = x.recipient_email || contact.find(k => k.kind === "email")?.value, phone = contact.find(k => k.kind !== "email")?.value;
   const addr = [[l.street, l.unit && "Unit " + l.unit].filter(Boolean).join(", "), [l.city, l.province, l.postal_code].filter(Boolean).join(", ")].filter(Boolean);
   const coAddr = [c.street, [c.city, c.province, c.postal_code].filter(Boolean).join(", ")].filter(Boolean);
@@ -17491,7 +17524,7 @@ async function openInvoice(id, keep) {
     .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0) || a.id - b.id);
   await pbLoadLooks(lines.map(x => x.item_id).filter(Boolean)).catch(() => {});
   const pays = (i.payment_applications || []).sort((a, b) => (a.payments?.received_on || "").localeCompare(b.payments?.received_on || ""));
-  const contact = (cust.customer_contacts || []).filter(x => !x.location_id).sort((a, b) => b.is_primary - a.is_primary);
+  const contact = uniqContacts((cust.customer_contacts || []).filter(x => !x.location_id));
   const email = contact.find(x => x.kind === "email")?.value, phone = contact.find(x => x.kind !== "email")?.value;
   const addr = [[l.street, l.unit && "Unit " + l.unit].filter(Boolean).join(", "), [l.city, l.province, l.postal_code].filter(Boolean).join(", ")].filter(Boolean);
   const coAddr = [c.street, [c.city, c.province, c.postal_code].filter(Boolean).join(", ")].filter(Boolean);
