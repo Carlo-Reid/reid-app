@@ -3861,6 +3861,8 @@ mark.ow-amt-hit { background: #FDE68A; color: #3b2a00; padding: 1px 5px; border-
 .ovd-buckets{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:0 0 14px;max-width:900px}
 .ovd-b{display:flex;flex-direction:column;gap:2px;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;color:var(--ink)}
 .ovd-b b{font-size:18px}.ovd-b.on{border-color:var(--blue);background:var(--blue-wash)}
+.err-bar{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:9999;display:flex;gap:12px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 32px);
+  background:var(--red-wash);color:var(--ink);border:1px solid var(--red);border-radius:12px;padding:10px 14px;box-shadow:0 6px 24px rgba(0,0,0,.18)}
 .ss-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px;max-width:820px}
 .ss-card h2{margin:0 0 6px;font-size:18px}.ss-test{border-color:var(--amber);background:var(--amber-wash)}.ss-live{border-color:var(--green);background:var(--green-wash)}
 .ss-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0}.ss-row input{min-width:260px}
@@ -13142,6 +13144,43 @@ function xpShell(hash, eyebrow, title, intro) {
 }
 const xpErr = e => /PGRST202|could not find/i.test(e?.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(e);
 const xpHere = hash => document.querySelector(`.xp-page[data-xp="${hash}"]`);
+// ---------- Safety net: a break shows "Something went wrong · Try again" and is written down for the owner (improvement 8) ----------
+const ERRS = { seen: new Map(), shown: 0 };
+function errNoise(m) { return !m || /ResizeObserver loop|^Script error\.?$|AbortError|The user aborted|Load failed$|NetworkError when attempting|Failed to fetch dynamically/i.test(m); }
+function errCatch(message, stack) {
+  message = String(message || "").slice(0, 1000);
+  if (errNoise(message)) return;
+  const now = Date.now(), last = ERRS.seen.get(message); if (last && now - last < 60000) return; ERRS.seen.set(message, now);
+  try { if (ME?.role) db.rpc("log_client_error", { p_message: message, p_stack: String(stack || "").slice(0, 4000), p_page: document.body.dataset.page || "",
+        p_url: location.origin + location.pathname + location.hash.split("=")[0], p_ua: navigator.userAgent.slice(0, 300), p_version: document.lastModified || "" }).then(() => {}, () => {}); } catch {}
+  errBar();
+}
+function errBar() {
+  let b = $("#err-bar");
+  if (!b) { b = document.createElement("div"); b.id = "err-bar"; b.className = "err-bar no-print"; b.setAttribute("role", "alert"); document.body.appendChild(b); }
+  b.innerHTML = `<span>⚠ Something went wrong on this page.</span> <button class="btn" type="button" data-err-again>Try again</button> <button class="link" type="button" data-err-x>Dismiss</button>`;
+  b.querySelector("[data-err-again]").onclick = () => { b.remove(); try { if ($("#inv-view") && !$("#inv-view").classList.contains("hidden")) closeInvoice(); routeTo(location.hash); } catch { location.reload(); } };
+  b.querySelector("[data-err-x]").onclick = () => b.remove();
+}
+window.addEventListener("error", e => { if (e.target && e.target !== window && !e.error) return; errCatch(e.message || e.error?.message, e.error?.stack); });   // (a picture that didn't load isn't a break)
+window.addEventListener("unhandledrejection", e => { const r = e.reason; errCatch(r?.message || String(r || ""), r?.stack); });
+// owners: App errors page
+xpAdd({ link: "apperr-link", hash: "app-errors", show: () => ME.role === "owner", open: openAppErrors });
+let APPERR_DAYS = 7;
+async function openAppErrors() {
+  const body = xpShell("app-errors", "Settings", "App errors", "Things that broke on someone's screen, newest first, so they can be fixed. Only the error and the page are kept (90 days).");
+  const { data, error } = await db.rpc("client_error_list", { p_days: APPERR_DAYS });
+  if (!xpHere("app-errors")) return;
+  if (error || !data) { body.innerHTML = `<div class="staff-msg err">${esc(error ? xpErr(error) : "Owners only.")}</div>`; return; }
+  const g = data.groups || [];
+  body.innerHTML = `<section class="cl-tools"><div class="cl-row"><label class="cl-group"><span class="cl-label">Going back</span><select id="apperr-days">${[[1, "1 day"], [7, "1 week"], [30, "30 days"], [90, "90 days"]].map(([d, t]) => `<option value="${d}" ${APPERR_DAYS === d ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <div class="cl-group"><span class="cl-label">Errors</span><b>${Number(data.n || 0)}</b></div></div></section>
+    ${g.length ? `<div class="staff-wrap"><table class="calls-table"><thead><tr><th>What broke</th><th>Times</th><th>Last</th><th>Who · page</th></tr></thead><tbody>
+      ${g.map((x, i) => `<tr><td><code style="white-space:pre-wrap;word-break:break-word">${esc(x.message)}</code>${x.stack ? `<details><summary class="quiet">details</summary><pre style="white-space:pre-wrap;font-size:11px;max-height:220px;overflow:auto">${esc(x.stack)}</pre></details>` : ""}</td>
+        <td>${x.n}</td><td>${esc(fmtWhen(x.last))}</td><td>${esc((x.people || []).filter(Boolean).join(", "))}<div class="quiet">${esc((x.pages || []).filter(Boolean).join(", "))}</div></td></tr>`).join("")}
+      </tbody></table></div>` : `<p class="quiet" style="padding:20px 0">Nothing broke. 👍</p>`}`;
+  $("#apperr-days")?.addEventListener("change", e => { APPERR_DAYS = Number(e.target.value); openAppErrors(); });
+}
 // ---------- Old estimates: still open after 30+ days; close the dead ones, follow up the rest (improvement 7) ----------
 const OLDE = { days: 90, pick: new Set() };
 xpAdd({ link: "oldest-link", hash: "old-estimates", show: () => ME.role === "owner" || ME.role === "sales", open: openOldEstimates });
