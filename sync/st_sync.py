@@ -2902,17 +2902,41 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
                  WHERE e.id = p_id AND (e.sold_by_employee_id = public._my_employee() OR j.sales_user_id = public.current_app_user_id()))
 $$;
 
+-- a sold estimate's install job; made now if the sale was closed before this existed (e.g. in ServiceTitan)
+CREATE OR REPLACE FUNCTION public.est_ensure_install_job(p_id bigint)
+RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE e estimates; sj jobs; ij jobs; v_type bigint; v_name text;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  SELECT * INTO e FROM estimates WHERE id = p_id; IF e.id IS NULL THEN RAISE EXCEPTION 'That estimate no longer exists'; END IF;
+  IF e.status <> 'accepted' THEN RAISE EXCEPTION 'Close the deal first'; END IF;
+  IF NOT public._est_can_change(p_id) AND NOT public.has_permission('calls.book') THEN RAISE EXCEPTION 'Only the sales person or the office can do this'; END IF;
+  SELECT * INTO ij FROM jobs WHERE from_estimate_id = e.id AND status <> 'cancelled' ORDER BY id DESC LIMIT 1;
+  IF ij.id IS NOT NULL THEN RETURN ij.id; END IF;
+  SELECT * INTO sj FROM jobs WHERE id = e.job_id;
+  SELECT name INTO v_name FROM estimate_options WHERE id = e.accepted_option_id;
+  SELECT id INTO v_type FROM job_types WHERE job_class = 'install' AND active IS NOT FALSE ORDER BY (name ~* '^install x 1') DESC, (name ~* '^install') DESC, name LIMIT 1;
+  INSERT INTO jobs (job_number, customer_id, location_id, job_type_id, business_unit_id, status, priority, summary, booked_by_user_id, sold_by_employee_id, partner_id, from_estimate_id)
+  VALUES ('new', e.customer_id, coalesce(e.location_id, sj.location_id), v_type, coalesce(e.business_unit_id, sj.business_unit_id), 'new', 'normal',
+          left('Install: ' || coalesce(v_name, 'sold option') || ' (estimate ' || e.estimate_number || ')', 200), public.current_app_user_id(), e.sold_by_employee_id, coalesce(e.partner_id, sj.partner_id), e.id)
+  RETURNING * INTO ij;
+  UPDATE jobs SET job_number = ij.id::text WHERE id = ij.id RETURNING * INTO ij;
+  INSERT INTO job_status_history (job_id, from_status, to_status, changed_by_user_id, note) VALUES (ij.id, NULL, 'new', public.current_app_user_id(), 'Install job for estimate ' || e.estimate_number || ' (sold earlier)');
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values) VALUES ('jobs', ij.id, 'insert', public.current_app_user_id(), jsonb_build_object('install_for_estimate', e.estimate_number));
+  RETURN ij.id;
+END $$;
+
 -- the invoice for a sold estimate: on its install job, with the sold option's lines and prices
 CREATE OR REPLACE FUNCTION public.est_sold_invoice(p_id bigint)
 RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE e estimates; ij jobs; v_id bigint; v_bu bigint; l estimate_lines; v_line bigint; v_seq int := 0;
+DECLARE e estimates; ij jobs; v_job bigint; v_id bigint; v_bu bigint; l estimate_lines; v_line bigint; v_seq int := 0;
 BEGIN
   IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
   SELECT * INTO e FROM estimates WHERE id = p_id; IF e.id IS NULL THEN RAISE EXCEPTION 'That estimate no longer exists'; END IF;
   IF e.status <> 'accepted' OR e.accepted_option_id IS NULL THEN RAISE EXCEPTION 'Close the deal first'; END IF;
   IF NOT public._est_can_change(p_id) THEN RAISE EXCEPTION 'Only the sales person or the office can do this'; END IF;
-  SELECT * INTO ij FROM jobs WHERE from_estimate_id = e.id AND status <> 'cancelled' ORDER BY id DESC LIMIT 1;
-  IF ij.id IS NULL THEN RAISE EXCEPTION 'The install job for this sale isn''t there'; END IF;
+  v_job := public.est_ensure_install_job(p_id);   -- made first, then read (one statement can't see a row it just made)
+  SELECT * INTO ij FROM jobs WHERE id = v_job;
   SELECT id INTO v_id FROM invoices WHERE job_id = ij.id AND status <> 'void' ORDER BY id DESC LIMIT 1;
   IF v_id IS NOT NULL THEN RETURN v_id; END IF;   -- already made: open it
   v_bu := coalesce(ij.business_unit_id, e.business_unit_id, (SELECT id FROM business_units ORDER BY id LIMIT 1));
@@ -2942,6 +2966,7 @@ BEGIN
   IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
   SELECT * INTO e FROM estimates WHERE id = p_id; IF e.id IS NULL THEN RAISE EXCEPTION 'That estimate no longer exists'; END IF;
   IF e.status <> 'accepted' THEN RAISE EXCEPTION 'This estimate isn''t sold'; END IF;
+  IF e.st_id IS NOT NULL THEN RAISE EXCEPTION 'This sale came from ServiceTitan. Undo it there until the live date.'; END IF;
   IF NOT public._est_can_change(p_id) THEN RAISE EXCEPTION 'Only the sales person or the office can undo a sale'; END IF;
   FOR ij IN SELECT * FROM jobs WHERE from_estimate_id = e.id AND status <> 'cancelled' LOOP
     IF EXISTS (SELECT 1 FROM visits WHERE job_id = ij.id AND status IN ('en_route', 'on_site', 'completed')) THEN
@@ -2974,18 +2999,22 @@ BEGIN
   RETURN 'undone';
 END $$;
 
--- the sold estimate's install job (for "Book a walk")
-CREATE OR REPLACE FUNCTION public.est_install_job(p_id bigint)
+-- a sold estimate: its install job (if any), the walk, and the invoice (on the install job, or on the estimate's own job when it was invoiced there, e.g. in ServiceTitan)
+DROP FUNCTION IF EXISTS public.est_install_job(bigint);
+CREATE FUNCTION public.est_install_job(p_id bigint)
 RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE
-    (SELECT jsonb_build_object('id', j.id, 'number', j.job_number, 'customer_id', j.customer_id, 'location_id', j.location_id,
-       'invoice_id', (SELECT id FROM invoices i WHERE i.job_id = j.id AND i.status <> 'void' ORDER BY id DESC LIMIT 1),
-       'walk', (SELECT jsonb_build_object('date', v.scheduled_date, 'start', v.arrival_start) FROM visits v WHERE v.job_id = j.id AND v.visit_purpose ~* 'walk' AND v.status <> 'cancelled' ORDER BY v.id DESC LIMIT 1))
-     FROM jobs j WHERE j.from_estimate_id = p_id AND j.status <> 'cancelled' ORDER BY j.id DESC LIMIT 1) END
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE (
+    SELECT jsonb_build_object('st', e.st_id IS NOT NULL,
+      'id', j.id, 'number', j.job_number, 'customer_id', coalesce(j.customer_id, e.customer_id), 'location_id', coalesce(j.location_id, e.location_id),
+      'invoice_id', coalesce((SELECT id FROM invoices i WHERE i.job_id = j.id AND i.status <> 'void' ORDER BY id DESC LIMIT 1),
+                             (SELECT id FROM invoices i WHERE i.job_id = e.job_id AND i.status <> 'void' AND e.st_id IS NOT NULL ORDER BY id DESC LIMIT 1)),
+      'walk', (SELECT jsonb_build_object('date', v.scheduled_date, 'start', v.arrival_start) FROM visits v WHERE v.job_id = j.id AND v.visit_purpose ~* 'walk' AND v.status <> 'cancelled' ORDER BY v.id DESC LIMIT 1))
+    FROM estimates e LEFT JOIN LATERAL (SELECT * FROM jobs j WHERE j.from_estimate_id = e.id AND j.status <> 'cancelled' ORDER BY j.id DESC LIMIT 1) j ON true
+    WHERE e.id = p_id) END
 $$;
 
-REVOKE EXECUTE ON FUNCTION public._est_can_change(bigint), public.est_sold_invoice(bigint), public.est_unsell(bigint), public.est_install_job(bigint) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.est_sold_invoice(bigint), public.est_unsell(bigint), public.est_install_job(bigint) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public._est_can_change(bigint), public.est_sold_invoice(bigint), public.est_unsell(bigint), public.est_install_job(bigint), public.est_ensure_install_job(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.est_sold_invoice(bigint), public.est_unsell(bigint), public.est_install_job(bigint), public.est_ensure_install_job(bigint) TO authenticated;
 
 NOTIFY pgrst, 'reload schema';
 """

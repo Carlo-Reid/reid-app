@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-24.174912">
+<meta name="app-version" content="2026-10-24.175804">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -6475,7 +6475,7 @@ function renderEstEdit() {
       ${closed ? `<button class="btn quiet-btn" type="button" id="est-preview">🖨 Print preview</button>
       ${x.status === "accepted" && !x.cancelled_at ? `<button class="btn" type="button" id="est-walk" title="Book a visit to walk the site before the install (on install job ${esc(EST.ij?.number || "")})">📅 ${EST.ij?.walk ? "Walk booked " + esc(fmtDate(EST.ij.walk.date)) : "Book a walk"}</button>
         <button class="btn" type="button" id="est-inv">🧾 ${EST.ij?.invoice_id ? "Open the invoice" : "Create the invoice"}</button>
-        <button class="btn quiet-btn" type="button" id="est-unsell" title="Closed by mistake? Put it back to not sold">↩ Un-sell</button>` : ""}` : `
+        ${EST.ij?.st || x.st_id ? `<span class="quiet est-st-note" title="ServiceTitan is still the master copy for this sale">Sold in ServiceTitan: undo it there until the live date</span>` : `<button class="btn quiet-btn" type="button" id="est-unsell" title="Closed by mistake? Put it back to not sold">↩ Un-sell</button>`}` : ""}` : `
       <button class="btn" type="button" id="est-save">Save</button>
       <button class="btn quiet-btn" type="button" id="est-preview" title="See it the way the customer gets it, then print it or come back and change it">🖨 Print preview</button>
       <button class="btn est-close-btn" type="button" id="est-close">✓ Close the deal…</button>
@@ -6613,14 +6613,18 @@ function wireEstEdit() {
 }
 // after a sale: make the invoice from the sold option (on the install job)
 async function estMakeInvoice() {
+  if (EST.ij?.invoice_id) return openInvoiceEditor(EST.ij.invoice_id);   // already invoiced (here or in ServiceTitan): open it
   const { data, error } = await db.rpc("est_sold_invoice", { p_id: EST.id });
   if (error) { const el = $("#est-msg"); if (el) { el.className = "staff-msg err est-tmsg"; el.textContent = "No invoice: " + (/PGRST202|could not find/i.test(error.message || "") ? "this turns on after the next database update." : rpcErr(error)); } return; }
   openInvoiceEditor(data, "The invoice has the sold option's lines and prices. Check it, then finish it.");
 }
 // after a sale: book a visit to walk the site, on the install job
 async function estBookWalk() {
-  const IJ = EST.ij || (await db.rpc("est_install_job", { p_id: EST.id })).data;
-  if (!IJ) return alertMsg("The install job for this sale isn't there.");
+  let IJ = EST.ij || (await db.rpc("est_install_job", { p_id: EST.id })).data;
+  if (!IJ?.id) {   // sold before (e.g. in ServiceTitan): make the install job for this sale first
+    const { error } = await db.rpc("est_ensure_install_job", { p_id: EST.id }); if (error) return alertMsg("Couldn't make the install job: " + rpcErr(error));
+    IJ = EST.ij = (await db.rpc("est_install_job", { p_id: EST.id })).data; if (!IJ?.id) return alertMsg("The install job for this sale isn't there.");
+    alertMsg(`Install job ${IJ.number} made for this sale.`); }
   try { await bookLists(); } catch (e) { return alertMsg(e.message); }
   document.querySelector(".ask-wrap")?.remove();
   const meEmp = ME.emp || null, techs = (BOOK.techs || []).filter(t => t.recent || t.id === meEmp);
