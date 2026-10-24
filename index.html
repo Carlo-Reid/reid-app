@@ -13142,6 +13142,49 @@ function xpShell(hash, eyebrow, title, intro) {
 }
 const xpErr = e => /PGRST202|could not find/i.test(e?.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(e);
 const xpHere = hash => document.querySelector(`.xp-page[data-xp="${hash}"]`);
+// ---------- Monitoring: who's billed for monitoring, who's on EFT, returned payments (improvement 6) ----------
+const MON = { show: "all", q: "" };
+const MON_SHOW = [["all", "Everyone"], ["returned", "Payment returned"], ["no_eft", "Billed, not on EFT"], ["not_billed", "On EFT, no monitoring bill this year"], ["ok", "All good"]];
+xpAdd({ link: "monitoring-link", hash: "monitoring", show: () => ME.role === "owner", open: openMonitoring });
+async function openMonitoring(msg) {
+  const body = xpShell("monitoring", "Security", "Monitoring", "Built from the monitoring invoices and the EFT bank lists: the last bill, what the bank said last time, and what's owing.");
+  const { data, error } = await db.rpc("monitoring_accounts");
+  if (!xpHere("monitoring")) return;
+  if (error || !data) { body.innerHTML = `<div class="staff-msg err">${esc(error ? xpErr(error) : "Owners only.")}</div>`; return; }
+  MON.data = data; monDraw(msg);
+}
+function monDraw(msg) {
+  const body = xpHere("monitoring")?.querySelector(".xp-body"); if (!body) return;
+  const n = MON.data.counts || {}, q = MON.q.trim().toLowerCase();
+  const rows = (MON.data.rows || []).filter(r => (MON.show === "all" || r.flag === MON.show) && (!q || `${r.name} ${r.number || ""} ${r.address || ""}`.toLowerCase().includes(q)));
+  const said = r => r.said === "returned" ? `<span class="ow-tag odd">Returned</span>` : r.said === "ok" ? `<span class="ds-view">Approved</span>` : r.response ? esc(r.response) : `<span class="quiet">not on a list</span>`;
+  const flag = { returned: "Payment returned", no_eft: "Billed, not on EFT", not_billed: "On EFT, no monitoring bill this year", ok: "" };
+  body.innerHTML = `${msg ? `<div class="staff-msg ok">${esc(msg)}</div>` : ""}
+    <div class="ovd-buckets"><div class="ovd-b"><span>Billed for monitoring (last 13 months)</span><b>${Number(n.billed || 0)}</b></div>
+      <div class="ovd-b"><span>Payment returned</span><b>${Number(n.returned || 0)}</b></div><div class="ovd-b"><span>Owing on monitoring bills</span><b>${money(n.owing || 0)}</b></div></div>
+    <section class="cl-tools"><div class="cl-row">
+      <div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${MON_SHOW.map(([k, t]) => `<button type="button" aria-pressed="${MON.show === k}" data-mon-show="${k}">${t} <span class="quiet">${Number(n[k] || 0)}</span></button>`).join("")}</div></div>
+      <label class="cl-group"><span class="cl-label">Find</span><input type="search" id="mon-q" value="${esc(MON.q)}" placeholder="Name, customer # or address"></label>
+    </div></section>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table"><thead><tr><th>Customer</th><th>Last monitoring bill</th><th>Bank said</th><th>Owing</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><button class="link" type="button" data-mon-cust="${r.customer_id}">${esc(r.name || "")}</button>${r.number ? ` <span class="quiet">#${esc(r.number)}</span>` : ""}
+          <div class="quiet">${esc(r.address || "")}</div>${flag[r.flag] ? `<div><span class="ow-tag ${r.flag === "returned" ? "odd" : ""}">${flag[r.flag]}</span></div>` : ""}</td>
+        <td>${r.last ? `${esc(fmtDate(r.last))} · ${money(r.last_amount)}<div class="quiet">${r.bills_13m} bills in 13 months</div>` : `<span class="quiet">none</span>`}</td>
+        <td>${said(r)}${r.received ? `<div class="quiet">${esc(fmtDate(r.received))}${r.amount ? " · " + esc(r.amount) : ""}</div>` : ""}</td>
+        <td>${Number(r.owing) > 0.004 ? `<b>${money(r.owing)}</b>` : `<span class="quiet">—</span>`}</td>
+        <td>${r.flag === "returned" ? `<button class="btn quiet-btn" type="button" data-mon-task="${r.customer_id}">Make a task</button>` : ""}${r.tasks ? `<div class="quiet">${r.tasks} open task${r.tasks > 1 ? "s" : ""}</div>` : ""}</td></tr>`).join("")}
+      </tbody></table></div>` : `<p class="quiet" style="padding:20px 0">Nobody here.</p>`}
+    <p class="quiet">"Bank said" is the Response on the newest EFT list each person is on. The monitoring contracts list in the database is empty, so this page is built from the bills and the bank lists.</p>`;
+  body.querySelectorAll("[data-mon-show]").forEach(b => b.addEventListener("click", () => { MON.show = b.dataset.monShow; monDraw(); }));
+  let qt; $("#mon-q")?.addEventListener("input", e => { MON.q = e.target.value; clearTimeout(qt); qt = setTimeout(() => { const p = e.target.selectionStart; monDraw(); const i = $("#mon-q"); if (i) { i.focus(); i.setSelectionRange(p, p); } }, 200); });
+  body.querySelectorAll("[data-mon-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.monCust))));
+  body.querySelectorAll("[data-mon-task]").forEach(b => b.addEventListener("click", async () => {
+    const r = MON.data.rows.find(x => x.customer_id === Number(b.dataset.monTask)); b.disabled = true;
+    const note = `EFT payment returned${r?.received ? " (" + fmtDate(r.received) + ")" : ""}${r?.amount ? ", " + r.amount : ""}: ${r?.response || "returned"}. Call to fix the bank details or take the payment.`;
+    const { error } = await db.rpc("add_task", { p_customer_id: r.customer_id, p_visit_id: null, p_note: note, p_priority: 2 });
+    if (error) { b.disabled = false; b.textContent = "Not made: " + xpErr(error); return; }
+    r.tasks = (r.tasks || 0) + 1; monDraw(`Task made for ${r.name}. It's on your Tasks page.`); }));
+}
 // ---------- Overdue: invoices still owing past their due date, and reminders (improvement 5) ----------
 const OVD = { days: 90, who: "customer", sort: "days" };
 xpAdd({ link: "overdue-link", hash: "overdue", show: () => can("invoices.adjust"), open: openOverdue });
