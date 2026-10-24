@@ -1,10 +1,11 @@
-# one-off, read-only: writes the database layout to a downloadable file (runs only from the tmp/schema-peek branch)
+# one-off, read-only: writes the database layout, locked so only the person with the key can read it (runs only from the tmp/schema-peek branch)
 name: Schema peek
 on:
   push:
     branches: [tmp/schema-peek]
+    paths: [".github/workflows/schema-peek.yml", "sync/schema_peek.py"]
 permissions:
-  contents: read
+  contents: write
 jobs:
   peek:
     runs-on: ubuntu-latest
@@ -19,4 +20,11 @@ jobs:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      - run: gzip -9 schema.txt && base64 -w 0 schema.txt.gz && echo
+      - run: |
+          gzip -9 schema.txt
+          openssl rand -hex 32 > k.txt
+          openssl enc -aes-256-cbc -pbkdf2 -salt -in schema.txt.gz -out peek.bin -pass file:k.txt
+          openssl pkeyutl -encrypt -pubin -inkey sync/peek.pub -in k.txt -out peek.key.bin
+          rm -f k.txt schema.txt.gz
+          git config user.name peek; git config user.email peek@users.noreply.github.com
+          git add peek.bin peek.key.bin && git commit -qm "peek output (locked)" && git push -q
