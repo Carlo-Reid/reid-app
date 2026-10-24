@@ -2712,6 +2712,131 @@ REVOKE EXECUTE ON FUNCTION public.pap_mail_list(text, integer), public.pap_mail_
 GRANT EXECUTE ON FUNCTION public.pap_mail_list(text, integer), public.pap_mail_get(bigint), public.pap_mail_file(bigint, boolean) TO authenticated;
 
 NOTIFY pgrst, 'reload schema';
+-- 99zz11_htin_more.sql
+-- =====================================================================
+-- HTIN List, more (Oct 24):
+--  * the list also gives each booking's call-back day, latest note and the job's tank answer
+--  * a booking can be linked to a customer (made from the booking, or one already on file)
+--  * HTIN numbers for the partner page (days to schedule, done this month, owed)
+--  * the job keeps its HTIN booking in step: scheduled → Accepted (with the date), en route,
+--    on site, left, and the job finished → Accomplished. Forward only; canceled is never touched.
+-- Safe to run more than once.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.partner_bookings_list(p_partner bigint, p_tab text DEFAULT 'all'::text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  WITH b AS (SELECT b.*, public._pb_closed(b) closed FROM partner_bookings b WHERE b.partner_id = p_partner)
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE jsonb_build_object(
+    'all', (SELECT count(*) FROM b), 'closed', (SELECT count(*) FROM b WHERE closed),
+    'statuses', (SELECT coalesce(jsonb_agg(jsonb_build_object('status', status, 'n', n) ORDER BY n DESC), '[]') FROM (SELECT status, count(*) n FROM b WHERE status IS NOT NULL GROUP BY 1) s),
+    'closed_statuses', (SELECT to_jsonb(closed_statuses) FROM partners WHERE id = p_partner),
+    'list_name', (SELECT list_name FROM partners WHERE id = p_partner),
+    'rows', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', b.id, 'ref', b.ref, 'booked_at', b.booked_at, 'status', b.status, 'status_at', b.status_at, 'service', b.service, 'service_date', b.service_date,
+        'their_name', b.their_name, 'address', b.address, 'extra', b.extra, 'email', b.email, 'provider', b.provider, 'phone', b.phone, 'callback', b.details ->> 'callback', 'tank', j.tank_payer,
+        'last_note', (SELECT jsonb_build_object('note', h ->> 'note', 'at', h ->> 'at') FROM jsonb_array_elements(coalesce(b.details -> 'history', '[]')) WITH ORDINALITY x(h, n) WHERE coalesce(h ->> 'note', '') <> '' ORDER BY x.n DESC LIMIT 1),
+        'channel', b.details ->> 'channel', 'contract', b.details ->> 'contract', 'variant', b.details ->> 'variant', 'closed', b.closed, 'override', b.closed_override, 'note', b.note, 'source', b.source,
+        'customer_id', b.customer_id, 'customer', c.display_name, 'how', b.match_how, 'addr_ok', b.addr_ok,
+        'job_id', b.job_id, 'job', j.job_number, 'job_status', j.status,
+        'visit', (SELECT min(v.scheduled_date) FROM visits v WHERE v.job_id = b.job_id AND v.status <> 'cancelled'),
+        'invoice_id', coalesce(b.invoice_id, i.id), 'invoice', coalesce(bi.invoice_number, i.invoice_number), 'balance', coalesce(bi.balance_due, i.balance_due),
+        'added_by', public._staff_name(b.added_by)) ORDER BY coalesce(b.booked_at, b.created_at) DESC, b.id DESC), '[]')
+      FROM b LEFT JOIN customers c ON c.id = b.customer_id LEFT JOIN jobs j ON j.id = b.job_id
+      LEFT JOIN invoices bi ON bi.id = b.invoice_id
+      LEFT JOIN LATERAL (SELECT i.id, i.invoice_number, i.balance_due FROM invoices i WHERE b.invoice_id IS NULL AND i.job_id = b.job_id AND i.status <> 'void' ORDER BY i.invoice_date DESC LIMIT 1) i ON true
+      WHERE coalesce(p_tab, 'all') = 'all' OR (p_tab = 'closed' AND b.closed) OR (p_tab = 'open' AND NOT b.closed))) END
+$function$;
+
+-- link a booking to a customer
+CREATE OR REPLACE FUNCTION public.partner_booking_link_customer(p_id bigint, p_customer bigint)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM customers WHERE id = p_customer) THEN RAISE EXCEPTION 'That customer is not there'; END IF;
+  UPDATE partner_bookings SET customer_id = p_customer, match_how = 'linked by hand', addr_ok = true, updated_at = now() WHERE id = p_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'That booking is not on the list any more'; END IF;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('partner_bookings', p_id, 'update', public.current_app_user_id(), jsonb_build_object('change', 'linked to customer', 'customer_id', p_customer));
+END $$;
+
+-- HTIN numbers for the partner page
+CREATE OR REPLACE FUNCTION public.htin_stats(p_partner bigint)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH b AS (SELECT * FROM partner_bookings WHERE partner_id = p_partner),
+  acc AS (   -- booked → first "Accepted" in the history, in days
+    SELECT b.id, extract(epoch FROM (min((h ->> 'at')::timestamp) AT TIME ZONE 'America/Toronto') - b.booked_at) / 86400.0 AS days
+    FROM b, jsonb_array_elements(coalesce(b.details -> 'history', '[]')) h
+    WHERE h ->> 'status' = 'Accepted' AND b.booked_at IS NOT NULL AND (h ->> 'at') ~ '^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d'
+    GROUP BY b.id, b.booked_at),
+  done AS (
+    SELECT b.id, max((h ->> 'at')::timestamp) AS at
+    FROM b, jsonb_array_elements(coalesce(b.details -> 'history', '[]')) h
+    WHERE h ->> 'status' IN ('Done', 'Accomplished') AND (h ->> 'at') ~ '^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d'
+    GROUP BY b.id),
+  inv AS (
+    SELECT DISTINCT ON (i.id) i.id, i.balance_due
+    FROM b JOIN invoices i ON (i.id = b.invoice_id OR (b.invoice_id IS NULL AND i.job_id = b.job_id)) AND i.status <> 'void')
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE jsonb_build_object(
+    'avg_days', (SELECT round(avg(days)::numeric, 1) FROM acc WHERE days >= 0 AND days < 120),
+    'avg_days_90', (SELECT round(avg(a.days)::numeric, 1) FROM acc a JOIN b ON b.id = a.id WHERE a.days >= 0 AND a.days < 120 AND b.booked_at > now() - interval '90 days'),
+    'done_month', (SELECT count(*) FROM done WHERE at >= date_trunc('month', now() AT TIME ZONE 'America/Toronto')),
+    'done_last_month', (SELECT count(*) FROM done WHERE at >= date_trunc('month', now() AT TIME ZONE 'America/Toronto') - interval '1 month' AND at < date_trunc('month', now() AT TIME ZONE 'America/Toronto')),
+    'new_month', (SELECT count(*) FROM b WHERE booked_at >= date_trunc('month', now() AT TIME ZONE 'America/Toronto') AT TIME ZONE 'America/Toronto'),
+    'waiting', (SELECT count(*) FROM b WHERE status ~* 'propose|waiting' AND NOT public._pb_closed(b)),
+    'waiting_2d', (SELECT count(*) FROM b WHERE status ~* 'propose|waiting' AND NOT public._pb_closed(b) AND booked_at < now() - interval '2 days'),
+    'owed', CASE WHEN public._can_see_invoices() THEN (SELECT coalesce(sum(balance_due), 0) FROM inv) END,
+    'owed_n', CASE WHEN public._can_see_invoices() THEN (SELECT count(*) FROM inv WHERE balance_due > 0.004) END) END
+$$;
+
+-- the job keeps its HTIN booking in step
+CREATE OR REPLACE FUNCTION public._htin_rank(s text) RETURNS int LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE WHEN s ~* 'cancel' THEN -1 WHEN s ~* 'accomplish|^done' THEN 5 WHEN s ~* 'left|he left' THEN 4 WHEN s ~* 'at destination' THEN 3
+              WHEN s ~* 'on the way' THEN 2 WHEN s ~* '^accepted' THEN 1 ELSE 0 END
+$$;
+CREATE OR REPLACE FUNCTION public._htin_step(p_job bigint, p_rank int, p_date timestamptz DEFAULT NULL)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE b partner_bookings; v_cur int; v_portal text; v_hist text; v_at text := to_char(now() AT TIME ZONE 'America/Toronto', 'YYYY-MM-DD"T"HH24:MI');
+BEGIN
+  FOR b IN SELECT * FROM partner_bookings WHERE job_id = p_job LOOP
+    v_cur := public._htin_rank(b.status);
+    IF v_cur < 0 THEN CONTINUE; END IF;   -- canceled: leave it alone
+    IF p_rank = 1 AND p_date IS NOT NULL AND v_cur <= 1 AND b.service_date IS DISTINCT FROM p_date THEN
+      UPDATE partner_bookings SET service_date = p_date, updated_at = now() WHERE id = b.id;   -- booked or moved: their date follows ours
+    END IF;
+    IF p_rank <= v_cur THEN CONTINUE; END IF;   -- forward only
+    v_portal := (ARRAY['Accepted', 'On the way to the destination', 'At destination', 'He left fate', 'Accomplished'])[p_rank];
+    v_hist := (ARRAY['Accepted', 'On the way to the destination', 'At destination', 'Left destination', 'Done'])[p_rank];
+    UPDATE partner_bookings SET status = v_portal, status_at = now(), updated_at = now(),
+           details = jsonb_set(coalesce(details, '{}'), '{history}', coalesce(details -> 'history', '[]') || jsonb_build_array(jsonb_build_object('status', v_hist, 'by', 'Reid app', 'at', v_at, 'auto', true)))
+    WHERE id = b.id;
+  END LOOP;
+END $$;
+CREATE OR REPLACE FUNCTION public._htin_visit_sync() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_rank int; v_date timestamptz;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM partner_bookings WHERE job_id = NEW.job_id) THEN RETURN NEW; END IF;
+  v_rank := CASE NEW.status WHEN 'scheduled' THEN 1 WHEN 'dispatched' THEN 1 WHEN 'en_route' THEN 2 WHEN 'on_site' THEN 3 WHEN 'completed' THEN 4 ELSE 0 END;
+  IF v_rank = 0 OR (v_rank = 1 AND NEW.scheduled_date IS NULL) THEN RETURN NEW; END IF;
+  IF v_rank = 1 THEN v_date := coalesce(NEW.arrival_start, (NEW.scheduled_date + time '08:00') AT TIME ZONE 'America/Toronto'); END IF;
+  PERFORM public._htin_step(NEW.job_id, v_rank, v_date);
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION public._htin_job_sync() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NEW.status IN ('completed', 'invoiced', 'closed') AND OLD.status IS DISTINCT FROM NEW.status THEN PERFORM public._htin_step(NEW.id, 5); END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS trg_htin_visit_sync ON public.visits;
+CREATE TRIGGER trg_htin_visit_sync AFTER INSERT OR UPDATE OF status, scheduled_date, arrival_start ON public.visits FOR EACH ROW EXECUTE FUNCTION public._htin_visit_sync();
+DROP TRIGGER IF EXISTS trg_htin_job_sync ON public.jobs;
+CREATE TRIGGER trg_htin_job_sync AFTER UPDATE OF status ON public.jobs FOR EACH ROW EXECUTE FUNCTION public._htin_job_sync();
+
+REVOKE EXECUTE ON FUNCTION public.partner_booking_link_customer(bigint, bigint), public.htin_stats(bigint), public._htin_step(bigint, int, timestamptz) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.partner_booking_link_customer(bigint, bigint), public.htin_stats(bigint) TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
 """
 
 # small pieces that only add functions (no table changes), applied on their own so a lock on APP_SCHEMA can't hold them up
@@ -4046,7 +4171,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL AND to_regprocedure('public.customer_partner_bookings(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_tank_payer(bigint,text)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL AND to_regprocedure('public.customer_partner_bookings(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_tank_payer(bigint,text)') IS NOT NULL AND to_regprocedure('public.htin_stats(bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_link_customer(bigint,bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
