@@ -2887,6 +2887,107 @@ REVOKE EXECUTE ON FUNCTION public.partner_rates(bigint), public.partner_rates_se
 GRANT EXECUTE ON FUNCTION public.partner_rates(bigint), public.partner_rates_set(bigint, numeric, numeric), public.inv_partner_rule(bigint) TO authenticated;
 
 NOTIFY pgrst, 'reload schema';
+-- 99zz13_est_after_sale.sql
+-- =====================================================================
+-- After a sale (Close the deal): the sales person can make the invoice from the sold option,
+-- or undo the sale if it was closed by mistake. Safe to run more than once.
+-- =====================================================================
+
+-- who may change a sold estimate: the office, or the sales person who sold it
+CREATE OR REPLACE FUNCTION public._est_can_change(p_id bigint)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT public.current_staff_role() IN ('owner', 'admin', 'office', 'accounting', 'manager')
+      OR public.has_permission('invoices.create') OR public.has_permission('calls.dispatch')
+      OR EXISTS (SELECT 1 FROM estimates e LEFT JOIN jobs j ON j.id = e.job_id
+                 WHERE e.id = p_id AND (e.sold_by_employee_id = public._my_employee() OR j.sales_user_id = public.current_app_user_id()))
+$$;
+
+-- the invoice for a sold estimate: on its install job, with the sold option's lines and prices
+CREATE OR REPLACE FUNCTION public.est_sold_invoice(p_id bigint)
+RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE e estimates; ij jobs; v_id bigint; v_bu bigint; l estimate_lines; v_line bigint; v_seq int := 0;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  SELECT * INTO e FROM estimates WHERE id = p_id; IF e.id IS NULL THEN RAISE EXCEPTION 'That estimate no longer exists'; END IF;
+  IF e.status <> 'accepted' OR e.accepted_option_id IS NULL THEN RAISE EXCEPTION 'Close the deal first'; END IF;
+  IF NOT public._est_can_change(p_id) THEN RAISE EXCEPTION 'Only the sales person or the office can do this'; END IF;
+  SELECT * INTO ij FROM jobs WHERE from_estimate_id = e.id AND status <> 'cancelled' ORDER BY id DESC LIMIT 1;
+  IF ij.id IS NULL THEN RAISE EXCEPTION 'The install job for this sale isn''t there'; END IF;
+  SELECT id INTO v_id FROM invoices WHERE job_id = ij.id AND status <> 'void' ORDER BY id DESC LIMIT 1;
+  IF v_id IS NOT NULL THEN RETURN v_id; END IF;   -- already made: open it
+  v_bu := coalesce(ij.business_unit_id, e.business_unit_id, (SELECT id FROM business_units ORDER BY id LIMIT 1));
+  INSERT INTO invoices (invoice_number, job_id, customer_id, location_id, business_unit_id, channel, bill_to_type, status, invoice_date,
+                        payment_terms_days, collect_on_site, created_by_user_id)
+  VALUES ('R' || nextval('app_invoice_seq'), ij.id, ij.customer_id, ij.location_id, v_bu, 'job', 'customer', 'draft', current_date, 0, true, public.current_app_user_id())
+  RETURNING id INTO v_id;
+  FOR l IN SELECT * FROM estimate_lines WHERE estimate_option_id = e.accepted_option_id AND parent_line_id IS NULL ORDER BY sequence, id LOOP
+    v_seq := v_seq + 1;
+    INSERT INTO invoice_lines (invoice_id, sequence, line_type, item_id, description, quantity, unit_price, unit_cost, taxable, tax_rate_pct)
+    VALUES (v_id, v_seq, CASE WHEN l.unit_price < 0 THEN 'discount' WHEN l.item_id IS NULL THEN 'other' ELSE 'item' END, l.item_id, l.description,
+            coalesce(l.quantity, 1), coalesce(l.unit_price, 0), l.unit_cost, coalesce(l.taxable, true), CASE WHEN coalesce(l.taxable, true) THEN public._hst() ELSE 0 END)
+    RETURNING id INTO v_line;
+    IF l.item_id IS NOT NULL THEN PERFORM public._inv_add_kit_parts(v_line); END IF;
+  END LOOP;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('invoices', v_id, 'insert', public.current_app_user_id(), jsonb_build_object('job', ij.job_number, 'from_estimate', e.estimate_number));
+  RETURN v_id;
+END $$;
+
+-- undo a sale closed by mistake: the estimate goes back to open, the install job it made is cancelled,
+-- an unfinished invoice on it is removed, and the sales job goes back to how it was
+CREATE OR REPLACE FUNCTION public.est_unsell(p_id bigint)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE e estimates; ij jobs; sj jobs; v_prev text; v_inv invoices;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
+  SELECT * INTO e FROM estimates WHERE id = p_id; IF e.id IS NULL THEN RAISE EXCEPTION 'That estimate no longer exists'; END IF;
+  IF e.status <> 'accepted' THEN RAISE EXCEPTION 'This estimate isn''t sold'; END IF;
+  IF NOT public._est_can_change(p_id) THEN RAISE EXCEPTION 'Only the sales person or the office can undo a sale'; END IF;
+  FOR ij IN SELECT * FROM jobs WHERE from_estimate_id = e.id AND status <> 'cancelled' LOOP
+    IF EXISTS (SELECT 1 FROM visits WHERE job_id = ij.id AND status IN ('en_route', 'on_site', 'completed')) THEN
+      RAISE EXCEPTION 'The install job % has already been worked on. Ask the office to undo it.', ij.job_number; END IF;
+    IF EXISTS (SELECT 1 FROM invoices i WHERE i.job_id = ij.id AND (i.status NOT IN ('draft', 'void') OR EXISTS (SELECT 1 FROM payment_applications pa WHERE pa.invoice_id = i.id))) THEN
+      RAISE EXCEPTION 'The install job % has a finished or paid invoice. Ask the office to undo it.', ij.job_number; END IF;
+    FOR v_inv IN SELECT * FROM invoices WHERE job_id = ij.id AND status = 'draft' LOOP
+      INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values)
+      VALUES ('invoices', v_inv.id, 'delete', public.current_app_user_id(), to_jsonb(v_inv) || jsonb_build_object('reason', 'sale undone', 'lines', (SELECT jsonb_agg(to_jsonb(l)) FROM invoice_lines l WHERE l.invoice_id = v_inv.id)));
+      DELETE FROM invoices WHERE id = v_inv.id;
+    END LOOP;
+    UPDATE visits SET status = 'cancelled', updated_at = now() WHERE job_id = ij.id AND status NOT IN ('cancelled', 'completed');
+    UPDATE jobs SET status = 'cancelled', updated_at = now() WHERE id = ij.id;
+    INSERT INTO job_status_history (job_id, from_status, to_status, changed_by_user_id, note) VALUES (ij.id, ij.status, 'cancelled', public.current_app_user_id(), 'Sale undone on estimate ' || e.estimate_number);
+  END LOOP;
+  UPDATE estimates SET status = CASE WHEN e.first_viewed_at IS NOT NULL THEN 'viewed' WHEN e.sent_at IS NOT NULL THEN 'sent' ELSE 'draft' END,
+         accepted_option_id = NULL, accepted_at = NULL, accepted_via = NULL, updated_at = now() WHERE id = p_id;
+  SELECT * INTO sj FROM jobs WHERE id = e.job_id;
+  IF sj.id IS NOT NULL AND sj.status = 'completed' THEN
+    SELECT from_status INTO v_prev FROM job_status_history WHERE job_id = sj.id AND to_status = 'completed' AND note = 'Deal closed' ORDER BY id DESC LIMIT 1;
+    IF v_prev IS NOT NULL THEN
+      UPDATE jobs SET status = v_prev, completed_at = NULL, updated_at = now() WHERE id = sj.id;
+      INSERT INTO job_status_history (job_id, from_status, to_status, changed_by_user_id, note) VALUES (sj.id, 'completed', v_prev, public.current_app_user_id(), 'Sale undone');
+    END IF;
+  END IF;
+  INSERT INTO notes (entity_type, entity_id, body, author_user_id, source)
+  VALUES ('job', coalesce(sj.id, (SELECT id FROM jobs WHERE from_estimate_id = e.id ORDER BY id DESC LIMIT 1)), 'Sale undone on estimate ' || e.estimate_number || ' (closed by mistake).', public.current_app_user_id(), 'sales');
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values, new_values)
+  VALUES ('estimates', p_id, 'update', public.current_app_user_id(), jsonb_build_object('status', 'accepted', 'option', e.accepted_option_id), jsonb_build_object('change', 'sale undone'));
+  RETURN 'undone';
+END $$;
+
+-- the sold estimate's install job (for "Book a walk")
+CREATE OR REPLACE FUNCTION public.est_install_job(p_id bigint)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE
+    (SELECT jsonb_build_object('id', j.id, 'number', j.job_number, 'customer_id', j.customer_id, 'location_id', j.location_id,
+       'invoice_id', (SELECT id FROM invoices i WHERE i.job_id = j.id AND i.status <> 'void' ORDER BY id DESC LIMIT 1),
+       'walk', (SELECT jsonb_build_object('date', v.scheduled_date, 'start', v.arrival_start) FROM visits v WHERE v.job_id = j.id AND v.visit_purpose ~* 'walk' AND v.status <> 'cancelled' ORDER BY v.id DESC LIMIT 1))
+     FROM jobs j WHERE j.from_estimate_id = p_id AND j.status <> 'cancelled' ORDER BY j.id DESC LIMIT 1) END
+$$;
+
+REVOKE EXECUTE ON FUNCTION public._est_can_change(bigint), public.est_sold_invoice(bigint), public.est_unsell(bigint), public.est_install_job(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.est_sold_invoice(bigint), public.est_unsell(bigint), public.est_install_job(bigint) TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
 """
 
 # small pieces that only add functions (no table changes), applied on their own so a lock on APP_SCHEMA can't hold them up
@@ -4221,7 +4322,7 @@ def main():
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
-        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL AND to_regprocedure('public.customer_partner_bookings(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_tank_payer(bigint,text)') IS NOT NULL AND to_regprocedure('public.htin_stats(bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_link_customer(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.inv_partner_rule(bigint)') IS NOT NULL")
+        cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL AND to_regprocedure('public.customer_partner_bookings(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_tank_payer(bigint,text)') IS NOT NULL AND to_regprocedure('public.htin_stats(bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_link_customer(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.inv_partner_rule(bigint)') IS NOT NULL AND to_regprocedure('public.est_unsell(bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")

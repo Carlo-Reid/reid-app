@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <link rel="icon" id="page-icon" href="data:,">
-<meta name="app-version" content="2026-10-24.125657">
+<meta name="app-version" content="2026-10-24.174912">
 <title>Customers – Reid Heating &amp; Cooling</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3724,6 +3724,8 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .ie-prule { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; background: #fdf6e7; border: 1px solid #ecd9a8; border-radius: 10px; padding: 10px 14px; margin: 8px 0 12px; color: #4a3a12; }
 .ie-prule .quiet { color: #6b5a30; font-size: 12.5px; margin-top: 2px; } .ie-prule-acts { display: flex; flex-wrap: wrap; gap: 6px; }
 .pbl-rates b small { font-size: 12px; font-weight: 600; } .pbl-rates-f input { width: 64px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; }
+.est-walk-f { display: grid; gap: 10px; } .est-walk-f label { display: grid; gap: 4px; font-weight: 600; font-size: 13px; }
+.est-walk-f input, .est-walk-f select { font: inherit; font-weight: 400; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper, #fff); color: var(--ink); }
 .htin-late { color: #b02a2a; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
 .htin-cb { font-size: 11.5px; font-weight: 600; color: #0b7480; white-space: nowrap; } .htin-cb.due { color: #fff; background: #c2410c; border-radius: 5px; padding: 1px 6px; }
 .htin-tank { font-size: 11.5px; font-weight: 600; color: #5a3d00; background: #fdf0d9; border-radius: 5px; padding: 1px 6px; width: fit-content; }
@@ -6307,6 +6309,7 @@ async function openEstEdit(id, msg) {
   COMPANY = co?.data || COMPANY;
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the estimate</h2>${esc(error ? rpcErr(error) : "It's not there any more.")}</div></div>`; return; }
   EST.x = data;
+  EST.ij = data.status === "accepted" && !data.cancelled_at ? ((await db.rpc("est_install_job", { p_id: id })).data || null) : null;   // the install job the sale made
   EST.opts = (data.estimate_options || []).sort((a, b) => a.sequence - b.sequence).map(o => ({ id: o.id, name: o.name, recommended: o.is_recommended,
     lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price), skip: (l.kit_skip || []).map(Number), disc: Number(l.unit_price) < 0, ldesc: l.long_desc || "" })) }));
   if (!EST.opts.length) EST.opts = [{ name: "Option 1", recommended: true, lines: [] }];
@@ -6469,7 +6472,10 @@ function renderEstEdit() {
       <span class="est-st est-${esc(x.status)}">${x.cancelled_at ? "Cancelled" : esc(STATUS[x.status] || x.status)}</span>
       <span class="est-tb-gap"></span>
       <button class="btn est-send-btn" type="button" id="est-send" title="Email or text it to the customer: a link, or a link and the PDF">✉ Email / Text</button>
-      ${closed ? `<button class="btn quiet-btn" type="button" id="est-preview">🖨 Print preview</button>` : `
+      ${closed ? `<button class="btn quiet-btn" type="button" id="est-preview">🖨 Print preview</button>
+      ${x.status === "accepted" && !x.cancelled_at ? `<button class="btn" type="button" id="est-walk" title="Book a visit to walk the site before the install (on install job ${esc(EST.ij?.number || "")})">📅 ${EST.ij?.walk ? "Walk booked " + esc(fmtDate(EST.ij.walk.date)) : "Book a walk"}</button>
+        <button class="btn" type="button" id="est-inv">🧾 ${EST.ij?.invoice_id ? "Open the invoice" : "Create the invoice"}</button>
+        <button class="btn quiet-btn" type="button" id="est-unsell" title="Closed by mistake? Put it back to not sold">↩ Un-sell</button>` : ""}` : `
       <button class="btn" type="button" id="est-save">Save</button>
       <button class="btn quiet-btn" type="button" id="est-preview" title="See it the way the customer gets it, then print it or come back and change it">🖨 Print preview</button>
       <button class="btn est-close-btn" type="button" id="est-close">✓ Close the deal…</button>
@@ -6589,11 +6595,53 @@ function wireEstEdit() {
     if (!k) return;
     const { data, error } = await db.rpc("est_close", { p_id: EST.id, p_option: Number(k) });
     if (error) { say("Not closed: " + rpcErr(error), true); return; }
-    SALES.rows = null; openEstEdit(EST.id, `Deal closed. Install job ${data.install_job_number} is ready to book.`); });
+    SALES.rows = null; await openEstEdit(EST.id, `Deal closed. Install job ${data.install_job_number} is ready to book.`);
+    const nx = await askChoice("Sold! What's next?", `Install job <b>${esc(data.install_job_number)}</b> was made.`, [["walk", "📅 Book a walk", true], ["invoice", "🧾 Create the invoice", true], ["", "Later"]]);
+    if (nx === "walk") estBookWalk(); else if (nx === "invoice") estMakeInvoice(); });
+  $("#est-walk")?.addEventListener("click", () => estBookWalk());
+  $("#est-inv")?.addEventListener("click", () => estMakeInvoice());
+  $("#est-unsell")?.addEventListener("click", async () => {
+    const k = await askChoice("Un-sell this estimate?", `It goes back to not sold so you can close it again with the right option.${EST.ij ? ` Install job <b>${esc(EST.ij.number)}</b> is cancelled${EST.ij.invoice_id ? " and its unfinished invoice is removed" : ""}.` : ""}`, [["yes", "↩ Un-sell it", true], ["", "Keep it sold"]]);
+    if (k !== "yes") return;
+    const { error } = await db.rpc("est_unsell", { p_id: EST.id });
+    if (error) { say("Not undone: " + (/PGRST202|could not find/i.test(error.message || "") ? "this turns on after the next database update." : rpcErr(error)), true); return; }
+    SALES.rows = null; openEstEdit(EST.id, "Sale undone. The estimate is open again."); });
   $("#est-lost")?.addEventListener("click", async () => {
     const k = await askChoice("Not sold", "Why didn't they buy?", [["price", "Price"], ["competitor", "Went with someone else"], ["not_doing_work", "Not doing the work"], ["no_response", "No answer"], ["financing_declined", "Financing declined"], ["other", "Other"], ["", "Cancel"]]);
     if (!k) return; const { error } = await db.rpc("est_lost", { p_id: EST.id, p_reason: k, p_note: null });
     if (error) { say("Not saved: " + rpcErr(error), true); return; } SALES.rows = null; openEstEdit(EST.id, "Marked as not sold."); });
+}
+// after a sale: make the invoice from the sold option (on the install job)
+async function estMakeInvoice() {
+  const { data, error } = await db.rpc("est_sold_invoice", { p_id: EST.id });
+  if (error) { const el = $("#est-msg"); if (el) { el.className = "staff-msg err est-tmsg"; el.textContent = "No invoice: " + (/PGRST202|could not find/i.test(error.message || "") ? "this turns on after the next database update." : rpcErr(error)); } return; }
+  openInvoiceEditor(data, "The invoice has the sold option's lines and prices. Check it, then finish it.");
+}
+// after a sale: book a visit to walk the site, on the install job
+async function estBookWalk() {
+  const IJ = EST.ij || (await db.rpc("est_install_job", { p_id: EST.id })).data;
+  if (!IJ) return alertMsg("The install job for this sale isn't there.");
+  try { await bookLists(); } catch (e) { return alertMsg(e.message); }
+  document.querySelector(".ask-wrap")?.remove();
+  const meEmp = ME.emp || null, techs = (BOOK.techs || []).filter(t => t.recent || t.id === meEmp);
+  const W = { date: ymd(addDays(new Date(), 1)), win: (BOOK.windows || [])[0] || ["08:00", "11:00"], who: meEmp || techs[0]?.id || null };
+  const d = document.createElement("div"); d.className = "ask-wrap"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Book a walk");
+  const draw = msg => { d.innerHTML = `<form class="ask est-walk-f" autocomplete="off"><h3>Book a walk</h3><p>Walk the site before the install · install job <b>${esc(IJ.number)}</b></p>
+      <label>Day <input type="date" name="date" value="${esc(W.date)}" min="${ymd(new Date())}" required></label>
+      <div><span class="cl-label">Arrival window</span><div class="bk-chips">${(BOOK.windows || []).map(([a, b]) => `<button type="button" class="chip small" data-w="${a}-${b}" aria-pressed="${W.win[0] === a && W.win[1] === b}">${winText(a, b)}</button>`).join("")}</div></div>
+      <label>Who walks it <select name="who">${meEmp ? `<option value="${meEmp}" ${W.who === meEmp ? "selected" : ""}>Me</option>` : ""}${techs.filter(t => t.id !== meEmp).map(t => `<option value="${t.id}" ${W.who === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>
+      <label>Note <input name="note" maxlength="300" placeholder="e.g. measure for the venting, check the gas line"></label>
+      <div class="ask-btns"><button class="btn" type="submit">Book the walk</button><button class="btn quiet-btn" type="button" data-x>Cancel</button></div>
+      <div class="staff-msg ${msg ? "err" : ""}" role="status">${esc(msg || "")}</div></form>`;
+    d.querySelector("[data-x]").addEventListener("click", () => d.remove());
+    d.querySelectorAll("[data-w]").forEach(b => b.addEventListener("click", () => { W.date = d.querySelector("[name=date]").value; W.who = Number(d.querySelector("[name=who]").value) || null; W.win = b.dataset.w.split("-"); draw(); }));
+    d.querySelector("form").addEventListener("submit", async e => { e.preventDefault(); const f = e.target; W.date = f.date.value; W.who = Number(f.who.value) || null;
+      const p = { job_id: IJ.id, customer_id: IJ.customer_id, location_id: IJ.location_id, summary: "Walk the site before the install", note: f.note.value.trim(), priority: "normal",
+        date: W.date, start: W.win[0], end: W.win[1], duration: 60, techs: W.who ? [W.who] : [] };
+      f.querySelector("[type=submit]").disabled = true;
+      const { error } = await db.rpc("book_call", { p }); if (error) return draw("Not booked: " + rpcErr(error));
+      d.remove(); openEstEdit(EST.id, `Walk booked: ${dayText(W.date)}, ${winText(W.win[0], W.win[1])}.`); }); };
+  draw(); d.addEventListener("click", e => { if (e.target === d) d.remove(); }); document.body.append(d); d.querySelector("[name=date]").focus();
 }
 let BK_SALES = null;   // partners ticked for sales calls
 let BK_PARTNERS = null;
