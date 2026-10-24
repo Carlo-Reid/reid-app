@@ -3858,6 +3858,9 @@ mark.ow-amt-hit { background: #FDE68A; color: #3b2a00; padding: 1px 5px; border-
 :root[data-theme="desert"] body:not([data-page="dispatch"]):not([data-page="dispatchmap"]) :is(#main, #search-page) .seg button[aria-pressed="true"] { color: #f2d29b !important; }
 :root[data-theme="desert"] .calls-table th { background: #193840; color: #dcb386; }
 /* ===== END DESERT ===== */
+.ovd-buckets{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:0 0 14px;max-width:900px}
+.ovd-b{display:flex;flex-direction:column;gap:2px;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;color:var(--ink)}
+.ovd-b b{font-size:18px}.ovd-b.on{border-color:var(--blue);background:var(--blue-wash)}
 .ss-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px;max-width:820px}
 .ss-card h2{margin:0 0 6px;font-size:18px}.ss-test{border-color:var(--amber);background:var(--amber-wash)}.ss-live{border-color:var(--green);background:var(--green-wash)}
 .ss-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0}.ss-row input{min-width:260px}
@@ -13139,6 +13142,42 @@ function xpShell(hash, eyebrow, title, intro) {
 }
 const xpErr = e => /PGRST202|could not find/i.test(e?.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(e);
 const xpHere = hash => document.querySelector(`.xp-page[data-xp="${hash}"]`);
+// ---------- Overdue: invoices still owing past their due date, and reminders (improvement 5) ----------
+const OVD = { days: 90, who: "customer", sort: "days" };
+xpAdd({ link: "overdue-link", hash: "overdue", show: () => can("invoices.adjust"), open: openOverdue });
+async function openOverdue() {
+  const body = xpShell("overdue", "Receivables", "Overdue", "Invoices still owing past their due date, oldest first. Click Remind to send a reminder by email or text (it opens the invoice with the reminder written).");
+  const { data, error } = await db.rpc("overdue_invoices", { p_days: OVD.days, p_who: OVD.who, p_limit: 500 });
+  if (!xpHere("overdue")) return;
+  if (error || !data) { body.innerHTML = `<div class="staff-msg err">${esc(error ? xpErr(error) : "Not for you.")}</div>`; return; }
+  const b = data.buckets || {}, rows = (data.rows || []).slice();
+  const sorts = { days: (x, y) => y.days - x.days, balance: (x, y) => y.balance - x.balance, customer: (x, y) => String(x.customer || "").localeCompare(String(y.customer || "")),
+                  reminded: (x, y) => String(x.reminded || "").localeCompare(String(y.reminded || "")) };
+  rows.sort(sorts[OVD.sort] || sorts.days);
+  const th = (k, t) => `<th><button class="link" type="button" data-ovd-sort="${k}">${t}${OVD.sort === k ? " ▾" : ""}</button></th>`;
+  body.innerHTML = `<div class="ovd-buckets">${[["30", "30–59 days"], ["60", "60–89 days"], ["90", "90–179 days"], ["180", "180+ days"]].map(([k, t]) =>
+      `<button type="button" class="ovd-b ${OVD.days === Number(k) ? "on" : ""}" data-ovd-days="${k}"><span>${t}</span><b>${money(b[k]?.amount || 0)}</b><span class="quiet">${Number(b[k]?.n || 0)} invoices</span></button>`).join("")}</div>
+    <section class="cl-tools"><div class="cl-row">
+      <div class="cl-group"><span class="cl-label">Owed by</span><div class="seg" role="group">${[["customer", "Customers"], ["partner", "Partners"], ["all", "Both"]].map(([k, t]) => `<button type="button" aria-pressed="${OVD.who === k}" data-ovd-who="${k}">${t}</button>`).join("")}</div></div>
+      <label class="cl-group"><span class="cl-label">At least</span><select id="ovd-days">${[1, 30, 60, 90, 180, 365].map(d => `<option value="${d}" ${OVD.days === d ? "selected" : ""}>${d === 1 ? "any days" : d + " days"} overdue</option>`).join("")}</select></label>
+      <div class="cl-group"><span class="cl-label">Showing</span><b>${Number(data.n || 0).toLocaleString()} · ${money(data.amount || 0)}</b></div>
+    </div></section>
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table"><thead><tr><th>Invoice</th>${th("customer", "Customer")}${th("days", "Overdue")}${th("balance", "Owing")}${th("reminded", "Last reminder")}<th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><button class="link" type="button" data-ovd-inv="${r.id}">#${esc(r.number || r.id)}</button><div class="quiet">${esc(fmtDate(r.date))}</div></td>
+        <td>${r.customer_id ? `<button class="link" type="button" data-ovd-cust="${r.customer_id}">${esc(r.customer || "")}</button>` : esc(r.customer || "")}${r.partner ? `<div class="quiet">bill to ${esc(r.partner)}</div>` : ""}</td>
+        <td>${r.days} days<div class="quiet">due ${esc(fmtDate(r.due))}</div></td><td><b>${money(r.balance)}</b>${Number(r.total) !== Number(r.balance) ? `<div class="quiet">of ${money(r.total)}</div>` : ""}</td>
+        <td>${r.reminded ? `${esc(fmtWhen(r.reminded))}${r.reminders > 1 ? `<div class="quiet">${r.reminders} sent</div>` : ""}` : `<span class="quiet">never</span>`}</td>
+        <td>${can("email.send") ? `<button class="btn quiet-btn" type="button" data-ovd-remind="${r.id}">Remind${r.email ? "" : " (no email: text)"}</button>` : ""}</td></tr>`).join("")}
+      </tbody></table></div>${rows.length >= 500 ? `<p class="quiet">Showing the oldest 500.</p>` : ""}` : `<p class="quiet" style="padding:20px 0">Nothing overdue that long. 🎉</p>`}
+    <p class="quiet">Test reminders (sent while in test mode) don't count as reminders here.</p>`;
+  body.querySelectorAll("[data-ovd-days]").forEach(x => x.addEventListener("click", () => { OVD.days = Number(x.dataset.ovdDays); openOverdue(); }));
+  body.querySelectorAll("[data-ovd-who]").forEach(x => x.addEventListener("click", () => { OVD.who = x.dataset.ovdWho; openOverdue(); }));
+  body.querySelectorAll("[data-ovd-sort]").forEach(x => x.addEventListener("click", () => { OVD.sort = x.dataset.ovdSort; openOverdue(); }));
+  $("#ovd-days")?.addEventListener("change", e => { OVD.days = Number(e.target.value); openOverdue(); });
+  body.querySelectorAll("[data-ovd-inv]").forEach(x => x.addEventListener("click", () => openInvoice(Number(x.dataset.ovdInv))));
+  body.querySelectorAll("[data-ovd-cust]").forEach(x => x.addEventListener("click", () => openCustomer(Number(x.dataset.ovdCust))));
+  body.querySelectorAll("[data-ovd-remind]").forEach(x => x.addEventListener("click", () => { const id = Number(x.dataset.ovdRemind); INV_REMIND = id; openInvoice(id); }));
+}
 // ---------- Sending: Test or Live, the test address, staff cells (improvement 4) ----------
 xpAdd({ link: "sendset-link", hash: "sending", show: () => ME.role === "owner", open: openSendSettings });
 async function openSendSettings(msg, bad) {
@@ -17232,6 +17271,12 @@ async function invoicePdfB64() {
   }
   return doc.output("datauristring").split(",")[1];
 }
+let INV_REMIND = null;   // invoice id: open its sending panel with reminder wording (from the Overdue page)
+function invoiceReminderText(D) {
+  const t = invoiceEmailText(D).split("\n"), i = t.findIndex(x => x.startsWith("Here is your invoice"));
+  if (i >= 0) t[i] = `This is a friendly reminder that invoice ${D.number} from ${D.coName} is past due. The balance owing is ${money(D.balance)}.`;
+  return t.join("\n");
+}
 function invoiceEmailText(D) {
   const pad = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s).padEnd(n), lpad = (s, n) => s.padStart(n);
   const first = (D.custName || "").split(/[\s,&/]+/)[0];
@@ -17452,9 +17497,11 @@ async function invEmailSetup(D) {
   // invoices use the shared sending panel (email and/or text, link or link + PDF); earlier invoice emails still show under it
   if (!D.void) {
     const first = (D.custName || "").split(/[\s,&/]+/)[0], old = await db.rpc("invoice_email_info", { p_invoice: D.id });
+    const rem = INV_REMIND === D.id && D.balance > 0.004; if (INV_REMIND === D.id) { INV_REMIND = null; if (rem) SEND.key = null; }   // from the Overdue page: reminder wording
     docSendSetup({ kind: "invoice", refId: D.id, title: `Invoice ${D.number}`, label: "invoice", fileName: `Reid invoice ${D.number}.pdf`, partnerFirst: !!D.partner,
-      subject: `Invoice ${D.number} from ${D.coName}`, body: invoiceEmailText(D), openNow: INV_EMAIL_OPEN,
-      sms: `Hi${first && !D.partner ? " " + first : ""}, here is your invoice ${D.number} from ${D.coName}${D.balance > 0.004 ? ` (balance ${money(D.balance)})` : ""}.`,
+      subject: rem ? `Reminder: invoice ${D.number} from ${D.coName} is past due` : `Invoice ${D.number} from ${D.coName}`, body: rem ? invoiceReminderText(D) : invoiceEmailText(D), openNow: INV_EMAIL_OPEN || rem,
+      sms: rem ? `Hi${first && !D.partner ? " " + first : ""}, a friendly reminder from ${D.coName}: invoice ${D.number} has a balance of ${money(D.balance)} that is past due. Please call us at ${D.coPhone || "the office"} to pay. Thank you!`
+               : `Hi${first && !D.partner ? " " + first : ""}, here is your invoice ${D.number} from ${D.coName}${D.balance > 0.004 ? ` (balance ${money(D.balance)})` : ""}.`,
       legacy: old.data?.sends?.length ? `<div class="ds-legacy"><div class="ds-sends-h">Earlier invoice emails</div>${invEmailStatus(old.data.sends)}</div>` : "" });
     return;
   }
