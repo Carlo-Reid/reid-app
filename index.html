@@ -3732,6 +3732,8 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .bk-day .bk-day-n { font-size: 11px; font-weight: 400; opacity: .75; }
 .bk-day-full .bk-day-n { color: var(--owe, #b42318); opacity: 1; }
 .dc-walk { display: inline-block; font-weight: 700; font-size: 11px; padding: 0 6px; border-radius: 9px; background: #e7f0fb; color: #1d4f91; margin-right: 2px; }
+.bk-mine-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 8px; }
+.bk-mine-sel { border: 2px solid var(--ink, #1f454c); }
 .bk-near { grid-column: 1 / -1; margin: 6px 0; }
 .bk-near h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 16px; margin: 0 0 6px; }
 .bk-near .near-calls { border-top: 0; margin: 0; padding-top: 0; }
@@ -6764,6 +6766,46 @@ function bkDayChips(F) {
     return `<button class="chip small bk-day bk-sq${F.range && shown.length && !free ? " bk-day-full" : ""}" type="button" data-bk-day="${d}" aria-pressed="${!F.later && F.date === d}" title="${esc(dayText(d))}${F.range ? `: ${free} of ${shown.length} ${who} free` : ""}">
       <b>${esc(name)}</b>${F.range && shown.length ? `<span class="bk-day-n">${free} free</span>` : ""}</button>`; }).join("") + `</span>`;
 }
+// a sales person's own calls, the next 10 working days (looks like Calls nearby, Section 1B): pick the day from here
+function bkSellerName(F) {
+  if (!bkSales() || !(F.sk === "site" || F.sk === "walk")) return "";
+  const me = ME.role === "sales" ? (F.sellers || []).find(x => x.me) : (F.sellers || []).find(x => x.id === Number(F.seller));
+  if (!me) return "";
+  const emp = ME.role === "sales" ? ME.emp || me.emp : me.emp;
+  return (emp && (BOOK.techs || []).find(t => t.id === emp)?.name) || me.name || "";
+}
+function bkMineHtml(F) {
+  const name = bkSellerName(F), l = F.locs.find(x => x.id === F.loc) || F.locs[0];
+  if (!NEAR.rows) { loadNear().then(() => { const el = document.getElementById("bk-mine"); if (el && BK === F) el.innerHTML = bkMineHtml(F); }); return `<span class="nc-lab">🗓 Your calls, next 10 working days:</span> <span class="quiet">checking…</span>`; }
+  if (NEAR.err) return `<span class="nc-lab">🗓 Your calls:</span> <span class="quiet">${esc(NEAR.err)}</span>`;
+  const first = n => String(n || "").trim().split(/\s+/)[0].toLowerCase();
+  const mine = v => (v.techs ? v.techs.split(/,\s*/) : []).some(n => n === name || (first(n) && first(n) === first(name) && !name.includes(" ")));
+  const rows = NEAR.rows.filter(mine);
+  const t = x => { const d = new Date(x); return isNaN(d) ? "" : d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\s?([ap])\.?m\.?/i, "$1").replace(":00", ""); };
+  const HH = x => { const d = new Date(x); return d.getHours() + d.getMinutes() / 60; };
+  const WINS = [[8, 11, "8–11a"], [11, 14, "11a–2p"], [14, 17, "2–5p"]];
+  const km = v => { if (!l || l.latitude == null || v.latitude == null) return null; const la = Number(l.latitude), dy = (Number(v.latitude) - la) * 110.57, dx = (Number(v.longitude) - Number(l.longitude)) * 111.32 * Math.cos(la * Math.PI / 180); return Math.sqrt(dx * dx + dy * dy); };
+  const kmTxt = k => k == null ? "" : k < 1 ? Math.round(k * 1000 / 50) * 50 + " m away" : k.toFixed(1) + " km away";
+  const day = d => new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }).replace(/\./g, "");
+  const days10 = []; for (let i = 0; days10.length < 10 && i < 21; i++) { const dt = new Date(); dt.setDate(dt.getDate() + i); const wd = dt.getDay(); if (wd === 0 || wd === 6) continue; days10.push(ymd(dt)); }
+  const info = days10.map(d => { const cs = rows.filter(v => v.d === d).sort((a, b) => String(a.from).localeCompare(String(b.from)));
+    const sp = cs.filter(v => v.from).map(v => [HH(v.from), v.to ? HH(v.to) : HH(v.from) + 1]);
+    const free = WINS.filter(([a, b]) => !sp.some(([x, y]) => x < b && y > a)), ks = cs.map(km).filter(k => k != null);
+    return { d, cs, free, min: ks.length ? Math.min(...ks) : null }; });
+  const best = info.filter(x => x.cs.length && x.free.length && x.min != null && x.min <= 5).sort((a, b) => a.min - b.min)[0];   // already out near here that day, with room
+  const total = info.reduce((n, x) => n + x.cs.length, 0);
+  const box = x => { const sel = !F.later && F.date === x.d, isBest = best && best.d === x.d;
+    return `<div class="nc-dbox ${isBest ? "top" : ""} ${sel ? "bk-mine-sel" : ""}"><div class="nc-bday">${esc(day(x.d))}${isBest ? ` <span class="nc-star">★ best</span>` : ""}<span class="nc-dn">${x.cs.length ? x.cs.length + " call" + (x.cs.length === 1 ? "" : "s") : ""}</span></div>
+      <div class="nc-opts">${x.cs.map(v => `<div class="nc-opt ${km(v) != null && km(v) <= 5 ? "room" : ""}"><div class="nc-o1"><b>${esc(v.from ? t(v.from) + (v.to ? "–" + t(v.to) : "") : "Any time")}</b> <span class="quiet">${esc([v.street, v.city].filter(Boolean).join(", "))}</span></div>
+          <div class="nc-o2 quiet">${esc(v.type || "")}${km(v) != null ? " · " + esc(kmTxt(km(v))) : ""}</div></div>`).join("")}
+        <div class="nc-opt ${x.free.length ? "room" : "over"}"><span class="nc-flag ${x.free.length ? "room" : "over"}">${!x.cs.length ? "Free all day" : x.free.length ? "Free " + esc(x.free.map(w => w[2]).join(", ")) : "No free window"}</span></div>
+        <button type="button" class="btn nc-book" data-bk-mine="${x.d}" ${sel ? "disabled" : ""}>${sel ? "✓ Picked" : "Pick this day"}</button></div></div>`; };
+  return `<details class="nc-drop" open><summary class="nc-lab">🗓 ${ME.role === "sales" ? "Your calls" : esc(name) + "'s calls"}, next 10 working days: <b>${total}</b>${best ? ` · best day: <b>${esc(day(best.d))}</b> (already near here)` : ""}</summary>
+    <div class="nc-best"><div class="nc-h">Only ${ME.role === "sales" ? "your" : esc(name) + "'s"} bookings <span class="nc-legend">· green = room / close by · red = no free window · pick the day here, then the arrival window below</span></div>
+      <div class="nc-days10">${info.map(box).join("")}</div></div></details>`;
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-bk-mine]"); if (!b || !BK) return; e.preventDefault();
+  BK.keep?.(); BK.date = b.dataset.bkMine; BK.later = false; renderBooking(); loadTechLoad(); });
 // the walk's Installers box: the same as Calls nearby on the customer page (Section 1B), installers only
 const bkNearLoc = () => { const F = BK; return F && (F.locs.find(x => x.id === (F.jobs.find(j => j.job_id === F.jobId)?.location_id || F.loc)) || F.locs[0]); };
 function bkNearHtml() {
@@ -6868,10 +6910,12 @@ function renderBooking(msg) {
         <label class="bk-row"><span class="bk-label">${bkSales() ? (F.sk === "est" ? "What are you quoting?" : "Reason for Call") : "What's wrong / what's needed"}</span><input id="bk-summary" maxlength="200" value="${esc(F.summary)}" placeholder="${esc(bkSales() ? (F.sk === "est" ? "e.g. New furnace and AC, 2-storey house" : "e.g. Measure venting") : t ? t.name : "e.g. No heat, furnace making a noise")}"></label>`}
       <label class="bk-row top"><span class="bk-label">${bkSales() ? (F.sk === "est" ? "Job notes for site visit" : "Job Notes") : "Notes for the tech"}</span><textarea id="bk-note" rows="3" maxlength="4000" placeholder="${bkSales() ? (F.sk === "est" ? "What you saw at the site: where the equipment is, sizes, access, what the customer wants…" : "Anything about the visit: parking, side door, what the customer wants…") : "Anything the tech should know: parking, side door, dog, what the customer said…"}">${esc(F.note)}</textarea></label>
 
-      ${bkSales() && (F.sk === "est" || F.sk === "phone") ? "" : `${F.walk && !F.byHand ? "" : `<div class="bk-row"><span class="bk-label">Day</span><span class="bk-chips">
+      ${bkSales() && (F.sk === "est" || F.sk === "phone") ? "" : `${(F.walk && !F.byHand) || (bkSellerName(F) && !F.later) ? "" : `<div class="bk-row"><span class="bk-label">Day</span><span class="bk-chips">
         <input type="date" id="bk-date" value="${esc(F.date)}" ${F.later ? "disabled" : ""}>
-        ${bkDayChips(F)}
+        ${bkSellerName(F) ? "" : bkDayChips(F)}
         <button class="chip small" type="button" data-bk-later aria-pressed="${F.later}" title="Save the job now and pick the day later from the Dispatch page">Not booked yet</button></span></div>`}
+      ${bkSellerName(F) && !F.later ? `<section class="block nc-sec bk-near bk-mine"><div class="bk-mine-top"><span class="bk-label">Day</span><input type="date" id="bk-date" value="${esc(F.date)}">
+        <button class="chip small" type="button" data-bk-later aria-pressed="false" title="Save the job now and pick the day later">Not booked yet</button></div><div class="near-calls" id="bk-mine">${bkMineHtml(F)}</div></section>` : ""}
       ${F.later ? "" : `<div class="bk-row"><span class="bk-label">Arrival window</span><span class="bk-chips">
         ${L.windows.map(([a, b]) => `<button class="chip small" type="button" data-bk-win="${a}-${b}" aria-pressed="${F.win && F.win[0] === a && F.win[1] === b}">${winText(a, b)}</button>`).join("")}
         <button class="chip small" type="button" data-bk-win="any" aria-pressed="${F.win === "any"}">Any time</button>
