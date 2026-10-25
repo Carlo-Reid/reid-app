@@ -1964,6 +1964,12 @@
   .dc-foot { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 3px; font-size: calc(12.5px * var(--fs, 1)); }
   .dsp-panel { flex: 0 0 340px; background: var(--panel); border: 2px solid var(--blue); border-radius: var(--radius-m); padding: 14px 16px; position: sticky; top: 10px;
                max-height: calc(100vh - 140px); overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  .dp-movebox { margin: 10px 0 2px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .dp-movebox > summary { cursor: pointer; font-weight: 700; font-size: calc(13px * var(--fs, 1)); text-transform: uppercase; letter-spacing: .06em; color: var(--steel); }
+  .dp-movebox[open] > summary { margin-bottom: 8px; }
+  .dsp-panel .chip.dp-clash, .dsp-panel input.dp-clash { border-color: #c92a2a !important; color: #c92a2a !important; background: #fdecec !important; }
+  .dsp-panel .chip.dp-clash[aria-pressed="true"] { background: #c92a2a !important; color: #fff !important; }
+  .dp-clash-msg { color: #c92a2a; font-size: calc(12.5px * var(--fs, 1)); margin: 4px 0; } .dp-clash-msg:empty { display: none; }
   .dsp-panel .dp-phone { margin: 2px 0 4px; } .dsp-panel .dp-phone a { font-weight: 600; text-decoration: none; }
   .dsp-panel h3 { margin: 10px 0 2px; font-size: calc(13px * var(--fs, 1)); text-transform: uppercase; letter-spacing: .06em; color: var(--steel); }
   .dp-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; font-size: calc(17px * var(--fs, 1)); }
@@ -8913,6 +8919,25 @@ function dspPhoneHtml(r) {
   if (!ph.length) return `<span class="quiet">No phone on file</span>`;
   return ph.map(k => `<a href="tel:${esc(String(k.value).replace(/[^\d+]/g, ""))}">📞 ${esc(phoneFmt(k.value))}</a>${k.contact_name ? ` <span class="quiet">${esc(k.contact_name)}</span>` : ""}`).join(" · ");
 }
+// Change time: a window turns red when one of this call's techs already has another call then (it can still be picked)
+const DSP_DAYS = new Map();   // date -> that day's calls (for a day other than the one on the board)
+async function dpMarkClashes(r) {
+  const p = $("#dsp-panel"), d = $("#dp-date")?.value; if (!p || !d) return;
+  const techs = DSP.panelTechs && DSP.panelTechs.visit === r.visit_id ? DSP.panelTechs.ids : r.techs.map(t => t.id);
+  let rows = d === DSP.date ? DSP.rows : DSP_DAYS.get(d);
+  if (!rows) { const { data } = await db.rpc("dispatch_day", { p_date: d }); rows = data || []; DSP_DAYS.set(d, rows); if ($("#dp-date")?.value !== d || DSP.sel !== r.visit_id) return; }
+  const H = x => { const t = new Date(x); return t.getHours() + t.getMinutes() / 60; }, hm = t => { const [h, m] = String(t).split(":").map(Number); return h + (m || 0) / 60; };
+  const others = rows.filter(o => o.visit_id !== r.visit_id && o.status !== "cancelled" && o.arrival_start && (o.techs || []).some(t => techs.includes(t.id)));
+  const clash = (a, z) => others.filter(o => { const x = H(o.arrival_start), y = o.arrival_end ? H(o.arrival_end) : x + 1; return x < z && y > a; });
+  const who = o => (o.techs || []).filter(t => techs.includes(t.id)).map(t => t.name).join(" and ");
+  const say = list => list.map(o => `${who(o)} already has ${o.customer_name} ${winText(o.arrival_start, o.arrival_end)}`).join("; ");
+  p.querySelectorAll("[data-dp-win]").forEach(b => { const w = b.dataset.dpWin; if (w === "any") return;
+    const [a, z] = w.split("-"), c = clash(hm(a), hm(z)); b.classList.toggle("dp-clash", !!c.length); b.title = c.length ? "Booked: " + say(c) + ". You can still pick it." : ""; });
+  const a = $("#dp-start")?.value, z = $("#dp-end")?.value, m = $("#dp-clash-msg");
+  const c = a ? clash(hm(a), z ? hm(z) : hm(a) + 1) : [];
+  [$("#dp-start"), $("#dp-end")].forEach(i => i?.classList.toggle("dp-clash", !!c.length));
+  if (m) m.textContent = c.length ? "⚠ " + say(c) + ". You can still move it." : "";
+}
 function renderDspPanel() {
   const r = dspCall(DSP.sel), p = $("#dsp-panel"); if (!r || !p) return;
   p.classList.remove("hidden");
@@ -8936,15 +8961,16 @@ function renderDspPanel() {
       <button class="link" type="button" data-dp-book>Book another visit on this job</button>
       <button class="link" type="button" data-dp-apl>Add to a partner list</button></div>
     ${done ? "" : `
-    <h3>Move</h3>
+    <details class="dp-movebox" ${DSP.moveOpen === r.visit_id ? "open" : ""}><summary>Change time</summary>
     <div class="dp-move">
       <input type="date" id="dp-date" value="${esc(r.scheduled_date || DSP.date)}" aria-label="Day">
       <div class="bk-chips">${BOOK.windows.map(([a, b]) => `<button class="chip small" type="button" data-dp-win="${a}-${b}" aria-pressed="${!!curWin && curWin[0] === a && curWin[1] === b}">${winText(a, b)}</button>`).join("")}
         <button class="chip small" type="button" data-dp-win="any" aria-pressed="${!curWin && !!r.scheduled_date}">Any time</button></div>
       <div class="bk-times">Or <input type="time" id="dp-start" step="900" value="${curWin ? curWin[0] : ""}" aria-label="From"> to <input type="time" id="dp-end" step="900" value="${curWin ? curWin[1] : ""}" aria-label="To">
         <button class="btn quiet-btn" type="button" data-dp-move>Move</button></div>
+      <div class="dp-clash-msg" id="dp-clash-msg" role="status"></div>
       ${r.scheduled_date ? `<button class="link" type="button" data-dp-unsched>Take it off the schedule (back to waiting)</button>` : ""}
-    </div>
+    </div></details>
     <h3>Techs</h3>
     <div class="bk-chips dp-techs">${(BOOK.techs || []).filter(t => t.recent || mine.has(t.id) || dt.includes(t.id)).map(t => { const n = dt.indexOf(t.id);
       return `<button class="chip small tech-chip" type="button" data-dp-tech="${t.id}" aria-pressed="${n >= 0}">${n === 0 ? `<span class="tc-n">Lead</span>` : n > 0 ? `<span class="tc-n">Helper</span>` : ""}${esc(t.name)}</button>`; }).join("")}</div>
@@ -8978,6 +9004,9 @@ function renderDspPanel() {
     if (date && date !== DSP.date) { DSP.date = date; }
     await loadDispatch();
   };
+  p.querySelector(".dp-movebox")?.addEventListener("toggle", e => { DSP.moveOpen = e.target.open ? r.visit_id : null; if (e.target.open) dpMarkClashes(r); });
+  ["#dp-date", "#dp-start", "#dp-end"].forEach(q => p.querySelector(q)?.addEventListener("input", () => dpMarkClashes(r)));
+  dpMarkClashes(r);
   p.querySelectorAll("[data-dp-win]").forEach(b => b.addEventListener("click", () => {
     const d = $("#dp-date").value; if (!d) return say("Pick the day first.", true);
     const w = b.dataset.dpWin; if (w === "any") move(d, null, null); else { const [a, z] = w.split("-"); move(d, a, z); }
