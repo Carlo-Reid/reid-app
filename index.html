@@ -3757,6 +3757,10 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .st-test-f { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; margin-top: 8px; }
 .st-test-f label { display: grid; gap: 4px; font-weight: 600; font-size: 13px; } .st-test-f input { font: inherit; font-weight: 400; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; min-width: 240px; }
 .st-test-on { color: #b35c00; } .st-live { color: #2b8a3e; }
+.pbpk { width: min(1200px, 96vw); } .pbpk-body { overflow: auto; flex: 1; padding: 12px 16px; background: var(--paper); }
+.pbpk .pbp-doc { box-shadow: none; } .pbpk .pbp-page { min-height: 0 !important; box-shadow: none; margin: 0 auto; }
+.pbp-add { margin-top: 6px; } .pbp-add.pbb-added { background: #2b8a3e !important; color: #fff !important; }
+@media print { .pbp-add { display: none !important; } }
 .est-note { width: 100%; box-sizing: border-box; font: inherit; resize: vertical; min-height: 2.6em; padding: 6px 8px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; color: inherit; }
 .est-note-ic { text-align: center; font-size: 18px; opacity: .7; }
 .est-note-np { font-size: 12px; white-space: nowrap; }
@@ -6191,15 +6195,60 @@ function renderSales(msg) {
 
 // ----- pick items straight from the price book (your own price book: the categories and items you're allowed to see) -----
 const PBB = { cats: null, open: new Set(), cat: null, items: null, q: "", oi: 0, added: new Set(), seq: 0, mode: "list", big: null, thumbs: new Map(), photos: new Map() };
+// Pictures on a proposal: the person's own print book (the categories ticked on the Print book page), each item with Add
+const PBPK = { key: null, html: null, added: new Set(), oi: 0 };
+async function openPrintPicks(oi) {
+  PBPK.oi = oi; PBPK.added = new Set();
+  let back = document.getElementById("pbpk-back");
+  if (!back) { back = document.createElement("div"); back.id = "pbpk-back"; back.className = "pbb-back"; document.body.appendChild(back);
+    back.addEventListener("click", e => { if (e.target === back) closePrintPicks(); }); }
+  back.hidden = false;
+  const o = EST.opts[oi] || {}, head = `<div class="pbb-head"><div><b>Your print book</b> <span class="quiet">adding to ${esc(o.name || "Option " + (oi + 1))}</span></div>
+    <span class="staff-msg" id="pbpk-msg" role="status"></span><button class="btn" type="button" id="pbpk-done">Done</button></div>`;
+  back.innerHTML = `<div class="pbb pbpk">${head}<div class="pbpk-body"><p class="quiet" style="padding:20px">Opening your print book…</p></div></div>`;
+  back.querySelector("#pbpk-done").addEventListener("click", closePrintPicks);
+  if (!PB.cats) await loadPbCats();
+  await loadPbBooks().catch(() => {});
+  PBP.picked = new Set([...PBP.picked].filter(id => PB.catBy.has(id))); pbpSyncBook();
+  if (!COMPANY) { const { data } = await db.from("company_settings").select("*").limit(1).maybeSingle(); COMPANY = data || { company_name: "Reid Heating & Cooling" }; }
+  if (!PBP.picked.size) { back.querySelector(".pbpk-body").innerHTML = `<p class="quiet" style="padding:20px">Your print book has no categories yet. Tick them on the <b>Print book</b> page (Price book → Print book), or use <b>📖 Price book</b>.</p>`; return; }
+  const key = JSON.stringify([[...PBP.picked].sort(), PBP.book ?? "", PBP.opt.nopic, PBP.opt.desc, PBP.opt.member]);
+  if (PBPK.key !== key || !PBPK.html) { const b = await makePrintBook(true); if (!b) return; PBPK.key = key; PBPK.html = b.html; }
+  if (document.getElementById("pbpk-back")?.hidden) return;
+  back.querySelector(".pbpk-body").innerHTML = `<div class="pbp-doc pbp-c${PBP.opt.cols || 2}">${PBPK.html}</div>`;
+  back.querySelector("#pbpk-msg").textContent = "";
+  back.querySelectorAll("[data-pbp-add]").forEach(b => b.addEventListener("click", () => {
+    const id = Number(b.dataset.pbpAdd);
+    EST.opts[PBPK.oi].lines.push({ item_id: id, description: b.dataset.pbpName, qty: 1, price: Number(b.dataset.pbpPrice) || 0 }); EST.dirty = true;
+    PBPK.added.add(id); b.textContent = "Added ✓"; b.classList.add("pbb-added"); back.querySelector("#pbpk-done").textContent = `Done (${PBPK.added.size} added)`; }));
+}
+function closePrintPicks() { const b = document.getElementById("pbpk-back"); if (b) b.hidden = true; if (PBPK.added.size) { PBPK.added = new Set(); renderEstEdit(); } }
+// a sales person's Price book on a proposal only shows what's in their print book (the categories, and everything inside them)
+async function salesBookCats() {
+  if (ME.role !== "sales") return null;
+  if (!PBP.picked.size) return null;
+  if (!PBB.catsAll) { const { data } = await db.rpc("pb_categories"); PBB.catsAll = (data || []).filter(c => c.active !== false); }
+  const kids = new Map(); PBB.catsAll.forEach(c => { const k = c.parent_id || 0; if (!kids.has(k)) kids.set(k, []); kids.get(k).push(c.id); });
+  const ok = new Set(), add = id => { if (ok.has(id)) return; ok.add(id); (kids.get(id) || []).forEach(add); };
+  [...PBP.picked].forEach(add); return ok.size ? ok : null;
+}
+const inSalesBook = (r, ok) => !ok || (r.category_ids || []).some(c => ok.has(Number(c)));
 async function openPbBrowse(oi, mode) {
   PBB.oi = oi; PBB.added = new Set(); PBB.mode = mode === "pics" ? "pics" : "list"; PBB.big = null;
   let back = document.getElementById("pbb-back");
   if (!back) { back = document.createElement("div"); back.id = "pbb-back"; back.className = "pbb-back"; document.body.appendChild(back);
     back.addEventListener("click", e => { if (e.target === back) closePbBrowse(); }); }
   back.hidden = false;
-  if (!PBB.cats) { back.innerHTML = `<div class="pbb"><div class="quiet" style="padding:30px">Opening the price book…</div></div>`;
+  if (!PBB.catsAll) { back.innerHTML = `<div class="pbb"><div class="quiet" style="padding:30px">Opening the price book…</div></div>`;
     const { data, error } = await db.rpc("pb_categories");
-    PBB.cats = error ? [] : (data || []).filter(c => c.active !== false); PBB.err = error ? rpcErr(error) : ""; }
+    PBB.catsAll = error ? [] : (data || []).filter(c => c.active !== false); PBB.err = error ? rpcErr(error) : ""; }
+  PBB.ok = await salesBookCats();
+  if (PBB.ok) {   // their print book's categories, plus the ones above them so the tree still opens
+    const by = new Map(PBB.catsAll.map(c => [c.id, c])), keep = new Set(PBB.ok);
+    PBB.ok.forEach(id => { let c = by.get(id); while (c && c.parent_id && !keep.has(c.parent_id)) { keep.add(c.parent_id); c = by.get(c.parent_id); } });
+    PBB.cats = PBB.catsAll.filter(c => keep.has(c.id)).map(c => PBB.ok.has(c.id) ? c : { ...c, items: 0 });
+    if (PBB.cat && !PBB.ok.has(PBB.cat)) { PBB.cat = null; PBB.items = null; }
+  } else PBB.cats = PBB.catsAll;
   drawPbBrowse();
 }
 function closePbBrowse() { const b = document.getElementById("pbb-back"); if (b) b.hidden = true; if (PBB.added.size) { EST.dirty = true; renderEstEdit(); } }
@@ -6279,7 +6328,7 @@ async function pbbLoad(args) {
   const my = ++PBB.seq; PBB.items = "loading"; drawPbBrowse(); if (PBB.q) $("#pbb-q")?.focus();
   const { data, error } = await db.rpc("pb_list", Object.assign({ p_search: null, p_type: "all", p_active: true, p_category: null, p_flag: null, p_limit: 200 }, args));
   if (my !== PBB.seq) return;
-  PBB.items = error ? [] : data || []; PBB.big = null;
+  PBB.items = error ? [] : (data || []).filter(r => inSalesBook(r, PBB.ok)); PBB.big = null;
   await pbLoadLooks(PBB.items.map(r => r.id)).catch(() => {}); if (my !== PBB.seq) return;
   drawPbBrowse(); if (PBB.mode === "pics") pbbThumbs();
   if (PBB.q) { const q = $("#pbb-q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
@@ -6611,14 +6660,15 @@ function wireEstEdit() {
     const now = d.innerHTML.replace(/<br\s*\/?>\s*$/i, "").trim(); l.ldesc = now === pb.trim() ? "" : d.textContent.trim() ? now : (pb ? "<p></p>" : ""); dirty(); }));   // emptied on purpose: keep it empty (not the price book's text)
   m.querySelectorAll("[data-ltreset]").forEach(b => b.addEventListener("click", () => { const [i, k] = b.dataset.ltreset.split(":").map(Number); EST.opts[i].lines[k].ldesc = ""; dirty(); renderEstEdit(); }));
   m.querySelectorAll("[data-obrowse]").forEach(b => b.addEventListener("click", () => openPbBrowse(Number(b.dataset.obrowse))));
-  m.querySelectorAll("[data-opics]").forEach(b => b.addEventListener("click", () => openPbBrowse(Number(b.dataset.opics), "pics")));
+  m.querySelectorAll("[data-opics]").forEach(b => b.addEventListener("click", () => openPrintPicks(Number(b.dataset.opics))));
   $("#est-newopt")?.addEventListener("click", () => { const names = ["Good", "Better", "Best"]; if (EST.opts.length === 1 && /^option 1$/i.test(EST.opts[0].name)) EST.opts[0].name = "Good";
     EST.opts.push({ name: names[EST.opts.length] || "Option " + (EST.opts.length + 1), recommended: false, lines: [] }); dirty(); renderEstEdit(); });
   // price book search for each option
   m.querySelectorAll("[data-ofind]").forEach(inp => { let tm, seq = 0; const i = Number(inp.dataset.ofind), res = m.querySelector(`[data-ores="${i}"]`);
     inp.addEventListener("input", () => { clearTimeout(tm); const q = inp.value.trim(); if (q.length < 2) { res.classList.add("hidden"); return; }
-      tm = setTimeout(async () => { const my = ++seq; const { data } = await db.rpc("pb_list", { p_search: q, p_type: "all", p_active: true, p_category: null, p_flag: null, p_limit: 12 }); if (my !== seq) return;
-        res.innerHTML = (data || []).map(r => `<button type="button" class="est-hit" data-hit='${esc(JSON.stringify({ id: r.id, name: pbName(r.name), price: Number(r.unit_price) || 0 }))}'><b>${esc(pbName(r.name))}</b> <span class="quiet">${esc(r.sku || "")}</span><span class="num">${money(r.unit_price)}</span></button>`).join("") || `<div class="quiet" style="padding:6px">Nothing found${ME.role === "sales" ? " in your price book" : ""}.</div>`;
+      tm = setTimeout(async () => { const my = ++seq; const ok = await salesBookCats(); let { data } = await db.rpc("pb_list", { p_search: q, p_type: "all", p_active: true, p_category: null, p_flag: null, p_limit: ok ? 60 : 12 }); if (my !== seq) return;
+        if (ok) data = (data || []).filter(r => inSalesBook(r, ok)).slice(0, 12);
+        res.innerHTML = (data || []).map(r => `<button type="button" class="est-hit" data-hit='${esc(JSON.stringify({ id: r.id, name: pbName(r.name), price: Number(r.unit_price) || 0 }))}'><b>${esc(pbName(r.name))}</b> <span class="quiet">${esc(r.sku || "")}</span><span class="num">${money(r.unit_price)}</span></button>`).join("") || `<div class="quiet" style="padding:6px">Nothing found${ME.role === "sales" ? (PBP.picked.size ? " in your print book" : " in your price book") : ""}.</div>`;
         res.classList.remove("hidden");
         res.querySelectorAll("[data-hit]").forEach(b => b.addEventListener("click", () => { const h = JSON.parse(b.dataset.hit); EST.opts[i].lines.push({ item_id: h.id, description: h.name, qty: 1, price: h.price }); dirty(); renderEstEdit();
           m.querySelector(`[data-ofind="${i}"]`)?.focus(); })); }, 250); }); });
@@ -14250,7 +14300,7 @@ function renderPrintBook(msg) {
   $("#pbp-book")?.addEventListener("change", e => { PBP.book = e.target.value; PBP.built = null; const b = (PB.books || []).find(x => String(x.id) === String(PBP.book));
     renderPrintBook(pbpSyncBook() ? `Ticked ${b.name}'s ${PBP.picked.size} categories. Untick any you don't want in this print.` : b ? `${b.name} shows every category; tick the ones you want.` : ""); });
   $("#pbp-title").addEventListener("change", e => { PBP.title = e.target.value.trim() || "Price Book"; pbpSave(); });
-  $("#pbp-make").addEventListener("click", makePrintBook);
+  $("#pbp-make").addEventListener("click", () => makePrintBook());
   $("#pbp-print")?.addEventListener("click", () => window.print());
 }
 // Opening a category or ticking a box only changes the list itself: the page stays exactly where it is
@@ -14289,9 +14339,10 @@ window.addEventListener("resize", () => { if (document.querySelector(".pb-main")
 async function inBatches(list, n, fn) { const out = new Array(list.length); let next = 0;
   await Promise.all(Array.from({ length: Math.min(n, list.length) }, async () => { while (next < list.length) { const i = next++; out[i] = await fn(list[i], i); } }));
   return out; }
-async function makePrintBook() {
-  const msg = t => { const m = $("#pbp-msg"); if (m) { m.className = "staff-msg"; m.textContent = t; } };
-  PBP.title = $("#pbp-title").value.trim() || "Price Book"; pbpSave();
+async function makePrintBook(forPick) {   // forPick: the same book, with an Add button on each item (Pictures on a proposal); returns { html, n }
+  forPick = forPick === true;
+  const msg = t => { const m = forPick ? $("#pbpk-msg") : $("#pbp-msg"); if (m) { m.className = "staff-msg"; m.textContent = t; } };
+  if (!forPick) { PBP.title = $("#pbp-title").value.trim() || "Price Book"; pbpSave(); }
   // the picked categories whose parent isn't picked start a section; sub-categories become headings inside it
   const order = [], walkAll = (c, d) => { order.push(c.id); c.kids.forEach(k => walkAll(k, d + 1)); }; (PB.catTop || []).forEach(c => walkAll(c, 0));
   const tops = order.filter(id => PBP.picked.has(id) && !PBP.picked.has(PB.catBy.get(id).parent_id));
@@ -14341,8 +14392,9 @@ async function makePrintBook() {
       <div class="pbp-txt"><div class="pbp-name">${pbNameHtml(r)}</div>
         ${o.desc && dd ? `<div class="pbp-desc">${(PBLOOK.get(r.id) || {}).desc_html ? pbDescHtml(r) : esc(dd)}</div>` : ""}
         <div class="pbp-price"><strong>${money(r.unit_price)}</strong>${u ? `<span>per ${esc(u)}</span>` : ""}${o.member && pbHasMember(r) ? `<em>Members ${money(r.member_price)}</em>` : ""}</div>
-        ${o.codes ? `<div class="pbp-code">${esc(r.sku)}</div>` : ""}</div></div>`; };
-  PBP.built = `<section class="pbp-page pbp-cover">
+        ${o.codes ? `<div class="pbp-code">${esc(r.sku)}</div>` : ""}
+        ${forPick ? `<button type="button" class="btn pbp-add" data-pbp-add="${r.id}" data-pbp-name="${esc(pbName(r.name))}" data-pbp-price="${Number(r.unit_price) || 0}">Add</button>` : ""}</div></div>`; };
+  const built = `<section class="pbp-page pbp-cover">
       <div class="pbp-cover-top"><img class="pbp-logo" src="${esc(coLogo(c))}" alt="${esc(co)}"></div>
       <div class="pbp-cover-mid"><div class="pbp-title">${esc(PBP.title)}</div>
         <div class="pbp-sub">${sections.map(s => esc(s.name)).join(" · ")}</div></div>
@@ -14352,6 +14404,8 @@ async function makePrintBook() {
       <header class="pbp-sechead"><span>${esc(s.name)}</span><span class="pbp-secco">${esc(co)}${c.phone ? " · " + esc(phoneFmt(c.phone)) : ""}</span></header>
       ${s.groups.map(g => `<div class="pbp-grpbox">${g.name ? `<h3 class="pbp-grp">${esc(g.name)}</h3>` : ""}<div class="pbp-grid">${g.items.map(card).join("")}</div></div>`).join("")}
     </section>`).join("")}</div>`;
+  if (forPick) return { html: built.replace(/^<section class="pbp-page pbp-cover">[\s\S]*?<\/section>/, ""), n: allIds.size };
+  PBP.built = built;
   renderPrintBook(`Ready: ${allIds.size} items in ${sections.length} section${sections.length > 1 ? "s" : ""}. Check it below, then print.`);
   $(".pbp-doc")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
