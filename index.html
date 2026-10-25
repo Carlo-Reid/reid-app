@@ -3729,6 +3729,7 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .bk-day { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.2; min-width: 74px; }
 .bk-day .bk-day-n { font-size: 11px; font-weight: 400; opacity: .75; }
 .bk-day-full .bk-day-n { color: var(--owe, #b42318); opacity: 1; }
+.dc-walk { display: inline-block; font-weight: 700; font-size: 11px; padding: 0 6px; border-radius: 9px; background: #e7f0fb; color: #1d4f91; margin-right: 2px; }
 .bk-near { grid-column: 1 / -1; margin: 6px 0; }
 .bk-near h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 16px; margin: 0 0 6px; }
 .bk-near .near-calls { border-top: 0; margin: 0; padding-top: 0; }
@@ -6757,7 +6758,10 @@ const bkNearLoc = () => { const F = BK; return F && (F.locs.find(x => x.id === (
 function bkNearHtml() {
   const l = bkNearLoc();
   if (!l) return `<span class="quiet">This customer has no address on file.</span>`;
-  return nearCallsHtml(l, { kind: BK.kind, pick: true, elId: "bk-near" });
+  const hr = t => { const [h, m] = String(t || "").split(":").map(Number); return isNaN(h) ? null : h + (m || 0) / 60; };
+  const W = Array.isArray(BK.win) ? BK.win : BK.win === "other" ? [BK.start, BK.end] : null;
+  const win = W && hr(W[0]) != null ? [hr(W[0]), hr(W[1]) ?? hr(W[0]) + 1] : null;   // Any time: no filter
+  return nearCallsHtml(l, { kind: BK.kind, pick: true, elId: "bk-near", win });
 }
 function bkNearDraw() { const el = document.getElementById("bk-near"); if (el && BK?.walk) el.innerHTML = bkNearHtml(); }
 document.addEventListener("click", async e => { const b = e.target.closest("[data-bk-pick]"); if (!b || !BK) return;
@@ -6765,8 +6769,9 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
   const name = b.dataset.nearTech, t = (BOOK.techs || []).find(x => x.name === name || x.name.split(" ")[0] === name);
   if (!t) return renderBooking({ text: `${name} isn't in the list of techs that can be booked.`, err: true });
   F.date = b.dataset.bkPick; F.later = false; F.techs = [t.id];
-  const tm = b.dataset.nearTime, w = tm && (BOOK.windows || []).find(([a]) => a === tm); if (w) F.win = w;
-  renderBooking({ text: `${t.name} picked for ${dayText(F.date)}${w ? ", " + winText(w[0], w[1]) : ""}. Check it, then press Book it.` });
+  const tm = b.dataset.nearTime, w = F.win === "any" && tm && (BOOK.windows || []).find(([a]) => a === tm); if (w) F.win = w;
+  const ws = Array.isArray(F.win) ? winText(F.win[0], F.win[1]) : F.win === "other" ? winText(F.start, F.end) : "any time";
+  renderBooking({ text: `${t.name} picked for ${dayText(F.date)}, ${ws}. Check it, then press Book it.` });
   loadTechLoad(); document.getElementById("bk-save")?.scrollIntoView({ behavior: "smooth", block: "center" });
 });
 function bookTechChips() {
@@ -6852,10 +6857,10 @@ function renderBooking(msg) {
         <label class="bk-row"><span class="bk-label">${bkSales() ? (F.sk === "est" ? "What are you quoting?" : "Reason for Call") : "What's wrong / what's needed"}</span><input id="bk-summary" maxlength="200" value="${esc(F.summary)}" placeholder="${esc(bkSales() ? (F.sk === "est" ? "e.g. New furnace and AC, 2-storey house" : "e.g. Quote for a new furnace and AC") : t ? t.name : "e.g. No heat, furnace making a noise")}"></label>`}
       <label class="bk-row top"><span class="bk-label">${bkSales() ? (F.sk === "est" ? "Job notes for site visit" : "Job Notes") : "Notes for the tech"}</span><textarea id="bk-note" rows="3" maxlength="4000" placeholder="${bkSales() ? (F.sk === "est" ? "What you saw at the site: where the equipment is, sizes, access, what the customer wants…" : "Anything about the visit: parking, side door, what the customer wants…") : "Anything the tech should know: parking, side door, dog, what the customer said…"}">${esc(F.note)}</textarea></label>
 
-      ${bkSales() && (F.sk === "est" || F.sk === "phone") ? "" : `<div class="bk-row"><span class="bk-label">Day</span><span class="bk-chips">
+      ${bkSales() && (F.sk === "est" || F.sk === "phone") ? "" : `${F.walk && !F.byHand ? "" : `<div class="bk-row"><span class="bk-label">Day</span><span class="bk-chips">
         <input type="date" id="bk-date" value="${esc(F.date)}" ${F.later ? "disabled" : ""}>
         ${bkDayChips(F)}
-        <button class="chip small" type="button" data-bk-later aria-pressed="${F.later}" title="Save the job now and pick the day later from the Dispatch page">Not booked yet</button></span></div>
+        <button class="chip small" type="button" data-bk-later aria-pressed="${F.later}" title="Save the job now and pick the day later from the Dispatch page">Not booked yet</button></span></div>`}
       ${F.later ? "" : `<div class="bk-row"><span class="bk-label">Arrival window</span><span class="bk-chips">
         ${L.windows.map(([a, b]) => `<button class="chip small" type="button" data-bk-win="${a}-${b}" aria-pressed="${F.win && F.win[0] === a && F.win[1] === b}">${winText(a, b)}</button>`).join("")}
         <button class="chip small" type="button" data-bk-win="any" aria-pressed="${F.win === "any"}">Any time</button>
@@ -6881,6 +6886,7 @@ function renderBooking(msg) {
   };
   const redraw = () => { keep(); renderBooking(); };
   F.keep = keep;
+  ["#bk-start", "#bk-end"].forEach(q => $(q)?.addEventListener("change", () => { keep(); if (F.walk && F.kind && !F.byHand) { F.techs = []; bkNearDraw(); } }));
   $("[data-bk-byhand]")?.addEventListener("click", () => { F.byHand = !F.byHand; redraw(); });
   document.querySelectorAll("[data-open-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.openCust))));
   document.querySelectorAll("[data-bk-mode]").forEach(b => b.addEventListener("click", async () => { F.mode = b.dataset.bkMode;
@@ -6916,7 +6922,9 @@ function renderBooking(msg) {
   $("#bk-form").addEventListener("click", e => { const b = e.target.closest("[data-bk-day]"); if (!b) return; F.date = b.dataset.bkDay; F.later = false; redraw(); loadTechLoad(); });   // the day buttons are redrawn when the free counts arrive
   $("[data-bk-later]")?.addEventListener("click", () => { F.later = !F.later; redraw(); loadTechLoad(); });
   document.querySelectorAll("[data-bk-win]").forEach(b => b.addEventListener("click", () => {
-    const w = b.dataset.bkWin; F.win = w === "any" || w === "other" ? w : w.split("-"); redraw();
+    const w = b.dataset.bkWin; F.win = w === "any" || w === "other" ? w : w.split("-");
+    if (F.walk && F.kind && !F.byHand && F.techs.length) { F.techs = []; keep(); return renderBooking({ text: "Window changed: pick an installer who's free for it." }); }
+    redraw();
     if (w === "other") $("#bk-start")?.focus();
   }));
   $("#bk-techs")?.addEventListener("click", e => {
@@ -6931,6 +6939,7 @@ function renderBooking(msg) {
     e.preventDefault(); keep();
     const say = (t, err) => { const m = $("#bk-msg"); m.className = "staff-msg " + (err ? "err" : ""); m.textContent = t; };
     if (F.mode === "visit" && !F.jobId) return say("Pick the job this visit is for.", true);
+    if (F.walk && !F.later && !F.techs.length) return say("Pick an installer (and the day) in the Installers box first.", true);
     if (F.mode !== "visit" && !F.loc) return say("This customer has no address yet. Add one with the pencil on their file first.", true);
     if (F.mode !== "visit" && !F.type) return say("Pick the type of job.", true);
     if (F.mode !== "visit" && !F.unit) return say("Pick the department.", true);
@@ -7484,13 +7493,15 @@ function nearCallsHtml(l, o = {}) {   // o.kind: only that kind of tech; o.pick:
     const sp = mine.map(v => [HH(v.from), v.to ? HH(v.to) : HH(v.from) + 1]).sort((a, b) => a[0] - b[0]);
     const free = WINS.filter(([a, b]) => !sp.some(([x, y]) => x < b && y > a));
     let clash = null; for (let i = 0; i < sp.length && !clash; i++) for (let j = i + 1; j < sp.length; j++) if (sp[j][0] < sp[i][1]) { clash = mine.sort((a, b) => String(a.from).localeCompare(String(b.from)))[i]; break; }
-    return { n: mine.length, free, clash, full: full.has(p.d + "|" + p.tech) || !free.length }; };
+    const fits = !o.win || !sp.some(([x, y]) => x < o.win[1] && y > o.win[0]);   // free for the whole arrival window picked on the booking
+    return { n: mine.length, free, clash, fits, full: o.win ? !fits : full.has(p.d + "|" + p.tech) || !free.length }; };
   // only the picked kind of tech (Any tech = everyone)
   const KIND = new Map((TKIND || []).map(t => [t.name, t.kind]));
   if (ME.role === "sales" && !o.kind) NEAR_KIND = "installs";
   const KND = o.kind || KND;
   const okKind = n => !KND || KIND.get(n) === KND || (KND === "maintenance" && KIND.get(n) === "service");   // service techs do maintenance too
-  const near2 = [...pairs.values()].filter(p => okKind(p.tech)).map(p => { const dd = dayOf(p); return { ...p, ...dd, score: p.calls.length * 2 + (5 - (p.min ?? 4)) - (dd.full ? 20 : 0) - (dd.clash ? 5 : 0) }; });
+  const near2 = [...pairs.values()].filter(p => okKind(p.tech)).map(p => { const dd = dayOf(p); return { ...p, ...dd, score: p.calls.length * 2 + (5 - (p.min ?? 4)) - (dd.full ? 20 : 0) - (dd.clash ? 5 : 0) }; })
+    .filter(p => !o.pick || ((!o.win || p.fits) && !(ME.role === "sales" && p.full)));   // booking a walk: only installers free for the window; a sales person never sees over-booked ones
   // techs with nothing booked that day: available, no calls yet (weekdays in the next 2 weeks)
   const busy = new Set(NEAR.rows.flatMap(v => (v.techs ? v.techs.split(/,\s*/) : []).map(n => v.d + "|" + n)));
   const free = [];
@@ -7505,8 +7516,8 @@ function nearCallsHtml(l, o = {}) {   // o.kind: only that kind of tech; o.pick:
   const line = p => `<div class="nc-opt ${p.full ? "over" : p.clash ? "warn" : "room"}">
       <div class="nc-o1"><button type="button" class="nc-hide" data-near-hide="${esc(p.d + "|" + p.tech)}" title="Take ${esc(p.tech)} off ${esc(day(p.d))} for now">✕</button><b>${esc(p.tech)}</b> <span class="quiet">${p.none ? "no calls booked yet" : `${p.calls.length} nearby${p.min != null ? ", " + kmTxt(p.min) : ""}`}</span></div>
       <div class="nc-o2">${p.full ? `<span class="nc-flag over">⚠ Over-booked: ${p.n} calls, no free window</span>`
-        : `<span class="nc-flag room">${p.none ? "Available all day" : "Free " + esc(p.free.map(w => w[2]).join(", "))}</span>`}${p.clash ? ` <span class="nc-flag warn">⚠ Two calls at once (${esc(win(p.clash))})</span>` : ""}</div>
-      <button type="button" class="btn nc-book" ${o.pick ? "data-bk-pick" : "data-near-book"}="${esc(p.d)}" data-near-tech="${esc(p.tech)}" ${!p.full && p.free.length ? `data-near-time="${String(p.free[0][0]).padStart(2, "0")}:00"` : ""}>${p.full ? (o.pick ? "Pick anyway" : "Book anyway") : (o.pick ? "Pick " : "Book ") + esc(p.tech)}</button></div>`;
+        : `<span class="nc-flag room">${p.none ? "Available all day" : o.win ? "Free for that window" : "Free " + esc(p.free.map(w => w[2]).join(", "))}</span>`}${p.clash ? ` <span class="nc-flag warn">⚠ Two calls at once (${esc(win(p.clash))})</span>` : ""}</div>
+      <button type="button" class="btn nc-book" ${o.pick ? "data-bk-pick" : "data-near-book"}="${esc(p.d)}" data-near-tech="${esc(p.tech)}" ${!p.full && p.free.length && !o.win ? `data-near-time="${String(p.free[0][0]).padStart(2, "0")}:00"` : ""}>${p.full ? (o.pick ? "Pick anyway" : "Book anyway") : (o.pick ? "Pick " : "Book ") + esc(p.tech)}</button></div>`;
   const box = d => { const os = best.filter(p => p.d === d), nn = near.filter(v => v.d === d).length, isTop = top && top.d === d;
     return `<div class="nc-dbox ${isTop ? "top" : ""}"><div class="nc-bday">${esc(day(d))}${isTop ? ` <span class="nc-star">★ best</span>` : ""}<span class="nc-dn">${nn ? nn + " call" + (nn === 1 ? "" : "s") + " nearby" : ""}</span></div>
       <div class="nc-opts">${os.length ? os.filter(p => !p.none).map(line).join("") + (() => { const fr = os.filter(p => p.none); return fr.length ? `<div class="nc-opt room nc-freeall"><span class="nc-flag room">Free all day, no calls yet:</span>
@@ -8388,14 +8399,16 @@ function dspTint(r) { const c = typeof dspMarkColor === "function" ? dspMarkColo
   const c2 = dspColor2(r, c)?.color;
   return c2 ? ["zc zc2", `style="--zc:${esc(c)};--zc2:${esc(c2)}"`, `;--zc:${esc(c)};--zc2:${esc(c2)}`] : ["zc", `style="--zc:${esc(c)}"`, `;--zc:${esc(c)}`]; }
 const dspCall = id => DSP.rows.find(r => r.visit_id === id) || DSP.waiting.find(r => r.visit_id === id);
+const dspIsWalk = r => /^walk the site/i.test(r.summary || "");   // a walk booked after a sale (a visit on the install job)
 function dspCard(r, from) {
   const helpers = r.techs.filter(t => t.id !== from).map(t => t.name), arr = dspArrive(r);
   return `<div class="dc ${arr?.cls || ""} st-${r.status} pr-${r.priority} ${DSP.sel === r.visit_id ? "sel" : ""} ${dspTint(r)[0]}" ${dspTint(r)[1]} draggable="true" tabindex="0" data-visit="${r.visit_id}" data-from="${from}">
     <div class="dc-time">${r.scheduled_date ? esc(winText(r.arrival_start, r.arrival_end)) : "Not booked yet"}${r.priority !== "normal" ? ` <span class="dc-prio">${r.priority === "emergency" ? "Emergency" : "High"}</span>` : ""}</div>
     <div class="dc-name">${esc(r.customer_name)}</div>
     ${arr ? `<div class="dc-arr">${esc(arr.text)}</div>` : ""}
-    <div class="dc-sub">${esc(r.city || "")}${r.city ? " · " : ""}${esc(r.job_type)}${r.visit_number > 1 ? `, visit ${r.visit_number}` : ""}</div>
-    ${r.summary && r.summary !== r.job_type ? `<div class="dc-sum">${esc(r.summary)}</div>` : ""}
+    ${dspIsWalk(r) ? `<div class="dc-sub"><span class="dc-walk">🚶 Walk</span> ${esc(r.city || "")}${r.city ? " · " : ""}before the install${r.job_number ? " (job " + esc(r.job_number) + ")" : ""}</div>`
+      : `<div class="dc-sub">${esc(r.city || "")}${r.city ? " · " : ""}${esc(r.job_type)}${r.visit_number > 1 ? `, visit ${r.visit_number}` : ""}</div>`}
+    ${r.summary && r.summary !== r.job_type && !dspIsWalk(r) ? `<div class="dc-sum">${esc(r.summary)}</div>` : ""}
     <div class="dc-foot"><span class="vstat ${r.status}">${esc(VISIT_STATUS[r.status] || r.status)}</span>${durText(r.duration) ? `<span class="quiet">${durText(r.duration)}</span>` : ""}
       ${helpers.length ? `<span class="dc-with">with ${esc(helpers.join(", "))}</span>` : ""}</div>
   </div>`;
