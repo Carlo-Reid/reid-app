@@ -3807,7 +3807,7 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .show-desc { font-size: 16px; line-height: 1.5; }
 .cmp-grid { flex: 1; display: grid; gap: 16px; padding: 16px 20px; overflow: auto; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
 .cmp-t { grid-column: 1 / -1; order: 99; width: 100%; border-collapse: collapse; font-size: 15px; }
-.cmp-t th, .cmp-t td { border: 1px solid #e3e8ed; padding: 7px 10px; text-align: left; vertical-align: top; }
+.cmp-t th, .cmp-t td { border: 1px solid #e3e8ed; height: 22px; padding: 7px 10px; text-align: left; vertical-align: top; }
 .cmp-t thead th { background: #f4f7f9; } .cmp-t tbody th { background: #fafbfc; width: 18%; font-weight: 700; } .cmp-t tbody tr:nth-child(even) td { background: #fcfdfd; }
 .cmp-col { position: relative; border: 1px solid #e3e8ed; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
 .cmp-col h3 { font-size: 20px; margin: 4px 0 0; } .cmp-price { font-size: 26px; font-weight: 800; }
@@ -6825,15 +6825,19 @@ function wireShow(b) {
 }
 // the compare details of the items being compared, line by line (the names in the order the first item has them)
 function cmpTable(C) {
-  if (C.length < 2 || !C.every(it => CMP_LINES.has(it.id))) return "";
-  const names = []; C.forEach(it => (CMP_LINES.get(it.id) || []).forEach(x => { const k = x.label.trim().toLowerCase(); if (x.label && !names.some(n => n.k === k)) names.push({ k, label: x.label }); }));
-  if (!names.length) return "";
-  const val = (it, k) => ((CMP_LINES.get(it.id) || []).find(x => x.label.trim().toLowerCase() === k) || {}).value || "—";
+  if (!C.length) return "";
+  // every line from each item's Compare details (PB 9), matched by name; then empty lines so there are always at least 10
+  const names = []; C.forEach(it => (CMP_LINES.get(it.id) || []).forEach(x => { const lab = String(x.label || "").trim(), k = lab.toLowerCase(); if (lab && !names.some(n => n.k === k)) names.push({ k, label: lab }); }));
+  while (names.length < 10) names.push({ k: null, label: "" });
+  const val = (it, k) => k == null ? "" : ((CMP_LINES.get(it.id) || []).find(x => String(x.label || "").trim().toLowerCase() === k) || {}).value || "";
   return `<table class="cmp-t"><thead><tr><th></th>${C.map(it => `<th>${esc(it.name)}</th>`).join("")}</tr></thead>
     <tbody>${names.map(n => `<tr><th>${esc(n.label)}</th>${C.map(it => `<td>${esc(val(it, n.k))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 }
-async function drawCompare() {
-  if (SHOW.cmp.some(it => !CMP_LINES.has(it.id))) { await loadCmpLines(SHOW.cmp.map(it => it.id)).catch(() => {}); }
+async function drawCompare(fresh = true) {
+  if (fresh) {   // always the newest details and descriptions for the items being compared
+    const ids = SHOW.cmp.map(it => it.id); ids.forEach(id => CMP_LINES.delete(id));
+    await Promise.all([loadCmpLines(ids), estInfo(ids)]).catch(() => {});
+  }
   const b = showBack(), C = SHOW.cmp, others = SHOW.list.filter(x => !inCmp(x.id)).filter((x, i, a) => a.findIndex(y => y.id === x.id) === i);
   b.innerHTML = `<div class="show show-cmp" role="dialog" aria-label="Compare">
     <div class="show-top"><b>Side by side</b><span class="show-acts"><button class="btn quiet-btn" type="button" data-cmp-back>‹ Back to one at a time</button><button class="btn quiet-btn" type="button" data-show-x>Close</button></span></div>
@@ -6858,7 +6862,7 @@ async function drawCompare() {
     tm = setTimeout(async () => { const ok = await salesBookCats(); const { data } = await db.rpc("pb_list", { p_search: SHOW.q, p_type: "all", p_active: true, p_category: null, p_flag: null, p_limit: 40 });
       SHOW.hits = (data || []).filter(r => inSalesBook(r, ok) && Number(r.unit_price) > 0).slice(0, 10).map(r => ({ id: r.id, name: pbName(r.name), price: Number(r.unit_price) || 0, opt: "" }));
       await estInfo(SHOW.hits.map(x => x.id)).catch(() => {}); drawCompare(); setTimeout(() => { const i = document.getElementById("cmp-q"); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 0); }, 300); });
-  const need = C.filter(it => !SHOW.photos.has(it.id)); if (need.length) { await Promise.all(need.map(it => showPhoto(it.id))); if (SHOW.cmpOpen) drawCompare(); }
+  const need = C.filter(it => !SHOW.photos.has(it.id)); if (need.length) { await Promise.all(need.map(it => showPhoto(it.id))); if (SHOW.cmpOpen) drawCompare(false); }
 }
 document.addEventListener("click", e => { const b = e.target.closest("[data-est-show]"); if (!b) return; e.preventDefault(); openShow(b.dataset.estShow); });
 // the add buttons beside each option (right of the proposal)
