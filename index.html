@@ -6644,27 +6644,8 @@ async function estBookWalk(back) {
     const { error } = await db.rpc("est_ensure_install_job", { p_id: EST.id }); if (error) return alertMsg("Couldn't make the install job: " + rpcErr(error));
     IJ = EST.ij = (await db.rpc("est_install_job", { p_id: EST.id })).data; if (!IJ?.id) return alertMsg("The install job for this sale isn't there.");
     alertMsg(`Install job ${IJ.number} made for this sale.`); }
-  try { await bookLists(); } catch (e) { return alertMsg(e.message); }
   document.querySelector(".ask-wrap")?.remove();
-  const meEmp = ME.emp || null, techs = (BOOK.techs || []).filter(t => t.recent || t.id === meEmp);
-  const W = { date: ymd(addDays(new Date(), 1)), win: (BOOK.windows || [])[0] || ["08:00", "11:00"], who: meEmp || techs[0]?.id || null };
-  const d = document.createElement("div"); d.className = "ask-wrap"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Book a walk");
-  const draw = msg => { d.innerHTML = `<form class="ask est-walk-f" autocomplete="off"><h3>Book a walk</h3><p>Walk the site before the install · install job <b>${esc(IJ.number)}</b></p>
-      <label>Day <input type="date" name="date" value="${esc(W.date)}" min="${ymd(new Date())}" required></label>
-      <div><span class="cl-label">Arrival window</span><div class="bk-chips">${(BOOK.windows || []).map(([a, b]) => `<button type="button" class="chip small" data-w="${a}-${b}" aria-pressed="${W.win[0] === a && W.win[1] === b}">${winText(a, b)}</button>`).join("")}</div></div>
-      <label>Who walks it <select name="who">${meEmp ? `<option value="${meEmp}" ${W.who === meEmp ? "selected" : ""}>Me</option>` : ""}${techs.filter(t => t.id !== meEmp).map(t => `<option value="${t.id}" ${W.who === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>
-      <label>Note <input name="note" maxlength="300" placeholder="e.g. measure for the venting, check the gas line"></label>
-      <div class="ask-btns"><button class="btn" type="submit">Book the walk</button><button class="btn quiet-btn" type="button" data-x>Cancel</button></div>
-      <div class="staff-msg ${msg ? "err" : ""}" role="status">${esc(msg || "")}</div></form>`;
-    d.querySelector("[data-x]").addEventListener("click", () => d.remove());
-    d.querySelectorAll("[data-w]").forEach(b => b.addEventListener("click", () => { W.date = d.querySelector("[name=date]").value; W.who = Number(d.querySelector("[name=who]").value) || null; W.win = b.dataset.w.split("-"); draw(); }));
-    d.querySelector("form").addEventListener("submit", async e => { e.preventDefault(); const f = e.target; W.date = f.date.value; W.who = Number(f.who.value) || null;
-      const p = { job_id: IJ.id, customer_id: IJ.customer_id, location_id: IJ.location_id, summary: "Walk the site before the install", note: f.note.value.trim(), priority: "normal",
-        date: W.date, start: W.win[0], end: W.win[1], duration: 60, techs: W.who ? [W.who] : [] };
-      f.querySelector("[type=submit]").disabled = true;
-      const { error } = await db.rpc("book_call", { p }); if (error) return draw("Not booked: " + rpcErr(error));
-      d.remove(); const m = `Walk booked: ${dayText(W.date)}, ${winText(W.win[0], W.win[1])}.`; back ? back(m) : openEstEdit(EST.id, m); }); };
-  draw(); d.addEventListener("click", e => { if (e.target === d) d.remove(); }); document.body.append(d); d.querySelector("[name=date]").focus();
+  openBooking(IJ.customer_id, { jobId: IJ.id, locId: IJ.location_id, walk: { est: EST.id, number: IJ.number, job: IJ }, kind: "installs" });
 }
 let BK_SALES = null;   // partners ticked for sales calls
 let BK_PARTNERS = null;
@@ -6688,10 +6669,13 @@ async function bkLoadHtin() {
   F.htinRows = error ? [] : (data?.rows || []).filter(r => !r.job && !/accomplish|cancel|done/i.test(r.status || ""));
   if (document.body.dataset.page === "book") renderBooking();
 }
+const bkSales = () => !BK?.walk && salesBooking();   // a walk booked after a sale is a normal visit on the install job
 async function openBooking(custId, opt = {}) {
-  setPage("book=" + custId, "book", salesBooking() ? "Sales Call" : "Book a call");
+  BK = null;   // a new booking starts fresh (a walk from before doesn't carry over)
+  setPage("book=" + custId, "book", opt.walk ? "Book a walk" : bkSales() ? "Sales Call" : "Book a call");
   $("#main").innerHTML = `<div class="loading">Getting the booking form ready…</div>`;
   try { await bookLists(); } catch (e) { $("#main").innerHTML = `<div class="empty"><div><h2>Can't book yet</h2>${esc(e.message)}</div></div>`; return; }
+  if (opt.kind) await loadTechKinds();
   const [cust, jobs] = await Promise.all([
     db.from("customers").select("id, display_name, customer_number, do_not_contact, locations(id, street, unit, city, active)").eq("id", custId).single(),
     db.rpc("open_jobs", { p_customer_id: custId })]);
@@ -6703,8 +6687,12 @@ async function openBooking(custId, opt = {}) {
   BK = { cust: c, locs, jobs: jobs.error ? [] : jobs.data, mode: opt.jobId ? "visit" : "new", jobId: opt.jobId || null,
          loc: loc || locs[0]?.id, type: "", unit: "", prio: "normal", summary: "", note: "",
          date: opt.date || ymd(addDays(new Date(), 1)), later: false, win: ["08:00", "11:00"], start: "", end: "", dur: "", techs: opt.tech ? [opt.tech] : [], allTechs: false, load: {}, htin: opt.htin || null };
+  if (opt.walk) {   // after a sale: walk the site, as a visit on the install job; the installers are shown first
+    BK.walk = opt.walk; BK.kind = opt.kind || null; BK.summary = "Walk the site before the install"; BK.dur = "60";
+    if (!BK.jobs.some(j => j.job_id === opt.jobId)) BK.jobs.unshift({ job_id: opt.jobId, job_number: opt.walk.number, job_type: "Install", summary: "the sale on estimate", last_visit: null });
+  }
   BK.htinFixed = !!BK.htin; BK.forP = BK.htin ? Number(BK.htin.partner) || 0 : 0; BK.tank = null; BK.isHtin = !!BK.htin;   // who the call is for (0 = Reid), and for Vista who pays for the tank
-  if (!BK_PARTNERS) db.rpc("book_partners").then(({ data }) => { BK_PARTNERS = data || []; if (document.body.dataset.page === "book" && !salesBooking()) renderBooking(); });
+  if (!BK_PARTNERS) db.rpc("book_partners").then(({ data }) => { BK_PARTNERS = data || []; if (document.body.dataset.page === "book" && !bkSales()) renderBooking(); });
   if (BK.htin) {   // booked from a partner's booking list (HTIN): say what it's for, and use their service date when it's still ahead
     BK.summary = [BK.htin.service, BK.htin.ref && `${BK.htin.list.replace(/ list$/i, "")} #${BK.htin.ref}`].filter(Boolean).join(" – ");
     const d = BK.htin.date ? String(BK.htin.date).slice(0, 10) : ""; if (d && d >= ymd(new Date())) BK.date = d;
@@ -6723,12 +6711,17 @@ async function loadTechLoad() {
   if ($("#bk-techs")) $("#bk-techs").innerHTML = bookTechChips();
 }
 function bookTechChips() {
-  const list = (BOOK.techs || []).filter(t => BK.allTechs || t.recent || BK.techs.includes(t.id));
+  const kinds = new Map((TKIND || []).map(t => [t.id, t.kind])), want = BK.kind, isKind = t => kinds.get(t.id) === want;
+  const byKind = want && (BOOK.techs || []).some(isKind);
+  let list = (BOOK.techs || []).filter(t => BK.allTechs || (byKind ? isKind(t) : t.recent) || BK.techs.includes(t.id));
+  if (byKind && !BK.later) list = list.slice().sort((a, b) => Number(BK.load[a.id]?.minutes || 0) - Number(BK.load[b.id]?.minutes || 0) || a.name.localeCompare(b.name));   // free first
+  const kn = (TECH_KINDS.find(k => k[0] === want) || [])[1] || "";
+  const note = want && !byKind ? `<span class="quiet">No techs are marked ${esc(kn)} yet (Staff page, Technicians), so the usual techs are shown.</span>` : "";
   return list.map(t => { const n = BK.techs.indexOf(t.id), L = BK.load[t.id];
     return `<button class="chip tech-chip" type="button" data-tech="${t.id}" aria-pressed="${n >= 0}">
       ${n >= 0 ? `<span class="tc-n">${n === 0 ? "Lead" : "Helper"}</span>` : ""}${esc(t.name)}
       <span class="tc-load">${BK.later ? "" : L ? `${callsWord(L.calls)} · ${durText(Number(L.minutes))}` : "free"}</span></button>`; }).join("")
-    + `<button class="link" type="button" data-all-techs>${BK.allTechs ? "Show only the usual techs" : "Show all techs"}</button>`;
+    + `<button class="link" type="button" data-all-techs>${BK.allTechs ? (byKind ? `Show only ${want === "installs" ? "installers" : esc(kn) + " techs"}` : "Show only the usual techs") : "Show all techs"}</button>` + note;
 }
 // "Sales call for" choices: Reid and the sales partners, only the ones the sales person is allowed
 function salesForList(F) {
@@ -6739,7 +6732,7 @@ function salesForList(F) {
   return ok;
 }
 function renderBooking(msg) {
-  if (salesBooking()) {   // from the Sales page (or a sales person): Walk site or Create estimate, Reid or a partner, always HVAC Sales
+  if (bkSales()) {   // from the Sales page (or a sales person): Walk site or Create estimate, Reid or a partner, always HVAC Sales
     if (BK.mode !== "sales") { BK.mode = "sales"; BK.jobId = null; BK.salesFor = BK.salesFor ?? 0; }
     if (ME.role === "sales") { if (!["site", "phone"].includes(BK.sk)) BK.sk = "site"; } else if (!BK.sk) BK.sk = "walk";   // a sales person: Site visit or Phone booking
     if (!BK_SALES) { db.rpc("partner_sales").then(({ data }) => { BK_SALES = data || []; if (document.body.dataset.page === "book") renderBooking(); }); }
@@ -6756,13 +6749,14 @@ function renderBooking(msg) {
   const groups = Object.keys(CLASS_NAMES).filter(k => types.some(t => t.job_class === k));
   const t = types.find(x => String(x.id) === String(F.type));
   $("#main").innerHTML = `<article class="staff book">
-    <h1>${salesBooking() ? "Sales Call" : "Book a call"}</h1>
+    <h1>${F.walk ? "Book a walk" : bkSales() ? "Sales Call" : "Book a call"}</h1>
     <p class="lead"><button class="link" type="button" data-open-cust="${F.cust.id}">${esc(F.cust.display_name)}</button> · Customer ${esc(F.cust.customer_number)}
       ${F.cust.do_not_contact ? ` · <strong class="owe">Marked do not contact</strong>` : ""}</p>
+    ${F.walk ? `<div class="staff-msg ok bk-htin">Walk the site before the install · install job <b>${esc(F.walk.number || "")}</b>. Pick the day, the window and who walks it.</div>` : ""}
     ${F.htin && F.htinFixed ? `<div class="staff-msg ok bk-htin">For <b>${esc(F.htin.partnerName)}</b> · ${esc(F.htin.list)} booking <b>#${esc(F.htin.ref || "")}</b>. The job goes on ${esc(F.htin.partnerName)} with their booking # as its reference.</div>` : ""}
     <form id="bk-form" class="bk-form" autocomplete="off">
       <div class="bk-row"><span class="bk-label">What</span><span class="bk-chips bk-what">
-        ${salesBooking() ? (ME.role === "sales" ? `<button class="bk-main" type="button" data-bk-sk="site" aria-pressed="${F.sk === "site"}"><b>Site visit</b><span>Book a time to go see the customer</span></button>
+        ${bkSales() ? (ME.role === "sales" ? `<button class="bk-main" type="button" data-bk-sk="site" aria-pressed="${F.sk === "site"}"><b>Site visit</b><span>Book a time to go see the customer</span></button>
         <button class="bk-main" type="button" data-bk-sk="phone" aria-pressed="${F.sk === "phone"}"><b>Phone booking</b><span>Done over the phone: go straight to the estimate</span></button></span></div>`
         : `<button class="bk-main" type="button" data-bk-sk="walk" aria-pressed="${F.sk === "walk"}"><b>Walk site</b><span>Book a visit to look at the job</span></button>
         <button class="bk-main" type="button" data-bk-sk="est" aria-pressed="${F.sk === "est"}"><b>Create estimate</b><span>Make the job and go straight to the estimate</span></button></span></div>`) : `
@@ -6771,7 +6765,7 @@ function renderBooking(msg) {
         <button class="chip" type="button" data-bk-mode="sales" aria-pressed="${F.mode === "sales"}">Sales Call</button>
         ${visit ? "" : `<span class="bk-sep" aria-hidden="true"></span>${[["normal", "Normal"], ["high", "High"], ["emergency", "Emergency"]].map(([k, x]) =>
           `<button class="chip small prio-${k}" type="button" data-bk-prio="${k}" aria-pressed="${F.prio === k}" title="Priority">${x}</button>`).join("")}`}</span></div>`}
-      ${!salesBooking() && F.mode === "new" ? `<div class="bk-row"><span class="bk-label">Call for</span><span class="bk-chips">${[{ id: 0, name: "Reid" }].concat(BK_PARTNERS || []).map(x =>
+      ${!bkSales() && F.mode === "new" ? `<div class="bk-row"><span class="bk-label">Call for</span><span class="bk-chips">${[{ id: 0, name: "Reid" }].concat(BK_PARTNERS || []).map(x =>
           `<button class="chip small" type="button" data-bk-for="${x.id}" aria-pressed="${Number(F.forP || 0) === x.id}">${esc(x.name.replace(/\s*\(.*\)\s*$/, ""))}</button>`).join("")}${BK_PARTNERS ? "" : `<span class="quiet">getting the partners…</span>`}</span></div>
         ${bkIsVista(F.forP) ? `<div class="bk-row"><span class="bk-label">What is this call?</span><span class="bk-chips">${BK_TANK.map(([k, x]) =>
           `<button class="chip small" type="button" data-bk-tank="${k}" aria-pressed="${F.tank === k}">${x}</button>`).join("")}</span></div>
@@ -6783,7 +6777,7 @@ function renderBooking(msg) {
             : `<span class="quiet">No open HTIN booking for this customer without a job. Add it on the HTIN List first, or pick No.</span>`}</span></div>` : ""}` : ""}` : ""}
       ${F.mode === "sales" ? `<div class="bk-row"><span class="bk-label">Sales call for</span><span class="bk-chips">${salesForList(F).map(x =>
           `<button class="chip small" type="button" data-bk-sales="${x.id}" aria-pressed="${Number(F.salesFor || 0) === x.id}">${esc(x.name.replace(/\s*\(.*\)\s*$/, ""))} Sales Call</button>`).join("")}</span></div>` : ""}
-      ${salesBooking() && ME.role !== "sales" ? `<div class="bk-row"><span class="bk-label">Sales person</span><span class="bk-chips">${(F.sellers || []).map(x =>
+      ${bkSales() && ME.role !== "sales" ? `<div class="bk-row"><span class="bk-label">Sales person</span><span class="bk-chips">${(F.sellers || []).map(x =>
           `<button class="chip small" type="button" data-bk-seller="${x.id}" aria-pressed="${Number(F.seller) === x.id}">${esc(x.name)}</button>`).join("") || `<span class="quiet">No one has the Sales role yet (Staff page).</span>`}</span></div>` : ""}
       ${visit ? `<label class="bk-row"><span class="bk-label">Job</span><select id="bk-job" required>
           <option value="">Pick the job…</option>${F.jobs.map(j => `<option value="${j.job_id}" ${j.job_id === F.jobId ? "selected" : ""}>Job ${esc(j.job_number)}: ${esc(j.job_type)}, ${esc(j.summary || "")}${j.last_visit ? " (last visit " + esc(longDate(j.last_visit)) + ")" : ""}</option>`).join("")}</select></label>
@@ -6791,15 +6785,15 @@ function renderBooking(msg) {
       : `${F.locs.length > 1 ? `<label class="bk-row"><span class="bk-label">Address</span><select id="bk-loc">${F.locs.map(l =>
             `<option value="${l.id}" ${l.id === F.loc ? "selected" : ""}>${esc([l.street, l.unit && "Unit " + l.unit, l.city].filter(Boolean).join(", "))}${l.active === false ? " (old)" : ""}</option>`).join("")}</select></label>`
           : `<div class="bk-row"><span class="bk-label">Address</span><span>${esc(F.locs[0] ? [F.locs[0].street, F.locs[0].city].filter(Boolean).join(", ") : "No address on file: add one with the pencil first")}</span></div>`}
-        ${salesBooking() ? `<div class="bk-row"><span class="bk-label">Department</span><span>HVAC Sales</span></div>` : `<label class="bk-row"><span class="bk-label">Type of job</span><select id="bk-type" required><option value="">Pick one…</option>
+        ${bkSales() ? `<div class="bk-row"><span class="bk-label">Department</span><span>HVAC Sales</span></div>` : `<label class="bk-row"><span class="bk-label">Type of job</span><select id="bk-type" required><option value="">Pick one…</option>
           ${groups.map(g => `<optgroup label="${esc(CLASS_NAMES[g])}">${types.filter(x => x.job_class === g).map(x =>
             `<option value="${x.id}" ${String(x.id) === String(F.type) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup>`).join("")}</select></label>
         <label class="bk-row"><span class="bk-label">Department</span><select id="bk-unit" required><option value="">Pick one…</option>
           ${L.units.map(u => `<option value="${u.id}" ${String(u.id) === String(F.unit) ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></label>`}
-        <label class="bk-row"><span class="bk-label">${salesBooking() ? (F.sk === "est" ? "What are you quoting?" : "Reason for Call") : "What's wrong / what's needed"}</span><input id="bk-summary" maxlength="200" value="${esc(F.summary)}" placeholder="${esc(salesBooking() ? (F.sk === "est" ? "e.g. New furnace and AC, 2-storey house" : "e.g. Quote for a new furnace and AC") : t ? t.name : "e.g. No heat, furnace making a noise")}"></label>`}
-      <label class="bk-row top"><span class="bk-label">${salesBooking() ? (F.sk === "est" ? "Job notes for site visit" : "Job Notes") : "Notes for the tech"}</span><textarea id="bk-note" rows="3" maxlength="4000" placeholder="${salesBooking() ? (F.sk === "est" ? "What you saw at the site: where the equipment is, sizes, access, what the customer wants…" : "Anything about the visit: parking, side door, what the customer wants…") : "Anything the tech should know: parking, side door, dog, what the customer said…"}">${esc(F.note)}</textarea></label>
+        <label class="bk-row"><span class="bk-label">${bkSales() ? (F.sk === "est" ? "What are you quoting?" : "Reason for Call") : "What's wrong / what's needed"}</span><input id="bk-summary" maxlength="200" value="${esc(F.summary)}" placeholder="${esc(bkSales() ? (F.sk === "est" ? "e.g. New furnace and AC, 2-storey house" : "e.g. Quote for a new furnace and AC") : t ? t.name : "e.g. No heat, furnace making a noise")}"></label>`}
+      <label class="bk-row top"><span class="bk-label">${bkSales() ? (F.sk === "est" ? "Job notes for site visit" : "Job Notes") : "Notes for the tech"}</span><textarea id="bk-note" rows="3" maxlength="4000" placeholder="${bkSales() ? (F.sk === "est" ? "What you saw at the site: where the equipment is, sizes, access, what the customer wants…" : "Anything about the visit: parking, side door, what the customer wants…") : "Anything the tech should know: parking, side door, dog, what the customer said…"}">${esc(F.note)}</textarea></label>
 
-      ${salesBooking() && (F.sk === "est" || F.sk === "phone") ? "" : `<div class="bk-row"><span class="bk-label">Day</span><span class="bk-chips">
+      ${bkSales() && (F.sk === "est" || F.sk === "phone") ? "" : `<div class="bk-row"><span class="bk-label">Day</span><span class="bk-chips">
         <input type="date" id="bk-date" value="${esc(F.date)}" ${F.later ? "disabled" : ""}>
         ${[0, 1, 2].map(n => { const d = ymd(addDays(new Date(), n)); return `<button class="chip small" type="button" data-bk-day="${d}" aria-pressed="${!F.later && F.date === d}">${n === 0 ? "Today" : n === 1 ? "Tomorrow" : new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long" })}</button>`; }).join("")}
         <button class="chip small" type="button" data-bk-later aria-pressed="${F.later}" title="Save the job now and pick the day later from the Dispatch page">Not booked yet</button></span></div>
@@ -6810,9 +6804,9 @@ function renderBooking(msg) {
         ${F.win === "other" ? `<span class="bk-times"><input type="time" id="bk-start" value="${esc(F.start)}" step="900" aria-label="From"> to <input type="time" id="bk-end" value="${esc(F.end)}" step="900" aria-label="To"></span>` : ""}</span></div>`}
       <label class="bk-row"><span class="bk-label">How long</span><select id="bk-dur">${[30, 45, 60, 90, 120, 150, 180, 240, 300, 360, 480].map(m =>
           `<option value="${m}" ${Number(F.dur || t?.duration || 60) === m ? "selected" : ""}>${durText(m)}</option>`).join("")}</select></label>
-      ${F.later || salesBooking() ? "" : `<div class="bk-row top"><span class="bk-label">Techs<span class="quiet bk-hint">The first one you pick leads. Numbers are what they already have that day.</span></span>
+      ${F.later || bkSales() ? "" : `<div class="bk-row top"><span class="bk-label">${F.walk && F.kind === "installs" ? "Installers" : "Techs"}<span class="quiet bk-hint">${F.walk && F.kind === "installs" ? "Free ones first. " : ""}The first one you pick leads. Numbers are what they already have that day.</span></span>
         <span class="bk-chips" id="bk-techs">${bookTechChips()}</span></div>`}`}
-      <div class="bk-actions"><button class="btn" type="submit" id="bk-save">${salesBooking() && F.sk === "est" ? "Create the estimate" : salesBooking() && F.sk === "phone" ? "Start the estimate" : F.later ? "Save the job" : "Book it"}</button>
+      <div class="bk-actions"><button class="btn" type="submit" id="bk-save">${bkSales() && F.sk === "est" ? "Create the estimate" : bkSales() && F.sk === "phone" ? "Start the estimate" : F.later ? "Save the job" : "Book it"}</button>
         <button class="link" type="button" data-open-cust="${F.cust.id}">Cancel</button>
         <span class="staff-msg ${msg?.err ? "err" : ""}" id="bk-msg" role="status">${msg ? esc(msg.text) : ""}</span></div>
     </form>
@@ -6875,9 +6869,9 @@ function renderBooking(msg) {
     if (F.mode !== "visit" && !F.loc) return say("This customer has no address yet. Add one with the pencil on their file first.", true);
     if (F.mode !== "visit" && !F.type) return say("Pick the type of job.", true);
     if (F.mode !== "visit" && !F.unit) return say("Pick the department.", true);
-    if (salesBooking() && ME.role !== "sales" && (F.sellers || []).length && !F.seller) return say("Pick the sales person this is for.", true);
-    if (!salesBooking() && F.mode === "new" && bkIsVista(F.forP) && !F.tank) return say("Pick what this call is: we pay for the tank, Vista pays for the tank, or Service Call.", true);
-    if (!salesBooking() && F.mode === "new" && bkIsVista(F.forP) && F.isHtin && !F.htin) return say("Pick the HTIN booking this call is for.", true);
+    if (bkSales() && ME.role !== "sales" && (F.sellers || []).length && !F.seller) return say("Pick the sales person this is for.", true);
+    if (!bkSales() && F.mode === "new" && bkIsVista(F.forP) && !F.tank) return say("Pick what this call is: we pay for the tank, Vista pays for the tank, or Service Call.", true);
+    if (!bkSales() && F.mode === "new" && bkIsVista(F.forP) && F.isHtin && !F.htin) return say("Pick the HTIN booking this call is for.", true);
     let start = null, end = null;
     if (!F.later) {
       if (!F.date) return say("Pick the day.", true);
@@ -6887,7 +6881,7 @@ function renderBooking(msg) {
     const p = { customer_id: F.cust.id, location_id: F.loc, job_type_id: Number(F.type) || null, business_unit_id: Number(F.unit) || null,
       summary: F.summary.trim(), note: F.note.trim(), priority: F.prio, date: F.later ? null : F.date, start, end,
       duration: Number(F.dur) || null, techs: F.later ? [] : F.techs };
-    if (salesBooking()) {   // the sales person goes to the call themselves
+    if (bkSales()) {   // the sales person goes to the call themselves
       const emp = ME.role === "sales" ? ME.emp : (F.sellers || []).find(x => x.id === Number(F.seller))?.emp;
       F.techs = emp ? [emp] : []; p.techs = F.later ? [] : F.techs;
     }
@@ -6899,23 +6893,23 @@ function renderBooking(msg) {
       const { error: e5 } = await db.rpc("htin_book_link", { p_booking: F.htin.id, p_job: data.job_id });
       if (e5) alertMsg("Booked, but not linked to the booking list: " + rpcErr(e5));
     }
-    if (!salesBooking() && F.mode === "new" && data?.job_id && !F.htin && Number(F.forP)) {   // a call for a partner: the job is theirs
+    if (!bkSales() && F.mode === "new" && data?.job_id && !F.htin && Number(F.forP)) {   // a call for a partner: the job is theirs
       const { error: e6 } = await db.rpc("set_job_partner", { p_job: data.job_id, p_partner: Number(F.forP) });
       if (e6) alertMsg("Booked, but not put on the partner: " + rpcErr(e6)); }
-    if (!salesBooking() && F.mode === "new" && data?.job_id && F.tank && bkIsVista(F.forP)) {
+    if (!bkSales() && F.mode === "new" && data?.job_id && F.tank && bkIsVista(F.forP)) {
       const { error: e7 } = await db.rpc("set_job_tank_payer", { p_job: data.job_id, p_who: F.tank });
       if (e7) alertMsg("Booked, but who pays for the tank wasn't saved: " + rpcErr(e7)); }
     if (F.mode === "sales" && Number(F.salesFor) && data?.job_id) {   // a partner's sales call: the job is theirs
       const { error: e2 } = await db.rpc("set_job_partner", { p_job: data.job_id, p_partner: Number(F.salesFor) });
       if (e2) alertMsg("Booked, but not marked as the partner's sales call: " + rpcErr(e2)); }
-    if (salesBooking() && ME.role !== "sales" && F.seller && data?.job_id) {   // the office booked it for a sales person: it goes on their Sales page
+    if (bkSales() && ME.role !== "sales" && F.seller && data?.job_id) {   // the office booked it for a sales person: it goes on their Sales page
       const { error: e4 } = await db.rpc("set_job_seller", { p_job: data.job_id, p_user: Number(F.seller) });
       if (e4) alertMsg("Booked, but not put on the sales person's page: " + rpcErr(e4)); }
     if (ME.role === "sales" && data?.job_id && (F.sk === "site" || F.sk === "phone")) {   // a site visit or a phone booking
       await db.rpc("set_sales_kind", { p_job: data.job_id, p_kind: F.sk });
       if (F.sk === "site") { SALES.rows = null; return openSales(`Site visit booked: ${F.later ? "no day picked yet" : dayText(F.date) + ", " + winText(start, end)}. When you get there, open it from here with "Open the call".`); }
     }
-    if (salesBooking() && (F.sk === "est" || F.sk === "phone") && data?.job_id) {
+    if (bkSales() && (F.sk === "est" || F.sk === "phone") && data?.job_id) {
       const { data: est, error: e3 } = await db.rpc("est_create", { p_job: data.job_id });
       if (!e3 && est) return openEstEdit(est);
       alertMsg("The job is saved, but the estimate couldn't start: " + rpcErr(e3) + ". Open it from the Sales page.");
@@ -6924,17 +6918,18 @@ function renderBooking(msg) {
   });
 }
 function bookedScreen(F, r, start, end) {
-  const techs = salesBooking() ? [ME.role === "sales" ? "you" : ((F.sellers || []).find(x => x.id === Number(F.seller)) || {}).name || "the sales person"] : F.techs.map(techName);
+  const techs = bkSales() ? [ME.role === "sales" ? "you" : ((F.sellers || []).find(x => x.id === Number(F.seller)) || {}).name || "the sales person"] : F.techs.map(techName);
   $("#main").innerHTML = `<article class="staff book">
     <h1>${F.later ? "Job saved" : "Booked"}</h1>
     <div class="bk-done">
       <div class="bk-done-big">${F.later ? "Not on the schedule yet" : esc(dayText(F.date)) + ", " + esc(winText(start, end))}</div>
       <div>${esc(F.cust.display_name)} · Job ${esc(r.job_number)}${r.visit_number > 1 ? `, visit ${r.visit_number}` : ""}</div>
-      ${!salesBooking() && F.mode === "new" && Number(F.forP) ? `<div>For <b>${esc((BK_PARTNERS || []).find(x => x.id === Number(F.forP))?.name || "the partner")}</b>${F.tank ? ` · ${esc(BK_TANK.find(x => x[0] === F.tank)?.[1] || "")}` : ""}${F.htin ? ` · HTIN booking #${esc(F.htin.ref || "")}` : ""}</div>` : ""}
+      ${!bkSales() && F.mode === "new" && Number(F.forP) ? `<div>For <b>${esc((BK_PARTNERS || []).find(x => x.id === Number(F.forP))?.name || "the partner")}</b>${F.tank ? ` · ${esc(BK_TANK.find(x => x[0] === F.tank)?.[1] || "")}` : ""}${F.htin ? ` · HTIN booking #${esc(F.htin.ref || "")}` : ""}</div>` : ""}
       <div class="quiet">${F.later ? "It's on the waiting list at the top of the Dispatch page until someone picks a day." : techs.length ? "With " + esc(techs.join(" and ")) : "No tech yet: assign one on the Dispatch page."}</div>
     </div>
     <div class="bk-actions">
-      <button class="btn" type="button" data-open-cust="${F.cust.id}">Back to ${esc(F.cust.display_name)}</button>
+      ${F.walk ? `<button class="btn" type="button" data-back-est>Back to the estimate</button>` : ""}
+      <button class="btn${F.walk ? " quiet-btn" : ""}" type="button" data-open-cust="${F.cust.id}">Back to ${esc(F.cust.display_name)}</button>
       ${ME.role !== "sales" && (can("calls.dispatch") || can("calls.book")) ? `<button class="btn quiet-btn" type="button" data-to-dispatch>Open the dispatch board${F.later ? "" : " for that day"}</button>` : ""}
       <button class="link" type="button" data-book-again>Book another call for this customer</button>
     </div>
@@ -6942,6 +6937,8 @@ function bookedScreen(F, r, start, end) {
   document.querySelector("[data-open-cust]").addEventListener("click", () => openCustomer(F.cust.id));
   document.querySelector("[data-to-dispatch]")?.addEventListener("click", () => openDispatch(F.later ? null : F.date));
   document.querySelector("[data-book-again]").addEventListener("click", () => openBooking(F.cust.id));
+  document.querySelector("[data-back-est]")?.addEventListener("click", () => { SALES.rows = null; openEstEdit(F.walk.est, `Walk booked: ${F.later ? "no day yet" : dayText(F.date) + ", " + winText(start, end)}.`); });
+  if (F.walk) SALES.rows = null;
 }
 
 /* ---------- a new customer ---------- */
