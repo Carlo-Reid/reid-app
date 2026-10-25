@@ -3773,6 +3773,27 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .pbpk .pbp-doc { margin: 0 auto; }
 .pbp-add { margin-top: 6px; } .pbp-add.pbb-added { background: #2b8a3e !important; color: #fff !important; }
 @media print { .pbp-add { display: none !important; } }
+.est-showpic { padding: 0; border: 0; background: none; cursor: zoom-in; font-size: 22px; display: block; }
+.est-showbtn { display: inline-block; font-size: 12px; margin: 2px 0 0; }
+.show-back { position: fixed; inset: 0; z-index: 2000; background: rgba(10, 20, 26, .7); display: flex; align-items: center; justify-content: center; padding: 18px; }
+.show-back[hidden] { display: none; }
+.show { background: #fff; color: #1c2630; border-radius: 14px; width: min(1300px, 100%); height: min(92vh, 900px); display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.35); }
+.show-top { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid #e3e8ed; }
+.show-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.show-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px; padding: 20px 26px; overflow: auto; }
+.show-pic { display: flex; align-items: center; justify-content: center; background: #f7f9fa; border-radius: 12px; min-height: 300px; }
+.show-pic img { max-width: 100%; max-height: 70vh; object-fit: contain; }
+.show-txt h2 { font-size: 30px; margin: 4px 0 6px; line-height: 1.15; } .show-maker { margin-bottom: 10px; }
+.show-price { font-size: 34px; font-weight: 800; margin: 8px 0 14px; }
+.show-desc { font-size: 16px; line-height: 1.5; }
+.cmp-grid { flex: 1; display: grid; gap: 16px; padding: 16px 20px; overflow: auto; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.cmp-col { position: relative; border: 1px solid #e3e8ed; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+.cmp-col h3 { font-size: 20px; margin: 4px 0 0; } .cmp-price { font-size: 26px; font-weight: 800; }
+.cmp-pic { height: 240px; display: flex; align-items: center; justify-content: center; background: #f7f9fa; border-radius: 10px; } .cmp-pic img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.cmp-x { position: absolute; top: 6px; right: 8px; font-size: 18px; }
+.cmp-add { border-style: dashed; } .cmp-add input { font: inherit; padding: 7px 9px; border: 1px solid #d5dde3; border-radius: 8px; }
+.cmp-pick { text-align: left; border: 1px solid #e3e8ed; background: #fff; border-radius: 8px; padding: 7px 9px; cursor: pointer; font: inherit; } .cmp-pick:hover { border-color: var(--blue); }
+@media (max-width: 900px) { .show-body { grid-template-columns: 1fr; } .cmp-grid { grid-template-columns: 1fr; } }
 .est-note { width: 100%; box-sizing: border-box; font: inherit; resize: vertical; min-height: 2.6em; padding: 6px 8px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; color: inherit; }
 .est-note-ic { text-align: center; font-size: 18px; opacity: .7; }
 .est-note-np { font-size: 12px; white-space: nowrap; }
@@ -6565,6 +6586,87 @@ const estParts = (l, i, k, closed) => { if (!estCanCost() || !l.item_id) return 
 // our logo (kept next to the app on the website); a logo set in the company settings wins
 const REID_LOGO = "https://carlo-reid.github.io/reid-app/reid-logo.png";
 const coLogo = c => (c && c.logo_url) || REID_LOGO;
+// ----- Show the customer: one item big (picture, what it is, price), and up to 3 side by side -----
+const SHOW = { list: [], at: 0, cmp: [], photos: new Map(), q: "", hits: null };
+function showItems() {   // every price book item on this proposal, option by option
+  const out = []; EST.opts.forEach((o, i) => o.lines.forEach((l, k) => { if (l.item_id && !l.kind && !l.disc) out.push({ id: l.item_id, name: l.description, price: Number(l.price) || 0, ldesc: l.ldesc, opt: o.name || "Option " + (i + 1), key: i + ":" + k }); })); return out;
+}
+async function showPhoto(id) {
+  if (SHOW.photos.has(id)) return SHOW.photos.get(id);
+  const { data } = await db.rpc("pb_photo", { p_id: id }); const ph = data ? "data:image/jpeg;base64," + data : (EINFO.get(id)?.thumb || null);
+  SHOW.photos.set(id, ph); return ph;
+}
+const showDesc = it => it.ldesc ? rteClean(it.ldesc) : (() => { const e = EINFO.get(it.id); return e ? pbDescHtml({ id: it.id, description: e.desc }) : ""; })();
+const showMaker = it => { const e = EINFO.get(it.id) || {}; return [e.mfr, e.sku].filter(Boolean).join(" · "); };
+function showBack() { let b = document.getElementById("show-back");
+  if (!b) { b = document.createElement("div"); b.id = "show-back"; b.className = "show-back"; document.body.appendChild(b);
+    b.addEventListener("click", e => { if (e.target === b) b.hidden = true; });
+    document.addEventListener("keydown", e => { const x = document.getElementById("show-back"); if (!x || x.hidden) return;
+      if (e.key === "Escape") x.hidden = true; else if (!SHOW.cmpOpen && e.key === "ArrowRight") showGo(1); else if (!SHOW.cmpOpen && e.key === "ArrowLeft") showGo(-1); }); }
+  b.hidden = false; return b; }
+async function openShow(key) {
+  SHOW.list = showItems(); SHOW.at = Math.max(0, SHOW.list.findIndex(x => x.key === key)); SHOW.cmpOpen = false;
+  await estInfo(SHOW.list.map(x => x.id)).catch(() => {}); drawShow();
+}
+function showGo(d) { if (!SHOW.list.length) return; SHOW.at = (SHOW.at + d + SHOW.list.length) % SHOW.list.length; drawShow(); }
+const inCmp = id => SHOW.cmp.some(x => x.id === id);
+async function drawShow() {
+  const b = showBack(), it = SHOW.list[SHOW.at]; if (!it) { b.hidden = true; return; }
+  const ph = SHOW.photos.get(it.id);
+  b.innerHTML = `<div class="show" role="dialog" aria-label="${esc(it.name)}">
+    <div class="show-top"><span class="quiet">${esc(it.opt)} · ${SHOW.at + 1} of ${SHOW.list.length}</span>
+      <span class="show-acts">${SHOW.list.length > 1 ? `<button class="btn quiet-btn" type="button" data-show-go="-1">‹ Back</button><button class="btn quiet-btn" type="button" data-show-go="1">Next ›</button>` : ""}
+        <button class="btn ${inCmp(it.id) ? "" : "quiet-btn"}" type="button" data-show-pick="${it.id}">${inCmp(it.id) ? "✓ In the comparison" : "＋ Compare"}</button>
+        <button class="btn" type="button" data-show-cmp ${SHOW.cmp.length ? "" : "disabled"}>Compare side by side (${SHOW.cmp.length}/3)</button>
+        <button class="btn quiet-btn" type="button" data-show-x>Close</button></span></div>
+    <div class="show-body">
+      <div class="show-pic">${ph ? `<img src="${ph}" alt="">` : `<span class="quiet">${SHOW.photos.has(it.id) ? "No picture" : "Loading the picture…"}</span>`}</div>
+      <div class="show-txt"><h2 style="${esc(pbNmCss(it.id))}">${esc(it.name)}</h2>
+        ${showMaker(it) ? `<div class="quiet show-maker">${esc(showMaker(it))}</div>` : ""}
+        <div class="show-price">${money(it.price)}</div>
+        <div class="show-desc">${showDesc(it) || `<span class="quiet">No description in the price book yet.</span>`}</div></div></div></div>`;
+  wireShow(b);
+  if (!SHOW.photos.has(it.id)) { await showPhoto(it.id); if (SHOW.list[SHOW.at] === it && !SHOW.cmpOpen) drawShow(); }
+}
+function wireShow(b) {
+  b.querySelector("[data-show-x]")?.addEventListener("click", () => { b.hidden = true; });
+  b.querySelectorAll("[data-show-go]").forEach(x => x.addEventListener("click", () => showGo(Number(x.dataset.showGo))));
+  b.querySelectorAll("[data-show-pick]").forEach(x => x.addEventListener("click", () => {
+    const id = Number(x.dataset.showPick), src = SHOW.list.find(y => y.id === id) || (SHOW.hits || []).find(y => y.id === id);
+    if (inCmp(id)) SHOW.cmp = SHOW.cmp.filter(y => y.id !== id);
+    else if (SHOW.cmp.length >= 3) return alertMsg("Up to 3 to compare. Take one off first.");
+    else if (src) SHOW.cmp.push({ ...src });
+    SHOW.cmpOpen ? drawCompare() : drawShow(); }));
+  b.querySelector("[data-show-cmp]")?.addEventListener("click", () => { SHOW.cmpOpen = true; drawCompare(); });
+}
+async function drawCompare() {
+  const b = showBack(), C = SHOW.cmp, others = SHOW.list.filter(x => !inCmp(x.id)).filter((x, i, a) => a.findIndex(y => y.id === x.id) === i);
+  b.innerHTML = `<div class="show show-cmp" role="dialog" aria-label="Compare">
+    <div class="show-top"><b>Side by side</b><span class="show-acts"><button class="btn quiet-btn" type="button" data-cmp-back>‹ Back to one at a time</button><button class="btn quiet-btn" type="button" data-show-x>Close</button></span></div>
+    <div class="cmp-grid cmp-n${Math.max(1, C.length)}">${C.map(it => `<div class="cmp-col">
+        <button class="link danger cmp-x" type="button" data-show-pick="${it.id}" title="Take it out of the comparison">✕</button>
+        <div class="cmp-pic">${SHOW.photos.get(it.id) ? `<img src="${SHOW.photos.get(it.id)}" alt="">` : `<span class="quiet">${SHOW.photos.has(it.id) ? "No picture" : "Loading…"}</span>`}</div>
+        <h3 style="${esc(pbNmCss(it.id))}">${esc(it.name)}</h3>
+        ${showMaker(it) ? `<div class="quiet">${esc(showMaker(it))}</div>` : ""}
+        <div class="cmp-price">${money(it.price)}</div>
+        ${it.opt ? `<div class="quiet">On this proposal: ${esc(it.opt)}</div>` : ""}
+        <div class="show-desc">${showDesc(it) || `<span class="quiet">No description yet.</span>`}</div></div>`).join("")}
+      ${C.length < 3 ? `<div class="cmp-col cmp-add"><b>Add ${C.length ? "another" : "one"} to compare</b>
+        ${others.length ? `<div class="quiet">From this proposal</div>${others.map(x => `<button type="button" class="cmp-pick" data-show-pick="${x.id}">${esc(x.name)} <span class="quiet">${esc(x.opt)} · ${money(x.price)}</span></button>`).join("")}` : ""}
+        <div class="quiet" style="margin-top:8px">From the price book</div>
+        <input type="search" id="cmp-q" placeholder="Model, name or code…" value="${esc(SHOW.q)}" autocomplete="off">
+        <div class="cmp-hits">${(SHOW.hits || []).filter(x => !inCmp(x.id)).map(x => `<button type="button" class="cmp-pick" data-show-pick="${x.id}">${esc(x.name)} <span class="quiet">${money(x.price)}</span></button>`).join("")}</div></div>` : ""}
+    </div></div>`;
+  wireShow(b);
+  b.querySelector("[data-cmp-back]").addEventListener("click", () => { SHOW.cmpOpen = false; drawShow(); });
+  const q = b.querySelector("#cmp-q"); let tm;
+  q?.addEventListener("input", () => { clearTimeout(tm); SHOW.q = q.value.trim(); if (SHOW.q.length < 2) return;
+    tm = setTimeout(async () => { const ok = await salesBookCats(); const { data } = await db.rpc("pb_list", { p_search: SHOW.q, p_type: "all", p_active: true, p_category: null, p_flag: null, p_limit: 40 });
+      SHOW.hits = (data || []).filter(r => inSalesBook(r, ok) && Number(r.unit_price) > 0).slice(0, 10).map(r => ({ id: r.id, name: pbName(r.name), price: Number(r.unit_price) || 0, opt: "" }));
+      await estInfo(SHOW.hits.map(x => x.id)).catch(() => {}); drawCompare(); setTimeout(() => { const i = document.getElementById("cmp-q"); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 0); }, 300); });
+  const need = C.filter(it => !SHOW.photos.has(it.id)); if (need.length) { await Promise.all(need.map(it => showPhoto(it.id))); if (SHOW.cmpOpen) drawCompare(); }
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-est-show]"); if (!b) return; e.preventDefault(); openShow(b.dataset.estShow); });
 // the add buttons beside each option (right of the proposal)
 const estToolsHtml = (o, i) => `<div class="est-tools no-print"><div class="est-tools-h">Add to ${esc(o.name || "Option " + (i + 1))}</div>
   <button class="btn est-tool" type="button" data-opics="${i}" title="Your price book, with pictures: tap Add on what you want">📖 Price book</button>
@@ -6631,8 +6733,8 @@ function renderEstEdit() {
           <td colspan="${l.kind === "note" ? 3 : 2}"><textarea class="est-d est-note" data-ld="${i}:${k}" rows="2" maxlength="4000" ${closed ? "disabled" : ""} placeholder="${l.kind === "note" ? "Type a note for the customer (no price)…" : "Type what this is for…"}" aria-label="Note">${esc(l.description)}</textarea></td>
           ${l.kind === "note" ? `<td class="r quiet est-note-np">no price</td>` : `<td class="r quiet">Amount</td><td class="r"><input class="est-p" data-lp="${i}:${k}" value="${Number(l.price).toFixed(2)}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="Amount"></td>`}
           <td>${closed ? "" : `<button class="link danger" type="button" data-ldel="${i}:${k}" title="Take it off">✕</button>`}</td></tr>` : `<tr>
-          <td class="est-pic">${estPic(l.item_id)}</td>
-          <td><input class="est-d" data-ld="${i}:${k}" value="${esc(l.description)}" ${closed ? "disabled" : ""} aria-label="What" style="${esc(pbNmCss(l.item_id))}">${estCode(l.item_id)}${estLineText(l, i, k, closed)}${estParts(l, i, k, closed)}</td>
+          <td class="est-pic">${l.item_id ? `<button type="button" class="est-showpic no-print" data-est-show="${i}:${k}" title="Show it to the customer">${estPic(l.item_id) || "🔍"}</button>` : estPic(l.item_id)}</td>
+          <td><input class="est-d" data-ld="${i}:${k}" value="${esc(l.description)}" ${closed ? "disabled" : ""} aria-label="What" style="${esc(pbNmCss(l.item_id))}">${l.item_id ? `<button type="button" class="link est-showbtn no-print" data-est-show="${i}:${k}">🔍 Show</button>` : ""}${estCode(l.item_id)}${estLineText(l, i, k, closed)}${estParts(l, i, k, closed)}</td>
           <td class="r"><input class="est-q" data-lq="${i}:${k}" value="${l.qty}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="How many"></td>
           <td class="r"><input class="est-p" data-lp="${i}:${k}" value="${Number(l.price).toFixed(2)}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="Price each"></td>
           <td class="r num est-lt" data-lt="${k}">${money((Number(l.qty) || 0) * (Number(l.price) || 0))}</td>
