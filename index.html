@@ -3776,11 +3776,13 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .st-test-on { color: #b35c00; } .st-live { color: #2b8a3e; }
 .pbpk { width: min(1200px, 96vw); } .pbpk-body { overflow: auto; flex: 1; padding: 12px 16px; background: var(--paper); }
 .pbpk .pbp-doc { margin: 0 auto; }
-.pbp-add { margin-top: 6px; } .pbp-add.pbb-added { background: #2b8a3e !important; color: #fff !important; }
+.pbp-add { margin-top: 6px; }
+.pbp-showbtn { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; text-align: inherit; }
+.pbp-showname { padding: 0; border: 0; background: none; cursor: pointer; font: inherit; color: inherit; text-align: left; text-decoration: underline dotted; } .pbp-add.pbb-added { background: #2b8a3e !important; color: #fff !important; }
 @media print { .pbp-add { display: none !important; } }
 .est-showpic { padding: 0; border: 0; background: none; cursor: zoom-in; font-size: 22px; display: block; }
 .est-showbtn { display: inline-block; font-size: 12px; margin: 2px 0 0; }
-.show-back { position: fixed; inset: 0; z-index: 2000; background: rgba(10, 20, 26, .7); display: flex; align-items: center; justify-content: center; padding: 18px; }
+.show-back { position: fixed; inset: 0; z-index: 2200; background: rgba(10, 20, 26, .7); display: flex; align-items: center; justify-content: center; padding: 18px; }
 .show-back[hidden] { display: none; }
 .show { background: #fff; color: #1c2630; border-radius: 14px; width: min(1300px, 100%); height: min(92vh, 900px); display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.35); }
 .show-top { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid #e3e8ed; }
@@ -4510,6 +4512,8 @@ const HELP = [
   ["#pbp-print", "Print or save as PDF", ["Prints the book, or saves it as a PDF from the print window."]],
   ["[data-pbp-cat]", "Category", ["Tick the categories to put in your book. Ticking one ticks everything inside it."]],
   ["[data-pbp-add]", "Add", ["Puts this item on the proposal option you're working on."]],
+  ["[data-pbp-show]", "Open it big", ["Opens this item full screen to go over it with the customer.", "Back / Next go through the price book; ＋ Add puts it on the option; ＋ Compare picks up to 3 to see side by side."]],
+  ["[data-show-add]", "Add to the option", ["Puts this item on the proposal option you're working on."]],
   ["#pbpk-done", "Done", ["Closes the price book and goes back to the proposal."]],
   // settings
   ["#send-test-box [name=email]", "Test email", ["While testing, proposals and invoices go to this email instead of the customer.", "Empty it (or press Go live) to send to customers."]],
@@ -6392,6 +6396,9 @@ async function openPrintPicks(oi) {
   if (document.getElementById("pbpk-back")?.hidden) return;
   back.querySelector(".pbpk-body").innerHTML = `<div class="pbp-doc pbp-c${PBP.opt.cols || 2}">${PBPK.html}</div>`;
   back.querySelector("#pbpk-msg").textContent = "";
+  back.querySelectorAll("[data-pbp-show]").forEach(b => b.addEventListener("click", () => {
+    const list = [...back.querySelectorAll("[data-pbp-add]")].map(x => ({ id: Number(x.dataset.pbpAdd), name: x.dataset.pbpName, price: Number(x.dataset.pbpPrice) || 0, opt: "Price book", key: "b" + x.dataset.pbpAdd, book: true }));
+    SHOW.list = list; SHOW.at = Math.max(0, list.findIndex(x => x.id === Number(b.dataset.pbpShow))); SHOW.cmpOpen = false; drawShow(); }));
   back.querySelectorAll("[data-pbp-add]").forEach(b => b.addEventListener("click", () => {
     const id = Number(b.dataset.pbpAdd);
     EST.opts[PBPK.oi].lines.push({ item_id: id, description: b.dataset.pbpName, qty: 1, price: Number(b.dataset.pbpPrice) || 0 }); EST.dirty = true;
@@ -6753,6 +6760,7 @@ async function drawShow() {
   b.innerHTML = `<div class="show" role="dialog" aria-label="${esc(it.name)}">
     <div class="show-top"><span class="quiet">${esc(it.opt)} · ${SHOW.at + 1} of ${SHOW.list.length}</span>
       <span class="show-acts">${SHOW.list.length > 1 ? `<button class="btn quiet-btn" type="button" data-show-go="-1">‹ Back</button><button class="btn quiet-btn" type="button" data-show-go="1">Next ›</button>` : ""}
+        ${it.book ? `<button class="btn ${PBPK.added.has(it.id) ? "pbb-added" : ""}" type="button" data-show-add="${it.id}">${PBPK.added.has(it.id) ? "Added ✓" : "＋ Add to " + esc(EST.opts[PBPK.oi]?.name || "the option")}</button>` : ""}
         <button class="btn ${inCmp(it.id) ? "" : "quiet-btn"}" type="button" data-show-pick="${it.id}">${inCmp(it.id) ? "✓ In the comparison" : "＋ Compare"}</button>
         <button class="btn" type="button" data-show-cmp ${SHOW.cmp.length ? "" : "disabled"}>Compare side by side (${SHOW.cmp.length}/3)</button>
         <button class="btn quiet-btn" type="button" data-show-x>Close</button></span></div>
@@ -6763,6 +6771,12 @@ async function drawShow() {
         <div class="show-price">${money(it.price)}</div>
         <div class="show-desc">${showDesc(it) || `<span class="quiet">No description in the price book yet.</span>`}</div></div></div></div>`;
   wireShow(b);
+  b.querySelector("[data-show-add]")?.addEventListener("click", () => {   // from the price book: put it on the option
+    if (PBPK.added.has(it.id)) return;
+    EST.opts[PBPK.oi].lines.push({ item_id: it.id, description: it.name, qty: 1, price: it.price }); EST.dirty = true; PBPK.added.add(it.id);
+    const pb = document.querySelector(`#pbpk-back [data-pbp-add="${it.id}"]`); if (pb) { pb.textContent = "Added ✓"; pb.classList.add("pbb-added"); }
+    const dn = document.querySelector("#pbpk-done"); if (dn) dn.textContent = `Done (${PBPK.added.size} added)`; drawShow(); });
+  if (!EINFO.has(it.id)) { await estInfo([it.id]).catch(() => {}); if (SHOW.list[SHOW.at] === it && !SHOW.cmpOpen) return drawShow(); }
   if (!SHOW.photos.has(it.id)) { await showPhoto(it.id); if (SHOW.list[SHOW.at] === it && !SHOW.cmpOpen) drawShow(); }
 }
 function wireShow(b) {
@@ -14679,8 +14693,9 @@ async function makePrintBook(forPick) {   // forPick: the same book, with an Add
   const card = r => { const d = pbText(r.description).replace(/\s+/g, " "), dd = d && d !== pbName(r.name) ? (d.length > 240 ? d.slice(0, 237).replace(/\s+\S*$/, "") + "…" : d) : "", u = pbUnit(r.unit_of_measure);
     return `<div class="pbp-item">
       ${(() => { const img = `<div class="pbp-img">${pics.get(r.id) ? `<img alt="" src="${pics.get(r.id)}">` : `<span>${esc(PB_TYPE_NAME[r.item_type] || "")}</span>`}</div>`, co8 = calloutsOf(r.id);
-        return co8 ? withBoxes(co8, img, "print") : img; })()}
-      <div class="pbp-txt"><div class="pbp-name">${pbNameHtml(r)}</div>
+        const pic = co8 ? withBoxes(co8, img, "print") : img;
+        return forPick ? `<button type="button" class="pbp-showbtn" data-pbp-show="${r.id}" title="Open it big to go over it with the customer">${pic}</button>` : pic; })()}
+      <div class="pbp-txt"><div class="pbp-name">${forPick ? `<button type="button" class="pbp-showname" data-pbp-show="${r.id}" title="Open it big">${pbNameHtml(r)}</button>` : pbNameHtml(r)}</div>
         ${o.desc && dd ? `<div class="pbp-desc">${(PBLOOK.get(r.id) || {}).desc_html ? pbDescHtml(r) : esc(dd)}</div>` : ""}
         <div class="pbp-price"><strong>${money(r.unit_price)}</strong>${u ? `<span>per ${esc(u)}</span>` : ""}${o.member && pbHasMember(r) ? `<em>Members ${money(r.member_price)}</em>` : ""}</div>
         ${o.codes ? `<div class="pbp-code">${esc(r.sku)}</div>` : ""}
