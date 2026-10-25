@@ -1,7 +1,7 @@
 // Supabase Edge Function: doc-open   (turn OFF "Verify JWT" for this one: customers click it without signing in)
 // The links in anything sent with send-doc come here with the send's secret code (?t=…):
 //   &k=open           the tiny picture in an email: notes that it was opened, returns a 1×1 picture
-//   &k=view / &k=pdf  the links in the email or text: shows a page first asking "Do you want to view this estimate?"
+//   &k=view / &k=pdf  the links in the email or text: shows a page first asking "Do you want to view this proposal?"
 //                     and who they are (it was sent to me / it was forwarded to me + name, who sent it). Every time.
 //   &k=see            they said yes: notes who it was, shows the PDF (k=pdf links download it)
 //   &k=no             they said no thanks
@@ -74,7 +74,7 @@ Deno.serve(async (req) => {
     const dl = u.searchParams.get("dl") === "1";
     const r = await db.rpc("doc_send_hit", { p_token: t, p_kind: dl ? "pdf" : "view", p_ip: ip, p_ua: ua, p_info: { ...base, geo: where, who, name, from } });
     const d = r.data as { kind?: string; file_name?: string; pdf?: string } | null;
-    const what = d?.kind === "invoice" ? "invoice" : d?.kind === "estimate" ? "estimate" : "document";
+    const what = d?.kind === "invoice" ? "invoice" : d?.kind === "estimate" ? "proposal" : "document";
     if (!d) return msgPage(`This link isn't valid any more. Please call us at ${PHONE} and we'll send it again.`, 404);
     if (!d.pdf) return msgPage(`Thank you. Please call us at ${PHONE} if you'd like another copy of your ${what}.`);
     const bytes = Uint8Array.from(atob(d.pdf), c => c.charCodeAt(0));
@@ -86,7 +86,7 @@ Deno.serve(async (req) => {
   const r = await db.rpc("doc_send_hit", { p_token: t, p_kind: "ask", p_ip: ip, p_ua: ua, p_info: { ...base, geo: where } });
   const d = r.data as { kind?: string; title?: string; sent_on?: string } | null;
   if (!d) return msgPage(`This link isn't valid any more. Please call us at ${PHONE} and we'll send it again.`, 404);
-  const what = d.kind === "invoice" ? "invoice" : d.kind === "estimate" ? "estimate" : "document";
+  const what = d.kind === "invoice" ? "invoice" : d.kind === "estimate" ? "proposal" : "document";
   const me = new URL(req.url); me.search = "";
   const action = me.toString();
   return shell(`
