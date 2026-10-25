@@ -3725,6 +3725,10 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .ie-prule .quiet { color: #6b5a30; font-size: 12.5px; margin-top: 2px; } .ie-prule-acts { display: flex; flex-wrap: wrap; gap: 6px; }
 .pbl-rates b small { font-size: 12px; font-weight: 600; } .pbl-rates-f input { width: 64px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; }
 .est-sold-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; } .est-sold-acts .btn { padding: 3px 8px; font-size: 12px; min-height: 0; }
+.bk-days { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; }
+.bk-day { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.2; min-width: 74px; }
+.bk-day .bk-day-n { font-size: 11px; font-weight: 400; opacity: .75; }
+.bk-day-full .bk-day-n { color: var(--owe, #b42318); opacity: 1; }
 .est-walk-f { display: grid; gap: 10px; } .est-walk-f label { display: grid; gap: 4px; font-weight: 600; font-size: 13px; }
 .est-walk-f input, .est-walk-f select { font: inherit; font-weight: 400; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper, #fff); color: var(--ink); }
 .htin-late { color: #b02a2a; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
@@ -6701,7 +6705,7 @@ async function openBooking(custId, opt = {}) {
     if (w) BK.win = w; else { const [h, m] = opt.time.split(":").map(Number), e = Math.min(23 * 60 + 45, h * 60 + m + 120); BK.win = "other"; BK.start = opt.time; BK.end = String(Math.floor(e / 60)).padStart(2, "0") + ":" + String(e % 60).padStart(2, "0"); } }
   nameCurrentPage("booking for " + c.display_name);
   renderBooking();
-  loadTechLoad();
+  loadTechLoad(); loadTechRange();
 }
 async function loadTechLoad() {
   if (!BK || BK.later || !BK.date) return;
@@ -6709,6 +6713,27 @@ async function loadTechLoad() {
   if (!BK || BK.date !== d) return;
   BK.load = {}; (r.data || []).forEach(x => BK.load[x.employee_id] = x);
   if ($("#bk-techs")) $("#bk-techs").innerHTML = bookTechChips();
+}
+// the next 10 days to pick from, each with how many of the techs shown are free that day
+async function loadTechRange() {
+  const F = BK; if (!F || F.range) return;
+  const from = ymd(new Date()), to = ymd(addDays(new Date(), 9)), r = await db.rpc("tech_load", { p_from: from, p_to: to });
+  if (BK !== F) return;
+  F.range = {}; (r.data || []).forEach(x => { const d = String(x.day).slice(0, 10); (F.range[d] = F.range[d] || {})[x.employee_id] = x; });
+  if (document.querySelector(".bk-days")) document.querySelector(".bk-days").outerHTML = bkDayChips(F);
+}
+function bkShownTechs() {   // the techs the Techs row shows before "Show all techs"
+  const kinds = new Map((TKIND || []).map(t => [t.id, t.kind])), want = BK.kind, isKind = t => kinds.get(t.id) === want;
+  const byKind = want && (BOOK.techs || []).some(isKind);
+  return (BOOK.techs || []).filter(t => byKind ? isKind(t) : t.recent);
+}
+function bkDayChips(F) {
+  const shown = bkShownTechs(), who = F.kind === "installs" && shown.length ? "installers" : "techs";
+  return `<span class="bk-days">` + Array.from({ length: 10 }, (_, n) => {
+    const dt = addDays(new Date(), n), d = ymd(dt), L = F.range?.[d], free = L ? shown.filter(t => !L[t.id]).length : shown.length;
+    const name = n === 0 ? "Today" : n === 1 ? "Tomorrow" : dt.toLocaleDateString("en-CA", { weekday: "short" }) + " " + dt.toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+    return `<button class="chip small bk-day${F.range && shown.length && !free ? " bk-day-full" : ""}" type="button" data-bk-day="${d}" aria-pressed="${!F.later && F.date === d}" title="${esc(dayText(d))}${F.range ? `: ${free} of ${shown.length} ${who} free` : ""}">
+      <b>${esc(name)}</b>${F.range && shown.length ? `<span class="bk-day-n">${free} free</span>` : ""}</button>`; }).join("") + `</span>`;
 }
 function bookTechChips() {
   const kinds = new Map((TKIND || []).map(t => [t.id, t.kind])), want = BK.kind, isKind = t => kinds.get(t.id) === want;
@@ -6755,7 +6780,7 @@ function renderBooking(msg) {
     ${F.walk ? `<div class="staff-msg ok bk-htin">Walk the site before the install · install job <b>${esc(F.walk.number || "")}</b>. Pick the day, the window and who walks it.</div>` : ""}
     ${F.htin && F.htinFixed ? `<div class="staff-msg ok bk-htin">For <b>${esc(F.htin.partnerName)}</b> · ${esc(F.htin.list)} booking <b>#${esc(F.htin.ref || "")}</b>. The job goes on ${esc(F.htin.partnerName)} with their booking # as its reference.</div>` : ""}
     <form id="bk-form" class="bk-form" autocomplete="off">
-      <div class="bk-row"><span class="bk-label">What</span><span class="bk-chips bk-what">
+      <div class="bk-row${F.walk ? " hidden" : ""}"><span class="bk-label">What</span><span class="bk-chips bk-what">
         ${bkSales() ? (ME.role === "sales" ? `<button class="bk-main" type="button" data-bk-sk="site" aria-pressed="${F.sk === "site"}"><b>Site visit</b><span>Book a time to go see the customer</span></button>
         <button class="bk-main" type="button" data-bk-sk="phone" aria-pressed="${F.sk === "phone"}"><b>Phone booking</b><span>Done over the phone: go straight to the estimate</span></button></span></div>`
         : `<button class="bk-main" type="button" data-bk-sk="walk" aria-pressed="${F.sk === "walk"}"><b>Walk site</b><span>Book a visit to look at the job</span></button>
@@ -6795,7 +6820,7 @@ function renderBooking(msg) {
 
       ${bkSales() && (F.sk === "est" || F.sk === "phone") ? "" : `<div class="bk-row"><span class="bk-label">Day</span><span class="bk-chips">
         <input type="date" id="bk-date" value="${esc(F.date)}" ${F.later ? "disabled" : ""}>
-        ${[0, 1, 2].map(n => { const d = ymd(addDays(new Date(), n)); return `<button class="chip small" type="button" data-bk-day="${d}" aria-pressed="${!F.later && F.date === d}">${n === 0 ? "Today" : n === 1 ? "Tomorrow" : new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long" })}</button>`; }).join("")}
+        ${bkDayChips(F)}
         <button class="chip small" type="button" data-bk-later aria-pressed="${F.later}" title="Save the job now and pick the day later from the Dispatch page">Not booked yet</button></span></div>
       ${F.later ? "" : `<div class="bk-row"><span class="bk-label">Arrival window</span><span class="bk-chips">
         ${L.windows.map(([a, b]) => `<button class="chip small" type="button" data-bk-win="${a}-${b}" aria-pressed="${F.win && F.win[0] === a && F.win[1] === b}">${winText(a, b)}</button>`).join("")}
@@ -6848,7 +6873,7 @@ function renderBooking(msg) {
   $("#bk-unit")?.addEventListener("change", e => { F.unit = e.target.value; });
   document.querySelectorAll("[data-bk-prio]").forEach(b => b.addEventListener("click", () => { F.prio = b.dataset.bkPrio; redraw(); }));
   $("#bk-date")?.addEventListener("change", e => { F.date = e.target.value; redraw(); loadTechLoad(); });
-  document.querySelectorAll("[data-bk-day]").forEach(b => b.addEventListener("click", () => { F.date = b.dataset.bkDay; F.later = false; redraw(); loadTechLoad(); }));
+  $("#bk-form").addEventListener("click", e => { const b = e.target.closest("[data-bk-day]"); if (!b) return; F.date = b.dataset.bkDay; F.later = false; redraw(); loadTechLoad(); });   // the day buttons are redrawn when the free counts arrive
   $("[data-bk-later]")?.addEventListener("click", () => { F.later = !F.later; redraw(); loadTechLoad(); });
   document.querySelectorAll("[data-bk-win]").forEach(b => b.addEventListener("click", () => {
     const w = b.dataset.bkWin; F.win = w === "any" || w === "other" ? w : w.split("-"); redraw();
