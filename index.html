@@ -3754,6 +3754,9 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .bk-near .near-calls { border-top: 0; margin: 0; padding-top: 0; }
 .bk-picked { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--line); }
 .bk-picked .bk-label { min-width: 0; font-weight: 600; }
+.st-test-f { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; margin-top: 8px; }
+.st-test-f label { display: grid; gap: 4px; font-weight: 600; font-size: 13px; } .st-test-f input { font: inherit; font-weight: 400; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; min-width: 240px; }
+.st-test-on { color: #b35c00; } .st-live { color: #2b8a3e; }
 .est-note { width: 100%; box-sizing: border-box; font: inherit; resize: vertical; min-height: 2.6em; padding: 6px 8px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; color: inherit; }
 .est-note-ic { text-align: center; font-size: 18px; opacity: .7; }
 .est-note-np { font-size: 12px; white-space: nowrap; }
@@ -16792,8 +16795,32 @@ async function loadSyncBox() {
   }
   box.innerHTML = `<h2>ServiceTitan sync</h2>${body}`;
 }
+// Settings (owners): while testing, proposals and invoices go to these instead of the customer. Empty the email to go live.
+async function sendTestBox() {
+  const box = $("#send-test-box"); if (!box) return;
+  const { data, error } = await db.rpc("send_test_get");
+  if (error) { box.innerHTML = `<h2>Sending to customers: test mode</h2><p class="quiet">${/PGRST202|could not find/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</p>`; return; }
+  const T = data || {}, on = !!T.email;
+  box.innerHTML = `<h2>Sending to customers: ${on ? `<span class="st-test-on">🧪 test mode is on</span>` : `<span class="st-live">✓ live</span>`}</h2>
+    <p class="quiet">${on ? "While testing, every proposal and invoice sent with ✉ Email / Text goes to these instead of the customer." : "Proposals and invoices go to the customer. Put an email back in to test again."}</p>
+    <form class="st-test-f" autocomplete="off">
+      <label>Test email <input type="email" name="email" value="${esc(T.email || "")}" placeholder="empty = live"></label>
+      <label>Test text number <input type="tel" name="phone" value="${esc(T.phone ? phoneFmt(T.phone) : "")}" placeholder="e.g. 613-298-2948"></label>
+      <button class="btn" type="submit">Save</button>
+      ${on ? `<button class="btn quiet-btn danger-chip" type="button" data-go-live>Go live…</button>` : ""}
+    </form><div class="staff-msg" id="st-test-msg" role="status"></div>`;
+  const f = box.querySelector("form"), say = (t, err) => { const m = $("#st-test-msg"); m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; };
+  const save = async (email, phone) => { const { error: e } = await db.rpc("send_test_set", { p_email: email || null, p_phone: phone || null });
+    if (e) return say("Not saved: " + rpcErr(e), true); { const c = await db.from("company_settings").select("*").limit(1).maybeSingle(); if (c.data) COMPANY = c.data; } await sendTestBox(); say(email ? "Saved. Test sends go to these now." : "Live: proposals and invoices now go to the customer."); };
+  f.addEventListener("submit", async e => { e.preventDefault();
+    if (!f.email.value.trim() && on) { const k = await askChoice("Go live?", "With no test email, proposals and invoices go to the real customer.", [["yes", "Yes, go live", true], ["", "Keep testing"]]); if (k !== "yes") return; }
+    save(f.email.value.trim(), f.phone.value.trim()); });
+  box.querySelector("[data-go-live]")?.addEventListener("click", async () => {
+    const k = await askChoice("Go live?", "Proposals and invoices sent with ✉ Email / Text will go to the real customer from now on.", [["yes", "Yes, go live", true], ["", "Keep testing"]]);
+    if (k === "yes") save("", f.phone.value.trim()); });
+}
 function renderSettings(slots, note) {
-  setTimeout(wireMyPassword, 0);
+  setTimeout(wireMyPassword, 0); setTimeout(sendTestBox, 0);
   setTimeout(async () => {
     const on = $("#cp-on"), msg = $("#cp-msg"); if (!on) return;
     const r = await db.rpc("my_call_popup");
@@ -16819,6 +16846,7 @@ function renderSettings(slots, note) {
       </form>
       <div class="staff-msg" id="pw-msg" role="status"></div>
     </section>
+    ${ME.role === "owner" ? `<section class="block" id="send-test-box"><h2>Sending to customers: test mode</h2><div class="quiet">Loading…</div></section>` : ""}
     <section class="block">
       <h2>Colours and text size</h2>
       <p class="quiet" style="max-width:720px;margin:0 0 10px">These are now in <b>Page settings</b> (the ⚙ at the top right of every page). You can set them for all pages, or give one page its own look.</p>
@@ -17666,7 +17694,7 @@ function docSendDraw(msg, bad, jump) {
   else {
     const chk = (set, v, label, sub) => `<label class="ds-pick"><input type="checkbox" data-ds-set="${set}" value="${esc(v)}" ${D[set].has(v) ? "checked" : ""}> <span>${label}${sub ? ` <span class="quiet">${sub}</span>` : ""}</span></label>`;
     box.innerHTML = `<h3>Send this ${esc(o.label || "document")}${info.customer_name ? ` to ${esc(info.customer_name)}` : ""}</h3>
-      ${info.test_to ? `<div class="ds-test">🧪 Test mode: emails go to <b>${esc(info.test_to)}</b> and texts to your cell <b>${info.my_cell ? esc(phoneFmt(info.my_cell)) : "(none on your employee record yet)"}</b>, marked with who they were meant for.</div>` : ""}
+      ${info.test_to ? `<div class="ds-test">🧪 Test mode: emails go to <b>${esc(info.test_to)}</b> and texts to <b>${COMPANY?.send_test_phone ? esc(phoneFmt(COMPANY.send_test_phone)) : info.my_cell ? esc(phoneFmt(info.my_cell)) + " (your cell)" : "(no test number: set it in Settings)"}</b>, marked with who they were meant for.</div>` : ""}
       <div class="ds-row"><span class="ds-lab">Send by</span>
         <label class="ds-pick"><input type="checkbox" id="ds-email" ${D.email ? "checked" : ""}> ✉ Email</label>
         <label class="ds-pick"><input type="checkbox" id="ds-text" ${D.text ? "checked" : ""}> 💬 Text</label></div>
