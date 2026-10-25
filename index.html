@@ -4390,7 +4390,7 @@ $("#chat-text").addEventListener("keydown", e => { if (e.key === "Enter" && !e.s
 function startOnline() { clearInterval(onlineTimer); checkIn(); onlineTimer = setInterval(checkIn, 60000); }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && onlineTimer) checkIn(); });
 
-$("#signout").addEventListener("click", async () => { clearInterval(onlineTimer); onlineTimer = null;
+$("#signout").addEventListener("click", async () => { clearInterval(onlineTimer); onlineTimer = null; PBP.loaded = false;
   await db.rpc("check_in", { p_leaving: true }); await db.rpc("log_login", { p_event: "sign_out", p_device: deviceName() });
   try { sessionStorage.removeItem("reid.loginId"); } catch (e) {} clearInterval(LOGIN_BEAT);
   await db.auth.signOut(); location.hash = ""; showSignin(); });
@@ -6211,6 +6211,8 @@ async function openPrintPicks(oi) {
     <span class="staff-msg" id="pbpk-msg" role="status"></span><button class="btn" type="button" id="pbpk-done">Done</button></div>`;
   back.innerHTML = `<div class="pbb pbpk">${head}<div class="pbpk-body"><p class="quiet" style="padding:20px">Opening your print book…</p></div></div>`;
   back.querySelector("#pbpk-done").addEventListener("click", closePrintPicks);
+  await pbpLoad().catch(() => {});
+  if (!PBP.picked.size) { back.hidden = true; return openPbBrowse(oi, "pics"); }   // no print book yet: pictures from the whole price book
   if (!PB.cats) await loadPbCats();
   await loadPbBooks().catch(() => {});
   PBP.picked = new Set([...PBP.picked].filter(id => PB.catBy.has(id))); pbpSyncBook();
@@ -6230,6 +6232,7 @@ function closePrintPicks() { const b = document.getElementById("pbpk-back"); if 
 // a sales person's Price book on a proposal only shows what's in their print book (the categories, and everything inside them)
 async function salesBookCats() {
   if (ME.role !== "sales") return null;
+  await pbpLoad().catch(() => {});
   if (!PBP.picked.size) return null;
   if (!PBB.catsAll) { const { data } = await db.rpc("pb_categories"); PBB.catsAll = (data || []).filter(c => c.active !== false); }
   const kids = new Map(); PBB.catsAll.forEach(c => { const k = c.parent_id || 0; if (!kids.has(k)) kids.set(k, []); kids.get(k).push(c.id); });
@@ -14245,9 +14248,26 @@ function wireAddonKits() {
 // ---------- Print book: a customer-friendly price book with pictures, for the categories picked ----------
 let PBP = { picked: new Set(), open: new Set(), opt: { member: true, desc: true, codes: false, nopic: true }, title: "Price Book", built: null };
 try { const sv = JSON.parse(localStorage.getItem("pbpPrefs") || "null"); if (sv) { PBP.picked = new Set(sv.picked || []); Object.assign(PBP.opt, sv.opt || {}); PBP.title = sv.title || PBP.title; } } catch (e) {}
-const pbpSave = () => { try { localStorage.setItem("pbpPrefs", JSON.stringify({ picked: [...PBP.picked], opt: PBP.opt, title: PBP.title })); } catch (e) {} };
+// saved with the person's login (so it follows them to any device), and on this device as a backup
+let PBP_TM = null;
+const pbpSave = () => { const v = { picked: [...PBP.picked], opt: PBP.opt, title: PBP.title, book: PBP.book ?? "" };
+  try { localStorage.setItem("pbpPrefs", JSON.stringify(v)); } catch (e) {}
+  if (!PBP.loaded) return; clearTimeout(PBP_TM); PBP_TM = setTimeout(() => db.rpc("set_my_print_book", { p: v }).then(() => {}, () => {}), 600); };
+// the person's own print book from the database (once per sign-in); a book made on this device before goes up the first time
+async function pbpLoad() {
+  if (PBP.loaded) return;
+  const { data, error } = await db.rpc("my_print_book");
+  if (error) return;   // not switched on yet: keep this device's copy
+  PBP.loaded = true;
+  if (data && Array.isArray(data.picked)) {
+    PBP.picked = new Set(data.picked.map(Number)); Object.assign(PBP.opt, data.opt || {}); PBP.title = data.title || PBP.title;
+    if (data.book != null) PBP.book = data.book; PBP.built = null;
+    try { localStorage.setItem("pbpPrefs", JSON.stringify(data)); } catch (e) {}
+  } else if (PBP.picked.size) pbpSave();
+}
 async function openPrintBook() {
   setPage("print-book", "pricebook", "Print book");
+  await pbpLoad().catch(() => {});
   if (!PB.cats) { $("#main").innerHTML = `<div class="loading">Loading the categories…</div>`; await loadPbCats(); }
   await loadPbBooks().catch(() => {});   // always fresh, so changes to a price book show here straight away
   if (!COMPANY) { const { data } = await db.from("company_settings").select("*").limit(1).maybeSingle(); COMPANY = data || { company_name: "Reid Heating & Cooling" }; }
@@ -14305,7 +14325,7 @@ function renderPrintBook(msg) {
     document.querySelectorAll("[data-pbp-cols]").forEach(x => x.setAttribute("aria-pressed", String(Number(x.dataset.pbpCols) === n)));
     const d = document.querySelector(".pbp-doc"); if (d) d.className = "pbp-doc pbp-c" + n; }));   // changes the book straight away, no need to make it again
   document.querySelectorAll("[data-pbp-opt]").forEach(cb => cb.addEventListener("change", () => { PBP.opt[cb.dataset.pbpOpt] = cb.checked; pbpSave(); }));
-  $("#pbp-book")?.addEventListener("change", e => { PBP.book = e.target.value; PBP.built = null; const b = (PB.books || []).find(x => String(x.id) === String(PBP.book));
+  $("#pbp-book")?.addEventListener("change", e => { PBP.book = e.target.value; PBP.built = null; pbpSave(); const b = (PB.books || []).find(x => String(x.id) === String(PBP.book));
     renderPrintBook(pbpSyncBook() ? `Ticked ${b.name}'s ${PBP.picked.size} categories. Untick any you don't want in this print.` : b ? `${b.name} shows every category; tick the ones you want.` : ""); });
   $("#pbp-title").addEventListener("change", e => { PBP.title = e.target.value.trim() || "Price Book"; pbpSave(); });
   $("#pbp-make").addEventListener("click", () => makePrintBook());
