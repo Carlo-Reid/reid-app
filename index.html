@@ -3777,6 +3777,8 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .pbpk { width: min(1200px, 96vw); } .pbpk-body { overflow: auto; flex: 1; padding: 12px 16px; background: var(--paper); }
 .pbpk .pbp-doc { margin: 0 auto; }
 .pbp-add { margin-top: 6px; }
+.pbp-cmp { display: inline-flex; align-items: center; gap: 5px; margin: 6px 10px 0 0; font-size: 13px; cursor: pointer; } .pbp-cmp input { width: 16px; height: 16px; }
+@media print { .pbp-cmp { display: none !important; } }
 .pbp-showbtn { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; text-align: inherit; }
 .pbp-showname { padding: 0; border: 0; background: none; cursor: pointer; font: inherit; color: inherit; text-align: left; text-decoration: underline dotted; } .pbp-add.pbb-added { background: #2b8a3e !important; color: #fff !important; }
 @media print { .pbp-add { display: none !important; } }
@@ -4512,6 +4514,8 @@ const HELP = [
   ["#pbp-print", "Print or save as PDF", ["Prints the book, or saves it as a PDF from the print window."]],
   ["[data-pbp-cat]", "Category", ["Tick the categories to put in your book. Ticking one ticks everything inside it."]],
   ["[data-pbp-add]", "Add", ["Puts this item on the proposal option you're working on."]],
+  ["[data-pbp-cmp]", "Compare", ["Tick up to 3 items to compare.", "Then press Compare side by side at the top."]],
+  ["#pbpk-cmp", "Compare side by side", ["Shows the items you ticked in columns: picture, price and description."]],
   ["[data-pbp-show]", "Open it big", ["Opens this item full screen to go over it with the customer.", "Back / Next go through the price book; ＋ Add puts it on the option; ＋ Compare picks up to 3 to see side by side."]],
   ["[data-show-add]", "Add to the option", ["Puts this item on the proposal option you're working on."]],
   ["#pbpk-done", "Done", ["Closes the price book and goes back to the proposal."]],
@@ -6378,9 +6382,11 @@ async function openPrintPicks(oi) {
     back.addEventListener("click", e => { if (e.target === back) closePrintPicks(); }); }
   back.hidden = false;
   const o = EST.opts[oi] || {}, head = `<div class="pbb-head"><div><b>Price book</b> <span class="quiet">adding to ${esc(o.name || "Option " + (oi + 1))}</span></div>
-    <span class="staff-msg" id="pbpk-msg" role="status"></span><button class="btn" type="button" id="pbpk-done">Done</button></div>`;
+    <span class="staff-msg" id="pbpk-msg" role="status"></span><button class="btn quiet-btn" type="button" id="pbpk-cmp">Compare side by side (${SHOW.cmp.length}/3)</button><button class="btn" type="button" id="pbpk-done">Done</button></div>`;
   back.innerHTML = `<div class="pbb pbpk">${head}<div class="pbpk-body"><p class="quiet" style="padding:20px">Opening your print book…</p></div></div>`;
   back.querySelector("#pbpk-done").addEventListener("click", closePrintPicks);
+  back.querySelector("#pbpk-cmp").addEventListener("click", () => { if (!SHOW.cmp.length) { const m = back.querySelector("#pbpk-msg"); m.className = "staff-msg err"; m.textContent = "Tick Compare on up to 3 items first."; return; }
+    SHOW.list = pbpkItems(); SHOW.cmpOpen = true; drawCompare(); });
   await pbpLoad().catch(() => {});
   if (!PB.cats) await loadPbCats();
   await loadPbBooks().catch(() => {});
@@ -6396,13 +6402,26 @@ async function openPrintPicks(oi) {
   if (document.getElementById("pbpk-back")?.hidden) return;
   back.querySelector(".pbpk-body").innerHTML = `<div class="pbp-doc pbp-c${PBP.opt.cols || 2}">${PBPK.html}</div>`;
   back.querySelector("#pbpk-msg").textContent = "";
+  pbpkSyncCmp();
+  back.querySelectorAll("[data-pbp-cmp]").forEach(cb => cb.addEventListener("change", () => {
+    const id = Number(cb.dataset.pbpCmp), it = pbpkItems().find(x => x.id === id);
+    if (cb.checked) { if (SHOW.cmp.length >= 3 && !inCmp(id)) { cb.checked = false; const m = back.querySelector("#pbpk-msg"); m.className = "staff-msg err"; m.textContent = "Up to 3 to compare. Untick one first."; return; }
+      if (it && !inCmp(id)) SHOW.cmp.push({ ...it }); }
+    else SHOW.cmp = SHOW.cmp.filter(x => x.id !== id);
+    back.querySelector("#pbpk-msg").textContent = ""; pbpkSyncCmp(); }));
   back.querySelectorAll("[data-pbp-show]").forEach(b => b.addEventListener("click", () => {
-    const list = [...back.querySelectorAll("[data-pbp-add]")].map(x => ({ id: Number(x.dataset.pbpAdd), name: x.dataset.pbpName, price: Number(x.dataset.pbpPrice) || 0, opt: "Price book", key: "b" + x.dataset.pbpAdd, book: true }));
+    const list = pbpkItems();
     SHOW.list = list; SHOW.at = Math.max(0, list.findIndex(x => x.id === Number(b.dataset.pbpShow))); SHOW.cmpOpen = false; drawShow(); }));
   back.querySelectorAll("[data-pbp-add]").forEach(b => b.addEventListener("click", () => {
     const id = Number(b.dataset.pbpAdd);
     EST.opts[PBPK.oi].lines.push({ item_id: id, description: b.dataset.pbpName, qty: 1, price: Number(b.dataset.pbpPrice) || 0 }); EST.dirty = true;
     PBPK.added.add(id); b.textContent = "Added ✓"; b.classList.add("pbb-added"); back.querySelector("#pbpk-done").textContent = `Done (${PBPK.added.size} added)`; }));
+}
+// the items in the price book pop-up, and its Compare ticks kept in step with the comparison
+const pbpkItems = () => [...document.querySelectorAll("#pbpk-back [data-pbp-add]")].map(x => ({ id: Number(x.dataset.pbpAdd), name: x.dataset.pbpName, price: Number(x.dataset.pbpPrice) || 0, opt: "Price book", key: "b" + x.dataset.pbpAdd, book: true }));
+function pbpkSyncCmp() {
+  document.querySelectorAll("#pbpk-back [data-pbp-cmp]").forEach(cb => { cb.checked = inCmp(Number(cb.dataset.pbpCmp)); });
+  const b = document.getElementById("pbpk-cmp"); if (b) { b.textContent = `Compare side by side (${SHOW.cmp.length}/3)`; b.classList.toggle("quiet-btn", !SHOW.cmp.length); }
 }
 function closePrintPicks() { const b = document.getElementById("pbpk-back"); if (b) b.hidden = true; if (PBPK.added.size) { PBPK.added = new Set(); renderEstEdit(); } }
 // a sales person's Price book on a proposal only shows what's in their print book (the categories, and everything inside them)
@@ -6744,9 +6763,9 @@ const showDesc = it => it.ldesc ? rteClean(it.ldesc) : (() => { const e = EINFO.
 const showMaker = it => { const e = EINFO.get(it.id) || {}; return [e.mfr, e.sku].filter(Boolean).join(" · "); };
 function showBack() { let b = document.getElementById("show-back");
   if (!b) { b = document.createElement("div"); b.id = "show-back"; b.className = "show-back"; document.body.appendChild(b);
-    b.addEventListener("click", e => { if (e.target === b) b.hidden = true; });
+    b.addEventListener("click", e => { if (e.target === b) { b.hidden = true; pbpkSyncCmp(); } });
     document.addEventListener("keydown", e => { const x = document.getElementById("show-back"); if (!x || x.hidden) return;
-      if (e.key === "Escape") x.hidden = true; else if (!SHOW.cmpOpen && e.key === "ArrowRight") showGo(1); else if (!SHOW.cmpOpen && e.key === "ArrowLeft") showGo(-1); }); }
+      if (e.key === "Escape") { x.hidden = true; pbpkSyncCmp(); } else if (!SHOW.cmpOpen && e.key === "ArrowRight") showGo(1); else if (!SHOW.cmpOpen && e.key === "ArrowLeft") showGo(-1); }); }
   b.hidden = false; return b; }
 async function openShow(key) {
   SHOW.list = showItems(); SHOW.at = Math.max(0, SHOW.list.findIndex(x => x.key === key)); SHOW.cmpOpen = false;
@@ -6780,7 +6799,7 @@ async function drawShow() {
   if (!SHOW.photos.has(it.id)) { await showPhoto(it.id); if (SHOW.list[SHOW.at] === it && !SHOW.cmpOpen) drawShow(); }
 }
 function wireShow(b) {
-  b.querySelector("[data-show-x]")?.addEventListener("click", () => { b.hidden = true; });
+  b.querySelector("[data-show-x]")?.addEventListener("click", () => { b.hidden = true; pbpkSyncCmp(); });
   b.querySelectorAll("[data-show-go]").forEach(x => x.addEventListener("click", () => showGo(Number(x.dataset.showGo))));
   b.querySelectorAll("[data-show-pick]").forEach(x => x.addEventListener("click", () => {
     const id = Number(x.dataset.showPick), src = SHOW.list.find(y => y.id === id) || (SHOW.hits || []).find(y => y.id === id);
@@ -14699,6 +14718,7 @@ async function makePrintBook(forPick) {   // forPick: the same book, with an Add
         ${o.desc && dd ? `<div class="pbp-desc">${(PBLOOK.get(r.id) || {}).desc_html ? pbDescHtml(r) : esc(dd)}</div>` : ""}
         <div class="pbp-price"><strong>${money(r.unit_price)}</strong>${u ? `<span>per ${esc(u)}</span>` : ""}${o.member && pbHasMember(r) ? `<em>Members ${money(r.member_price)}</em>` : ""}</div>
         ${o.codes ? `<div class="pbp-code">${esc(r.sku)}</div>` : ""}
+        ${forPick ? `<label class="pbp-cmp"><input type="checkbox" data-pbp-cmp="${r.id}"> Compare</label>` : ""}
         ${forPick ? `<button type="button" class="btn pbp-add" data-pbp-add="${r.id}" data-pbp-name="${esc(pbName(r.name))}" data-pbp-price="${Number(r.unit_price) || 0}">Add</button>` : ""}</div></div>`; };
   const built = `<section class="pbp-page pbp-cover">
       <div class="pbp-cover-top"><img class="pbp-logo" src="${esc(coLogo(c))}" alt="${esc(co)}"></div>
