@@ -2298,6 +2298,9 @@
   .pbi-panel { position: static !important; max-height: none !important; width: auto !important; }
   .pbi-panel .pb-photo { min-height: 260px; } .pbi-panel .pb-photo img { max-height: 380px; }
   .pbi-side { display: flex; flex-direction: column; gap: 16px; }
+  .pbi-cmp-f { display: grid; gap: 6px; } .pbi-cmp-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1.2fr); gap: 6px; align-items: center; }
+  .pbi-cmp-row input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+  .pbi-cmp-t { width: 100%; border-collapse: collapse; } .pbi-cmp-t th, .pbi-cmp-t td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
   .pbi-box { display: flex; flex-direction: column; gap: 10px; } .pbi-box h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); } .pbi-box p { margin: 0; }
   .pbi-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
   .pbi-form label, .pbi-yform > label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; margin: 0; }
@@ -3797,6 +3800,9 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .show-price { font-size: 34px; font-weight: 800; margin: 8px 0 14px; }
 .show-desc { font-size: 16px; line-height: 1.5; }
 .cmp-grid { flex: 1; display: grid; gap: 16px; padding: 16px 20px; overflow: auto; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.cmp-t { grid-column: 1 / -1; order: 99; width: 100%; border-collapse: collapse; font-size: 15px; }
+.cmp-t th, .cmp-t td { border: 1px solid #e3e8ed; padding: 7px 10px; text-align: left; vertical-align: top; }
+.cmp-t thead th { background: #f4f7f9; } .cmp-t tbody th { background: #fafbfc; width: 18%; font-weight: 700; } .cmp-t tbody tr:nth-child(even) td { background: #fcfdfd; }
 .cmp-col { position: relative; border: 1px solid #e3e8ed; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
 .cmp-col h3 { font-size: 20px; margin: 4px 0 0; } .cmp-price { font-size: 26px; font-weight: 800; }
 .cmp-pic { height: 240px; display: flex; align-items: center; justify-content: center; background: #f7f9fa; border-radius: 10px; } .cmp-pic img { max-width: 100%; max-height: 100%; object-fit: contain; }
@@ -4516,6 +4522,7 @@ const HELP = [
   ["[data-pbp-cat]", "Category", ["Tick the categories to put in your book. Ticking one ticks everything inside it."]],
   ["[data-pbp-add]", "Add", ["Puts this item on the proposal option you're working on."]],
   ["[data-pbp-cmp]", "Compare", ["Tick up to 3 items to compare.", "Then press Compare side by side at the top."]],
+  ["#pbi-cmp input", "Compare details", ["Type a name on the left (for example Efficiency) and its value on the right (96% AFUE).", "Use the same names on similar items so the lines match up when they're compared.", "Press Save compare details."]],
   ["#pbpk-cmp", "Compare side by side", ["Shows the items you ticked in columns: picture, price and description."]],
   ["[data-pbp-show]", "Open it big", ["Opens this item full screen to go over it with the customer.", "Back / Next go through the price book; ＋ Add puts it on the option; ＋ Compare picks up to 3 to see side by side."]],
   ["[data-show-add]", "Add to the option", ["Puts this item on the proposal option you're working on."]],
@@ -6810,11 +6817,21 @@ function wireShow(b) {
     SHOW.cmpOpen ? drawCompare() : drawShow(); }));
   b.querySelector("[data-show-cmp]")?.addEventListener("click", () => { SHOW.cmpOpen = true; drawCompare(); });
 }
+// the compare details of the items being compared, line by line (the names in the order the first item has them)
+function cmpTable(C) {
+  if (C.length < 2 || !C.every(it => CMP_LINES.has(it.id))) return "";
+  const names = []; C.forEach(it => (CMP_LINES.get(it.id) || []).forEach(x => { const k = x.label.trim().toLowerCase(); if (x.label && !names.some(n => n.k === k)) names.push({ k, label: x.label }); }));
+  if (!names.length) return "";
+  const val = (it, k) => ((CMP_LINES.get(it.id) || []).find(x => x.label.trim().toLowerCase() === k) || {}).value || "—";
+  return `<table class="cmp-t"><thead><tr><th></th>${C.map(it => `<th>${esc(it.name)}</th>`).join("")}</tr></thead>
+    <tbody>${names.map(n => `<tr><th>${esc(n.label)}</th>${C.map(it => `<td>${esc(val(it, n.k))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
 async function drawCompare() {
+  if (SHOW.cmp.some(it => !CMP_LINES.has(it.id))) { await loadCmpLines(SHOW.cmp.map(it => it.id)).catch(() => {}); }
   const b = showBack(), C = SHOW.cmp, others = SHOW.list.filter(x => !inCmp(x.id)).filter((x, i, a) => a.findIndex(y => y.id === x.id) === i);
   b.innerHTML = `<div class="show show-cmp" role="dialog" aria-label="Compare">
     <div class="show-top"><b>Side by side</b><span class="show-acts"><button class="btn quiet-btn" type="button" data-cmp-back>‹ Back to one at a time</button><button class="btn quiet-btn" type="button" data-show-x>Close</button></span></div>
-    <div class="cmp-grid cmp-n${Math.max(1, C.length)}">${C.map(it => `<div class="cmp-col">
+    <div class="cmp-grid cmp-n${Math.max(1, C.length)}">${cmpTable(C)}${C.map(it => `<div class="cmp-col">
         <button class="link danger cmp-x" type="button" data-show-pick="${it.id}" title="Take it out of the comparison">✕</button>
         <div class="cmp-pic">${SHOW.photos.get(it.id) ? `<img src="${SHOW.photos.get(it.id)}" alt="">` : `<span class="quiet">${SHOW.photos.has(it.id) ? "No picture" : "Loading…"}</span>`}</div>
         <h3 style="${esc(pbNmCss(it.id))}">${esc(it.name)}</h3>
@@ -14782,6 +14799,34 @@ async function pbiLabour(id, edit, msg) {
   $("#pbi-lab-kit")?.addEventListener("click", () => save(null, null, null, "Back to the kit's pricing."));
   $("#pbi-lab-clear")?.addEventListener("click", () => save(null, null, null, "Cleared."));
 }
+// Compare details: 10 lines (name + value) that line up when this item is compared side by side with others
+const CMP_SUGGEST = ["Efficiency", "Heating output (BTU)", "Cooling size (tons)", "SEER2 / HSPF2", "Stages", "Blower / fan", "Sound level", "Warranty: parts", "Warranty: labour", "Size (H × W × D)"];
+const CMP_LINES = new Map();   // item id -> [{label, value}]
+async function loadCmpLines(ids) {
+  const want = [...new Set(ids)].filter(id => id && !CMP_LINES.has(id)); if (!want.length) return;
+  const { data, error } = await db.rpc("pb_compare_get", { p_ids: want }); if (error) return;
+  want.forEach(id => CMP_LINES.set(id, [])); (data || []).forEach(r => CMP_LINES.set(Number(r.id), r.lines || []));
+}
+async function pbiCompare(id, edit) {
+  const box = $("#pbi-cmp"); if (!box) return;
+  CMP_LINES.delete(id); await loadCmpLines([id]);
+  const L = CMP_LINES.get(id); if (!$("#pbi-cmp")) return;
+  if (!L) { box.innerHTML = `<h2>Compare details</h2><p class="quiet">This turns on after tonight's update.</p>`; return; }
+  const labels = edit ? (await db.rpc("pb_compare_labels")).data || [] : [];
+  const rows = Array.from({ length: 10 }, (_, i) => L[i] || { label: "", value: "" });
+  box.innerHTML = `<h2>Compare details</h2>
+    <p class="quiet">Up to 10 lines shown in a table when this is compared side by side with other equipment. Use the same names on similar items (for example Efficiency) so the lines match up.</p>
+    ${edit ? `<form class="pbi-cmp-f"><datalist id="cmp-labels">${[...new Set([...labels, ...CMP_SUGGEST])].map(x => `<option value="${esc(x)}">`).join("")}</datalist>
+      ${rows.map((x, i) => `<div class="pbi-cmp-row"><span class="quiet">${i + 1}</span><input name="l${i}" list="cmp-labels" value="${esc(x.label)}" placeholder="${esc(CMP_SUGGEST[i])}" maxlength="60" aria-label="Line ${i + 1} name">
+        <input name="v${i}" value="${esc(x.value)}" placeholder="value" maxlength="120" aria-label="Line ${i + 1} value"></div>`).join("")}
+      <div><button class="btn" type="submit">Save compare details</button> <span class="staff-msg" id="pbi-cmp-msg" role="status"></span></div></form>`
+      : L.length ? `<table class="pbi-cmp-t">${L.map(x => `<tr><th>${esc(x.label)}</th><td>${esc(x.value)}</td></tr>`).join("")}</table>` : `<p class="quiet">None filled in yet.</p>`}`;
+  box.querySelector("form")?.addEventListener("submit", async e => { e.preventDefault(); const f = e.target, m = $("#pbi-cmp-msg");
+    const lines = rows.map((_, i) => ({ label: f["l" + i].value.trim(), value: f["v" + i].value.trim() })).filter(x => x.label || x.value);
+    const { error } = await db.rpc("pb_compare_set", { p_id: id, p_lines: lines });
+    m.className = "staff-msg " + (error ? "err" : "ok"); m.textContent = error ? "Not saved: " + rpcErr(error) : "Saved.";
+    if (!error) CMP_LINES.set(id, lines); });
+}
 function renderPbItemPage(msg) {
   const id = PB.itemPage, r = (PB.rows || []).find(x => x.id === id);
   if (r && !PBLOOK.has(id)) { pbLoadLooks([id]).then(() => { if (PB.itemPage === id) renderPbItemPage(msg); }); return; }
@@ -14809,9 +14854,10 @@ function renderPbItemPage(msg) {
           <form id="pbi-cust" class="pbi-form"><label>Customer number<input name="c" inputmode="numeric" placeholder="e.g. 5581306" required autocomplete="off"></label>
             <button class="btn quiet-btn" type="submit">Find</button></form>
           <div id="pbi-yearly"></div></section>
+        <section class="cl-tools pbi-box" id="pbi-cmp"><h2>Compare details</h2><div class="quiet">Loading…</div></section>
       </div>
     </div></article>`;
-  showPbItem(id);
+  showPbItem(id); pbiCompare(id, edit);
   if (seeCost()) pbiLabour(id, edit);
   const say = (el, t, err) => { el.innerHTML = `<div class="staff-msg ${err ? "err" : "ok"}">${t}</div>`; };
   $("#pbi-move")?.addEventListener("click", async () => {
