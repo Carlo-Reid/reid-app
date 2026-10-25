@@ -1964,6 +1964,7 @@
   .dc-foot { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 3px; font-size: calc(12.5px * var(--fs, 1)); }
   .dsp-panel { flex: 0 0 340px; background: var(--panel); border: 2px solid var(--blue); border-radius: var(--radius-m); padding: 14px 16px; position: sticky; top: 10px;
                max-height: calc(100vh - 140px); overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  .dsp-panel .dp-phone { margin: 2px 0 4px; } .dsp-panel .dp-phone a { font-weight: 600; text-decoration: none; }
   .dsp-panel h3 { margin: 10px 0 2px; font-size: calc(13px * var(--fs, 1)); text-transform: uppercase; letter-spacing: .06em; color: var(--steel); }
   .dp-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; font-size: calc(17px * var(--fs, 1)); }
   .dp-job { font-weight: 600; }
@@ -8895,6 +8896,23 @@ async function dropCall(vid, from, to) {
   await loadDispatch();
 }
 function dspToast(text) { const m = document.createElement("div"); m.className = "toast err"; m.textContent = text; $("#toasts").appendChild(m); setTimeout(() => m.remove(), 6000); }
+// the customer's phone numbers under the address in the call panel (loaded once per customer)
+const DSP_PHONES = new Map();
+function dspPhoneHtml(r) {
+  const ph = DSP_PHONES.get(r.customer_id);
+  if (ph === undefined) {
+    DSP_PHONES.set(r.customer_id, null);
+    db.from("customer_contacts").select("kind, value, is_primary, location_id, contact_name").eq("customer_id", r.customer_id).then(({ data }) => {
+      const list = (data || []).filter(k => !["email", "fax"].includes(k.kind) && k.value && (!k.location_id || k.location_id === r.location_id))
+        .sort((a, b) => (b.is_primary - a.is_primary) || ((b.location_id === r.location_id) - (a.location_id === r.location_id)));
+      DSP_PHONES.set(r.customer_id, list.filter((k, i) => list.findIndex(x => String(x.value).replace(/\D/g, "") === String(k.value).replace(/\D/g, "")) === i).slice(0, 3));
+      const el = document.querySelector("#dsp-panel .dp-phone"); if (el && DSP.sel === r.visit_id) el.innerHTML = dspPhoneHtml(r); });
+    return `<span class="quiet">…</span>`;
+  }
+  if (ph === null) return `<span class="quiet">…</span>`;
+  if (!ph.length) return `<span class="quiet">No phone on file</span>`;
+  return ph.map(k => `<a href="tel:${esc(String(k.value).replace(/[^\d+]/g, ""))}">📞 ${esc(phoneFmt(k.value))}</a>${k.contact_name ? ` <span class="quiet">${esc(k.contact_name)}</span>` : ""}`).join(" · ");
+}
 function renderDspPanel() {
   const r = dspCall(DSP.sel), p = $("#dsp-panel"); if (!r || !p) return;
   p.classList.remove("hidden");
@@ -8903,8 +8921,9 @@ function renderDspPanel() {
   const curWin = r.arrival_start ? [hhmm(r.arrival_start), r.arrival_end ? hhmm(r.arrival_end) : ""] : null;
   p.innerHTML = `<div class="dp-head"><strong>${esc(r.customer_name)}</strong><button class="link" type="button" data-dp-close aria-label="Close">Close</button></div>
     <div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>
+    <div class="dp-phone">${dspPhoneHtml(r)}</div>
     <div class="dp-job">${esc(r.job_type)} · Job ${esc(r.job_number)}${r.visit_number > 1 ? `, visit ${r.visit_number}` : ""}${r.business_unit ? " · " + esc(r.business_unit) : ""}</div>
-    ${r.summary ? `<div>${esc(r.summary)}</div>` : ""}
+    ${r.summary && r.summary.trim().toLowerCase() !== String(r.job_type || "").trim().toLowerCase() ? `<div>${esc(r.summary)}</div>` : ""}
     <div class="dp-when"><span class="vstat ${r.status}">${esc(VISIT_STATUS[r.status] || r.status)}</span>
       ${r.scheduled_date ? esc(dayText(r.scheduled_date)) + ", " + esc(winText(r.arrival_start, r.arrival_end)) : "Not booked yet"}${r.duration ? " · " + durText(r.duration) : ""}</div>
     ${(() => { const k = dspKey(r), two = dspColor2(r, k.color), b = r.border_zone ? zoneByKey(r.border_zone) : null;
