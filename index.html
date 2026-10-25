@@ -6329,7 +6329,7 @@ async function openSalesCall(jobId, msg) {
   $("#sc-yes")?.addEventListener("click", async () => {
     const { data, error } = await db.rpc("sales_on_site", { p_job: jobId });
     if (error) { say("Not saved: " + rpcErr(error), true); return; }
-    r.on_site = data || new Date().toISOString(); openSalesCall(jobId); });
+    r.on_site = data || new Date().toISOString(); startEst(); });
   $("#sc-no")?.addEventListener("click", () => openSales());
   $("#sc-go").addEventListener("click", () => { if (!$("#sc-go").disabled) startEst(); });
   $("#sc-phone").addEventListener("click", async () => {
@@ -9044,6 +9044,7 @@ function renderDspPanel() {
     say("Saving…");
     const { error } = await db.rpc("set_call_status", { p_visit_id: r.visit_id, p_status: s, p_note: note || null });
     if (error) return say("Not changed: " + rpcErr(error), true);
+    if (s === "on_site" && ["sales", "technician"].includes(ME.role)) return openOnSite(r.job_id, r.job_type, r.job_class);
     await loadDispatch();
   };
   p.querySelectorAll("[data-dp-status]").forEach(b => b.addEventListener("click", () => setStatus(b.dataset.dpStatus)));
@@ -9185,12 +9186,25 @@ function renderMyCalls() {
     f.querySelector("[data-mc-x]").addEventListener("click", () => f.classList.add("hidden"));
   });
 }
+// "On site": a sales call opens its estimate (made if there isn't one yet); any other call opens the job's invoice (the draft, or a new one)
+async function openOnSite(jobId, jobType, jobClass) {
+  if (!jobClass) { try { await bookLists(); } catch {} jobClass = (BOOK?.job_types || []).find(t => t.name === jobType)?.job_class || ""; }
+  if (jobClass === "sales") {
+    const { data, error } = await db.rpc("est_create", { p_job: jobId });
+    if (error) return alertMsg("On site, but the estimate didn't open: " + rpcErr(error));
+    SALES.rows = null; return openEstEdit(data, "You're on site. Here's the estimate.");
+  }
+  const { data, error } = await db.rpc("new_invoice", { p_job: jobId });
+  if (error) return alertMsg("On site, but the invoice didn't open: " + rpcErr(error));
+  openInvoiceEditor(data, "You're on site. Here's the invoice for this job.");
+}
 async function mcSet(card, id, status, note) {
   const m = card.querySelector(".mc-msg"); m.className = "mc-msg"; m.textContent = "Saving…";
   card.querySelectorAll("button").forEach(b => b.disabled = true);
   const { error } = await db.rpc("set_call_status", { p_visit_id: id, p_status: status, p_note: note });
   if (error) { card.querySelectorAll("button").forEach(b => b.disabled = false); m.className = "mc-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
   if (status === "completed" || status === "needs_return") MC.open = null;
+  if (status === "on_site") { const c = (MC.data?.calls || []).find(x => x.visit_id === id); if (c) return openOnSite(c.job_id, c.job_type, c.job_class); }
   await loadMyCalls();
 }
 // humidifiers, filters, media and pads have no serial number (same rule as the database)
