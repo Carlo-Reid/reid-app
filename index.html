@@ -3569,6 +3569,8 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .pb-sp.hidden { display: none; }
 /* ===== Sales call (site visit) screen ===== */
 .sl-pay { display: inline-flex; gap: 4px; align-items: center; } .sl-pay input[type=date] { font-size: 12px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 6px; max-width: 132px; }
+.sl-pay.paid { color: var(--steel); font-size: 12px; } .sl-pay.paid input[type=date] { background: #ebfbee; border-color: #8fd19e; }
+.ins-paid-d { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; }
 .sl-pay.on input[type=date] { border-color: #e8a33a; background: #fff6e5; } .sl-payall { background: #fff6e5; border-radius: 10px; padding: 8px 10px; }
 .sl-inst-tag { display: inline-block; margin-top: 4px; font-size: 11px; }
 .sl-comm { white-space: nowrap; } .sl-comm .sl-comm-st { font-size: 11px; margin-top: 3px; display: inline-block; } .sl-comm-sum { display: block; margin-top: 4px; }
@@ -6542,7 +6544,7 @@ const salesToday = () => { const d = new Date(); return new Date(d.getTime() - d
 function salesPayCell(r) {
   const id = salesInstOf(r), c = SALES.comm?.get(id);
   if (!c || c.commission_amount == null) return `<span class="quiet">—</span>`;
-  if (c.paid_at) return `<span class="quiet">paid ${esc(fmtDate(c.paid_at.slice(0, 10)))}</span>`;
+  if (c.paid_at || c.prepaid_at) return `<label class="sl-pay paid" title="The day it was paid: change it here">${c.paid_at ? "Paid" : "Paid early"} <input type="date" data-sl-paid="${id}" value="${esc(insLocalDay(c.paid_at || c.prepaid_at))}" aria-label="Day it was paid"></label>`;
   const on = SALES.pay?.get(id) || "";
   return `<label class="sl-pay ${on ? "on" : ""}" title="${on ? "On payroll: paid on this day" : "Pick the pay day to put it on payroll"}"><input type="checkbox" data-sl-paychk="${id}" ${on ? "checked" : ""} aria-label="For payroll">
     <input type="date" data-sl-pay="${id}" value="${esc(on)}" aria-label="Pay day"></label>`;
@@ -6659,6 +6661,10 @@ function renderSales(msg) {
     if (error) { alertMsg("Not saved: " + rpcErr(error)); return false; } return true; };
   document.querySelectorAll("[data-sl-pay]").forEach(inp => inp.addEventListener("change", async () => { const id = Number(inp.dataset.slPay);
     if (!inp.value) return; if (await paySet(id, inp.value)) { SALES.payDay = inp.value; openSales(`On payroll for ${fmtDate(inp.value)}${inp.value <= salesToday() ? " (paid)" : ""}.`); } }));
+  document.querySelectorAll("[data-sl-paid]").forEach(inp => inp.addEventListener("change", async () => { if (!inp.value) return;
+    const { error } = await db.rpc("set_commission_paid_date", { p_job_id: Number(inp.dataset.slPaid), p_date: inp.value });
+    if (error) { alertMsg("Not saved: " + (/function|schema|PGRST202/i.test(error.message || "") ? "run RUN SETUP NOW.bat first." : rpcErr(error))); return; }
+    openSales(`Paid day changed to ${fmtDate(inp.value)}.`); }));
   document.querySelectorAll("[data-sl-paychk]").forEach(ch => ch.addEventListener("change", async () => { const id = Number(ch.dataset.slPaychk), d = document.querySelector(`[data-sl-pay="${id}"]`);
     if (ch.checked) { if (SALES.payDay && SALES.payDay >= salesToday()) { d.value = SALES.payDay; d.dispatchEvent(new Event("change")); } else { ch.checked = false; try { d.showPicker(); } catch { d.focus(); } } return; }
     if (await paySet(id, null)) openSales("Taken off payroll."); }));
@@ -11641,6 +11647,8 @@ function insState(r) {
   if (r.customer_paid) return ["ready", "Ready to pay", "s-warn"];
   return ["waiting", "Waiting: customer owes " + money(r.owing), "s-open"];
 }
+// a paid time as the day in Ottawa (what the date boxes show)
+const insLocalDay = ts => { if (!ts) return ""; const d = new Date(ts); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
 const insOwed = r => Number(r.commission_amount || 0);
 // ===== Stock: scan equipment and parts in / out / move / count from a phone, tablet or computer =====
 const STK = (() => { let o = {}; try { o = JSON.parse(localStorage.getItem("reid.stock") || "{}"); } catch {} return { place: o.place || null, mode: o.mode || "in", tab: o.tab || "scan", log: [] }; })();
@@ -12279,8 +12287,8 @@ function showInstall(id) {
       <label>Commission <span class="quiet">(leave blank to work it out)</span><input name="commission_amount" inputmode="decimal" value="" placeholder="${r.commission_amount != null ? money(r.commission_amount) : ""}"></label>
       <div><button class="btn quiet-btn" type="submit">Save</button></div>
     </form>
-    <div class="ins-pay">${r.paid_at ? `Paid ${money(r.paid_amount)} on ${fmtDate(r.paid_at.slice(0, 10))} <button class="link" type="button" data-pay="undo_pay">Undo</button>`
-      : r.prepaid_at ? `Paid early: ${money(r.prepaid_amount)} on ${fmtDate(r.prepaid_at.slice(0, 10))} <button class="link" type="button" data-pay="undo_prepay">Undo</button>`
+    <div class="ins-pay">${r.paid_at ? `Paid ${money(r.paid_amount)} on <input type="date" class="ins-paid-d" value="${esc(insLocalDay(r.paid_at))}" aria-label="Day it was paid" title="Change the day it was paid"> <button class="link" type="button" data-pay="undo_pay">Undo</button>`
+      : r.prepaid_at ? `Paid early: ${money(r.prepaid_amount)} on <input type="date" class="ins-paid-d" value="${esc(insLocalDay(r.prepaid_at))}" aria-label="Day it was paid" title="Change the day it was paid"> <button class="link" type="button" data-pay="undo_prepay">Undo</button>`
       : r.salesperson_id ? `<label class="ins-payamt">Amount <input id="pay-amt" inputmode="decimal" value="${amt(r.commission_amount)}"></label>
           ${r.customer_paid ? `<button class="btn" type="button" data-pay="pay">Mark commission paid</button>` : `<button class="btn quiet-btn" type="button" data-pay="prepay">Pay early</button>`}` : ""}</div>
     <h3>Rebate</h3>
@@ -12325,6 +12333,10 @@ function showInstall(id) {
     const el = e.target; if (!el.name) return;
     save({ [el.name]: /amount/.test(el.name) ? num(el.value) : el.value });
   }));
+  p.querySelector(".ins-paid-d")?.addEventListener("change", async e => { if (!e.target.value) return; say("Saving…");
+    const { error } = await db.rpc("set_commission_paid_date", { p_job_id: id, p_date: e.target.value });
+    if (error) return say("Not saved: " + (/function|schema|PGRST202/i.test(error.message || "") ? "run RUN SETUP NOW.bat first." : rpcErr(error)), true);
+    await loadInstalls(); say("Paid day changed to " + fmtDate(e.target.value) + "."); });
   p.querySelectorAll("[data-pay]").forEach(b => b.addEventListener("click", async () => {
     const what = b.dataset.pay, a = $("#pay-amt") ? Number(($("#pay-amt").value || "").replace(/[$,\s]/g, "")) : null;
     if ((what === "pay" || what === "prepay") && !(a >= 0)) return say("Type the amount paid.", true);
