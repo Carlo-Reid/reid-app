@@ -2347,6 +2347,7 @@
   .ie-find-row { display: flex; gap: 8px; } .ie-find-row input { flex: 1; min-width: 0; }
   .ie-vs { margin: 6px 0 10px; } .ie-vs h3 { margin: 4px 0; font-size: 15px; } .ie-vs table { width: 100%; } .ie-vs th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--steel); }
   .vs-bad { color: var(--red); font-weight: 700; } .vs-good { color: var(--green); font-weight: 700; } .ie-vs-v { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+  .pctl-ct input.pctl-cin { width: 58px; } .pctl-kw { width: 200px; font-size: 13px; } .pctl-usual td { background: var(--paper); }
   .pctl-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); } .pctl-tab { border: 1px solid var(--line); border-bottom: 0; background: var(--paper); border-radius: 8px 8px 0 0; padding: 7px 14px; font-weight: 700; cursor: pointer; margin-bottom: -2px; }
   .pctl-tab[aria-selected="true"] { background: #fff; border-color: var(--blue, #1d4f91); border-bottom: 2px solid #fff; color: var(--blue, #1d4f91); } .pctl-tab .quiet { font-weight: 400; font-size: 12px; }
   .pctl-unset td { color: var(--steel); } .pctl-ghost::placeholder { color: #adb5bd; } .pctl-acts { white-space: nowrap; } .pctl-acts .link { margin-left: 6px; }
@@ -14356,7 +14357,7 @@ function costingHtml(I) {
       ${k.office > 0.004 ? `<tr><td>Office<br><span class="quiet">overhead from the pricing formula, same as the item page</span></td><td class="r">−${money(k.office)}</td></tr>` : ""}
       <tr><td>Vehicle <input data-cost="vehicle" inputmode="decimal" value="${k.vehicle.toFixed(2)}" aria-label="Vehicle cost">
           <br><span class="quiet">${C.vehicle_own ? `changed for this job · <button class="link" type="button" data-cost-vreset>use the usual amount</button>` : "the usual amount for a job"}</span></td><td class="r">−${money(k.vehicle)}</td></tr>
-      ${C.sales ? `<tr><td>Commission<br><span class="quiet">${esc(C.sales.name || "")}${C.sales.amount == null ? " · " + Number(C.sales.pct || 0) + "%" : ""}</span></td><td class="r">−${money(k.comm)}</td></tr>` : ""}
+      ${C.sales ? `<tr><td>Commission<br><span class="quiet">${esc(C.sales.name || "")}${C.sales.by_type ? " · by type of work (Pricing control)" : C.sales.amount == null ? " · " + Number(C.sales.pct || 0) + "%" : ""}</span></td><td class="r">−${money(k.comm)}</td></tr>` : ""}
       <tr><td>Other costs <input data-cost="other" inputmode="decimal" value="${C.other != null ? Number(C.other).toFixed(2) : ""}" placeholder="0.00" aria-label="Other costs">
           <input class="wide" data-cost="other_note" value="${esc(C.other_note || "")}" placeholder="What for (permit, rental, sub-trade...)" aria-label="What the other costs are for"></td><td class="r">−${money(k.other)}</td></tr>
       <tr class="tot"><td>Profit</td><td class="r">${money(k.profit)}</td></tr>
@@ -15237,11 +15238,13 @@ let PBI_CP = null;
 async function pbiComm(price, cost) {
   const box = $("#pbi-comm"); if (!box) return;
   if (!PBI_CP) { const r = await db.rpc("commission_people"); PBI_CP = r.error ? [] : (r.data || []).filter(x => x.pct != null || Number(x.installs_this_year) > 0); }
+  const fi = await db.rpc("comm_for_item", { p_item: PB.itemPage }), R = fi.data?.rates || {}, grp = fi.data?.group;
   if (!$("#pbi-comm")) return;
   const def = COMPANY?.commission_default_pct != null ? Number(COMPANY.commission_default_pct) : null, owner = ME.role === "owner";
   box.innerHTML = `<div class="pbi-comm-row"><label>Sales commission for <select id="pbi-comm-who"><option value="">${def != null ? `Company default (${+def}%)` : "Company default (not set)"}</option>
-      ${PBI_CP.map(x => `<option value="${x.employee_id}" data-pct="${x.pct ?? ""}">${esc(x.name)}${x.pct != null ? ` (${+Number(x.pct)}%)` : " (no rate set)"}</option>`).join("")}</select></label>
-    <label class="pbi-comm-pct"><input id="pbi-comm-pct" inputmode="decimal" value="${def ?? ""}" placeholder="%" aria-label="Commission %">%</label></div>
+      ${PBI_CP.map(x => { const r = R[x.employee_id] ?? x.pct; return `<option value="${x.employee_id}" data-pct="${r ?? ""}">${esc(x.name)}${r != null ? ` (${+Number(r)}%${grp ? " on " + esc(grp) : ""})` : " (no rate set)"}</option>`; }).join("")}</select></label>
+    <label class="pbi-comm-pct"><input id="pbi-comm-pct" inputmode="decimal" value="${def ?? ""}" placeholder="%" aria-label="Commission %">%</label>
+    ${grp ? `<span class="quiet">Type of work for commission: <b>${esc(grp)}</b></span>` : `<span class="quiet">Type of work: none matched, so each person's usual rate</span>`}</div>
     <table class="pbi-jc-t"><tbody>
       <tr><td>Sales commission <span class="quiet" id="pbi-comm-note"></span></td><td class="r num" id="pbi-comm-amt">—</td><td class="r num quiet" id="pbi-comm-pc"></td></tr>
       ${owner ? `<tr class="pbi-own"><td><b>Owner take-home</b> <span class="quiet">profit less commission · only owners see this</span></td><td class="r num"><b id="pbi-own-amt">—</b></td><td class="r num" id="pbi-own-pc"></td></tr>` : ""}
@@ -15425,6 +15428,7 @@ async function openPriceControl(msg) {
   if (!document.querySelector(".pctl")) $("#main").innerHTML = `<div class="loading">Loading the pricing…</div>`;
   const [f, pr, bk, co, ps, fp, bp] = await Promise.all([db.rpc("price_formula_list"), db.rpc("pb_pricing"), db.rpc("price_book_list"), db.from("company_settings").select("*").limit(1).maybeSingle(),
     db.rpc("partner_sales"), db.rpc("price_formula_partner_list"), db.rpc("price_book_partner_list")]);
+  { const cm = await db.rpc("comm_setup_get"); PCTL.comm = cm.error ? null : cm.data; PCTL.commErr = cm.error ? rpcErr(cm.error) : ""; }
   PCTL.partners = (ps.data || []).filter(x => x.sales_ok); PCTL.fp = fp.data || []; PCTL.fpErr = fp.error ? rpcErr(fp.error) : ""; PCTL.bp = bp.data || [];
   if (PCTL.tab && !PCTL.partners.some(x => x.id === PCTL.tab)) PCTL.tab = 0;
   if (co.data) COMPANY = co.data;
@@ -15511,6 +15515,7 @@ function renderPriceControl(msg) {
         : `<p class="quiet">No price books yet: everyone sees the whole price book at the sell price.</p>`}
       <p class="quiet">Sell price is the normal price. HSG price = total cost ÷ the series' HSG factor; Sales price = HSG price ÷ the Sales factor (both set on the Pricing formulas page).</p>
       ${can("staff.manage") || ME.role === "owner" ? `<div class="set-tools"><button class="btn quiet-btn" type="button" data-set-pb="books">Change price books</button></div>` : ""}</section>
+    <section class="cl-tools pctl-box" id="pctl-comm"><h2>7. Sales commission</h2>${pctlCommHtml()}</section>
   </article>`;
   $("#main").scrollTop = top;
   wirePriceControl(edit);
@@ -15582,6 +15587,40 @@ function wirePctlGrid() {
     const { error } = await db.rpc("save_price_formula", { p_id: id, p });
     pctlRedrawGrid(error ? "Not saved: " + rpcErr(error) : `Saved. All ${f.items} ${f.name} model${f.items === 1 ? " was" : "s were"} repriced.`, true); }));
 }
+// section 7: each sales person's % for each type of work, and the words that decide an item's type
+function pctlCommHtml(msg) {
+  const C = PCTL.comm; if (!C) return `<p class="staff-msg err">${esc(PCTL.commErr || "Couldn't load the commission rates.")}</p>`;
+  const P = C.people.filter(x => x.pct != null || Object.keys(x.groups || {}).length || !PCTL.commShowOnly), G = C.groups;
+  const shown = PCTL.commAll ? C.people : C.people.filter(x => x.pct != null || Object.keys(x.groups || {}).length);
+  const cell = (x, gid) => { const v = gid ? x.groups?.[gid] : x.pct; return `<td class="r"><input class="ie-num pctl-cin" data-cemp="${x.employee_id}" data-cgrp="${gid || ""}" data-was="${v ?? ""}" inputmode="decimal" value="${v != null ? +Number(v) : ""}" placeholder="${gid ? (x.pct != null ? +Number(x.pct) : "") : ""}" aria-label="${esc(x.name)} ${gid ? "" : "usual "}rate">${v != null ? "%" : ""}</td>`; };
+  return `<p class="quiet">Each sales person's % of the sale (before HST), by type of work. A blank box (grey number) uses their usual rate in the last row. An item's type comes from words in its name, then its price book categories, checked from the top down; change the words to move items between types.
+      The Installs page and the invoice job costing work commission out line by line with these. A rate typed on one install still wins.</p>
+    ${msg ? `<div class="staff-msg ${/^Not/.test(msg) ? "err" : "ok"}" role="status">${esc(msg)}</div>` : ""}
+    <div class="staff-wrap pctl-wrap"><table class="calls-table pctl-ct"><thead><tr><th>Type of work</th><th>Words that put an item here</th>${shown.map(x => `<th class="r">${esc(x.name)}</th>`).join("")}</tr></thead><tbody>
+      ${G.map(g => `<tr><td><b>${esc(g.name)}</b></td><td><input class="pctl-kw" data-cgkw="${g.id}" data-was="${esc(g.keywords || "")}" value="${esc(g.keywords || "")}" placeholder="${g.name === "Other" ? "anything else" : "words"}" aria-label="Words for ${esc(g.name)}"></td>${shown.map(x => cell(x, g.id)).join("")}</tr>`).join("")}
+      <tr class="pctl-usual"><td><b>Usual rate</b><br><span class="quiet">anything not in a type above, or a box left blank</span></td><td></td>${shown.map(x => cell(x, null)).join("")}</tr>
+    </tbody></table></div>
+    <div class="set-tools"><button class="btn" type="button" id="pctl-csave">Save commission</button>
+      <button class="link" type="button" id="pctl-call">${PCTL.commAll ? "Show only people with rates" : `Show everyone who sells (${C.people.length})`}</button>
+      <span class="quiet">Words: separate with | (for example <code>water tank|water heater</code>).</span></div>`;
+}
+async function pctlCommReload(msg) {
+  const cm = await db.rpc("comm_setup_get"); if (!cm.error) PCTL.comm = cm.data;
+  const box = $("#pctl-comm"); if (!box) return; box.innerHTML = `<h2>7. Sales commission</h2>${pctlCommHtml(msg)}`; wirePctlComm();
+}
+function wirePctlComm() {
+  $("#pctl-call")?.addEventListener("click", () => { PCTL.commAll = !PCTL.commAll; pctlCommReload(); });
+  $("#pctl-csave")?.addEventListener("click", async e => {
+    const b = e.currentTarget; b.disabled = true; let n = 0; const errs = [];
+    for (const el of document.querySelectorAll("#pctl-comm [data-cgkw]")) { if (el.value.trim() === el.dataset.was) continue;
+      const { error } = await db.rpc("comm_group_set", { p_group: Number(el.dataset.cgkw), p_keywords: el.value }); error ? errs.push(rpcErr(error)) : n++; }
+    for (const el of document.querySelectorAll("#pctl-comm .pctl-cin")) { const v = el.value.trim().replace(/[%\s]/g, ""); if (v === el.dataset.was) continue;
+      if (v !== "" && !isFinite(Number(v))) { errs.push("type numbers only"); continue; }
+      const { error } = await db.rpc("comm_rate_set", { p_emp: Number(el.dataset.cemp), p_group: el.dataset.cgrp ? Number(el.dataset.cgrp) : null, p_pct: v === "" ? null : Number(v) }); error ? errs.push(rpcErr(error)) : n++; }
+    PBI_CP = null;
+    pctlCommReload(errs.length ? "Not all saved: " + errs[0] : n ? `Saved ${n} change${n === 1 ? "" : "s"}.` : "Nothing changed.");
+  });
+}
 function wirePriceControl(edit) {
   $("#pctl-back").addEventListener("click", () => openSettings());
   document.querySelectorAll("[data-pctl-bp]").forEach(b => b.addEventListener("click", async () => {
@@ -15594,7 +15633,7 @@ function wirePriceControl(edit) {
     const { error } = await db.rpc("pricing_control_set", { p_labour: r, p_margin: g, p_commission: cm });
     if (error) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
     openPriceControl("Saved. Proposals use the new numbers from now on."); });
-  wirePctlGrid();
+  wirePctlGrid(); wirePctlComm();
   let t, seq = 0; const q = $("#pctl-q"), res = $("#pctl-res");
   q.addEventListener("input", () => { clearTimeout(t); t = setTimeout(async () => { const s = q.value.trim(), my = ++seq; if (s.length < 2) { res.innerHTML = ""; return; }
     const { data } = await db.rpc("pb_list", { p_search: s, p_type: "all", p_active: true, p_category: null, p_flag: null, p_limit: 10 }); if (my !== seq) return;
