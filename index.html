@@ -212,6 +212,7 @@
   .pb-cat:hover .pb-cat-pw, .pb-cat-pw:focus, .pb-cat-pw.sure { opacity: 1; } .pb-cat-pw.off { color: #2b8a3e; }
   .pb-cat-pw.sure { background: #c92a2a; color: #fff; font-size: 12px; font-weight: 700; padding: 2px 6px; } .pb-cat-pw.off.sure { background: #2b8a3e; }
   .pb-dd { display: flex; flex-wrap: wrap; gap: 8px 8px; align-items: center; } .pb-dd label { gap: 4px !important; } .pb-dd .pb-allpick { font-size: 13.5px; }
+  .pb-catmove { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; font-size: 13px; } .pb-catmove select { font-size: 13px; padding: 4px 6px; }
   .pb-quick { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; } .pb-quick .btn { min-width: 128px; }
   .pb-dd #pb-sel-flag { width: 126px !important; } .pb-dd #pb-sel-type { width: 128px !important; } .pb-dd #pb-sel-active { width: 96px !important; } .pb-dd #pb-sel-cols { width: 92px !important; } .pb-dd #pb-sel-order { width: 130px !important; }
   .pb-dd select { width: auto !important; min-width: 0 !important; padding: 4px 18px 4px 6px !important; } .pb-dd .pb-allpick { margin-left: 2px; }
@@ -16779,7 +16780,9 @@ function pbCatTree(edit) {
           ${cur ? `<button class="link pb-cattools-btn" type="button" id="pb-cattools" aria-expanded="${!!PB.catToolsOpen}">${PB.catToolsOpen ? "▾" : "▸"} Change ${esc(cur.name)}</button>` : ""}
           ${cur && PB.catToolsOpen ? `<div class="pb-cattools"><button class="link" type="button" data-pb-catnew="${cur.id}">+ New one inside ${esc(cur.name)}</button>
           <button class="link" type="button" data-pb-move="-1" title="Move ${esc(cur.name)} up">↑ Up</button><button class="link" type="button" data-pb-move="1" title="Move ${esc(cur.name)} down">↓ Down</button><button class="link" type="button" id="pb-catren">Edit (name or where it sits)</button><button class="link" type="button" id="pb-catret" title="${cur.active ? "Turn off just the category; its items stay on" : "Turn the category back on"}">${cur.active ? "Deactivate category only" : "Reactivate category only"}</button>
-          <button class="btn pb-off-btn ${cur.active ? "" : "on"}" type="button" id="pb-catretall" data-pb-off="${cur.id}">${cur.active ? `Deactivate ${esc(cur.name)} and all ${(cur.total || 0).toLocaleString()} items in it` : `Reactivate ${esc(cur.name)} and all its items`}</button></div>` : ""}
+          <button class="btn pb-off-btn ${cur.active ? "" : "on"}" type="button" id="pb-catretall" data-pb-off="${cur.id}">${cur.active ? `Deactivate ${esc(cur.name)} and all ${(cur.total || 0).toLocaleString()} items in it` : `Reactivate ${esc(cur.name)} and all its items`}</button>
+          ${cur.total ? `<div class="pb-catmove"><span>Move all ${(cur.total || 0).toLocaleString()} items in ${esc(cur.name)}${cur.tt ? ` <span class="quiet">(now ${Object.entries(cur.tt).filter(([, n]) => n).map(([t, n]) => n + " " + ({ service: "parts", security: "security", material: "material", equipment: "equipment", fee: "fees", labour: "labour" }[t] || t)).join(", ")})</span>` : ""} to</span>
+            <select id="pb-cattype">${PB_TYPES.slice(1).map(([k, t]) => `<option value="${k}">${t}</option>`).join("")}</select><button class="btn" type="button" id="pb-cattype-go">Move</button></div>` : ""}</div>` : ""}
           <button class="link" type="button" id="pb-catold">${PB.showRetiredCats ? "Hide" : "Show"} deactivated</button>`}</div>` : ""}
     ${PB.cats.length ? `<ul class="pb-tree"><li><div class="pb-cat ${PB.cat == null ? "cur" : ""}"><span class="pb-tw"></span><button class="pb-catbtn" type="button" data-pb-cat="">All categories</button></div></li>
       ${edit ? `<li class="pb-droptop-li"><div class="pb-droptop" data-pb-droptop="1">Drop here to make it a main category</div></li>` : ""}
@@ -17118,6 +17121,19 @@ function renderPricebook(msg) {
     PB.catForm = null; if (f.parent) PB.open.add(f.parent); await loadPbCats(); await loadPricebook(); renderPricebook(f.mode === "rename" ? "Saved." : "Added the category " + n + ".");
   });
   // deactivate (or reactivate) a whole category with every item in it: the big button, or on any category row. Asks once first.
+  // move every item in the open category (and the ones inside it) to another type, e.g. Equipment -> Security
+  $("#pb-cattype-go")?.addEventListener("click", async () => {
+    const cur = PB.catBy.get(PB.cat), t = $("#pb-cattype").value, tn = (PB_TYPES.find(x => x[0] === t) || [])[1] || t; if (!cur) return;
+    const k = await askChoice(`Move everything in ${esc(cur.name)} to ${esc(tn)}?`, `All ${(cur.total || 0).toLocaleString()} items in <b>${esc(cur.name)}</b> and the categories inside it become <b>${esc(tn)}</b>. Their prices, costs and categories stay the same.`, [["yes", "Move them", true], ["", "Cancel"]]);
+    if (k !== "yes") return;
+    const b = $("#pb-cattype-go"); if (b) { b.disabled = true; b.textContent = "Moving…"; }
+    const { data: items, error: le } = await db.rpc("pb_list", { p_search: null, p_type: "all", p_active: null, p_category: cur.id, p_flag: null, p_limit: 20000 });
+    if (le) { renderPricebook("Not moved: " + rpcErr(le)); return; }
+    const ids = (items || []).filter(r => r.item_type !== t).map(r => r.id);
+    if (!ids.length) { renderPricebook(`Everything in ${cur.name} is already ${tn}.`); return; }
+    const { data: n, error } = await db.rpc("pb_set_items_type", { p_ids: ids, p_type: t });
+    if (error) { renderPricebook("Not moved: " + rpcErr(error)); return; }
+    await loadPbCats(); await loadPricebook(); renderPricebook(`Moved ${n ?? ids.length} items in ${cur.name} to ${tn}.`); });
   document.querySelectorAll("[data-pb-off]").forEach(btn => btn.addEventListener("click", async e => {
     e.stopPropagation(); const cur = PB.catBy.get(Number(btn.dataset.pbOff)); if (!cur) return;
     if (btn.dataset.sure !== "1") { document.querySelectorAll("[data-pb-off][data-sure]").forEach(b => { if (b !== btn) { delete b.dataset.sure; b.classList.remove("sure"); if (b.classList.contains("pb-cat-pw")) b.textContent = b.classList.contains("off") ? "On" : "Off"; } });
