@@ -2345,6 +2345,8 @@
   .pbi-comm-row select { max-width: 260px; } .pbi-comm-pct { flex-direction: row !important; align-items: center; gap: 4px; } .pbi-comm-pct input { width: 70px; }
   .pbi-own td { background: #fff9db; } .pbi-own.neg td { background: #fff5f5; color: var(--red); }
   .ie-find-row { display: flex; gap: 8px; } .ie-find-row input { flex: 1; min-width: 0; }
+  .ie-vs { margin: 6px 0 10px; } .ie-vs h3 { margin: 4px 0; font-size: 15px; } .ie-vs table { width: 100%; } .ie-vs th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--steel); }
+  .vs-bad { color: var(--red); font-weight: 700; } .vs-good { color: var(--green); font-weight: 700; } .ie-vs-v { margin: 4px 0; padding-left: 18px; font-size: 13px; }
   .pctl-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); } .pctl-tab { border: 1px solid var(--line); border-bottom: 0; background: var(--paper); border-radius: 8px 8px 0 0; padding: 7px 14px; font-weight: 700; cursor: pointer; margin-bottom: -2px; }
   .pctl-tab[aria-selected="true"] { background: #fff; border-color: var(--blue, #1d4f91); border-bottom: 2px solid #fff; color: var(--blue, #1d4f91); } .pctl-tab .quiet { font-weight: 400; font-size: 12px; }
   .pctl-unset td { color: var(--steel); } .pctl-ghost::placeholder { color: #adb5bd; } .pctl-acts { white-space: nowrap; } .pctl-acts .link { margin-left: 6px; }
@@ -14268,9 +14270,10 @@ async function costPlan(lines) {
   const top = (lines || []).filter(l => l.item_id && !l.kit_parent && Number(l.quantity) > 0); if (!top.length || !estCanCost()) return null;
   if (!COMPANY) { const c = await db.from("company_settings").select("*").limit(1).maybeSingle(); if (c.data) COMPANY = c.data; }
   await estCosting(top.map(l => Number(l.item_id))).catch(() => {});
-  let labour = 0, office = 0, hrs = 0;
-  top.forEach(l => { const c = estLineCost({ item_id: Number(l.item_id), qty: Number(l.quantity), price: Number(l.unit_price) || 0 }); labour += c.lab || 0; office += c.off || 0; hrs += c.hrs || 0; });
-  return { labour: Math.round(labour * 100) / 100, office: Math.round(office * 100) / 100, hrs };
+  let labour = 0, office = 0, hrs = 0, parts = 0;
+  top.forEach(l => { const c = estLineCost({ item_id: Number(l.item_id), qty: Number(l.quantity), price: Number(l.unit_price) || 0 }); labour += c.lab || 0; office += c.off || 0; hrs += c.hrs || 0; parts += (c.mat || 0) + (c.war || 0); });
+  const r2 = v => Math.round(v * 100) / 100;
+  return { labour: r2(labour), office: r2(office), hrs, parts: r2(parts) };
 }
 // Job costing: what the job cost, what the store keeps, and the profit
 function costingCalc(I) {
@@ -14280,17 +14283,50 @@ function costingCalc(I) {
   const tk = C.partner_tank, tank = tk ? Math.round(n(tk.amount) / (1 + n(C.hst ?? 13) / 100) * 100) / 100 : 0;
   const tankCost = tk ? C.lines.filter(l => l.equip).reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) : 0;
   const revenue = sale - cut - card - tank;
-  const parts = C.lines.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) - tankCost;
+  const parts = C.lines.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) - tankCost + n(C.actual?.stock_cost);
   const noCost = C.lines.filter(l => n(l.unit_price) > 0 && (l.unit_cost == null || n(l.unit_cost) === 0)).length;
-  const hours = C.hours != null ? n(C.hours) : n(C.est_hours);
+  // labour: hours on the job × techs × cost per hour. Hours are the real time on site (each visit's arrived to done) once there
+  // is some, or what you typed, or the price book's hours. A tech with no pay rate set counts at the company rate, or the price book's rate.
+  const A = C.actual || {}, P = C.plan, actual = Number(A.tech_hours) > 0 && C.hours == null;
   const rates = C.techs.map(t => n(t.rate)).filter(r => r > 0);
-  const rate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : n(C.labour_rate);
-  const P = C.plan, planLab = !(rate > 0) && P && P.labour > 0, labour = planLab ? P.labour : hours * rate, office = P ? P.office || 0 : 0, S = C.sales;
+  const rate0 = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : n(C.labour_rate);
+  const planRate = P && P.hrs > 0 ? P.labour / P.hrs : 0, rate = rate0 > 0 ? rate0 : planRate, planLab = !(rate0 > 0) && planRate > 0;
+  const techsN = C.techs.length || n(C.est_techs) || 1;
+  const hours = C.hours != null ? n(C.hours) : actual ? n(A.crew_hours) : n(C.est_hours);
+  const labour = actual ? (A.visits || []).reduce((a, v) => a + (v.techs.length ? v.techs : [{}]).reduce((b, t) => b + n(v.hours) * (n(t.rate) || n(C.labour_rate) || planRate), 0), 0)
+    : hours * techsN * rate;
+  const labSrc = actual ? "actual" : C.hours != null ? "typed" : "estimate";
+  const office = P ? P.office || 0 : 0, S = C.sales;
   const comm = S ? (S.amount != null ? n(S.amount) : (S.sale_amount != null ? n(S.sale_amount) : sale) * n(S.pct) / 100) : 0;
   const vehicle = n(C.vehicle), other = n(C.other), profit = revenue - parts - labour - office - vehicle - comm - other;
-  return { sale, total, st, cut, card, tk, tank, tankCost, revenue, parts, noCost, hours, rate, rateFromTechs: rates.length > 0, labour, planLab, office, vehicle, comm, other, profit,
+  // what the price book expected for this job (same costing as the item page and proposals)
+  const expParts = P ? P.parts : parts, expLab = P && P.labour > 0 ? P.labour : n(C.est_hours) * techsN * rate, expVeh = C.vehicle_default != null ? n(C.vehicle_default) : vehicle;
+  const exp = { parts: expParts, labour: expLab, office, vehicle: expVeh, other: 0, comm, hours: P && P.hrs ? P.hrs : n(C.est_hours) * techsN };
+  exp.profit = revenue - exp.parts - exp.labour - exp.office - exp.vehicle - exp.comm;
+  return { sale, total, st, cut, card, tk, tank, tankCost, revenue, parts, noCost, hours, rate, techsN, labSrc, actual, A, exp, rateFromTechs: rates.length > 0, labour, planLab, office, vehicle, comm, other, profit,
            margin: revenue > 0 ? profit / revenue * 100 : 0 };
 }
+// Expected (what the price book planned) against actual (what the job really took)
+function costingVsHtml(I, k) {
+  const E = k.exp, A = k.A || {}, done = A.job_done || Number(A.tech_hours) > 0, pct = v => (Math.round(v * 10) / 10) + "%";
+  const row = (lab, e, a, costRow = true, note = "") => { const d = a - e, bad = costRow ? d > 0.5 : d < -0.5, good = costRow ? d < -0.5 : d > 0.5;
+    return `<tr><td>${lab}${note ? `<br><span class="quiet">${note}</span>` : ""}</td><td class="r">${money(e)}</td><td class="r">${money(a)}</td><td class="r ${bad ? "vs-bad" : good ? "vs-good" : ""}">${Math.abs(d) < 0.005 ? "—" : (d > 0 ? "+" : "−") + money(Math.abs(d))}</td></tr>`; };
+  const em = k.revenue > 0 ? E.profit / k.revenue * 100 : 0;
+  return `<div class="ie-vs"><h3>Expected vs actual ${done ? "" : `<span class="quiet">(actual fills in as the techs mark arrived and done)</span>`}</h3>
+    <table><thead><tr><th></th><th class="r">Expected</th><th class="r">Actual</th><th class="r">Difference</th></tr></thead><tbody>
+      ${row("Parts and equipment", E.parts, k.parts, true, n0(A.stock_cost) ? `includes ${money(A.stock_cost)} taken out of stock that isn't on the invoice` : "")}
+      ${row("Labour", E.labour, k.labour, true, `expected ${+Number(E.hours).toFixed(1)} tech-hours · actual ${k.labSrc === "actual" ? +Number(A.tech_hours).toFixed(1) + " tech-hours on site" : k.labSrc === "typed" ? +(k.hours * k.techsN).toFixed(1) + " tech-hours typed" : "not done yet"}`)}
+      ${E.office || k.office ? row("Office", E.office, k.office) : ""}
+      ${row("Vehicle", E.vehicle, k.vehicle)}
+      ${k.other ? row("Other costs", 0, k.other) : ""}${k.comm ? row("Commission", E.comm, k.comm) : ""}
+      ${row("<b>Profit</b>", E.profit, k.profit, false)}
+      <tr><td>Margin</td><td class="r">${pct(em)}</td><td class="r">${pct(k.margin)}</td><td class="r ${k.margin < em - 0.05 ? "vs-bad" : k.margin > em + 0.05 ? "vs-good" : ""}">${Math.abs(k.margin - em) < 0.05 ? "—" : (k.margin > em ? "+" : "−") + pct(Math.abs(k.margin - em))}</td></tr>
+    </tbody></table>
+    ${(A.visits || []).length ? `<details><summary>Time on site (${A.visits.length} visit${A.visits.length === 1 ? "" : "s"})</summary><ul class="ie-vs-v">${A.visits.map(v => `<li>${esc(fmtDate(v.arrived))} ${esc(new Date(v.arrived).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }))} to ${esc(new Date(v.done).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }))}: <b>${+Number(v.hours).toFixed(2)} hrs</b>${v.techs.length ? " · " + esc(v.techs.map(t => t.name).join(", ")) : " · no tech on the visit"}</li>`).join("")}</ul></details>` : ""}
+    ${(A.stock || []).length ? `<details><summary>Taken out of stock for this job, not on the invoice</summary><ul class="ie-vs-v">${A.stock.map(x => `<li>${esc(pbName(x.name))} × ${+Number(x.qty)}: ${money(x.cost)}</li>`).join("")}</ul></details>` : ""}
+    <p class="quiet">Expected is what the price book planned for these items (same as the item page). Red means it cost more or made less than planned.</p></div>`;
+}
+const n0 = v => Number(v) || 0;
 function costingHtml(I) {
   const C = I.cost, k = costingCalc(I), e = C.can_edit_costs, pct = v => (Math.round(v * 10) / 10) + "%";
   const lvl = k.margin >= 40 ? "good" : k.margin >= 25 ? "ok" : "low";
@@ -14303,6 +14339,7 @@ function costingHtml(I) {
     <div class="quiet" style="margin-top:-6px">${k.tk ? `Margin is profit ÷ what ${esc(k.tk.partner)} pays Reid before HST (${money(k.revenue)}).` : k.st ? `Margin is profit ÷ Reid's share after ${esc(k.st.name)} (${money(k.revenue)}).` : "Margin is profit ÷ the sale before HST."} Green is 40% or more, orange 25 to 40%, red under 25%.</div>
     <div class="ie-cost-bar" role="img" aria-label="Where the money goes">${segs.map(x => `<i style="width:${x[1] / base * 100}%;background:${x[2]}" title="${esc(x[0])} ${money(x[1])}"></i>`).join("")}</div>
     <div class="ie-cost-key">${segs.map(x => `<span><b style="background:${x[2]}"></b>${esc(x[0])} ${pct(x[1] / base * 100)}</span>`).join("")}</div>
+    ${costingVsHtml(I, k)}
     <table>
       <tr><td>Sale (before HST)</td><td class="r">${money(k.sale)}</td></tr>
       ${k.st ? `<tr class="store"><td><strong>${esc(k.st.name)} keeps</strong><br><span class="quiet">${C.can_set_store ? `<input data-cost="cut" inputmode="decimal" value="${Number(k.st.cut_pct)}" aria-label="${esc(k.st.name)} cut %">` : Number(k.st.cut_pct)}% of ${money(k.total)} + card
@@ -14312,9 +14349,10 @@ function costingHtml(I) {
       ${k.tk ? `<tr class="store"><td><strong>Tank: ${esc(k.tk.partner)} pays ${esc(k.tk.supplier)}</strong><br><span class="quiet">${money(k.tk.amount)} with HST, not Reid's money</span></td><td class="r"><strong>−${money(k.tank)}</strong></td></tr>
         <tr><td>Reid's share (before HST)</td><td class="r">${money(k.revenue)}</td></tr>` : ""}
       <tr><td>Parts and equipment${k.tk && k.tankCost ? `<br><span class="quiet">not counting the tank (${money(k.tankCost)}): ${esc(k.tk.supplier)} is paid by ${esc(k.tk.partner)}</span>` : ""}${k.noCost ? `<br><span class="warn">${k.noCost} line${k.noCost > 1 ? "s" : ""} with no cost</span>` : ""}</td><td class="r">−${money(k.parts)}</td></tr>
-      <tr><td>Labour ${k.planLab ? `<b>as priced in the price book</b>${C.plan.hrs ? ` (${+C.plan.hrs.toFixed(1)} tech-hours)` : ""}<br><span class="quiet">No tech or labour rate on this job yet, so it uses each item's labour, like the item page and proposals.</span><br>Real hours: ` : ""}<input data-cost="hours" inputmode="decimal" value="${+k.hours.toFixed(2)}" aria-label="Hours"> hrs × ${money(k.rate)}/hr
-          <br><span class="quiet">${esc(hrsNote)}${C.techs.length ? " · " + esc(C.techs.map(t => t.name).join(", ")) : ""}</span>
-          ${!k.rate ? (C.can_set_rate ? `<br><span class="warn">What does a tech hour cost you?</span> <input data-cost="rate" inputmode="decimal" placeholder="$/hr" aria-label="Labour cost per hour">` : `<br><span class="warn">No labour cost set (Settings)</span>`) : ""}</td><td class="r">−${money(k.labour)}</td></tr>
+      <tr><td>Labour <input data-cost="hours" inputmode="decimal" value="${+k.hours.toFixed(2)}" aria-label="Hours on the job"> hrs × ${k.techsN} tech${k.techsN === 1 ? "" : "s"} × ${money(k.rate)}/hr
+          <br><span class="quiet">${k.labSrc === "actual" ? `real time on site, from the arrived and done times (${+Number(k.A.tech_hours).toFixed(2)} tech-hours, each at their own rate)` : k.labSrc === "typed" ? `hours you typed${Number(k.A.tech_hours) > 0 ? ` · <button class="link" type="button" data-cost-hreset>use the real time on site</button>` : ""}` : "the price book's hours for these items (Labour cost box on each item's page)"}${C.techs.length ? " · " + esc(C.techs.map(t => t.name).join(", ")) : ""}</span>
+          ${k.planLab ? `<br><span class="quiet">No tech pay rate or company labour rate yet, so it uses the price book's ${money(k.rate)}/hr.</span>` : ""}
+          ${!(k.rate > 0) ? (C.can_set_rate ? `<br><span class="warn">What does a tech hour cost you?</span> <input data-cost="rate" inputmode="decimal" placeholder="$/hr" aria-label="Labour cost per hour">` : `<br><span class="warn">No labour cost set (Settings)</span>`) : ""}</td><td class="r">−${money(k.labour)}</td></tr>
       ${k.office > 0.004 ? `<tr><td>Office<br><span class="quiet">overhead from the pricing formula, same as the item page</span></td><td class="r">−${money(k.office)}</td></tr>` : ""}
       <tr><td>Vehicle <input data-cost="vehicle" inputmode="decimal" value="${k.vehicle.toFixed(2)}" aria-label="Vehicle cost">
           <br><span class="quiet">${C.vehicle_own ? `changed for this job · <button class="link" type="button" data-cost-vreset>use the usual amount</button>` : "the usual amount for a job"}</span></td><td class="r">−${money(k.vehicle)}</td></tr>
@@ -14344,6 +14382,7 @@ function wireCosting(root, I, call, reload) {
     call("inv_set_costs", { p_invoice: I.id, p: { [f]: v == null ? "" : String(v) } }, "Saved.");
   }));
   root.querySelector("[data-cost-vreset]")?.addEventListener("click", () => call("inv_set_vehicle", { p_invoice: I.id, p_amount: null }, "Back to the usual vehicle cost."));
+  root.querySelector("[data-cost-hreset]")?.addEventListener("click", () => call("inv_set_costs", { p_invoice: I.id, p: { hours: "" } }, "Back to the real time on site."));
   root.querySelectorAll("[data-cost-line]").forEach(el => el.addEventListener("change", () => {
     const v = num(el.value); if (v != null && !isFinite(v)) return reload("Not saved: type a number.");
     call("inv_set_line_cost", { p_line: Number(el.dataset.costLine), p_cost: v }, "Saved.");
@@ -15139,8 +15178,8 @@ async function pbiLabour(id, edit, msg) {
   const note = own ? `<div class="pbi-lab-note over"><b>Pricing override</b> by ${esc(own.by || "someone")}${own.at ? " on " + esc(fmtDate(own.at)) : ""}${kit ? ` <button class="link" type="button" id="pbi-lab-kit">Go back to the kit's pricing</button>` : ` <button class="link" type="button" id="pbi-lab-clear">Clear</button>`}</div>`
     : kit ? `<div class="pbi-lab-note kit"><b>Taking kit pricing</b> from ${esc((kit.names || []).slice(0, 2).join(", "))}${(kit.names || []).length > 2 ? ` and ${(kit.names || []).length - 2} more parts` : ""}. Change a number and save to override it.</div>`
     : `<div class="pbi-lab-note quiet">No add-on kit on this part. Type the labour here.</div>`;
-  box.innerHTML = `<h2>Labour cost</h2>${note}
-    <form class="pbi-lab-f" id="pbi-lab-f"><label>Hours<input name="h" inputmode="decimal" value="${num(v.h)}" ${edit ? "" : "disabled"}></label>
+  box.innerHTML = `<h2>Labour cost</h2>${note}<p class="quiet">The one place for this item's labour: proposals, the job costing on invoices and the item's estimated hours all use these numbers.</p>
+    <form class="pbi-lab-f" id="pbi-lab-f"><label>Hours on the job<input name="h" inputmode="decimal" value="${num(v.h)}" ${edit ? "" : "disabled"}></label>
       <label>Techs<input name="t" inputmode="numeric" value="${num(v.t)}" ${edit ? "" : "disabled"}></label>
       <label>Cost per hour<input name="r" inputmode="decimal" value="${v.r == null ? "" : Number(v.r).toFixed(2)}" placeholder="${rate0 ? rate0.toFixed(2) : ""}" ${edit ? "" : "disabled"}></label>
       <div class="pbi-lab-tot">Labour cost <b id="pbi-lab-tot">—</b></div>
