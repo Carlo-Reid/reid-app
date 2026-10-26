@@ -3567,6 +3567,7 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 :root[data-theme="desert"] .pb-sp { background: rgba(220,179,134,.18); border-color: rgba(220,179,134,.55); color: #f2d29b; }
 .pb-sp.hidden { display: none; }
 /* ===== Sales call (site visit) screen ===== */
+.sl-sp-pick { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 12px; } .sl-sp-pick select { max-width: 170px; font-size: 13px; padding: 3px 6px; }
 .sl-kind { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 700; color: var(--steel); }
 .sl-act .btn.sc-here { background: var(--green) !important; border-color: var(--green) !important; color: var(--on-accent) !important; }
 .scall .sc-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin: 0 0 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 6px 16px rgba(0,0,0,.05); max-width: 760px; }
@@ -6490,6 +6491,16 @@ async function openSales(msg) {
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load sales</h2>${/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</div></div>`; return; }
   SALES.rows = data || []; renderSales(msg);
 }
+// the sales person on a deal: owners/dispatchers can add or change it right here (an Install row changes the deal it came from)
+const salesSrc = r => r.stage === "install" ? (SALES.rows || []).find(x => x.est_id && x.est_id === r.est_id && x.stage !== "install") : r;
+function salesSpPick(r) {
+  const src = salesSrc(r), cur = src?.sales_person || "";
+  if (!salesBoss()) return cur && !SALES.seller ? `<div class="sl-sp">${esc(cur)}</div>` : "";
+  if (!src) return "";
+  const P = SALES.people || [], hit = P.find(x => x.name === cur);
+  return `<label class="sl-sp-pick" title="The sales person on this deal"><span class="quiet">Sales person</span><select data-sl-sp="${src.job_id}">
+    <option value="" ${!hit ? "selected" : ""}>${cur && !hit ? esc(cur) : "No one yet"}</option>${P.map(x => `<option value="${x.id}" ${hit && hit.id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>`;
+}
 // the drop-down of sales people: owners/dispatchers always; a sales person only when an owner let them see someone else's page
 function salesWhoPicker() {
   const P = SALES.people || [], boss = salesBoss();
@@ -6515,7 +6526,7 @@ function renderSales(msg) {
       <button class="btn" type="button" id="sl-new">+ New sales job</button>
       ${salesWhoPicker()}</div>
     ${rows.length ? `<table class="calls-table sl-t"><thead><tr><th>Stage</th><th>Customer</th><th>Call</th><th>For</th><th class="r">Proposal</th><th></th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div>${r.sales_person && !SALES.seller && salesBoss() ? `<div class="sl-sp">${esc(r.sales_person)}</div>` : ""}</td>
+      ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div>${salesSpPick(r)}</td>
         <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${r.visit_date ? `${esc(fmtDate(r.visit_date))}<div class="quiet">${r.visit_from ? esc(t(r.visit_from) + (r.visit_to ? "–" + t(r.visit_to) : "")) : "any time"}${r.seller ? " · " + esc(r.seller) : ""}</div>` : `<span class="quiet">${r.stage === "install" ? "Install not booked yet" : "Not booked yet"}</span>`}</td>
         <td>${esc(r.partner || "Reid")}<div class="quiet">${esc(r.type || "")}</div></td>
@@ -6530,6 +6541,12 @@ function renderSales(msg) {
   document.querySelectorAll("[data-sl-tab]").forEach(b => b.addEventListener("click", () => { SALES.tab = b.dataset.slTab; salesSave(); renderSales(); }));
   $("#sl-who")?.addEventListener("change", e => { const me = (SALES.people || []).find(x => x.me); SALES.seller = me && String(me.id) === e.target.value ? "" : e.target.value; salesSave(); openSales(); });
   $("#sl-new").addEventListener("click", () => { SALES_FIND = true; openSearchScreen(); });
+  document.querySelectorAll("[data-sl-sp]").forEach(sel => sel.addEventListener("change", async () => { sel.disabled = true;
+    const job = Number(sel.dataset.slSp), who = sel.value ? Number(sel.value) : null, r = (SALES.rows || []).find(x => x.job_id === job);
+    const { error } = await db.rpc("set_job_seller", { p_job: job, p_user: who });
+    if (error) { sel.disabled = false; alertMsg("Not changed: " + rpcErr(error)); return; }
+    const name = who ? (SALES.people || []).find(x => x.id === who)?.name : "";
+    SALES.rows = null; openSales(`${r?.customer || "Job " + (r?.job_number || "")}: ${name ? "sales person is now " + name : "sales person taken off"}.`); }));
   document.querySelectorAll("[data-sl-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.slCust))));
   document.querySelectorAll("[data-sl-est]").forEach(b => b.addEventListener("click", async () => { b.disabled = true;
     const { data, error } = await db.rpc("est_create", { p_job: Number(b.dataset.slEst) });
