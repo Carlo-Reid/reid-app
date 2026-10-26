@@ -195,7 +195,7 @@ AS $function$
     JOIN job_types t ON t.id = ij.job_type_id JOIN customers c ON c.id = ij.customer_id LEFT JOIN locations l ON l.id = ij.location_id
     LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = ij.id ORDER BY v.visit_number DESC LIMIT 1) v ON true
     WHERE r.est IS NOT NULL AND t.job_class = 'install'   -- only real install jobs (not a follow-up service call)
-    ORDER BY ij.id)
+    ORDER BY ij.id),
   here AS (
     SELECT jsonb_build_object(
       'job_id', j2.id, 'job_number', j2.job_number, 'status', j2.status, 'summary', j2.summary, 'type', t.name, 'same_call', true,
