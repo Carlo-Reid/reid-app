@@ -10,7 +10,7 @@ BEGIN
   IF NOT (public.has_permission('pricebook.edit') OR coalesce(public._is_owner(), false)) THEN RAISE EXCEPTION 'You can''t change pricing'; END IF;
   IF p_labour IS NOT NULL AND (p_labour <= 0 OR p_labour > 1000) THEN RAISE EXCEPTION 'Type the labour cost per hour, e.g. 55'; END IF;
   IF p_margin IS NULL OR p_margin <= 0 OR p_margin >= 95 THEN RAISE EXCEPTION 'The margin goal has to be between 1 and 94%%'; END IF;
-  UPDATE company_settings SET labour_cost_per_hour = p_labour, margin_goal_pct = p_margin;
+  UPDATE company_settings SET labour_cost_per_hour = p_labour, margin_goal_pct = p_margin WHERE id = (SELECT id FROM company_settings ORDER BY id LIMIT 1);
 END $f$;
 
 REVOKE EXECUTE ON FUNCTION public.pricing_control_set(numeric, numeric) FROM PUBLIC, anon;

@@ -9,7 +9,7 @@ BEGIN
   IF p_labour IS NOT NULL AND (p_labour <= 0 OR p_labour > 1000) THEN RAISE EXCEPTION 'Type the labour cost per hour, e.g. 55'; END IF;
   IF p_margin IS NULL OR p_margin <= 0 OR p_margin >= 95 THEN RAISE EXCEPTION 'The margin goal has to be between 1 and 94%%'; END IF;
   IF p_commission IS NOT NULL AND (p_commission < 0 OR p_commission >= 50) THEN RAISE EXCEPTION 'The commission has to be between 0 and 49%%'; END IF;
-  UPDATE company_settings SET labour_cost_per_hour = p_labour, margin_goal_pct = p_margin, commission_default_pct = p_commission;
+  UPDATE company_settings SET labour_cost_per_hour = p_labour, margin_goal_pct = p_margin, commission_default_pct = p_commission WHERE id = (SELECT id FROM company_settings ORDER BY id LIMIT 1);
 END $f$;
 
 REVOKE EXECUTE ON FUNCTION public.pricing_control_set(numeric, numeric, numeric) FROM PUBLIC, anon;
