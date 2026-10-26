@@ -6505,8 +6505,11 @@ async function openSales(msg) {
   if (SALES.seller && !SALES.people.some(x => String(x.id) === String(SALES.seller))) SALES.seller = "";
   const seeComm = can("installs.manage") || ["owner", "accounting"].includes(ME.role), y = new Date().getFullYear();
   const [{ data, error }, ins] = await Promise.all([db.rpc("sales_list", { p_seller: SALES.seller ? Number(SALES.seller) : null }),
-    seeComm ? db.rpc("install_list", { p_from: (y - 2) + "-01-01", p_to: (y + 1) + "-12-31" }) : Promise.resolve({ data: null })]);
-  SALES.comm = ins.error || !ins.data ? null : new Map(ins.data.map(r => [r.job_id, r]));
+    // installs from 18 months back to the end of next year, in half-year pieces at once (one big ask is too slow)
+    seeComm ? Promise.all([[y - 2, 2], [y - 1, 1], [y - 1, 2], [y, 1], [y, 2], [y + 1, 1], [y + 1, 2]].map(([yy, h]) =>
+      db.rpc("install_list", { p_from: yy + (h === 1 ? "-01-01" : "-07-01"), p_to: yy + (h === 1 ? "-06-30" : "-12-31") }))).then(rs => ({ data: rs.some(r => !r.error) ? rs.flatMap(r => r.data || []) : null }))
+      : Promise.resolve({ data: null })]);
+  SALES.comm = !ins.data ? null : new Map(ins.data.map(r => [r.job_id, r]));
   if (document.body.dataset.page !== "sales") return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load sales</h2>${/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</div></div>`; return; }
   SALES.rows = data || []; renderSales(msg);
