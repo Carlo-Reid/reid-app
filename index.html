@@ -402,6 +402,10 @@
   .pb-grip { cursor: grab; color: var(--muted, #8a94a0); font-size: 13px; padding: 0 2px 0 0; user-select: none; }
   .pb-cat[draggable="true"]:hover .pb-grip { color: var(--ink); }
   .pb-cat.pb-dragging { opacity: .45; }
+  .pb-cat.pb-drop-into { background: var(--blue-wash, #e7f0ff); outline: 2px solid var(--dz-1f6fd1, #1f6fd1); outline-offset: -2px; border-radius: 6px; }
+  .pb-droptop-li { display: none; } body.pb-dragmode .pb-droptop-li { display: block; }
+  .pb-droptop { margin: 4px 0; padding: 8px 10px; border: 2px dashed var(--dz-1f6fd1, #1f6fd1); border-radius: 8px; color: var(--dz-1f6fd1, #1f6fd1); font-weight: 700; font-size: 13px; text-align: center; }
+  .pb-droptop.pb-drop-into { background: var(--blue-wash, #e7f0ff); outline: none; }
   .pb-cat.pb-drop-before { box-shadow: inset 0 3px 0 var(--dz-1f6fd1, #1f6fd1); } .pb-cat.pb-drop-after { box-shadow: inset 0 -3px 0 var(--dz-1f6fd1, #1f6fd1); }
   .zb-small { font-size: .82em; opacity: .8; font-weight: 500; } .zb-small .zb-link { font-weight: 500; }
   .ti-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); gap: 8px 18px; margin: 8px 0 12px; }
@@ -14835,6 +14839,8 @@ async function loadPbCats() {
   const tt = c => { const own = PB.catTypeN?.get(c.id) || {}, m = { ...own }; for (const k of c.kids) for (const [t, v] of Object.entries(tt(k))) m[t] = (m[t] || 0) + v; return (c.tt = m); };
   if (PB.catTypeN) PB.catTop.forEach(tt);
 }
+// is category a inside category b (or b itself)?
+const pbCatInside = (a, b) => { for (let x = PB.catBy.get(a), n = 0; x && n < 50; x = x.parent_id ? PB.catBy.get(x.parent_id) : null, n++) if (x.id === b) return true; return false; };
 // New costs from supplier invoices waiting for approval, by item
 async function loadPbUpdates() {
   PB.upd = new Map(); if (!seeCost()) return;
@@ -16721,7 +16727,7 @@ function pbCatTree(edit) {
     if (!c.active && PB.cat !== c.id && !PB.showRetiredCats) return "";
     if (!has(c)) return "";
     const kids = c.kids.filter(k => (k.active || PB.cat === k.id || PB.showRetiredCats) && has(k)), open = PB.open.has(c.id);
-    return `<li><div class="pb-cat ${PB.cat === c.id ? "cur" : ""} ${c.active ? "" : "pb-cat-old"}" ${edit ? `data-pb-drag="${c.id}" title="Click to open · press and hold, then drag up or down to change the order"` : ""}>${edit ? `<span class="pb-grip" aria-hidden="true">⠿</span>` : ""}${kids.length
+    return `<li><div class="pb-cat ${PB.cat === c.id ? "cur" : ""} ${c.active ? "" : "pb-cat-old"}" ${edit ? `data-pb-drag="${c.id}" title="Click to open · press and hold, then drag: onto a category to put it inside, between two to place it there, or to the top strip to make it a main category to change the order"` : ""}>${edit ? `<span class="pb-grip" aria-hidden="true">⠿</span>` : ""}${kids.length
         ? `<button class="pb-tw" type="button" data-pb-tw="${c.id}" aria-expanded="${open}" aria-label="${open ? "Close" : "Open"} ${esc(c.name)}">${open ? "▾" : "▸"}</button>` : `<span class="pb-tw"></span>`}
       <button class="pb-catbtn" type="button" data-pb-cat="${c.id}" title="${esc(c.name)}">${esc(c.name)}${cnt(c) ? ` <span class="quiet">${cnt(c)}</span>` : ""}</button>${edit ? `<button class="pb-cat-pw ${c.active ? "" : "off"}" type="button" data-pb-off="${c.id}" title="${c.active ? `Deactivate ${esc(c.name)} and every item in it` : `Reactivate ${esc(c.name)} and every item in it`}" aria-label="${c.active ? "Deactivate" : "Reactivate"} ${esc(c.name)} with its items">${c.active ? "Off" : "On"}</button>` : ""}</div>
       ${open && kids.length ? `<ul>${kids.map(k => node(k, d + 1)).join("")}</ul>` : ""}</li>`;
@@ -16742,6 +16748,7 @@ function pbCatTree(edit) {
           <button class="btn pb-off-btn ${cur.active ? "" : "on"}" type="button" id="pb-catretall" data-pb-off="${cur.id}">${cur.active ? `Deactivate ${esc(cur.name)} and all ${(cur.total || 0).toLocaleString()} items in it` : `Reactivate ${esc(cur.name)} and all its items`}</button></div>` : ""}
           <button class="link" type="button" id="pb-catold">${PB.showRetiredCats ? "Hide" : "Show"} deactivated</button>`}</div>` : ""}
     ${PB.cats.length ? `<ul class="pb-tree"><li><div class="pb-cat ${PB.cat == null ? "cur" : ""}"><span class="pb-tw"></span><button class="pb-catbtn" type="button" data-pb-cat="">All categories</button></div></li>
+      ${edit ? `<li class="pb-droptop-li"><div class="pb-droptop" data-pb-droptop="1">Drop here to make it a main category</div></li>` : ""}
       ${PB.catTop.map(c => node(c, 0)).join("")}</ul>` : `<p class="quiet">No categories yet.</p>`}
   </details>`;
 }
@@ -16974,10 +16981,23 @@ function renderPricebook(msg) {
     const me = sibs.find(c => c.id === id); sibs.splice(sibs.indexOf(me), 1); sibs.splice(sibs.findIndex(c => c.id === targetId) + (after ? 1 : 0), 0, me); saveOrder(sibs, me.name); };
   document.querySelectorAll("[data-pb-move]").forEach(b => b.addEventListener("click", () => { const id = PB.cat, sibs = sibsOf(id), vis = sibs.filter(c => c.active || PB.showRetiredCats || c.id === id), i = vis.findIndex(c => c.id === id), j = i + Number(b.dataset.pbMove);
     if (j < 0 || j >= vis.length) return; moveTo(id, vis[j].id, Number(b.dataset.pbMove) > 0); }));
-  // press and hold a category (about half a second), then drag it up or down among its neighbours; a quick click just opens it
+  // put a category inside another one (or make it a main category), next to a given category or at the end
+  const pbCatPlace = async (me, parent, nextTo, after) => {
+    const c = PB.catBy.get(me); if (!c) return; const par = parent || null;
+    const ids = (par ? PB.catBy.get(par).kids : PB.catTop).filter(k => k.id !== me).map(k => k.id);
+    let i = ids.length; if (nextTo != null && ids.includes(nextTo)) i = ids.indexOf(nextTo) + (after ? 1 : 0); ids.splice(i, 0, me);
+    const oldPar = c.parent_id && PB.catBy.has(c.parent_id) ? c.parent_id : null;
+    if (oldPar !== par) { const { error } = await db.rpc("save_pb_category", { p_id: me, p_name: c.name, p_parent_id: par, p_active: c.active });
+      if (error) { alertMsg("Not moved: " + rpcErr(error)); return; } }
+    const { error: oe } = await db.rpc("set_pb_category_order", { p_ids: ids });
+    if (par) PB.open.add(par);
+    await loadPbCats(); renderPricebook();
+    alertMsg(oe ? "Moved, but the order wasn't saved: " + rpcErr(oe) : `Moved ${c.name} ${par ? "into " + PB.catBy.get(par)?.name : "to the main categories"}.`);
+  };
+  // press and hold a category (about half a second), then drag it: between two categories (any group), onto one to put it inside, or to the top strip; a quick click just opens it
   document.querySelectorAll("[data-pb-drag]").forEach(d => {
     let timer = null, start = null, holding = false, over = null;
-    const clear = () => { document.querySelectorAll(".pb-drop-before, .pb-drop-after").forEach(x => x.classList.remove("pb-drop-before", "pb-drop-after")); };
+    const clear = () => { document.querySelectorAll(".pb-drop-before, .pb-drop-after, .pb-drop-into").forEach(x => x.classList.remove("pb-drop-before", "pb-drop-after", "pb-drop-into")); };
     const stop = () => { clearTimeout(timer); timer = null; holding = false; over = null; d.classList.remove("pb-dragging", "pb-holdready"); document.body.classList.remove("pb-dragmode"); clear(); };
     d.addEventListener("pointerdown", e => {
       if (e.button !== 0 || e.target.closest(".pb-cat-pw, .pb-tw")) return;
@@ -16988,14 +17008,20 @@ function renderPricebook(msg) {
       if (!start) return;
       if (!holding) { if (Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y) > 8) { clearTimeout(timer); timer = null; start = null; } return; }
       e.preventDefault();
-      const el = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-pb-drag]"); clear(); over = null;
-      if (!el) return; const t = Number(el.dataset.pbDrag), me = Number(d.dataset.pbDrag);
-      if (t === me || !sibsOf(me).some(c => c.id === t)) return;
-      const r = el.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
-      el.classList.add(after ? "pb-drop-after" : "pb-drop-before"); over = { t, after };
+      const sc = d.closest(".pb-cats"); if (sc) { const rr = sc.getBoundingClientRect(); if (e.clientY < rr.top + 36) sc.scrollTop -= 14; else if (e.clientY > rr.bottom - 36) sc.scrollTop += 14; }
+      const el = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-pb-drag], [data-pb-droptop]"); clear(); over = null;
+      if (!el) return; const me = Number(d.dataset.pbDrag);
+      if (el.dataset.pbDroptop) { if (PB.catBy.get(me)?.parent_id && PB.catBy.has(PB.catBy.get(me).parent_id)) { el.classList.add("pb-drop-into"); over = { top: true }; } return; }
+      const t = Number(el.dataset.pbDrag); if (t === me || pbCatInside(t, me)) return;   // not onto itself or something inside it
+      const r = el.getBoundingClientRect(), f = (e.clientY - r.top) / r.height, mode = f < .28 ? "before" : f > .72 ? "after" : "into";
+      el.classList.add(mode === "into" ? "pb-drop-into" : "pb-drop-" + mode); over = { t, mode };
     });
     d.addEventListener("pointerup", () => { const was = holding, o = over, me = Number(d.dataset.pbDrag); stop(); start = null;
-      if (was) { PB.dragJustEnded = true; setTimeout(() => { PB.dragJustEnded = false; }, 400); if (o) moveTo(me, o.t, o.after); } });
+      if (was) { PB.dragJustEnded = true; setTimeout(() => { PB.dragJustEnded = false; }, 400); if (!o) return;
+        if (o.top) return pbCatPlace(me, null);
+        if (o.mode === "into") return pbCatPlace(me, o.t);
+        const tp = PB.catBy.get(o.t)?.parent_id, tpar = tp && PB.catBy.has(tp) ? tp : null, mp = PB.catBy.get(me)?.parent_id, mpar = mp && PB.catBy.has(mp) ? mp : null;
+        if (tpar === mpar) moveTo(me, o.t, o.mode === "after"); else pbCatPlace(me, tpar, o.t, o.mode === "after"); } });
     d.addEventListener("pointercancel", () => { stop(); start = null; });
     d.addEventListener("contextmenu", e => { if (holding || timer) e.preventDefault(); });
   });
