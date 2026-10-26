@@ -14822,13 +14822,18 @@ async function openPricebook() {
   supMailRun().catch(() => { MAIL.busy = false; });
 }
 async function loadPbCats() {
-  let { data, error } = PB.viewBook != null ? await db.rpc("pb_categories_for", { p_book: PB.viewBook }) : await db.rpc("pb_categories");
+  const [r1, tc] = await Promise.all([PB.viewBook != null ? db.rpc("pb_categories_for", { p_book: PB.viewBook }) : db.rpc("pb_categories"), db.rpc("pb_category_type_counts")]);
+  let { data, error } = r1;
   PB.cats = error ? [] : data;
+  // items of each type in each category (if the counts aren't there yet, the list just isn't narrowed by type)
+  PB.catTypeN = tc.error ? null : new Map(); if (PB.catTypeN) for (const x of tc.data || []) { const m = PB.catTypeN.get(x.category_id) || {}; m[x.item_type] = Number(x.n); PB.catTypeN.set(x.category_id, m); }
   PB.catBy = new Map(PB.cats.map(c => [c.id, { ...c, kids: [] }]));
   PB.catTop = [];
   for (const c of PB.catBy.values()) (c.parent_id && PB.catBy.has(c.parent_id) ? PB.catBy.get(c.parent_id).kids : PB.catTop).push(c);
   const tot = c => (c.total = Number(c.items) + c.kids.reduce((s, k) => s + tot(k), 0));
   PB.catTop.forEach(tot);
+  const tt = c => { const own = PB.catTypeN?.get(c.id) || {}, m = { ...own }; for (const k of c.kids) for (const [t, v] of Object.entries(tt(k))) m[t] = (m[t] || 0) + v; return (c.tt = m); };
+  if (PB.catTypeN) PB.catTop.forEach(tt);
 }
 // New costs from supplier invoices waiting for approval, by item
 async function loadPbUpdates() {
@@ -16709,17 +16714,21 @@ async function loadPricebook() {
 }
 
 function pbCatTree(edit) {
+  const ty = PB.catTypeN && PB.type && PB.type !== "all" ? PB.type : null, up = new Set(); for (let x = PB.cat && PB.catBy.get(PB.cat); x; x = x.parent_id ? PB.catBy.get(x.parent_id) : null) up.add(x.id);
+  const has = c => !ty || (c.tt?.[ty] || 0) > 0 || up.has(c.id),
+    cnt = c => ty ? (c.tt?.[ty] || 0) : c.total;
   const node = (c, d) => {
     if (!c.active && PB.cat !== c.id && !PB.showRetiredCats) return "";
-    const kids = c.kids.filter(k => k.active || PB.cat === k.id || PB.showRetiredCats), open = PB.open.has(c.id);
+    if (!has(c)) return "";
+    const kids = c.kids.filter(k => (k.active || PB.cat === k.id || PB.showRetiredCats) && has(k)), open = PB.open.has(c.id);
     return `<li><div class="pb-cat ${PB.cat === c.id ? "cur" : ""} ${c.active ? "" : "pb-cat-old"}" ${edit ? `data-pb-drag="${c.id}" title="Click to open · press and hold, then drag up or down to change the order"` : ""}>${edit ? `<span class="pb-grip" aria-hidden="true">⠿</span>` : ""}${kids.length
         ? `<button class="pb-tw" type="button" data-pb-tw="${c.id}" aria-expanded="${open}" aria-label="${open ? "Close" : "Open"} ${esc(c.name)}">${open ? "▾" : "▸"}</button>` : `<span class="pb-tw"></span>`}
-      <button class="pb-catbtn" type="button" data-pb-cat="${c.id}" title="${esc(c.name)}">${esc(c.name)}${c.total ? ` <span class="quiet">${c.total}</span>` : ""}</button>${edit ? `<button class="pb-cat-pw ${c.active ? "" : "off"}" type="button" data-pb-off="${c.id}" title="${c.active ? `Deactivate ${esc(c.name)} and every item in it` : `Reactivate ${esc(c.name)} and every item in it`}" aria-label="${c.active ? "Deactivate" : "Reactivate"} ${esc(c.name)} with its items">${c.active ? "Off" : "On"}</button>` : ""}</div>
+      <button class="pb-catbtn" type="button" data-pb-cat="${c.id}" title="${esc(c.name)}">${esc(c.name)}${cnt(c) ? ` <span class="quiet">${cnt(c)}</span>` : ""}</button>${edit ? `<button class="pb-cat-pw ${c.active ? "" : "off"}" type="button" data-pb-off="${c.id}" title="${c.active ? `Deactivate ${esc(c.name)} and every item in it` : `Reactivate ${esc(c.name)} and every item in it`}" aria-label="${c.active ? "Deactivate" : "Reactivate"} ${esc(c.name)} with its items">${c.active ? "Off" : "On"}</button>` : ""}</div>
       ${open && kids.length ? `<ul>${kids.map(k => node(k, d + 1)).join("")}</ul>` : ""}</li>`;
   };
   const cur = PB.cat ? PB.catBy.get(PB.cat) : null, f = PB.catForm;
   return `<details class="pb-cats" ${PB.catsOpen ?? matchMedia("(min-width: 900px)").matches ? "open" : ""}>
-    <summary>Categories${cur ? ": " + esc(cur.name) : ""}</summary>
+    <summary>Categories${ty ? ` <span class="quiet">with ${esc({ service: "parts", material: "material", equipment: "equipment" }[ty] || (PB_TYPE_NAME[ty] || ty).toLowerCase())}</span>` : ""}${cur ? ": " + esc(cur.name) : ""}</summary>
     <div class="pb-catfind"><input type="search" id="pb-catq" size="8" placeholder="Find a category…" autocomplete="off" aria-label="Find a category">
       <div class="pb-catres hidden" id="pb-catres" role="listbox"></div></div>
     ${edit ? `<div class="pb-cat-tools">${f ? `<form id="pb-catform" class="pb-catform"><label>${f.mode === "rename" ? "New name" : f.parent ? "New category inside " + esc(PB.catBy.get(f.parent)?.name || "") : "New top category"}
@@ -16994,7 +17003,8 @@ function renderPricebook(msg) {
   { const q = $("#pb-catq"), res = $("#pb-catres"); let hits = [], pick = 0;
     const show = () => {
       const s = q.value.trim().toLowerCase(); if (!s) { res.classList.add("hidden"); res.innerHTML = ""; return; }
-      hits = (PB.cats || []).filter(c => (c.active || PB.showRetiredCats) && c.name.toLowerCase().includes(s))
+      const ty = PB.catTypeN && PB.type && PB.type !== "all" ? PB.type : null;   // the quick buttons narrow the search too
+      hits = (PB.cats || []).filter(c => (c.active || PB.showRetiredCats) && c.name.toLowerCase().includes(s) && (!ty || (PB.catBy.get(c.id)?.tt?.[ty] || 0) > 0))
         .sort((a, b) => (a.name.toLowerCase().startsWith(s) ? 0 : 1) - (b.name.toLowerCase().startsWith(s) ? 0 : 1) || a.name.localeCompare(b.name)).slice(0, 40);
       pick = 0;
       res.innerHTML = hits.length ? hits.map((c, i) => { const path = pbCatPath(c.id).split(" › "); path.pop();
