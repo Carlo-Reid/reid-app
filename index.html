@@ -2326,7 +2326,6 @@
   .my-disc { margin-top: 6px; padding: 5px 8px; border-radius: 8px; background: #fff4e6; border: 1px solid #ffc078; color: #7a3e00; font-size: 13px; line-height: 1.35; }
   .my-disc-k { font-weight: 800; text-transform: uppercase; letter-spacing: .04em; font-size: 11px; } .my-disc i { display: block; color: #995200; }
   .my-disc-sm { font-size: 12px; padding: 3px 6px; } .my-disc-s { font-size: 12px; color: #c05600; font-weight: 700; }
-  .pbp-adddisc { background: #e8590c; border-color: #e8590c; color: #fff; margin-top: 4px; }
   .est-mydisc-h { margin-top: 6px; } .est-mydisc { display: flex; flex-direction: column; align-items: flex-start; text-align: left; } .est-mydisc span { font-size: 12px; color: #c05600; font-weight: 700; }
   .ie-mydisc { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; } .ie-mydisc b { color: #c05600; } .ie-discopt { background: #fff4e6; color: #7a3e00; }
   .pbi-box { display: flex; flex-direction: column; gap: 10px; } .pbi-box h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); } .pbi-box p { margin: 0; }
@@ -6506,9 +6505,6 @@ async function openPrintPicks(oi) {
   back.querySelectorAll("[data-pbp-show]").forEach(b => b.addEventListener("click", () => {
     const list = pbpkItems();
     SHOW.list = list; SHOW.at = Math.max(0, list.findIndex(x => x.id === Number(b.dataset.pbpShow))); SHOW.cmpOpen = false; drawShow(); }));
-  back.querySelectorAll("[data-pbp-adddisc]").forEach(b => b.addEventListener("click", () => {
-    const id = Number(b.dataset.pbpAdddisc); estAddWithDisc(PBPK.oi, id, b.dataset.pbpName, Number(b.dataset.pbpPrice) || 0); EST.dirty = true;
-    PBPK.added.add(id); b.textContent = "Added with the discount ✓"; b.classList.add("pbb-added"); back.querySelector("#pbpk-done").textContent = `Done (${PBPK.added.size} added)`; }));
   back.querySelectorAll("[data-pbp-add]").forEach(b => b.addEventListener("click", () => {
     const id = Number(b.dataset.pbpAdd);
     EST.opts[PBPK.oi].lines.push({ item_id: id, description: b.dataset.pbpName, qty: 1, price: Number(b.dataset.pbpPrice) || 0 }); EST.dirty = true;
@@ -7091,17 +7087,24 @@ async function drawCompare(fresh = true) {
 }
 document.addEventListener("click", e => { const b = e.target.closest("[data-est-show]"); if (!b) return; e.preventDefault(); openShow(b.dataset.estShow); });
 // the add buttons beside each option (right of the proposal)
-function estAddWithDisc(oi, id, name, price) {   // the item, plus its discount as a rebate line
-  const d = MYDISC.get(Number(id)), o = EST.opts[oi]; if (!o) return;
-  o.lines.push({ item_id: id, description: name, qty: 1, price });
-  if (d && discAmt(d, price) > 0) o.lines.push({ item_id: null, description: discLineText(d, name), qty: 1, price: -discAmt(d, price), disc: true });
+// promos on the person's price book show on a proposal only for equipment already picked on that option (and not used yet)
+function estPromos(o) {
+  const out = [];
+  o.lines.forEach(l => { const d = l.item_id && !l.disc && !l.kind && MYDISC.get(Number(l.item_id)); if (!d || out.some(x => x.d === d)) return;
+    if (o.lines.some(x => x.disc && x.description === discLineText(d, l.description))) return; out.push({ d, l }); });
+  return out;
+}
+function estApplyPromo(oi, id) {   // its discount as a rebate line on that option
+  const o = EST.opts[oi], d = MYDISC.get(Number(id)); if (!o || !d) return;
+  const l = o.lines.find(x => Number(x.item_id) === Number(id) && !x.disc && !x.kind); if (!l) return;
+  const a = discAmt(d, l.price) * (Number(l.qty) || 1); if (a > 0) o.lines.push({ item_id: null, description: discLineText(d, l.description), qty: 1, price: -a, disc: true });
 }
 const estToolsHtml = (o, i) => `<div class="est-tools no-print"><div class="est-tools-h">Add to ${esc(o.name || "Option " + (i + 1))}</div>
   <button class="btn est-tool" type="button" data-opics="${i}" title="Your price book, with pictures: tap Add on what you want">Price book</button>
   <button class="btn quiet-btn est-tool" type="button" data-onote="${i}:note" title="Text for the customer, no price">Add a note</button>
   <button class="btn quiet-btn est-tool" type="button" data-onote="${i}:note_price" title="Text with an amount">Add a note with $</button>
   <button class="btn quiet-btn est-tool" type="button" data-odisc="${i}" title="Money off the option">Rebate or discount</button>
-  ${MYDISC.size ? `<div class="est-tools-h est-mydisc-h">Your discounts</div>${[...MYDISC.values()].map(d => `<button class="btn quiet-btn est-tool est-mydisc" type="button" data-omydisc="${i}:${d.item_id}" title="Adds ${esc(pbName(d.name))} and its discount">${esc(pbName(d.name))}<span>${discWord(d, d.unit_price)}</span></button>`).join("")}` : ""}</div>`;
+  ${(() => { const P = estPromos(o); return P.length ? `<div class="est-tools-h est-mydisc-h">Promo on this option</div>${P.map(({ d, l }) => `<button class="btn quiet-btn est-tool est-mydisc" type="button" data-omydisc="${i}:${d.item_id}" title="Adds the promo for ${esc(l.description)} as a discount line">${esc(l.description)}<span>${discWord(d, l.price)}</span></button>`).join("")}` : ""; })()}</div>`;
 function renderEstEdit() {
   if (!MYDISC_AT) loadMyDisc().then(ch => { if (ch && document.querySelector(".est-sheet")) renderEstEdit(); });
   { const ids = EST.opts.flatMap(o => o.lines.map(l => l.item_id)).filter(id => id && !EINFO.has(id));
@@ -7211,7 +7214,7 @@ function wireEstEdit() {
   m.querySelectorAll("[data-lq]").forEach(el => el.addEventListener("input", () => { const [i, k] = ij(el.dataset.lq); EST.opts[i].lines[k].qty = el.value.replace(/[^\d.]/g, ""); dirty(); refreshTotals(i); }));
   m.querySelectorAll("[data-lpd]").forEach(el => el.addEventListener("input", () => { const [i, k] = ij(el.dataset.lpd); EST.opts[i].lines[k].price = -Math.abs(Number(el.value.replace(/[^\d.]/g, "")) || 0); dirty(); refreshTotals(i); }));
   m.querySelectorAll("[data-omydisc]").forEach(el => el.addEventListener("click", () => { const [i, id] = el.dataset.omydisc.split(":").map(Number), d = MYDISC.get(id); if (!d) return;
-    estAddWithDisc(i, id, pbName(d.name), Number(d.unit_price) || 0); dirty(); renderEstEdit(); }));
+    estApplyPromo(i, id); dirty(); renderEstEdit(); }));
   m.querySelectorAll("[data-odisc]").forEach(el => el.addEventListener("click", () => { const i = Number(el.dataset.odisc); EST.opts[i].lines.push({ item_id: null, description: "", qty: 1, price: 0, disc: true }); dirty(); renderEstEdit();
     const ins = m.querySelectorAll(`[data-oi="${i}"] .est-disc .est-d`); ins[ins.length - 1]?.focus(); }));
   m.querySelectorAll("[data-lp]").forEach(el => el.addEventListener("input", () => { const [i, k] = ij(el.dataset.lp); EST.opts[i].lines[k].price = el.value.replace(/[^\d.]/g, ""); dirty(); refreshTotals(i); }));
@@ -15000,9 +15003,8 @@ async function makePrintBook(forPick) {
         <div class="pbp-price"><strong>${money(r.unit_price)}</strong>${u ? `<span>per ${esc(u)}</span>` : ""}${o.member && pbHasMember(r) ? `<em>Members ${money(r.member_price)}</em>` : ""}</div>
         ${o.codes ? `<div class="pbp-code">${esc(r.sku)}</div>` : ""}
         ${forPick ? `<label class="pbp-cmp"><input type="checkbox" data-pbp-cmp="${r.id}"> Compare</label>` : ""}
-        ${discTag(r.id, r.unit_price, "pbp-disc")}
-        ${forPick ? `<button type="button" class="btn pbp-add" data-pbp-add="${r.id}" data-pbp-name="${esc(pbName(r.name))}" data-pbp-price="${Number(r.unit_price) || 0}">Add</button>` : ""}
-        ${forPick && MYDISC.has(r.id) ? `<button type="button" class="btn pbp-add pbp-adddisc" data-pbp-adddisc="${r.id}" data-pbp-name="${esc(pbName(r.name))}" data-pbp-price="${Number(r.unit_price) || 0}">Add with ${discWord(MYDISC.get(r.id), r.unit_price)}</button>` : ""}</div></div>`; };
+        ${forPick ? "" : discTag(r.id, r.unit_price, "pbp-disc")}
+        ${forPick ? `<button type="button" class="btn pbp-add" data-pbp-add="${r.id}" data-pbp-name="${esc(pbName(r.name))}" data-pbp-price="${Number(r.unit_price) || 0}">Add</button>` : ""}</div></div>`; };
   const built = `<section class="pbp-page pbp-cover">
       <div class="pbp-cover-top"><img class="pbp-logo" src="${esc(coLogo(c))}" alt="${esc(co)}"></div>
       <div class="pbp-cover-mid"><div class="pbp-title">${esc(PBP.title)}</div>
