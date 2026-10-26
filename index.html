@@ -2339,6 +2339,11 @@
   .pctl-co { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 18px; } .pctl-co > div { grid-column: 1 / -1; }
   .pctl-co label { display: flex; flex-direction: column; gap: 4px; font-weight: 700; } .pctl-in { display: flex; align-items: center; gap: 4px; } .pctl-in input { width: 110px; }
   .pctl-ft input.ie-num { width: 74px; } .pctl-sec td { background: var(--paper); font-weight: 800; text-transform: uppercase; letter-spacing: .05em; font-size: 12px; color: var(--steel); }
+  .pctl-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); } .pctl-tab { border: 1px solid var(--line); border-bottom: 0; background: var(--paper); border-radius: 8px 8px 0 0; padding: 7px 14px; font-weight: 700; cursor: pointer; margin-bottom: -2px; }
+  .pctl-tab[aria-selected="true"] { background: #fff; border-color: var(--blue, #1d4f91); border-bottom: 2px solid #fff; color: var(--blue, #1d4f91); } .pctl-tab .quiet { font-weight: 400; font-size: 12px; }
+  .pctl-unset td { color: var(--steel); } .pctl-ghost::placeholder { color: #adb5bd; } .pctl-acts { white-space: nowrap; } .pctl-acts .link { margin-left: 6px; }
+  .pbp-partner { font-size: .55em; margin-top: 8px; letter-spacing: .04em; }
+  .pctl-bp { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
   .pbi-box { display: flex; flex-direction: column; gap: 10px; } .pbi-box h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); } .pbi-box p { margin: 0; }
   .pbi-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
   .pbi-form label, .pbi-yform > label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; margin: 0; }
@@ -14896,6 +14901,7 @@ async function openPrintBook() {
   if (!COMPANY) { const { data } = await db.from("company_settings").select("*").limit(1).maybeSingle(); COMPANY = data || { company_name: "Reid Heating & Cooling" }; }
   PBP.picked = new Set([...PBP.picked].filter(id => PB.catBy.has(id)));
   pbpSyncBook();
+  { const { data } = await db.rpc("my_price_partners"); PBP.partners = data || []; if (PBP.partner && !PBP.partners.some(x => x.id === PBP.partner)) PBP.partner = null; }
   // the ML297V category (made Oct 17) goes in the book once; untick it any time after
   try { if (!localStorage.getItem("pbpAddedML297V")) { const c = (PB.cats || []).find(x => /^ml297v$/i.test(x.name)); if (c) { PBP.picked.add(c.id); pbpSave(); localStorage.setItem("pbpAddedML297V", "1"); } } } catch (e) {}
   renderPrintBook();
@@ -14929,6 +14935,8 @@ function renderPrintBook(msg) {
         ${pbpTree()}</section>
       <section class="cl-tools pbp-opts"><strong>The book</strong>
         <label>Title on the cover<input id="pbp-title" value="${esc(PBP.title)}" maxlength="60"></label>
+        ${(PBP.partners || []).length ? `<label>Prices for<select id="pbp-partner"><option value="">Reid</option>${PBP.partners.map(x => `<option value="${x.id}" ${String(PBP.partner || "") === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>
+          <span class="quiet">A partner book shows that partner's equipment prices.</span></label>` : ""}
         ${(PB.books || []).length && can("pricebook.edit") ? `<label>Price book<select id="pbp-book"><option value="">Standard</option>${PB.books.map(b => `<option value="${b.id}" ${String(PBP.book ?? "") === String(b.id) ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>` : ""}
         <div class="pbp-across"><span>Equipment across the page</span><span role="group" aria-label="How many across">${[2, 3, 4, 5, 6].map(n => `<button type="button" class="chip small" data-pbp-cols="${n}" aria-pressed="${(o.cols || 2) === n}">${n}</button>`).join("")}</span></div>
         <label class="pb-check"><input type="checkbox" data-pbp-opt="member" ${o.member ? "checked" : ""}> Show member prices</label>
@@ -14950,6 +14958,7 @@ function renderPrintBook(msg) {
   document.querySelectorAll("[data-pbp-opt]").forEach(cb => cb.addEventListener("change", () => { PBP.opt[cb.dataset.pbpOpt] = cb.checked; pbpSave(); }));
   $("#pbp-book")?.addEventListener("change", e => { PBP.book = e.target.value; PBP.built = null; pbpSave(); const b = (PB.books || []).find(x => String(x.id) === String(PBP.book));
     renderPrintBook(pbpSyncBook() ? `Ticked ${b.name}'s ${PBP.picked.size} categories. Untick any you don't want in this print.` : b ? `${b.name} shows every category; tick the ones you want.` : ""); });
+  $("#pbp-partner")?.addEventListener("change", e => { PBP.partner = e.target.value ? Number(e.target.value) : null; PBP.built = null; renderPrintBook(PBP.partner ? `Now make the book: it'll have ${(PBP.partners.find(x => x.id === PBP.partner) || {}).name} prices.` : ""); });
   $("#pbp-title").addEventListener("change", e => { PBP.title = e.target.value.trim() || "Price Book"; pbpSave(); });
   $("#pbp-make").addEventListener("click", () => makePrintBook());
   $("#pbp-print")?.addEventListener("click", () => window.print());
@@ -15026,6 +15035,10 @@ async function makePrintBook(forPick) {
   }
   if (!allIds.size) return msg("Nothing to print: those categories have no priced items.");
   PBLOOK.clear(); await pbLoadLooks([...allIds]);   // always fresh, so a name just coloured shows in the book
+  // a partner book: that partner's prices (from its numbers on the Pricing control page); items it has no numbers for keep the Reid price
+  const PART = !forPick && PBP.partner ? (PBP.partners || []).find(x => x.id === PBP.partner) : null, PPR = new Map();
+  if (PART) { const ids = [...allIds]; for (let i = 0; i < ids.length; i += 500) { const { data, error } = await db.rpc("pb_partner_prices", { p_partner: PART.id, p_ids: ids.slice(i, i + 500) });
+      if (error) return msg("Couldn't get the " + PART.name + " prices: " + rpcErr(error)); (data || []).forEach(x => { if (x.price != null) PPR.set(Number(x.item_id), Number(x.price)); }); } }
   // pictures
   const pics = new Map(), want = [...allIds].filter(id => sections.some(s => s.groups.some(g => g.items.some(r => r.id === id && r.has_picture))));
   const chunks = []; for (let i = 0; i < want.length; i += 100) chunks.push(want.slice(i, i + 100));
@@ -15044,15 +15057,15 @@ async function makePrintBook(forPick) {
         return forPick ? `<button type="button" class="pbp-showbtn" data-pbp-show="${r.id}" title="Open it big to go over it with the customer">${pic}</button>` : pic; })()}
       <div class="pbp-txt"><div class="pbp-name">${forPick ? `<button type="button" class="pbp-showname" data-pbp-show="${r.id}" title="Open it big">${pbNameHtml(r)}</button>` : pbNameHtml(r)}</div>
         ${o.desc && dd ? `<div class="pbp-desc">${(PBLOOK.get(r.id) || {}).desc_html ? pbDescHtml(r) : esc(dd)}</div>` : ""}
-        <div class="pbp-price"><strong>${money(r.unit_price)}</strong>${u ? `<span>per ${esc(u)}</span>` : ""}${o.member && pbHasMember(r) ? `<em>Members ${money(r.member_price)}</em>` : ""}</div>
+        <div class="pbp-price"><strong>${money(PPR.has(r.id) ? PPR.get(r.id) : r.unit_price)}</strong>${u ? `<span>per ${esc(u)}</span>` : ""}${!PART && o.member && pbHasMember(r) ? `<em>Members ${money(r.member_price)}</em>` : ""}</div>
         ${o.codes ? `<div class="pbp-code">${esc(r.sku)}</div>` : ""}
         ${forPick ? `<label class="pbp-cmp"><input type="checkbox" data-pbp-cmp="${r.id}"> Compare</label>` : ""}
-        ${forPick ? "" : discTag(r.id, r.unit_price, "pbp-disc")}
+        ${forPick || PART ? "" : discTag(r.id, r.unit_price, "pbp-disc")}
         ${forPick ? `<button type="button" class="btn pbp-add" data-pbp-add="${r.id}" data-pbp-name="${esc(pbName(r.name))}" data-pbp-price="${Number(r.unit_price) || 0}">Add to ${esc(EST.opts[PBPK.oi]?.name || "the option")}</button>` : ""}
         ${forPick && EST.ij?.invoice_id ? `<button type="button" class="btn quiet-btn pbp-add" data-pbp-addinv="${r.id}" title="Puts it on the invoice for this sale">Add to the invoice</button>` : ""}</div></div>`; };
   const built = `<section class="pbp-page pbp-cover">
       <div class="pbp-cover-top"><img class="pbp-logo" src="${esc(coLogo(c))}" alt="${esc(co)}"></div>
-      <div class="pbp-cover-mid"><div class="pbp-title">${esc(PBP.title)}</div>
+      <div class="pbp-cover-mid"><div class="pbp-title">${esc(PBP.title)}${PART ? `<div class="pbp-partner">${esc(PART.name)}</div>` : ""}</div>
         <div class="pbp-sub">${sections.map(s => esc(s.name)).join(" · ")}</div></div>
       <div class="pbp-cover-foot"><div>${esc(co)}</div><div>${contact.map(esc).join("  ·  ")}</div><div class="pbp-date">Prices as of ${esc(today)}. Prices before HST.</div></div>
     </section>
@@ -15310,7 +15323,10 @@ async function openPriceControl(msg) {
   setPage("price-control", "settings", "Pricing control");
   if (!(ME.role === "owner" || can("pricebook.edit"))) { $("#main").innerHTML = `<div class="empty"><div><h2>Owners only</h2>Pricing control is for owners and people who can edit the price book.</div></div>`; return; }
   if (!document.querySelector(".pctl")) $("#main").innerHTML = `<div class="loading">Loading the pricing…</div>`;
-  const [f, pr, bk, co] = await Promise.all([db.rpc("price_formula_list"), db.rpc("pb_pricing"), db.rpc("price_book_list"), db.from("company_settings").select("*").limit(1).maybeSingle()]);
+  const [f, pr, bk, co, ps, fp, bp] = await Promise.all([db.rpc("price_formula_list"), db.rpc("pb_pricing"), db.rpc("price_book_list"), db.from("company_settings").select("*").limit(1).maybeSingle(),
+    db.rpc("partner_sales"), db.rpc("price_formula_partner_list"), db.rpc("price_book_partner_list")]);
+  PCTL.partners = (ps.data || []).filter(x => x.sales_ok); PCTL.fp = fp.data || []; PCTL.fpErr = fp.error ? rpcErr(fp.error) : ""; PCTL.bp = bp.data || [];
+  if (PCTL.tab && !PCTL.partners.some(x => x.id === PCTL.tab)) PCTL.tab = 0;
   if (co.data) COMPANY = co.data;
   if (!document.querySelector(".pctl, .loading")) return;
   if (pr.data) PB.pricing = pr.data;
@@ -15373,16 +15389,9 @@ function renderPriceControl(msg) {
       </form></section>
 
     <section class="cl-tools pctl-box"><h2>4. Equipment pricing formulas</h2>
-      <p class="quiet">One line per series. Change a number and press Save on that line: every model in the series is repriced right away. Actual GP is what the models really make after rounding.
-        Click a series name to see its models.</p>
-      ${PCTL.fErr ? `<p class="staff-msg err">${esc(PCTL.fErr)}</p>` : ""}
-      <div class="staff-wrap"><table class="calls-table pctl-ft"><thead><tr><th>Series</th><th class="r">Models</th><th>Comes with</th><th class="r">Material $</th><th class="r">Warranty $</th><th class="r">Labour $</th><th class="r">Office $</th><th class="r">GP %</th><th class="r">Round to $</th><th class="r">Then add $</th><th class="r">Actual GP</th>${edit ? "<th></th>" : ""}</tr></thead>
-      ${secs.map(x => `<tbody><tr class="pctl-sec"><td colspan="${edit ? 12 : 11}">${esc(x.name)}</td></tr>${x.rows.map(f => { const g = f.gp || {}, inp = (k, v) => `<td class="r"><input class="ie-num" data-pk="${k}" inputmode="decimal" value="${v ?? ""}" ${d} aria-label="${k} for ${esc(f.name)}"></td>`;
-        return `<tr data-pctl-f="${f.id}"><td><button class="link" type="button" data-pctl-open="${f.id}"><b>${esc(f.name)}</b></button></td><td class="r num">${f.items}</td><td class="quiet">${f.addon_name ? `${esc(pbName(f.addon_name))} ${money(f.addon_cost)}` : "—"}</td>
-          ${inp("material", f.material)}${inp("warranty", f.warranty)}${inp("labour", f.labour)}${inp("office", f.office)}${inp("gp_pct", pctlPct(f.gp_pct))}${inp("round_to", f.round_to)}${inp("adder", f.adder)}
-          <td class="r num ${g.min != null && g.min < estMargin() - 0.1 ? "pb-low" : ""}">${g.avg != null ? (g.min === g.max ? pct(g.min) : `${pct(g.min)} – ${pct(g.max)}`) : "—"}</td>
-          ${edit ? `<td><button class="btn quiet-btn" type="button" data-pctl-save="${f.id}">Save</button></td>` : ""}</tr>`; }).join("")}</tbody>`).join("") || `<tbody><tr><td colspan="12" class="quiet">No pricing formulas yet.</td></tr></tbody>`}
-      </table></div>
+      <div class="pctl-tabs" role="tablist">${[{ id: 0, name: "Reid" }, ...PCTL.partners].map(t => { const n = t.id ? PCTL.fp.filter(x => x.partner_id === t.id).length : F.length;
+        return `<button type="button" role="tab" class="pctl-tab" data-pctl-tab="${t.id}" aria-selected="${(PCTL.tab || 0) === t.id}">${esc(t.name)}${t.id ? ` <span class="quiet">${n ? n + " set" : "not set"}</span>` : ""}</button>`; }).join("")}</div>
+      ${pctlGrid(F, secs, edit, d)}
       <div class="set-tools"><button class="btn quiet-btn" type="button" data-set-pb="formulas">Open the Pricing formulas page</button><span class="quiet">to add a series, add models to one, give one model its own GP %, or change what comes with it.</span></div></section>
 
     <section class="cl-tools pctl-box"><h2>5. Markup rules and member prices</h2>
@@ -15394,7 +15403,11 @@ function renderPriceControl(msg) {
 
     <section class="cl-tools pctl-box"><h2>6. Price books</h2>
       <p class="quiet">What each tech or sales person sees. Invoices always charge the sell price.</p>
-      ${PCTL.books.length ? `<table class="calls-table"><thead><tr><th>Price book</th><th>Price level</th><th class="r">Up or down</th><th>Who's on it</th></tr></thead><tbody>${PCTL.books.map(b => `<tr><td><b>${esc(b.name)}</b></td><td>${LV[b.price_level] || esc(b.price_level)}</td><td class="r num">${Number(b.adjust_pct) ? (Number(b.adjust_pct) > 0 ? "+" : "") + Number(b.adjust_pct) + "%" : "—"}</td><td>${(b.people || []).map(x => esc(x.name)).join(", ") || `<span class="quiet">no one yet</span>`}</td></tr>`).join("")}</tbody></table>`
+      ${PCTL.books.length ? `<table class="calls-table"><thead><tr><th>Price book</th><th>Price level</th><th class="r">Up or down</th><th>Who's on it</th><th>Can also print</th></tr></thead><tbody>${PCTL.books.map(b => { const canBp = can("staff.manage") || ME.role === "owner", on = new Set(PCTL.bp.filter(x => x.book_id === b.id).map(x => x.partner_id));
+        return `<tr><td><b>${esc(b.name)}</b></td><td>${LV[b.price_level] || esc(b.price_level)}</td><td class="r num">${Number(b.adjust_pct) ? (Number(b.adjust_pct) > 0 ? "+" : "") + Number(b.adjust_pct) + "%" : "—"}</td><td>${(b.people || []).map(x => esc(x.name)).join(", ") || `<span class="quiet">no one yet</span>`}</td>
+          <td class="pctl-bp"><span class="quiet">Reid book, and:</span> ${PCTL.partners.map(x => `<label class="pb-check"><input type="checkbox" data-pctl-bpc="${b.id}" value="${x.id}" ${on.has(x.id) ? "checked" : ""} ${canBp ? "" : "disabled"}> ${esc(x.name)} book</label>`).join("")}
+            ${canBp && PCTL.partners.length ? `<button class="btn quiet-btn" type="button" data-pctl-bp="${b.id}">Save</button>` : ""}</td></tr>`; }).join("")}</tbody></table>
+        <p class="quiet">A partner book prints that partner's prices (section 4). Only partners with at least one series set can be printed.</p>`
         : `<p class="quiet">No price books yet: everyone sees the whole price book at the sell price.</p>`}
       <p class="quiet">Sell price is the normal price. HSG price = total cost ÷ the series' HSG factor; Sales price = HSG price ÷ the Sales factor (both set on the Pricing formulas page).</p>
       ${can("staff.manage") || ME.role === "owner" ? `<div class="set-tools"><button class="btn quiet-btn" type="button" data-set-pb="books">Change price books</button></div>` : ""}</section>
@@ -15402,8 +15415,41 @@ function renderPriceControl(msg) {
   $("#main").scrollTop = top;
   wirePriceControl(edit);
 }
+// one tab of the formulas grid: Reid's own numbers, or one partner's (a series not set for the partner shows Reid's numbers greyed: that partner gets Reid's price)
+function pctlGrid(F, secs, edit, d) {
+  const tab = PCTL.tab || 0, P = tab ? PCTL.partners.find(x => x.id === tab) : null, pn = P ? esc(P.name) : "";
+  const head = tab ? `<p class="quiet">${pn}'s numbers for each series. A series that isn't set for ${pn} gives ${pn} the Reid price. Type numbers and press <b>Set for ${pn}</b> (blank boxes start from Reid's).
+      Partner prices show on ${pn} print books (Price books, section 6, decides who can print them).</p>${PCTL.fpErr ? `<p class="staff-msg err">${esc(PCTL.fpErr)}</p>` : ""}`
+    : `<p class="quiet">Reid's own prices. One line per series. Change a number and press Save on that line: every model in the series is repriced right away. Actual GP is what the models really make after rounding. Click a series name to see its models.</p>${PCTL.fErr ? `<p class="staff-msg err">${esc(PCTL.fErr)}</p>` : ""}`;
+  return `${head}<div class="staff-wrap"><table class="calls-table pctl-ft"><thead><tr><th>Series</th><th class="r">Models</th><th>Comes with</th><th class="r">Material $</th><th class="r">Warranty $</th><th class="r">Labour $</th><th class="r">Office $</th><th class="r">GP %</th><th class="r">Round to $</th><th class="r">Then add $</th><th class="r">Actual GP</th>${edit ? "<th></th>" : ""}</tr></thead>
+    ${secs.map(x => `<tbody><tr class="pctl-sec"><td colspan="${edit ? 12 : 11}">${esc(x.name)}</td></tr>${x.rows.map(f => {
+      const pr = tab ? PCTL.fp.find(z => z.formula_id === f.id && z.partner_id === tab) : null, src = tab ? pr || f : f, g = (tab ? pr?.gp : f.gp) || {};
+      const inp = (k, v) => `<td class="r"><input class="ie-num ${tab && !pr ? "pctl-ghost" : ""}" data-pk="${k}" inputmode="decimal" value="${tab && !pr ? "" : v ?? ""}" placeholder="${tab && !pr ? v ?? "" : ""}" ${d} aria-label="${k} for ${esc(f.name)}"></td>`;
+      return `<tr data-pctl-f="${f.id}" class="${tab && !pr ? "pctl-unset" : ""}"><td><button class="link" type="button" data-pctl-open="${f.id}"><b>${esc(f.name)}</b></button>${tab && !pr ? `<div class="quiet">uses Reid's price</div>` : ""}</td><td class="r num">${f.items}</td><td class="quiet">${f.addon_name ? `${esc(pbName(f.addon_name))} ${money(f.addon_cost)}` : "—"}</td>
+        ${inp("material", src.material)}${inp("warranty", src.warranty)}${inp("labour", src.labour)}${inp("office", src.office)}${inp("gp_pct", pctlPct(src.gp_pct))}${inp("round_to", src.round_to)}${inp("adder", src.adder)}
+        <td class="r num ${g.min != null && g.min < estMargin() - 0.1 ? "pb-low" : ""}">${g.min != null ? (Math.abs(g.min - g.max) < 0.0005 ? pct(g.min) : `${pct(g.min)} – ${pct(g.max)}`) : "—"}</td>
+        ${edit ? `<td class="pctl-acts">${tab ? `<button class="btn quiet-btn" type="button" data-pctl-psave="${f.id}">${pr ? "Save" : "Set for " + pn}</button>${pr ? `<button class="link danger" type="button" data-pctl-pdel="${f.id}">Use Reid's price</button>` : ""}`
+          : `<button class="btn quiet-btn" type="button" data-pctl-save="${f.id}">Save</button>`}</td>` : ""}</tr>`; }).join("")}</tbody>`).join("") || `<tbody><tr><td colspan="12" class="quiet">No pricing formulas yet.</td></tr></tbody>`}
+    </table></div>`;
+}
 function wirePriceControl(edit) {
   $("#pctl-back").addEventListener("click", () => openSettings());
+  document.querySelectorAll("[data-pctl-tab]").forEach(b => b.addEventListener("click", () => { PCTL.tab = Number(b.dataset.pctlTab); renderPriceControl(); }));
+  document.querySelectorAll("[data-pctl-psave]").forEach(b => b.addEventListener("click", async () => {
+    const id = Number(b.dataset.pctlPsave), tr = b.closest("tr"), f = PCTL.f.find(x => x.id === id), P = PCTL.partners.find(x => x.id === PCTL.tab), p = {};
+    for (const el of tr.querySelectorAll("[data-pk]")) { let v = String(el.value).replace(/[$,%\s]/g, ""); if (v !== "" && !isFinite(Number(v))) return renderPriceControl(`Not saved: type numbers only for ${f.name}.`);
+      if (el.dataset.pk === "gp_pct" && v !== "") { if (Number(v) >= 95) return renderPriceControl("Not saved: the gross profit has to be under 95%."); v = String(Number(v) / 100); } p[el.dataset.pk] = v; }
+    b.disabled = true;
+    const { error } = await db.rpc("price_formula_partner_set", { p_formula: id, p_partner: PCTL.tab, p });
+    openPriceControl(error ? "Not saved: " + rpcErr(error) : `Saved: ${P.name} prices for the ${f.name} series.`); }));
+  document.querySelectorAll("[data-pctl-pdel]").forEach(b => b.addEventListener("click", async () => {
+    const id = Number(b.dataset.pctlPdel), f = PCTL.f.find(x => x.id === id), P = PCTL.partners.find(x => x.id === PCTL.tab);
+    const { error } = await db.rpc("price_formula_partner_set", { p_formula: id, p_partner: PCTL.tab, p: null });
+    openPriceControl(error ? "Not saved: " + rpcErr(error) : `${P.name} gets Reid's price for the ${f.name} series again.`); }));
+  document.querySelectorAll("[data-pctl-bp]").forEach(b => b.addEventListener("click", async () => {
+    const book = Number(b.dataset.pctlBp), ids = [...document.querySelectorAll(`[data-pctl-bpc="${book}"]:checked`)].map(x => Number(x.value));
+    const { error } = await db.rpc("price_book_partners_set", { p_book: book, p_partners: ids });
+    openPriceControl(error ? "Not saved: " + rpcErr(error) : "Saved: who can print which partner books."); }));
   document.querySelectorAll("[data-pctl-open]").forEach(b => b.addEventListener("click", () => { PF.open = Number(b.dataset.pctlOpen); openFormulas(); }));
   $("#pctl-co")?.addEventListener("submit", async e => { e.preventDefault(); const f = e.target, m = $("#pctl-co-msg"), n = v => String(v).trim() === "" ? null : Number(String(v).replace(/[$,%\s]/g, ""));
     const r = n(f.rate.value), g = n(f.goal.value);
@@ -15452,7 +15498,12 @@ async function pctlWalk() {
       </tbody></table>
       ${Math.abs(calc - price) > 0.5 ? `<p class="staff-msg err">The price book has ${money(price)}, not ${money(calc)}. It may have been typed by hand or be waiting for a new cost.</p>` : `<p class="staff-msg ok">Matches the price book: ${money(price)}.</p>`}
       <p class="quiet">What it really makes: profit ${money(price - sub2)}, ${price ? pct((price - sub2) / price) : "—"} gross profit (rounding and the adder move it off the ${pct(gp)} target).
-        ${c.hsg != null ? `HSG price (reference) ${money(c.hsg)}, Sales price ${money(c.sales)}.` : ""}</p>`;
+        ${c.hsg != null ? `HSG price (reference) ${money(c.hsg)}, Sales price ${money(c.sales)}.` : ""}</p>
+      ${(() => { const rows = PCTL.fp.filter(z => z.formula_id === f.id).map(z => { const P = PCTL.partners.find(x => x.id === z.partner_id); if (!P) return "";
+          const s2 = cost + addon + Number(z.material) + Number(z.warranty) + Number(z.labour) + Number(z.office), g2 = Number(z.gp_pct), rt2 = Number(z.round_to) || 1, pp = Math.round(s2 / (1 - g2) / rt2) * rt2 + Number(z.adder);
+          return `<tr><td>${esc(P.name)}</td><td class="r num">${money(s2)}</td><td class="r num">${pct(g2)}</td><td class="r num"><b>${money(pp)}</b></td><td class="r num">${pp ? pct((pp - s2) / pp) : "—"}</td></tr>`; }).join("");
+        return rows ? `<h3>Partner prices for this model</h3><table class="calls-table pctl-walk-p"><thead><tr><th>Partner</th><th class="r">Total cost</th><th class="r">GP target</th><th class="r">Price</th><th class="r">Really makes</th></tr></thead><tbody>${rows}</tbody></table>`
+          : `<p class="quiet">No partner has its own numbers for this series, so partners get the Reid price.</p>`; })()}`;
   } else {
     const P = PCTL.pr, rp = P ? pbRulePrice(r.item_type, cost) : null;
     body = `<p>Not on a pricing formula, so it uses ${rp != null ? "the markup rules" : "the price typed in the price book"}.</p>
