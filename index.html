@@ -2360,6 +2360,13 @@
   .est-comm-t td { border-top: 1px solid #e5dbff; padding: 4px 6px; } .est-comm-t .r { text-align: right; } .est-comm-sum td { background: #efe9ff; }
   .ec-own { margin-top: 4px; padding-top: 4px; border-top: 1px dashed #b197fc; } .ec-own .ec-row:first-child span:last-child { color: #5f3dc4; font-weight: 700; }
   .ec-comm-d summary { cursor: pointer; font-size: 12.5px; color: #5f3dc4; } .ec-comm-d select { width: 100%; margin: 4px 0; } .ec-comm-d .ec-row { font-size: 12.5px; } .ec-own-note { font-size: 11.5px; }
+  .pf-jc { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--line); border-left: 5px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--panel, #fff); max-width: 760px; }
+  .pf-jc.ok { border-left-color: var(--green); } .pf-jc.low { border-left-color: var(--red); }
+  .pf-jc-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; } .pf-jc-head h3 { margin: 0; font-size: 16px; }
+  .pf-jc-head label { display: flex; gap: 6px; align-items: center; font-weight: 700; font-size: 13px; } .pf-jc-head select { max-width: 360px; }
+  .pf-jc-t .pf-in { width: 96px; text-align: right; } .pf-jc-t td { vertical-align: middle; } .pf-addon { max-width: 260px; margin-left: 4px; }
+  .pf-jc.ok .pbi-jc-big > div:first-child strong { color: var(--green); } .pf-jc.low .pbi-jc-big > div:first-child strong { color: var(--red); }
+  .pf-ref summary { cursor: pointer; font-size: 13px; color: var(--steel); } .pf-ref-in { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
   .pctl-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); } .pctl-tab { border: 1px solid var(--line); border-bottom: 0; background: var(--paper); border-radius: 8px 8px 0 0; padding: 7px 14px; font-weight: 700; cursor: pointer; margin-bottom: -2px; }
   .pctl-tab[aria-selected="true"] { background: #fff; border-color: var(--blue, #1d4f91); border-bottom: 2px solid #fff; color: var(--blue, #1d4f91); } .pctl-tab .quiet { font-weight: 400; font-size: 12px; }
   .pctl-unset td { color: var(--steel); } .pctl-ghost::placeholder { color: #adb5bd; } .pctl-acts { white-space: nowrap; } .pctl-acts .link { margin-left: 6px; }
@@ -15839,16 +15846,59 @@ function renderFormulas(msg) {
   $("#main").scrollTop = top;
   wireFormulas();
 }
+// PB: an open series laid out like the item page's job costing: each cost on its own line with $ and % of the price,
+// then the price, margin and markup, for the model picked (live as you type; Save reprices every model)
 function pfSettings(f, edit, tstats) {
-  const d = edit ? "" : "disabled", n = (k, lab, v, hint) => `<label>${lab}<input data-pf-f="${k}" inputmode="decimal" value="${v ?? ""}" ${d}>${hint ? `<span class="quiet">${hint}</span>` : ""}</label>`;
-  const opts = [...new Map([[f.addon_item_id, f.addon_name], ...((tstats && PF.tstatItems) || []).map(t => [t.id, t.name])]).entries()].filter(([id]) => id);
-  return `<form class="pf-set" id="pf-set">
-    <label>Comes with (thermostat)<select data-pf-f="addon_item_id" ${d}><option value="">Nothing (or each model's own coil)</option>${opts.map(([id, nm]) => `<option value="${id}" ${id === f.addon_item_id ? "selected" : ""}>${esc(pbName(nm))}</option>`).join("")}</select></label>
-    ${n("material", "Material $", f.material)}${n("warranty", "Warranty $", f.warranty)}${n("labour", "Labour $", f.labour)}
-    ${n("gp_pct", "Gross profit %", Math.round(Number(f.gp_pct) * 1000) / 10)}${n("round_to", "Round to $", f.round_to)}${n("adder", "Then add $", f.adder)}
-    ${n("hsg_factor", "HSG factor", f.hsg_factor, "reference only")}${n("sales_factor", "Sales factor", f.sales_factor, "reference only")}
-    ${edit ? `<div class="pf-setbtns"><button class="btn" type="submit">Save and reprice</button><span class="quiet">Every model below gets its new price right away.</span></div>` : ""}
+  const d = edit ? "" : "disabled", it = (PF.items || []).filter(x => x.active !== false && Number(x.cost) > 0);
+  const opts = [...new Map([[f.addon_item_id, { name: f.addon_name, cost: f.addon_cost }], ...((tstats && PF.tstatItems) || []).map(t => [t.id, { name: t.name, cost: t.cost }])]).entries()].filter(([id]) => id);
+  PF.addonCost = Object.fromEntries(opts.map(([id, o]) => [id, Number(o.cost) || 0]));
+  if (!it.some(x => x.id === PF.model)) PF.model = it[0]?.id ?? null;
+  const inp = (k, v, w) => `<input class="ie-num pf-in" data-pf-f="${k}" inputmode="decimal" value="${v ?? ""}" ${d} aria-label="${k}"${w ? ` style="width:${w}px"` : ""}>`;
+  const row = (lab, sub, val, id) => `<tr><td>${lab}${sub ? ` <span class="quiet">${sub}</span>` : ""}</td><td class="r num">${val}</td><td class="r num quiet" id="${id}"></td></tr>`;
+  return `<form class="pf-set pf-jc" id="pf-set">
+    <div class="pf-jc-head"><h3>How a ${esc(f.name)} price is made</h3>
+      ${it.length ? `<label>For the model <select id="pf-model">${it.map(x => `<option value="${x.id}" ${x.id === PF.model ? "selected" : ""}>${esc(pbName(x.name))} · ${esc(x.sku)}</option>`).join("")}</select></label>` : `<span class="quiet">Add a model below to see its numbers.</span>`}</div>
+    <table class="pbi-jc-t pf-jc-t"><thead><tr><th></th><th class="r">$</th><th class="r">% of price</th></tr></thead><tbody>
+      ${row("Equipment: the unit", "what we pay for the model", `<span id="pf-c-unit">—</span>`, "pf-p-unit")}
+      <tr><td>Equipment: comes with <select data-pf-f="addon_item_id" ${d} class="pf-addon"><option value="">Nothing (or each model's own coil)</option>${opts.map(([id, o]) => `<option value="${id}" ${id === f.addon_item_id ? "selected" : ""}>${esc(pbName(o.name))}</option>`).join("")}</select></td><td class="r num" id="pf-c-addon">—</td><td class="r num quiet" id="pf-p-addon"></td></tr>
+      ${row("Materials", "install parts", inp("material", f.material), "pf-p-mat")}
+      ${row("Warranty", "", inp("warranty", f.warranty), "pf-p-war")}
+      ${row("Labour", "", inp("labour", f.labour), "pf-p-lab")}
+      <tr class="pbi-jc-tot"><td><b>Total cost</b></td><td class="r num"><b id="pf-c-tot">—</b></td><td class="r num" id="pf-p-tot"></td></tr>
+      <tr><td>Gross profit target</td><td class="r num">${inp("gp_pct", Math.round(Number(f.gp_pct) * 1000) / 10, 70)} %</td><td class="r num quiet">÷ <span id="pf-div">—</span></td></tr>
+      <tr><td>Round to the nearest</td><td class="r num">$ ${inp("round_to", f.round_to, 70)}</td><td></td></tr>
+      <tr><td>Then add</td><td class="r num">$ ${inp("adder", f.adder, 70)}</td><td></td></tr>
+      <tr class="pbi-jc-price"><td><b>Sell price</b> <span class="quiet">before HST</span></td><td class="r num"><b id="pf-c-price">—</b></td><td class="r num quiet">100%</td></tr>
+      <tr class="pbi-jc-tot"><td><b>Profit</b></td><td class="r num"><b id="pf-c-profit">—</b></td><td class="r num" id="pf-p-profit"></td></tr>
+    </tbody></table>
+    <div class="pbi-jc-big"><div><span>Margin</span><strong id="pf-b-margin">—</strong></div><div><span>Markup</span><strong id="pf-b-markup">—</strong></div></div>
+    <p class="quiet" id="pf-note"></p>
+    <details class="pf-ref"><summary>Reference factors (HSG and Sales price levels)</summary><div class="pf-ref-in">
+      <label>HSG factor ${inp("hsg_factor", f.hsg_factor, 70)}</label><label>Sales factor ${inp("sales_factor", f.sales_factor, 70)}</label>
+      <span class="quiet">HSG price = total cost ÷ HSG factor; Sales price = HSG price ÷ Sales factor. Used by price books set to those levels.</span></div></details>
+    ${edit ? `<div class="pf-setbtns"><button class="btn" type="submit">Save and reprice</button><span class="quiet">Every model in ${esc(f.name)} gets its new price right away.</span></div>` : ""}
   </form>`;
+}
+// live numbers for the picked model, as the boxes change
+function pfCalc() {
+  const fm = $("#pf-set"); if (!fm) return;
+  const g = k => { const el = fm.querySelector(`[data-pf-f="${k}"]`); const v = Number(String(el?.value ?? "").replace(/[$,%\s]/g, "")); return isFinite(v) ? v : 0; };
+  const m = (PF.items || []).find(x => x.id === PF.model), cost = m ? Number(m.cost) || 0 : 0;
+  const addonSel = fm.querySelector('[data-pf-f="addon_item_id"]').value, addon = m?.addon_item_id ? Number(m.addon_cost) || 0 : addonSel ? PF.addonCost[addonSel] ?? 0 : 0;
+  const mat = g("material"), war = g("warranty"), lab = g("labour"), gp = g("gp_pct") / 100, rt = g("round_to") || 1, add = g("adder");
+  const tot = cost + addon + mat + war + lab, price = gp < 0.95 ? Math.round(tot / (1 - gp) / rt) * rt + add : 0, profit = price - tot;
+  const pc = v => price > 0 ? (v / price * 100).toFixed(1) + "%" : "";
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set("pf-c-unit", m ? money(cost) : "—"); set("pf-p-unit", m ? pc(cost) : "");
+  set("pf-c-addon", money(addon)); set("pf-p-addon", pc(addon));
+  if (m?.addon_item_id) set("pf-c-addon", money(addon) + " (" + pbName(m.addon_name || "own coil") + ")");
+  set("pf-p-mat", pc(mat)); set("pf-p-war", pc(war)); set("pf-p-lab", pc(lab));
+  set("pf-c-tot", money(tot)); set("pf-p-tot", pc(tot)); set("pf-div", (1 - gp).toFixed(2));
+  set("pf-c-price", money(price)); set("pf-c-profit", money(profit)); set("pf-p-profit", pc(profit));
+  const mg = price > 0 ? profit / price : null; set("pf-b-margin", mg != null ? (mg * 100).toFixed(1) + "%" : "—"); set("pf-b-markup", tot > 0 ? ((price / tot - 1) * 100).toFixed(1) + "%" : "—");
+  const ok = mg != null && mg >= estMargin() - 0.0005; fm.classList.toggle("ok", ok); fm.classList.toggle("low", mg != null && !ok);
+  const now = m ? Number(m.price) : null, goal = Math.round(estMargin() * 1000) / 10;
+  set("pf-note", m ? `${now != null && Math.abs(now - price) > 0.5 ? `In the price book now: ${money(now)}. Press Save and reprice to change it to ${money(price)}. ` : `Matches the price book (${money(now)}). `}${mg != null ? (ok ? `At or above your ${goal}% margin goal.` : `Below your ${goal}% margin goal.`) : ""} Rounding and the adder move the real margin off the target.` : "");
 }
 function pfItems(f, edit) {
   const it = PF.items || [];
@@ -15867,6 +15917,8 @@ function pfItems(f, edit) {
 }
 function wireFormulas() {
   const say = m => openFormulas(m), f = PF.rows.find(x => x.id === PF.open);
+  $("#pf-model")?.addEventListener("change", e => { PF.model = Number(e.target.value); pfCalc(); });
+  $("#pf-set")?.addEventListener("input", pfCalc); $("#pf-set")?.addEventListener("change", pfCalc); pfCalc();
   $("#pf-new")?.addEventListener("click", () => { PF.newOpen = true; renderFormulas(); $("#pf-newf [name=n]").focus(); });
   $("#pf-newx")?.addEventListener("click", () => { PF.newOpen = false; renderFormulas(); });
   $("#pf-newf")?.addEventListener("submit", async e => { e.preventDefault();
@@ -15874,7 +15926,7 @@ function wireFormulas() {
     if (error) return say("Not saved: " + rpcErr(error)); PF.newOpen = false; PF.open = data; say("Made. Set its numbers, then add the models it prices."); });
   document.querySelectorAll("[data-pf]").forEach(b => b.addEventListener("click", async () => {
     const id = Number(b.dataset.pf); PF.open = PF.open === id ? null : id;
-    if (PF.open && !PF.tstatItems) { const t = PF.rows.find(x => /thermostat/i.test(x.name)); if (t) { const r = await db.rpc("price_formula_items", { p_formula: t.id }); PF.tstatItems = (r.data || []).map(x => ({ id: x.id, name: x.name })); } else PF.tstatItems = []; }
+    if (PF.open && !PF.tstatItems) { const t = PF.rows.find(x => /thermostat/i.test(x.name)); if (t) { const r = await db.rpc("price_formula_items", { p_formula: t.id }); PF.tstatItems = (r.data || []).map(x => ({ id: x.id, name: x.name, cost: x.cost })); } else PF.tstatItems = []; }
     openFormulas(); }));
   document.querySelectorAll("[data-pf-item]").forEach(b => b.addEventListener("click", () => openPbItemPage(Number(b.dataset.pfItem))));
   $("#pf-set")?.addEventListener("submit", async e => { e.preventDefault();
