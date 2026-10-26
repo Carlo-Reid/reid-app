@@ -2341,6 +2341,9 @@
   .pctl-ft input.ie-num { width: 74px; } .pctl-sec td { background: var(--paper); font-weight: 800; text-transform: uppercase; letter-spacing: .05em; font-size: 12px; color: var(--steel); }
   .pctl-topbar { overflow-x: auto; overflow-y: hidden; height: 16px; } .pctl-topbar > div { height: 1px; }
   .pctl-wrap { max-height: 70vh; overflow: auto; } .pctl-wrap thead th { position: sticky; top: 0; z-index: 2; background: var(--panel, #fff); }
+  .pbi-comm { display: flex; flex-direction: column; gap: 6px; } .pbi-comm-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; } .pbi-comm-row label { display: flex; flex-direction: column; font-size: 12px; font-weight: 700; color: var(--steel); }
+  .pbi-comm-row select { max-width: 260px; } .pbi-comm-pct { flex-direction: row !important; align-items: center; gap: 4px; } .pbi-comm-pct input { width: 70px; }
+  .pbi-own td { background: #fff9db; } .pbi-own.neg td { background: #fff5f5; color: var(--red); }
   .pctl-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); } .pctl-tab { border: 1px solid var(--line); border-bottom: 0; background: var(--paper); border-radius: 8px 8px 0 0; padding: 7px 14px; font-weight: 700; cursor: pointer; margin-bottom: -2px; }
   .pctl-tab[aria-selected="true"] { background: #fff; border-color: var(--blue, #1d4f91); border-bottom: 2px solid #fff; color: var(--blue, #1d4f91); } .pctl-tab .quiet { font-weight: 400; font-size: 12px; }
   .pctl-unset td { color: var(--steel); } .pctl-ghost::placeholder { color: #adb5bd; } .pctl-acts { white-space: nowrap; } .pctl-acts .link { margin-left: 6px; }
@@ -15131,6 +15134,7 @@ async function pbiLabour(id, edit, msg) {
 // Job costing on the part page: the same costing the proposal uses (kit parts, labour, warranty, office), for one of this item
 async function pbiCosting(id) {
   const box = $("#pbi-jc"); if (!box) return;
+  if (!COMPANY || !("commission_default_pct" in COMPANY)) { const c = await db.from("company_settings").select("*").limit(1).maybeSingle(); if (c.data) COMPANY = c.data; }
   const r = (PB.rows || []).find(x => x.id === id); if (!r) return;
   ECOST.delete(id); EST.costErr = ""; await estCosting([id]);
   if (!$("#pbi-jc") || PB.itemPage !== id) return;
@@ -15151,6 +15155,7 @@ async function pbiCosting(id) {
       <tr class="pbi-jc-tot"><td><b>Total cost</b></td><td class="r num"><b>${money(cost)}</b></td><td class="r num">${pc(cost)}</td></tr>
       <tr class="pbi-jc-tot"><td><b>Profit</b></td><td class="r num"><b>${money(profit)}</b></td><td class="r num">${pc(profit)}</td></tr>
     </tbody></table>
+    <div class="pbi-comm" id="pbi-comm"></div>
     <div class="pbi-jc-big"><div><span>Margin</span><strong>${margin == null ? "—" : (margin * 100).toFixed(1) + "%"}</strong></div>
       <div><span>Markup</span><strong>${cost > 0 ? ((price / cost - 1) * 100).toFixed(1) + "%" : "—"}</strong></div></div>
     ${margin == null ? `<p class="quiet">No price set, so there's no margin yet.</p>` : ok ? `<p class="quiet">Above the ${Math.round(estMargin() * 1000) / 10}% goal. You could discount up to <b>${money(Math.max(0, price - at40))}</b> and still keep ${Math.round(estMargin() * 1000) / 10}%.</p>`
@@ -15158,7 +15163,33 @@ async function pbiCosting(id) {
     ${mem != null ? `<p class="quiet">Member price ${money(mem)}: profit ${money(mem - cost)}, margin ${mem > 0 ? ((mem - cost) / mem * 100).toFixed(1) + "%" : "—"}.</p>` : ""}
     ${c.known ? "" : `<p class="quiet">No cost found for this item, so it shows as $0.</p>`}
     ${can("pricebook.edit") || ME.role === "owner" ? `<div class="pbi-disc" id="pbi-disc"><h3>Discount for a price book</h3><div class="quiet">Loading…</div></div>` : ""}`;
+  pbiComm(price, cost);
   if ($("#pbi-disc")) pbiDisc(id, price, cost);
+}
+// PB 6: the sales commission on this sale (a sales person's own rate from the Installs page, or the company default from
+// Pricing control), and for owners only what's left for the owner after the commission
+let PBI_CP = null;
+async function pbiComm(price, cost) {
+  const box = $("#pbi-comm"); if (!box) return;
+  if (!PBI_CP) { const r = await db.rpc("commission_people"); PBI_CP = r.error ? [] : (r.data || []).filter(x => x.pct != null || Number(x.installs_this_year) > 0); }
+  if (!$("#pbi-comm")) return;
+  const def = COMPANY?.commission_default_pct != null ? Number(COMPANY.commission_default_pct) : null, owner = ME.role === "owner";
+  box.innerHTML = `<div class="pbi-comm-row"><label>Sales commission for <select id="pbi-comm-who"><option value="">${def != null ? `Company default (${+def}%)` : "Company default (not set)"}</option>
+      ${PBI_CP.map(x => `<option value="${x.employee_id}" data-pct="${x.pct ?? ""}">${esc(x.name)}${x.pct != null ? ` (${+Number(x.pct)}%)` : " (no rate set)"}</option>`).join("")}</select></label>
+    <label class="pbi-comm-pct"><input id="pbi-comm-pct" inputmode="decimal" value="${def ?? ""}" placeholder="%" aria-label="Commission %">%</label></div>
+    <table class="pbi-jc-t"><tbody>
+      <tr><td>Sales commission <span class="quiet" id="pbi-comm-note"></span></td><td class="r num" id="pbi-comm-amt">—</td><td class="r num quiet" id="pbi-comm-pc"></td></tr>
+      ${owner ? `<tr class="pbi-own"><td><b>Owner take-home</b> <span class="quiet">profit less commission · only owners see this</span></td><td class="r num"><b id="pbi-own-amt">—</b></td><td class="r num" id="pbi-own-pc"></td></tr>` : ""}
+    </tbody></table>
+    ${def == null && !PBI_CP.some(x => x.pct != null) ? `<p class="quiet">No commission rates are set yet. Set a company default on the Pricing control page (Settings), or each sales person's rate under Commission rates on the Installs page.</p>` : ""}`;
+  const who = $("#pbi-comm-who"), inp = $("#pbi-comm-pct");
+  const calc = () => { const v = String(inp.value).trim() === "" ? null : Number(String(inp.value).replace(/[%\s]/g, ""));
+    const ok = v != null && isFinite(v) && v >= 0, c = ok ? Math.round(price * v) / 100 : null, left = price - cost - (c || 0), pc = x => price > 0 ? (x / price * 100).toFixed(1) + "%" : "—";
+    $("#pbi-comm-amt").textContent = c != null ? money(c) : "—"; $("#pbi-comm-pc").textContent = c != null ? pc(c) : "";
+    $("#pbi-comm-note").textContent = ok ? `${+v}% of ${money(price)} before HST` : "type a % to see it";
+    if (owner) { $("#pbi-own-amt").textContent = money(left); $("#pbi-own-pc").textContent = pc(left); $("#pbi-own-amt").closest("tr").classList.toggle("neg", left < 0); } };
+  who.addEventListener("change", () => { const o = who.selectedOptions[0]; inp.value = who.value ? o.dataset.pct : def ?? ""; calc(); });
+  inp.addEventListener("input", calc); calc();
 }
 // PB 6: pick a price book and give it money off this item; everyone on that book sees it on their price book and print book,
 // and they can add it with the discount to a proposal or invoice in one click
@@ -15387,6 +15418,8 @@ function renderPriceControl(msg) {
       <form class="pctl-co" id="pctl-co">
         <label>Labour cost per hour<span class="pctl-in">$<input name="rate" inputmode="decimal" value="${rate != null ? Number(rate).toFixed(2) : ""}" placeholder="55.00" ${d}></span>
           <span class="quiet">What one hour of a tech costs you. Used for an item's own labour (hours × techs × this) on proposals and add-on kits.${rate == null ? " Not set yet, so $55 is used." : ""}</span></label>
+        <label>Default sales commission<span class="pctl-in"><input name="comm" inputmode="decimal" value="${COMPANY?.commission_default_pct != null ? +Number(COMPANY.commission_default_pct) : ""}" placeholder="e.g. 5" ${d}>%</span>
+          <span class="quiet">% of the sale before HST. Shown on each item's job costing. A sales person's own rate (Installs page, Commission rates) wins.</span></label>
         <label>Margin goal on proposals<span class="pctl-in"><input name="goal" inputmode="decimal" value="${goal}" ${d}>%</span>
           <span class="quiet">The costing card on a proposal turns green at or above this, and shows the most you can discount and still keep it.</span></label>
         ${edit ? `<div><button class="btn" type="submit">Save</button> <span class="staff-msg" id="pctl-co-msg" role="status"></span></div>` : ""}
@@ -15491,9 +15524,9 @@ function wirePriceControl(edit) {
     const { error } = await db.rpc("price_book_partners_set", { p_book: book, p_partners: ids });
     openPriceControl(error ? "Not saved: " + rpcErr(error) : "Saved: who can print which partner books."); }));
   $("#pctl-co")?.addEventListener("submit", async e => { e.preventDefault(); const f = e.target, m = $("#pctl-co-msg"), n = v => String(v).trim() === "" ? null : Number(String(v).replace(/[$,%\s]/g, ""));
-    const r = n(f.rate.value), g = n(f.goal.value);
-    if ((r != null && !isFinite(r)) || g == null || !isFinite(g)) { m.className = "staff-msg err"; m.textContent = "Type numbers only."; return; }
-    const { error } = await db.rpc("pricing_control_set", { p_labour: r, p_margin: g });
+    const r = n(f.rate.value), g = n(f.goal.value), cm = n(f.comm.value);
+    if ((r != null && !isFinite(r)) || (cm != null && !isFinite(cm)) || g == null || !isFinite(g)) { m.className = "staff-msg err"; m.textContent = "Type numbers only."; return; }
+    const { error } = await db.rpc("pricing_control_set", { p_labour: r, p_margin: g, p_commission: cm });
     if (error) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
     openPriceControl("Saved. Proposals use the new numbers from now on."); });
   wirePctlGrid();
