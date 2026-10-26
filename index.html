@@ -3575,6 +3575,7 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .sl-pay.on input[type=date] { border-color: #e8a33a; background: #fff6e5; } .sl-payall { background: #fff6e5; border-radius: 10px; padding: 8px 10px; }
 .sl-inst-tag { display: inline-block; margin-top: 4px; font-size: 11px; }
 .sl-comm { white-space: nowrap; }
+.sl-views { margin: 0 0 12px; display: inline-flex; } .sl-views button { font-size: 15px; padding: 8px 18px; font-weight: 700; }
 .sl-cf-note { background: #fff6e5; border-radius: 8px; padding: 4px 10px; font-size: 13px; }
 .sl-tablewrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .sl-tablewrap .top-sbar { top: 0; background: var(--panel); margin-bottom: 0; }
@@ -4310,7 +4311,7 @@ async function showApp() {
   $("#partners-link").classList.toggle("hidden", !canPartnerPay());
   $("#marketing-link").classList.toggle("hidden", !can("email.send"));
   $("#installs-link").classList.toggle("hidden", !(can("installs.manage") || ["owner", "accounting"].includes(ME.role)));
-  $("#commissions-link").classList.toggle("hidden", !(can("installs.manage") || ["owner", "accounting"].includes(ME.role)));
+  $("#commissions-link").classList.add("hidden");   // Commissions is a view on the Sales page now
   $("#pos-link").classList.toggle("hidden", !ME.role || !(can("po.create") || ["owner", "admin", "accounting", "warehouse", "office", "dispatcher"].includes(ME.role)));
   $("#dispatch-link").classList.toggle("hidden", !ME.booking || !(can("calls.dispatch") || can("calls.book")));
   $("#dispatchmap-link").classList.toggle("hidden", !ME.booking || !(can("calls.dispatch") || can("calls.book")));
@@ -5319,7 +5320,7 @@ function setPage(hash, kind, label) {
   if (hash !== "dispatch") document.body.classList.remove("dsp-mapmode");
   if (hash !== "stock") try { stkCamStop(); } catch {}
   document.body.classList.toggle("dsp-sales", hash === "sales-dispatch");
-  document.querySelectorAll(".side-nav-list button").forEach(b => b.classList.toggle("cur", b.dataset.page === (hash === "sales-dispatch" ? "sales-dispatch" : kind)));
+  document.querySelectorAll(".side-nav-list button").forEach(b => b.classList.toggle("cur", b.dataset.page === (hash === "sales-dispatch" ? "sales-dispatch" : kind === "commissions" ? "sales" : kind)));
   setTimeout(showLastCust, 0);
   if (location.hash !== h) { if (h) location.hash = hash; else history.pushState(null, "", location.pathname); }
   const top = NAV.stack[NAV.stack.length - 1];
@@ -6666,6 +6667,11 @@ function salesSpPick(r) {
   return `<label class="sl-sp-pick" title="The sales person on this deal"><select aria-label="Sales person" data-sl-sp="${src.job_id}">
     <option value="" ${!hit ? "selected" : ""}>${cur && !hit ? esc(cur) : "No one yet"}</option>${P.map(x => `<option value="${x.id}" ${hit && hit.id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>`;
 }
+// Sales and Commissions are one page: two views at the top
+const salesSeeComm = () => can("installs.manage") || ["owner", "accounting"].includes(ME.role);
+const salesViews = on => salesSeeComm() ? `<div class="seg sl-views" role="tablist" aria-label="Sales page">
+    <button type="button" role="tab" data-sl-view="deals" aria-pressed="${on === "deals"}">Deals</button><button type="button" role="tab" data-sl-view="commissions" aria-pressed="${on === "commissions"}">Commissions</button></div>` : "";
+function wireSalesViews() { document.querySelectorAll("[data-sl-view]").forEach(b => b.addEventListener("click", () => b.dataset.slView === "commissions" ? openCommissions() : openSales())); }
 // the drop-down of sales people: owners/dispatchers always; a sales person only when an owner let them see someone else's page
 function salesWhoPicker() {
   const P = SALES.people || [], boss = salesBoss();
@@ -6713,6 +6719,7 @@ function renderSales(msg) {
   const STAGE = { booked: ["Booked", "sl-booked"], estimate: ["Proposal", "sl-est"], closed: ["Closed deal", "sl-won"], lost: ["Not sold", "sl-lost"], install: ["Install", "sl-inst"] };
   const won = R.filter(r => r.stage === "closed").reduce((s, r) => s + Number(r.sold_total || 0), 0);
   $("#main").innerHTML = `<article class="staff sales">
+    ${salesViews("deals")}
     <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Sales</span><h1>Sales</h1>
       <p>Your sales calls: book the call, make the proposal, close the deal. To start a new one, press <b>+ New sales job</b>, find the customer (or add them) and press <b>+ Book a sales call</b>.</p></div>
       <div class="cl-hero-range"><span>Closed deals${SALES.from || SALES.to ? " · " + esc(SALES.range && SALES.range !== "custom" ? SALES_RANGES.find(x => x[0] === SALES.range)[1] : [SALES.from ? fmtDate(SALES.from) : "start", SALES.to ? fmtDate(SALES.to) : "today"].join(" – ")) : ""}</span><strong class="ow-hero-amt">${money(won)}</strong><em>${n("closed")} sold · ${n("open")} open</em>${SALES.comm ? `<div class="sl-comm-grid"><div class="sl-cg-h">Commission</div>
@@ -6750,7 +6757,7 @@ function renderSales(msg) {
           : r.est_id ? `<button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>` : ""}${(r.stage === "closed" || r.stage === "install") && r.est_id ? `<button class="btn quiet-btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>${estSoldBtns(r.est_id, !!r.st_id)}` : ""}${["booked", "estimate"].includes(r.stage) ? `<button class="btn quiet-btn sl-cancel" type="button" data-sl-cancel="${r.job_id}" title="Cancel this sales job and its proposal">Cancel</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="quiet">${qq.length ? "Nothing matches your search." : SALES.tab === "open" ? "No open sales jobs. Press + New sales job to start one." : "Nothing here."}</p>`}
   </article>`;
-  salesFitList(); setTimeout(salesFitList, 200);   // again once the sideways bar is in
+  wireSalesViews(); salesFitList(); setTimeout(salesFitList, 200);   // again once the sideways bar is in
   document.querySelectorAll("[data-sl-tab]").forEach(b => b.addEventListener("click", () => { SALES.tab = b.dataset.slTab; salesSave(); renderSales(); }));
   // payroll: tick or pick a pay day (ticking with no day asks for one); clear the tick to take it off
   const paySet = async (id, day, msg) => { const c = SALES.comm?.get(id);
@@ -16155,8 +16162,9 @@ function renderCommissions(msg) {
   const P = [...by.values()].sort((a, b) => b.comm - a.comm), T = P.reduce((a, x) => ({ n: a.n + x.n, sale: a.sale + x.sale, comm: a.comm + x.comm, paid: a.paid + x.paid, owed: a.owed + x.owed, waiting: a.waiting + x.waiting }), { n: 0, sale: 0, comm: 0, paid: 0, owed: 0, waiting: 0 });
   const def = COMPANY?.commission_default_pct, yrs = [0, 1, 2].map(d => new Date().getFullYear() - d);
   $("#main").innerHTML = `<article class="staff comm-page">
-    <div class="pos-head"><h1>Commissions</h1><span><button class="btn quiet-btn" type="button" id="comm-ins">Open Installs</button></span></div>
-    <p class="lead">Everything about sales commission in one place: what each person is owed and has been paid, their % for each type of work, and the default.</p>
+    ${salesViews("commissions")}
+    <div class="pos-head"><h1>Sales · Commissions</h1><span><button class="btn quiet-btn" type="button" id="comm-deals">See each deal's commission and payroll</button> <button class="btn quiet-btn" type="button" id="comm-ins">Open Installs</button></span></div>
+    <p class="lead">Each sales person's commission for the year: owed, paid and waiting, and their % for each type of work. To pay commission or put it on payroll, use the Deals view (Commission and Payroll columns).</p>
     ${msg ? `<div class="staff-msg ${/^Not/.test(msg) ? "err" : "ok"}" role="status">${esc(msg)}</div>` : ""}
     <section class="cl-tools pctl-box"><h2>1. Owed and paid <select id="comm-year" aria-label="Year">${yrs.map(y => `<option ${y === COMM.year ? "selected" : ""}>${y}</option>`).join("")}</select></h2>
       ${COMM.err ? `<p class="staff-msg err">${esc(COMM.err)}</p>` : ""}
@@ -16173,6 +16181,8 @@ function renderCommissions(msg) {
   </article>`;
   wirePctlComm();
   $("#comm-ins").addEventListener("click", () => openInstalls());
+  $("#comm-deals")?.addEventListener("click", () => { SALES.commF = "unpaid"; salesSave(); openSales(); });
+  wireSalesViews();
   $("#comm-year").addEventListener("change", e => { COMM.year = Number(e.target.value); openCommissions(); });
   $("#comm-def").addEventListener("submit", async e => { e.preventDefault(); const v = String(e.target.comm.value).trim().replace(/[%\s]/g, ""), m = $("#comm-def-msg");
     if (v !== "" && !isFinite(Number(v))) { m.className = "staff-msg err"; m.textContent = "Type a number."; return; }
