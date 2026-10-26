@@ -6489,13 +6489,24 @@ async function openPrintPicks(oi) {
   if (!PBP.picked.size) { tempAll = PBP.picked; PBP.picked = new Set((PB.cats || []).filter(c => c.active !== false).map(c => c.id)); }
   if (!COMPANY) { const { data } = await db.from("company_settings").select("*").limit(1).maybeSingle(); COMPANY = data || { company_name: "Reid Heating & Cooling" }; }
   if (!PBP.picked.size) { back.querySelector(".pbpk-body").innerHTML = `<p class="quiet" style="padding:20px">There's nothing in your price book yet.</p>`; return; }
-  const key = JSON.stringify([[...PBP.picked].sort(), PBP.book ?? "", PBP.opt.nopic, PBP.opt.desc, PBP.opt.member]);
-  if (PBPK.key !== key || !PBPK.html) { let b = null; try { b = await makePrintBook(true); } finally { if (tempAll) PBP.picked = tempAll; } if (!b) return; PBPK.key = key; PBPK.html = b.html; }
+  const key = JSON.stringify([[...PBP.picked].sort(), PBP.book ?? "", PBP.opt.nopic, PBP.opt.desc, PBP.opt.member, EST.ij?.invoice_id || 0, EST.opts.length]);
+  if (PBPK.key !== key || !PBPK.html) { let b = null; PBPK.note = "";
+    try { b = await makePrintBook(true);
+      if (!b && !tempAll) {   // their print book's categories have nothing in them: show their whole price book instead of an empty pop-up
+        const keep = PBP.picked; PBP.picked = new Set((PB.cats || []).filter(c => c.active !== false).map(c => c.id));
+        try { b = await makePrintBook(true); } finally { PBP.picked = keep; }
+        if (b) PBPK.note = "Your print book's categories have nothing in them, so this is your whole price book."; } }
+    finally { if (tempAll) PBP.picked = tempAll; } if (!b) return; PBPK.key = key; PBPK.html = b.html; }
   else if (tempAll) PBP.picked = tempAll;
   if (document.getElementById("pbpk-back")?.hidden) return;
   back.querySelector(".pbpk-body").innerHTML = `<div class="pbp-doc pbp-c${PBP.opt.cols || 2}">${PBPK.html}</div>`;
-  back.querySelector("#pbpk-msg").textContent = "";
+  { const m = back.querySelector("#pbpk-msg"); m.className = "staff-msg"; m.textContent = PBPK.note || ""; }
   pbpkSyncCmp();
+  back.querySelectorAll("[data-pbp-addinv]").forEach(b => b.addEventListener("click", async () => {   // straight onto the sale's invoice
+    const inv = EST.ij?.invoice_id, m = back.querySelector("#pbpk-msg"); if (!inv) return; b.disabled = true;
+    const { data: n, error } = await db.rpc("inv_add_item", { p_invoice: inv, p_item: Number(b.dataset.pbpAddinv), p_qty: 1 });
+    if (error) { b.disabled = false; m.className = "staff-msg err"; m.textContent = "Not added to the invoice: " + rpcErr(error); return; }
+    b.textContent = "On the invoice ✓"; b.classList.add("pbb-added"); m.className = "staff-msg ok"; m.textContent = `Added to the invoice${n ? `, with ${n} add-on kit part${n > 1 ? "s" : ""}` : ""}.`; }));
   back.querySelectorAll("[data-pbp-cmp]").forEach(cb => cb.addEventListener("change", () => {
     const id = Number(cb.dataset.pbpCmp), it = pbpkItems().find(x => x.id === id);
     if (cb.checked) { if (SHOW.cmp.length >= 3 && !inCmp(id)) { cb.checked = false; const m = back.querySelector("#pbpk-msg"); m.className = "staff-msg err"; m.textContent = "Up to 3 to compare. Untick one first."; return; }
@@ -15004,7 +15015,8 @@ async function makePrintBook(forPick) {
         ${o.codes ? `<div class="pbp-code">${esc(r.sku)}</div>` : ""}
         ${forPick ? `<label class="pbp-cmp"><input type="checkbox" data-pbp-cmp="${r.id}"> Compare</label>` : ""}
         ${forPick ? "" : discTag(r.id, r.unit_price, "pbp-disc")}
-        ${forPick ? `<button type="button" class="btn pbp-add" data-pbp-add="${r.id}" data-pbp-name="${esc(pbName(r.name))}" data-pbp-price="${Number(r.unit_price) || 0}">Add</button>` : ""}</div></div>`; };
+        ${forPick ? `<button type="button" class="btn pbp-add" data-pbp-add="${r.id}" data-pbp-name="${esc(pbName(r.name))}" data-pbp-price="${Number(r.unit_price) || 0}">Add to ${esc(EST.opts[PBPK.oi]?.name || "the option")}</button>` : ""}
+        ${forPick && EST.ij?.invoice_id ? `<button type="button" class="btn quiet-btn pbp-add" data-pbp-addinv="${r.id}" title="Puts it on the invoice for this sale">Add to the invoice</button>` : ""}</div></div>`; };
   const built = `<section class="pbp-page pbp-cover">
       <div class="pbp-cover-top"><img class="pbp-logo" src="${esc(coLogo(c))}" alt="${esc(co)}"></div>
       <div class="pbp-cover-mid"><div class="pbp-title">${esc(PBP.title)}</div>
