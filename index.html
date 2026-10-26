@@ -3569,7 +3569,8 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .pb-sp.hidden { display: none; }
 /* ===== Sales call (site visit) screen ===== */
 .sl-sp-pick { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
-.sl-find { display: flex; gap: 10px; align-items: center; margin: 0 0 10px; } .sl-find input { flex: 1; max-width: 520px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: var(--panel); color: var(--ink); }
+.sl-find { display: flex; gap: 10px; align-items: center; margin: 0 0 10px; flex-wrap: wrap; }
+.sl-dates label { display: flex; gap: 6px; align-items: center; font-weight: 650; font-size: 13px; } .sl-dates select, .sl-dates input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--panel); color: var(--ink); } .sl-find input { flex: 1; max-width: 520px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: var(--panel); color: var(--ink); }
 .sl-t th .sl-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; font-weight: 700; } .sl-t th .sl-sort:hover, .sl-t th .sl-sort.on { color: var(--blue, #1f6fd1); } .sl-sp-pick select { max-width: 170px; font-size: 13px; padding: 3px 6px; }
 .sl-kind { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 700; color: var(--steel); }
 .sl-act .btn.sc-here { background: var(--green) !important; border-color: var(--green) !important; color: var(--on-accent) !important; }
@@ -6479,9 +6480,21 @@ const rpcErr = e => e.code === "PGRST202" || /could not find the function|schema
 /* ---------- book a call ---------- */
 let BK = null;
 /* ---------------- Sales page: sales jobs → booked → estimate → closed deal ---------------- */
-const SALES = { tab: "open", seller: "", people: [], rows: null, q: "", sort: "", dir: 1 };
+const SALES = { tab: "open", seller: "", people: [], rows: null, q: "", sort: "", dir: 1, range: "", from: "", to: "" };
+// the date a deal counts on: its call date, or (no call) the last change to its proposal / when the job was made
+const salesDate = r => r.visit_date || String(r.sort || "").slice(0, 10);
+const SALES_RANGES = [["", "All dates"], ["month", "This month"], ["lastmonth", "Last month"], ["3m", "Last 3 months"], ["year", "This year"], ["lastyear", "Last year"], ["custom", "Pick dates…"]];
+function salesRangeDates(k) {
+  const d = new Date(), y = d.getFullYear(), m = d.getMonth(), iso = x => new Date(x.getTime() - x.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  if (k === "month") return [iso(new Date(y, m, 1)), iso(new Date(y, m + 1, 0))];
+  if (k === "lastmonth") return [iso(new Date(y, m - 1, 1)), iso(new Date(y, m, 0))];
+  if (k === "3m") return [iso(new Date(y, m - 2, 1)), iso(new Date(y, m + 1, 0))];
+  if (k === "year") return [y + "-01-01", y + "-12-31"];
+  if (k === "lastyear") return [(y - 1) + "-01-01", (y - 1) + "-12-31"];
+  return ["", ""];
+}
 try { Object.assign(SALES, JSON.parse(localStorage.getItem("reid.sales") || "{}")); } catch {}
-const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller, sort: SALES.sort, dir: SALES.dir })); } catch {} };
+const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller, sort: SALES.sort, dir: SALES.dir, range: SALES.range, from: SALES.from, to: SALES.to })); } catch {} };
 const salesBoss = () => ME.role === "owner" || can("calls.dispatch");
 async function openSales(msg) {
   setPage("sales", "sales", "Sales");
@@ -6514,7 +6527,8 @@ function salesWhoPicker() {
 }
 function renderSales(msg) {
   spHome();
-  const R = SALES.rows || [], n = k => R.filter(r => k === "all" || (k === "open" ? ["booked", "estimate"].includes(r.stage) : r.stage === k)).length;
+  if (SALES.range && SALES.range !== "custom") [SALES.from, SALES.to] = salesRangeDates(SALES.range);   // "This month" etc. move with the calendar
+  const R = (SALES.rows || []).filter(r => { const d = salesDate(r); return (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); }), n = k => R.filter(r => k === "all" || (k === "open" ? ["booked", "estimate"].includes(r.stage) : r.stage === k)).length;
   const qq = (SALES.q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
   const spOf = r => salesSrc(r)?.sales_person || "";
   const hay = r => [r.customer, r.street, r.city, r.job_number, r.est_number, spOf(r), r.seller, r.type, r.partner || "Reid", r.summary].join(" ").toLowerCase();
@@ -6531,12 +6545,15 @@ function renderSales(msg) {
   $("#main").innerHTML = `<article class="staff sales">
     <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Sales</span><h1>Sales</h1>
       <p>Your sales calls: book the call, make the proposal, close the deal. To start a new one, press <b>+ New sales job</b>, find the customer (or add them) and press <b>+ Book a sales call</b>.</p></div>
-      <div class="cl-hero-range"><span>Closed deals</span><strong class="ow-hero-amt">${money(won)}</strong><em>${n("closed")} sold · ${n("open")} open</em></div></header>
+      <div class="cl-hero-range"><span>Closed deals${SALES.from || SALES.to ? " · " + esc(SALES.range && SALES.range !== "custom" ? SALES_RANGES.find(x => x[0] === SALES.range)[1] : [SALES.from ? fmtDate(SALES.from) : "start", SALES.to ? fmtDate(SALES.to) : "today"].join(" – ")) : ""}</span><strong class="ow-hero-amt">${money(won)}</strong><em>${n("closed")} sold · ${n("open")} open</em></div></header>
     ${msg ? `<div class="staff-msg ok" role="status">${esc(msg)}</div>` : ""}
     <div class="sl-bar"><span class="seg sl-tabs" role="group">${[["open", "Open"], ["booked", "Booked"], ["estimate", "Proposals"], ["closed", "Closed deals"], ["install", "Installs"], ["lost", "Not sold"], ["all", "All"]].map(([k, x]) =>
         `<button type="button" data-sl-tab="${k}" aria-pressed="${SALES.tab === k}">${x} <span class="sl-n">${n(k)}</span></button>`).join("")}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button>
       ${salesWhoPicker()}</div>
+    <div class="sl-find sl-dates"><label>Dates <select id="sl-range">${SALES_RANGES.map(([k, t]) => `<option value="${k}" ${(SALES.range || "") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>From <input type="date" id="sl-from" value="${esc(SALES.from || "")}"></label><label>To <input type="date" id="sl-to" value="${esc(SALES.to || "")}"></label>
+      ${SALES.from || SALES.to ? `<button class="link" type="button" id="sl-alldates">Show all dates</button>` : ""}</div>
     <div class="sl-find"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
       ${qq.length ? `<span class="quiet">${rows.length} found</span>` : ""}</div>
     ${rows.length ? `<table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("for", "For")}${th("prop", "Proposal", "r")}<th></th></tr></thead><tbody>
@@ -6554,6 +6571,10 @@ function renderSales(msg) {
       : `<p class="quiet">${qq.length ? "Nothing matches your search." : SALES.tab === "open" ? "No open sales jobs. Press + New sales job to start one." : "Nothing here."}</p>`}
   </article>`;
   document.querySelectorAll("[data-sl-tab]").forEach(b => b.addEventListener("click", () => { SALES.tab = b.dataset.slTab; salesSave(); renderSales(); }));
+  // dates: a quick pick, or your own From / To (picking your own dates switches the list to "Pick dates…")
+  $("#sl-range")?.addEventListener("change", e => { SALES.range = e.target.value; if (!SALES.range) SALES.from = SALES.to = ""; salesSave(); renderSales(); });
+  ["from", "to"].forEach(k => $("#sl-" + k)?.addEventListener("change", e => { SALES[k] = e.target.value; SALES.range = SALES.from || SALES.to ? "custom" : ""; salesSave(); renderSales(); }));
+  $("#sl-alldates")?.addEventListener("click", () => { SALES.range = ""; SALES.from = SALES.to = ""; salesSave(); renderSales(); });
   // search as you type (keeps your place in the box); click a column heading to sort, again to reverse
   $("#sl-q")?.addEventListener("input", e => { SALES.q = e.target.value; const pos = e.target.selectionStart; renderSales(); const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(pos, pos); } catch {} } });
   document.querySelectorAll("[data-sl-sort]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.slSort; if (SALES.sort === k) SALES.dir = -(SALES.dir || 1); else { SALES.sort = k; SALES.dir = k === "prop" ? -1 : 1; } salesSave(); renderSales(); }));
