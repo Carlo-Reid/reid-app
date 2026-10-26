@@ -6849,7 +6849,7 @@ const COST_RULES = `<div class="rules">
   </ul>
   <b>The margin</b>
   <ul>
-    <li>Profit = price before HST − total cost. Margin = profit ÷ price.</li>
+    <li>Profit = price before HST − total cost. Margin = profit ÷ price. For owners the total cost includes the sales commission (by type of work, Pricing control section 7), so the margin is after commission.</li>
     <li>Goal: the margin goal on the Pricing control page (Settings), 40% unless you change it. Green shows the most you can discount and still keep it. Red shows how much to raise the price to get back to it.</li>
     <li>It's for the whole option: discounts and rebates lower the price, and lines typed in by hand count as $0 cost.</li>
   </ul>
@@ -6899,8 +6899,11 @@ function estCostCard(o, i) {
     const price = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
     const cs = o.lines.map(estLineCost), mat = cs.reduce((s, c) => s + c.mat, 0), lab = cs.reduce((s, c) => s + c.lab, 0), hrs = cs.reduce((s, c) => s + c.hrs, 0);
     const war = cs.reduce((s, c) => s + (c.war || 0), 0), off = cs.reduce((s, c) => s + (c.off || 0), 0), veh = o.lines.some(l => l.item_id) ? Number(COMPANY?.vehicle_cost_default) || 0 : 0;
-    const cost = mat + lab + war + off + veh, profit = price - cost, margin = price > 0 ? profit / price : null;
-    const at40 = cost / (1 - estMargin()), roomUp = at40 - price, maxDisc = price - at40;
+    // the sales commission is part of the cost (owners: worked out by type of work); it grows with the price, so the
+    // price that keeps the goal is (other costs) ÷ (1 − goal − commission %)
+    const cm = ME.role === "owner" ? estCommCalc(o) : null, comm = cm ? cm.total : 0, cr = cm && cm.sale > 0 ? cm.total / cm.sale : 0;
+    const fixed = mat + lab + war + off + veh, cost = fixed + comm, profit = price - cost, margin = price > 0 ? profit / price : null;
+    const at40 = 1 - estMargin() - cr > 0.01 ? fixed / (1 - estMargin() - cr) : fixed / (1 - estMargin()), roomUp = at40 - price, maxDisc = price - at40;
     const own = o.lines.filter(l => !l.item_id && !l.disc && (Number(l.qty) || 0) * (Number(l.price) || 0)).length;
     const ok = margin != null && margin >= estMargin() - 0.0005;
     return `<div class="ec-card ${margin == null ? "" : ok ? "ok" : "low"}">
@@ -6911,9 +6914,9 @@ function estCostCard(o, i) {
       ${war ? `<div class="ec-row"><span>Warranty</span><span>${money(war)}</span></div>` : ""}
       ${off ? `<div class="ec-row"><span>Office <span class="quiet">from the pricing formula</span></span><span>${money(off)}</span></div>` : ""}
       ${veh ? `<div class="ec-row"><span>Vehicle <span class="quiet">the usual amount for a job</span></span><span>${money(veh)}</span></div>` : ""}
+      ${ME.role === "owner" ? estCommRows(cm) : ""}
       <div class="ec-row ec-tot"><span>Total cost</span><b>${money(cost)}</b></div>
       <div class="ec-row"><span>Profit</span><b>${money(profit)}</b></div>
-      ${ME.role === "owner" ? estCommRows(estCommCalc(o), profit) : ""}
       <div class="ec-margin">${margin == null ? `<span class="quiet">Add items to see the margin.</span>` : `<span class="ec-pct">${(margin * 100).toFixed(1)}%</span> margin
         ${ok ? `<div class="ec-note">Max discount: <b>${money(Math.max(0, maxDisc))}</b> <span class="quiet">(${price > 0 ? (Math.max(0, maxDisc) / price * 100).toFixed(1) : 0}%) and still keep ${Math.round(estMargin() * 1000) / 10}%</span></div>`
              : `<div class="ec-note">Below ${Math.round(estMargin() * 1000) / 10}%. Raise the price by <b>${money(roomUp)}</b> to get there (${money(at40)} before HST).</div>`}`}</div>
@@ -7211,15 +7214,14 @@ function estCommCalc(o) {
     return { d: String(l.disc ? l.description || "Rebate or discount" : l.description || "").split("\n")[0], grp: l.disc ? "Rebate" : it?.group || "Usual rate", amt, pct, c: pct != null ? Math.round(amt * pct) / 100 : 0 }; });
   return { name: me?.name || "", rows, total: rows.reduce((a, r) => a + r.c, 0), sale: rows.reduce((a, r) => a + r.amt, 0), any: rows.some(r => r.pct != null) };
 }
-const estCommRows = (cm, profit) => {
+const estCommRows = cm => {
   if (!cm) return ME.role === "owner" ? `<div class="ec-row ec-own"><span>Sales commission</span><span class="quiet">loading…</span></div>` : "";
   return `<div class="ec-own">
-    <div class="ec-row"><span>Sales commission <span class="quiet">${cm.any ? `${esc(cm.name)}${cm.sale ? " · " + (cm.total / cm.sale * 100).toFixed(2) + "%" : ""}` : "no rate set"}</span></span><span>−${money(cm.total)}</span></div>
-    <div class="ec-row"><span><b>Left after commission</b></span><b>${money(profit - cm.total)}</b></div>
+    <div class="ec-row"><span>Sales commission <span class="quiet">${cm.any ? `${esc(cm.name)}${cm.sale ? " · " + (cm.total / cm.sale * 100).toFixed(2) + "%" : ""}` : "no rate set"}</span></span><span>${money(cm.total)}</span></div>
     <details class="ec-comm-d"><summary>Commission by line · paid to</summary>
       <select data-est-comm-who aria-label="Sales person"><option value="">Pick the sales person…</option>${ECOMM.people.map(x => `<option value="${x.employee_id}" ${x.employee_id === ECOMM.emp ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>
       ${cm.rows.map(r => `<div class="ec-row"><span>${esc(r.d)} <span class="quiet">${esc(r.grp)}${r.pct != null ? " " + +Number(r.pct) + "%" : ""}</span></span><span>${money(r.c)}</span></div>`).join("") || `<div class="quiet">Nothing priced yet.</div>`}
-    </details><div class="quiet ec-own-note">Only owners see the commission.</div></div>`;
+    </details><div class="quiet ec-own-note">Only owners see the commission. It's in the total cost and the margin.</div></div>`;
 };
 document.addEventListener("change", e => { const s = e.target.closest?.("[data-est-comm-who]"); if (!s) return; ECOMM.emp = s.value ? Number(s.value) : null;
   document.querySelectorAll("[data-ec]").forEach(el => { const k = Number(el.dataset.ec), w = el.querySelector(".ec-costwrap"); if (w && EST.opts[k]) { w.innerHTML = estCostCard(EST.opts[k], k); w.querySelector(".ec-comm-d")?.setAttribute("open", ""); } }); });
@@ -15268,7 +15270,7 @@ async function pbiCosting(id) {
       <tr class="pbi-jc-tot"><td><b>Profit</b></td><td class="r num"><b>${money(profit)}</b></td><td class="r num">${pc(profit)}</td></tr>
     </tbody></table>
     <div class="pbi-comm" id="pbi-comm"></div>
-    <div class="pbi-jc-big"><div><span>Margin</span><strong>${margin == null ? "—" : (margin * 100).toFixed(1) + "%"}</strong></div>
+    <div class="pbi-jc-big"><div><span id="pbi-jc-mlab">Margin</span><strong id="pbi-jc-margin">${margin == null ? "—" : (margin * 100).toFixed(1) + "%"}</strong></div>
       <div><span>Markup</span><strong>${cost > 0 ? ((price / cost - 1) * 100).toFixed(1) + "%" : "—"}</strong></div></div>
     ${margin == null ? `<p class="quiet">No price set, so there's no margin yet.</p>` : ok ? `<p class="quiet">Above the ${Math.round(estMargin() * 1000) / 10}% goal. You could discount up to <b>${money(Math.max(0, price - at40))}</b> and still keep ${Math.round(estMargin() * 1000) / 10}%.</p>`
       : `<p class="pbi-jc-warn">Below the ${Math.round(estMargin() * 1000) / 10}% goal. A price of <b>${money(at40)}</b> gets it to ${Math.round(estMargin() * 1000) / 10}%.</p>`}
@@ -15301,7 +15303,10 @@ async function pbiComm(price, cost) {
     const ok = v != null && isFinite(v) && v >= 0, c = ok ? Math.round(price * v) / 100 : null, left = price - cost - (c || 0), pc = x => price > 0 ? (x / price * 100).toFixed(1) + "%" : "—";
     $("#pbi-comm-amt").textContent = c != null ? money(c) : "—"; $("#pbi-comm-pc").textContent = c != null ? pc(c) : "";
     $("#pbi-comm-note").textContent = ok ? `${+v}% of ${money(price)} before HST` : "type a % to see it";
-    if (owner) { $("#pbi-own-amt").textContent = money(left); $("#pbi-own-pc").textContent = pc(left); $("#pbi-own-amt").closest("tr").classList.toggle("neg", left < 0); } };
+    if (owner) { $("#pbi-own-amt").textContent = money(left); $("#pbi-own-pc").textContent = pc(left); $("#pbi-own-amt").closest("tr").classList.toggle("neg", left < 0); }
+    // the commission is part of the cost: the margin shown is after it
+    const mg = $("#pbi-jc-margin"), ml = $("#pbi-jc-mlab"); if (mg && price > 0) { mg.textContent = ((price - cost - (c || 0)) / price * 100).toFixed(1) + "%"; ml.textContent = c ? "Margin after commission" : "Margin";
+      const box = $("#pbi-jc"); if (box) { const ok = (price - cost - (c || 0)) / price >= estMargin() - 0.0005; box.classList.toggle("ok", ok); box.classList.toggle("low", !ok); } } };
   who.addEventListener("change", () => { const o = who.selectedOptions[0]; inp.value = who.value ? o.dataset.pct : def ?? ""; calc(); });
   inp.addEventListener("input", calc); calc();
 }
