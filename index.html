@@ -3575,6 +3575,7 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .sl-pay.on input[type=date] { border-color: #e8a33a; background: #fff6e5; } .sl-payall { background: #fff6e5; border-radius: 10px; padding: 8px 10px; }
 .sl-inst-tag { display: inline-block; margin-top: 4px; font-size: 11px; }
 .sl-comm { white-space: nowrap; }
+.sl-cf-note { background: #fff6e5; border-radius: 8px; padding: 4px 10px; font-size: 13px; }
 .sl-tablewrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .sl-tablewrap .top-sbar { top: 0; background: var(--panel); margin-bottom: 0; }
 .sl-tablewrap .sl-t { margin: 0; overflow: visible !important; }   /* (a table that clips stops the headings sticking) */
@@ -6502,7 +6503,7 @@ const rpcErr = e => e.code === "PGRST202" || /could not find the function|schema
 /* ---------- book a call ---------- */
 let BK = null;
 /* ---------------- Sales page: sales jobs → booked → estimate → closed deal ---------------- */
-const SALES = { tab: "open", seller: "", people: [], rows: null, q: "", sort: "", dir: 1, range: "", from: "", to: "", dateBy: "" };
+const SALES = { tab: "open", seller: "", people: [], rows: null, q: "", sort: "", dir: 1, range: "", from: "", to: "", dateBy: "", commF: "" };
 // the date a deal counts on: its call date, or (no call) the last change to its proposal / when the job was made
 const salesDate = r => r.visit_date || String(r.sort || "").slice(0, 10);
 const SALES_RANGES = [["", "All dates"], ["month", "This month"], ["lastmonth", "Last month"], ["3m", "Last 3 months"], ["year", "This year"], ["lastyear", "Last year"], ["custom", "Pick dates…"]];
@@ -6516,7 +6517,7 @@ function salesRangeDates(k) {
   return ["", ""];
 }
 try { Object.assign(SALES, JSON.parse(localStorage.getItem("reid.sales") || "{}")); } catch {}
-const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller, sort: SALES.sort, dir: SALES.dir, range: SALES.range, from: SALES.from, to: SALES.to, dateBy: SALES.dateBy })); } catch {} };
+const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller, sort: SALES.sort, dir: SALES.dir, range: SALES.range, from: SALES.from, to: SALES.to, dateBy: SALES.dateBy, commF: SALES.commF })); } catch {} };
 const salesBoss = () => ME.role === "owner" || can("calls.dispatch");
 async function openSales(msg) {
   setPage("sales", "sales", "Sales");
@@ -6579,6 +6580,18 @@ function salesFitList() {
   const bar = w.querySelector(".top-sbar"); w.style.setProperty("--sl-bar", (bar && bar.style.display !== "none" ? bar.offsetHeight + 2 : 0) + "px");
 }
 window.addEventListener("resize", () => { if (document.body.dataset.page === "sales") salesFitList(); });
+// where a sale's commission is at: paid / payroll / ready / waiting (null = nothing sold)
+const SALES_COMMF = [["", "Everything"], ["unpaid", "Not paid yet"], ["ready", "Ready to pay"], ["payroll", "On payroll"], ["waiting", "Waiting"], ["paid", "Paid"]];
+function salesCommState(r) {
+  const id = salesInstOf(r), sold = r.stage === "closed" || r.stage === "install" || !!r.installs;
+  if (!sold) return null;
+  if (id && salesPaidOf(id)) return "paid";
+  if (id && SALES.pay?.get(id)) return "payroll";
+  const c = id ? SALES.comm?.get(id) : null;
+  if (c && insState(c)[0] === "ready") return "ready";
+  return "waiting";   // the customer still owes, it isn't installed yet, or there's no rate / sales person yet
+}
+const salesCommMatch = (r, f) => !f || (f === "unpaid" ? ["ready", "payroll", "waiting"].includes(salesCommState(r)) : salesCommState(r) === f);
 // the quick list of paid / payroll days (no amounts to work out, so it's back in a moment)
 async function salesLoadPaid() {
   if (!(can("installs.manage") || ["owner", "accounting"].includes(ME.role))) return;
@@ -6676,6 +6689,12 @@ function renderSales(msg) {
   const hay = r => [r.customer, r.street, r.city, r.job_number, ...(r.installs || []).flatMap(i => [i.job_number, i.visit_date || "", i.visit_date ? fmtDate(i.visit_date) : ""]), salesDate(r), fmtDate(salesDate(r)), r.est_number, spOf(r), r.seller, r.type, r.partner || "Reid", r.summary].join(" ").toLowerCase();
   // searching looks at every date and stage, so a name or job number is always found
   let rows = qq.length ? (SALES.rows || []).filter(r => { const h = hay(r); return qq.every(w => h.includes(w)); }) : (SALES.rows || []).filter(r => inTab(r, SALES.tab) && inRange(r, SALES.tab));
+  const seeCommF = !!(SALES.comm || SALES.paid), cf = seeCommF ? SALES.commF || "" : "";
+  // counts and commission for each choice (in the tab and dates you're on)
+  const cfBase = rows, cfCount = {}; if (seeCommF) for (const [k] of SALES_COMMF) { const L = cfBase.filter(r => salesCommMatch(r, k)), seen = new Set(); let amt = 0;
+    L.forEach(r => { const id = salesInstOf(r); if (!id || seen.has(id)) return; seen.add(id); const pd = salesPaidOf(id); amt += Number(pd ? (pd.paid_at ? pd.paid_amount : pd.prepaid_amount) : SALES.comm?.get(id)?.commission_amount) || 0; });
+    cfCount[k] = { n: L.length, amt }; }
+  if (cf) rows = rows.filter(r => salesCommMatch(r, cf));
   const SORDER = { booked: 1, estimate: 2, closed: 3, install: 4, lost: 5 };
   const SKEY = { stage: r => SORDER[r.stage] || 9, sp: r => spOf(r).toLowerCase() || "~", cust: r => (r.customer || "").toLowerCase(), call: r => r.visit_date ? r.visit_date + (r.visit_from || "") : "~",
     inst: r => { const i = r.installs?.[0] || (r.stage === "install" ? r : null); return i?.visit_date || "~"; },
@@ -6705,12 +6724,14 @@ function renderSales(msg) {
       ${salesWhoPicker()}</div>
     <div class="sl-find sl-dates"><label>Dates by <select id="sl-dateby"><option value="sold" ${by(SALES.tab) === "sold" ? "selected" : ""}>Sold date</option><option value="installed" ${by(SALES.tab) === "installed" ? "selected" : ""}>Install date</option>${SALES.comm || SALES.paid ? `<option value="paid" ${by(SALES.tab) === "paid" ? "selected" : ""}>Commission paid date</option>` : ""}</select></label>
       ${by(SALES.tab) === "paid" ? salesPaidDaysPick() : ""}
+      ${seeCommF ? `<label>Commission <select id="sl-commf">${SALES_COMMF.map(([k, t]) => `<option value="${k}" ${cf === k ? "selected" : ""}>${t}${cfCount[k] ? ` (${cfCount[k].n}${k ? ", " + money(cfCount[k].amt) : ""})` : ""}</option>`).join("")}</select></label>` : ""}
       <label>Dates <select id="sl-range">${SALES_RANGES.map(([k, t]) => `<option value="${k}" ${(SALES.range || "") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <label>From <input type="date" id="sl-from" value="${esc(SALES.from || "")}"></label><label>To <input type="date" id="sl-to" value="${esc(SALES.to || "")}"></label>
       ${SALES.from || SALES.to ? `<button class="link" type="button" id="sl-alldates">Show all dates</button>` : ""}</div>
     ${SALES.pay && cs.ready.length ? `<div class="sl-find sl-payall"><span>Put all <b>${cs.ready.length}</b> ready to pay (<b>${money(cs.now)}</b>${SALES.from || SALES.to ? " in these dates" : ""}) on payroll for</span>
       ${payDaySelect(`id="sl-payall-d" aria-label="Pay day"`, SALES.payDay && SALES.payDay >= salesToday() ? SALES.payDay : nextPayDay(), payDays(28, 100))}<button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
     <div class="sl-find"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
+      ${cf && !qq.length ? `<span class="sl-cf-note">Showing <b>${esc(SALES_COMMF.find(x => x[0] === cf)[1].toLowerCase())}</b>: ${rows.length} ${rows.length === 1 ? "sale" : "sales"}, ${money(cfCount[cf]?.amt || 0)} commission <button class="link" type="button" id="sl-cf-clear">Show everything</button></span>` : ""}
       ${qq.length ? `<span class="quiet">${rows.length} found${SALES.from || SALES.to || SALES.tab !== "all" ? " (searching all dates and stages)" : ""}</span>` : ""}</div>
     ${rows.length ? `<div class="staff-wrap sl-tablewrap" id="sl-tw"><table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
       ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
@@ -6748,6 +6769,8 @@ function renderSales(msg) {
     b.disabled = true; let ok = 0; for (const c of cs.ready) if (await paySet(c.job_id, day)) ok++;
     SALES.payDay = day; openSales(`${ok} commissions (${money(cs.now)}) on payroll for ${fmtDate(day)}.`); });
   // dates: a quick pick, or your own From / To (picking your own dates switches the list to "Pick dates…")
+  $("#sl-cf-clear")?.addEventListener("click", () => { SALES.commF = ""; salesSave(); renderSales(); });
+  $("#sl-commf")?.addEventListener("change", e => { SALES.commF = e.target.value; salesSave(); renderSales(); });
   $("#sl-dateby")?.addEventListener("change", e => { SALES.dateBy = e.target.value; salesSave(); renderSales(); });
   $("#sl-paidday")?.addEventListener("change", e => { const d = e.target.value; SALES.range = d ? "custom" : ""; SALES.from = SALES.to = d; salesSave(); renderSales(); });
   $("#sl-range")?.addEventListener("change", e => { SALES.range = e.target.value; if (!SALES.range) SALES.from = SALES.to = ""; salesSave(); renderSales(); });
