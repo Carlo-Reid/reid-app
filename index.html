@@ -6831,6 +6831,7 @@ const COST_RULES = `<div class="rules">
     <li><b>Warranty:</b> a warranty part in the kit counts as the warranty. If there isn't one, the formula's Warranty $ is used.</li>
     <li><b>Labour:</b> first the item's own labour (typed on its part page), then its add-on kit's labour (hours to install × techs needed × cost per hour). If neither is set, the formula's Labour $ is used. Items with no formula use their labour hours × the company rate.</li>
     <li><b>Office:</b> the formula's Office $.</li>
+    <li><b>Vehicle:</b> the usual vehicle cost for a job (the same amount the invoice's job costing uses).</li>
   </ul>
   <b>The margin</b>
   <ul>
@@ -6883,8 +6884,8 @@ function estCostCard(o, i) {
   return [o].map(o => {
     const price = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
     const cs = o.lines.map(estLineCost), mat = cs.reduce((s, c) => s + c.mat, 0), lab = cs.reduce((s, c) => s + c.lab, 0), hrs = cs.reduce((s, c) => s + c.hrs, 0);
-    const war = cs.reduce((s, c) => s + (c.war || 0), 0), off = cs.reduce((s, c) => s + (c.off || 0), 0);
-    const cost = mat + lab + war + off, profit = price - cost, margin = price > 0 ? profit / price : null;
+    const war = cs.reduce((s, c) => s + (c.war || 0), 0), off = cs.reduce((s, c) => s + (c.off || 0), 0), veh = o.lines.some(l => l.item_id) ? Number(COMPANY?.vehicle_cost_default) || 0 : 0;
+    const cost = mat + lab + war + off + veh, profit = price - cost, margin = price > 0 ? profit / price : null;
     const at40 = cost / (1 - estMargin()), roomUp = at40 - price, maxDisc = price - at40;
     const own = o.lines.filter(l => !l.item_id && !l.disc && (Number(l.qty) || 0) * (Number(l.price) || 0)).length;
     const ok = margin != null && margin >= estMargin() - 0.0005;
@@ -6895,6 +6896,7 @@ function estCostCard(o, i) {
       <div class="ec-row"><span>Labour <span class="quiet">${hrs ? (Math.round(hrs * 10) / 10) + " tech-hours" : lab ? "from the pricing formula" : ""}</span></span><span>${money(lab)}</span></div>
       ${war ? `<div class="ec-row"><span>Warranty</span><span>${money(war)}</span></div>` : ""}
       ${off ? `<div class="ec-row"><span>Office <span class="quiet">from the pricing formula</span></span><span>${money(off)}</span></div>` : ""}
+      ${veh ? `<div class="ec-row"><span>Vehicle <span class="quiet">the usual amount for a job</span></span><span>${money(veh)}</span></div>` : ""}
       <div class="ec-row ec-tot"><span>Total cost</span><b>${money(cost)}</b></div>
       <div class="ec-row"><span>Profit</span><b>${money(profit)}</b></div>
       <div class="ec-margin">${margin == null ? `<span class="quiet">Add items to see the margin.</span>` : `<span class="ec-pct">${(margin * 100).toFixed(1)}%</span> margin
@@ -14248,6 +14250,7 @@ async function openInvoiceEditor(id, msg) {
   if (location.hash !== "#invoice-edit=" + id) setPage("invoice-edit=" + id, "invoice", "invoice");
   if (!document.querySelector(".ie")) $("#main").innerHTML = `<div class="loading">Opening the invoice…</div>`;
   const [{ data, error }, cost, bill, prule] = await Promise.all([db.rpc("inv_editor", { p_invoice: id }), db.rpc("inv_costing", { p_invoice: id }), db.rpc("inv_bill_info", { p_invoice: id }), db.rpc("inv_partner_rule", { p_invoice: id })]);
+  if (data && !cost.error && cost.data) cost.data.plan = await costPlan(data.lines).catch(() => null);
   if (data) { data.cost = cost.error ? null : cost.data; data.bill = bill.error || !bill.data ? null : { ...bill.data, invoice_id: id }; data.prule = prule.error ? null : prule.data; }
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the invoice</h2>${esc(error ? rpcErr(error) : "It no longer exists")}</div></div>`; return; }
   if (ME.role === "sales" && (data.looks || []).length) {   // a sales person only sees the partners they're allowed to sell for (Staff page, "Sales call for")
@@ -14258,6 +14261,16 @@ async function openInvoiceEditor(id, msg) {
   await pbLoadLooks((data.lines || []).map(l => l.item_id).filter(Boolean)).catch(() => {});
   nameCurrentPage("invoice " + data.number);
   renderInvoiceEditor(msg);
+}
+// the labour and office the price book plans for these invoice lines (same math as the item page and proposals):
+// the invoice falls back to this labour when no tech or labour rate is on the job yet, and always counts the office
+async function costPlan(lines) {
+  const top = (lines || []).filter(l => l.item_id && !l.kit_parent && Number(l.quantity) > 0); if (!top.length || !estCanCost()) return null;
+  if (!COMPANY) { const c = await db.from("company_settings").select("*").limit(1).maybeSingle(); if (c.data) COMPANY = c.data; }
+  await estCosting(top.map(l => Number(l.item_id))).catch(() => {});
+  let labour = 0, office = 0, hrs = 0;
+  top.forEach(l => { const c = estLineCost({ item_id: Number(l.item_id), qty: Number(l.quantity), price: Number(l.unit_price) || 0 }); labour += c.lab || 0; office += c.off || 0; hrs += c.hrs || 0; });
+  return { labour: Math.round(labour * 100) / 100, office: Math.round(office * 100) / 100, hrs };
 }
 // Job costing: what the job cost, what the store keeps, and the profit
 function costingCalc(I) {
@@ -14272,16 +14285,16 @@ function costingCalc(I) {
   const hours = C.hours != null ? n(C.hours) : n(C.est_hours);
   const rates = C.techs.map(t => n(t.rate)).filter(r => r > 0);
   const rate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : n(C.labour_rate);
-  const labour = hours * rate, S = C.sales;
+  const P = C.plan, planLab = !(rate > 0) && P && P.labour > 0, labour = planLab ? P.labour : hours * rate, office = P ? P.office || 0 : 0, S = C.sales;
   const comm = S ? (S.amount != null ? n(S.amount) : (S.sale_amount != null ? n(S.sale_amount) : sale) * n(S.pct) / 100) : 0;
-  const vehicle = n(C.vehicle), other = n(C.other), profit = revenue - parts - labour - vehicle - comm - other;
-  return { sale, total, st, cut, card, tk, tank, tankCost, revenue, parts, noCost, hours, rate, rateFromTechs: rates.length > 0, labour, vehicle, comm, other, profit,
+  const vehicle = n(C.vehicle), other = n(C.other), profit = revenue - parts - labour - office - vehicle - comm - other;
+  return { sale, total, st, cut, card, tk, tank, tankCost, revenue, parts, noCost, hours, rate, rateFromTechs: rates.length > 0, labour, planLab, office, vehicle, comm, other, profit,
            margin: revenue > 0 ? profit / revenue * 100 : 0 };
 }
 function costingHtml(I) {
   const C = I.cost, k = costingCalc(I), e = C.can_edit_costs, pct = v => (Math.round(v * 10) / 10) + "%";
   const lvl = k.margin >= 40 ? "good" : k.margin >= 25 ? "ok" : "low";
-  const segs = [["Parts", k.parts, "#8A6A3B"], ["Labour", k.labour, "#3D7AB8"], ["Vehicle", k.vehicle, "#2A9D8F"], ["Commission", k.comm, "#7A5BB0"], ["Other", k.other, "#7B8794"],
+  const segs = [["Parts", k.parts, "#8A6A3B"], ["Labour", k.labour, "#3D7AB8"], ["Office", k.office, "#B07A2E"], ["Vehicle", k.vehicle, "#2A9D8F"], ["Commission", k.comm, "#7A5BB0"], ["Other", k.other, "#7B8794"],
                 [k.st ? k.st.name : "Store", k.cut + k.card, "#C0392B"], ["Profit", Math.max(k.profit, 0), "#2E7D4F"]].filter(x => x[1] > 0.004);
   const base = segs.reduce((a, x) => a + x[1], 0) || 1;
   const hrsNote = C.hours != null ? "you set" : Number(C.est_hours) ? "price book estimate" : "type the hours";
@@ -14299,9 +14312,10 @@ function costingHtml(I) {
       ${k.tk ? `<tr class="store"><td><strong>Tank: ${esc(k.tk.partner)} pays ${esc(k.tk.supplier)}</strong><br><span class="quiet">${money(k.tk.amount)} with HST, not Reid's money</span></td><td class="r"><strong>−${money(k.tank)}</strong></td></tr>
         <tr><td>Reid's share (before HST)</td><td class="r">${money(k.revenue)}</td></tr>` : ""}
       <tr><td>Parts and equipment${k.tk && k.tankCost ? `<br><span class="quiet">not counting the tank (${money(k.tankCost)}): ${esc(k.tk.supplier)} is paid by ${esc(k.tk.partner)}</span>` : ""}${k.noCost ? `<br><span class="warn">${k.noCost} line${k.noCost > 1 ? "s" : ""} with no cost</span>` : ""}</td><td class="r">−${money(k.parts)}</td></tr>
-      <tr><td>Labour <input data-cost="hours" inputmode="decimal" value="${+k.hours.toFixed(2)}" aria-label="Hours"> hrs × ${money(k.rate)}/hr
+      <tr><td>Labour ${k.planLab ? `<b>as priced in the price book</b>${C.plan.hrs ? ` (${+C.plan.hrs.toFixed(1)} tech-hours)` : ""}<br><span class="quiet">No tech or labour rate on this job yet, so it uses each item's labour, like the item page and proposals.</span><br>Real hours: ` : ""}<input data-cost="hours" inputmode="decimal" value="${+k.hours.toFixed(2)}" aria-label="Hours"> hrs × ${money(k.rate)}/hr
           <br><span class="quiet">${esc(hrsNote)}${C.techs.length ? " · " + esc(C.techs.map(t => t.name).join(", ")) : ""}</span>
           ${!k.rate ? (C.can_set_rate ? `<br><span class="warn">What does a tech hour cost you?</span> <input data-cost="rate" inputmode="decimal" placeholder="$/hr" aria-label="Labour cost per hour">` : `<br><span class="warn">No labour cost set (Settings)</span>`) : ""}</td><td class="r">−${money(k.labour)}</td></tr>
+      ${k.office > 0.004 ? `<tr><td>Office<br><span class="quiet">overhead from the pricing formula, same as the item page</span></td><td class="r">−${money(k.office)}</td></tr>` : ""}
       <tr><td>Vehicle <input data-cost="vehicle" inputmode="decimal" value="${k.vehicle.toFixed(2)}" aria-label="Vehicle cost">
           <br><span class="quiet">${C.vehicle_own ? `changed for this job · <button class="link" type="button" data-cost-vreset>use the usual amount</button>` : "the usual amount for a job"}</span></td><td class="r">−${money(k.vehicle)}</td></tr>
       ${C.sales ? `<tr><td>Commission<br><span class="quiet">${esc(C.sales.name || "")}${C.sales.amount == null ? " · " + Number(C.sales.pct || 0) + "%" : ""}</span></td><td class="r">−${money(k.comm)}</td></tr>` : ""}
@@ -15152,8 +15166,8 @@ async function pbiCosting(id) {
   if (!$("#pbi-jc") || PB.itemPage !== id) return;
   if (EST.costErr) { box.innerHTML = `<h2>Job costing</h2><p class="staff-msg err">Couldn't load the costing: ${esc(EST.costErr)}</p><button class="btn quiet-btn" type="button" id="pbi-jc-retry">Try again</button>`;
     $("#pbi-jc-retry")?.addEventListener("click", () => pbiCosting(id)); return; }
-  const price = Number(r.unit_price) || 0, c = estLineCost({ item_id: id, qty: 1, price });
-  const cost = c.mat + c.lab + (c.war || 0) + (c.off || 0), profit = price - cost, margin = price > 0 ? profit / price : null;
+  const price = Number(r.unit_price) || 0, c = estLineCost({ item_id: id, qty: 1, price }), veh = Number(COMPANY?.vehicle_cost_default) || 0;
+  const cost = c.mat + c.lab + (c.war || 0) + (c.off || 0) + veh, profit = price - cost, margin = price > 0 ? profit / price : null;
   const pc = v => price > 0 ? (v / price * 100).toFixed(1) + "%" : "—", ok = margin != null && margin >= estMargin() - 0.0005;
   const at40 = cost / (1 - estMargin()), mem = pbHasMember(r) ? Number(r.member_price) || 0 : null;
   const row = (t, v, sub) => `<tr><td>${t}${sub ? ` <span class="quiet">${sub}</span>` : ""}</td><td class="r num">${money(v)}</td><td class="r num quiet">${pc(v)}</td></tr>`;
@@ -15163,7 +15177,7 @@ async function pbiCosting(id) {
       <tr class="pbi-jc-price"><td><b>Price</b> <span class="quiet">before HST</span></td><td class="r num"><b>${money(price)}</b></td><td class="r num quiet">100%</td></tr>
       ${row("Materials", c.mat, (ECOST.get(id)?.parts || []).length ? "item + add-on kit" : "")}
       ${row("Labour", c.lab, c.hrs ? (Math.round(c.hrs * 10) / 10) + " tech-hours" : c.lab ? "from the pricing formula" : "")}
-      ${c.war ? row("Warranty", c.war) : ""}${c.off ? row("Office", c.off, "from the pricing formula") : ""}
+      ${c.war ? row("Warranty", c.war) : ""}${c.off ? row("Office", c.off, "from the pricing formula") : ""}${veh ? row("Vehicle", veh, "the usual amount for a job") : ""}
       <tr class="pbi-jc-tot"><td><b>Total cost</b></td><td class="r num"><b>${money(cost)}</b></td><td class="r num">${pc(cost)}</td></tr>
       <tr class="pbi-jc-tot"><td><b>Profit</b></td><td class="r num"><b>${money(profit)}</b></td><td class="r num">${pc(profit)}</td></tr>
     </tbody></table>
@@ -19025,6 +19039,7 @@ async function showInvoiceCosting(inv, msg) {
     db.from("invoices").select("subtotal, total").eq("id", inv.id).single()]);
   if (box.dataset.inv !== String(inv.id)) return;
   if (error || !data) { box.innerHTML = `<div class="staff-msg err">Couldn't work out the costs${error ? ": " + esc(rpcErr(error)) : ""}</div>`; return; }
+  { const ed = await db.rpc("inv_editor", { p_invoice: inv.id }); data.plan = ed.error ? null : await costPlan(ed.data?.lines).catch(() => null); if (box.dataset.inv !== String(inv.id)) return; }
   const I = { id: inv.id, subtotal: t.data?.subtotal ?? inv.subtotal, total: t.data?.total ?? inv.total, cost: data };
   const top = box.scrollTop;
   box.innerHTML = `<div class="inv-cost-head"><button class="link" type="button" data-invcost-close>Close</button></div>
