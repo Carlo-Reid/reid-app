@@ -4505,6 +4505,13 @@ def main():
         log("Saved. Updating search...")
         cur.execute("SELECT public._sync_after()")
         conn.commit()
+        # staff records combined in the app, and names kept the way they were set (the copy above just rewrote them)
+        try:
+            cur.execute("SELECT to_regprocedure('public._staff_after_sync()') IS NOT NULL")
+            if cur.fetchone()[0]:
+                cur.execute("SELECT public._staff_after_sync()"); conn.commit()
+        except Exception as e2:
+            conn.rollback(); log(f"Combined staff records not re-applied: {str(e2)[:200]}")
         log("Done: " + ", ".join(f"{v} {k.replace('-', ' ')}" for k, v in summary["changed"].items()) + (f", {notes} notes" if notes else ""))
     except Exception as e:
         conn.rollback()

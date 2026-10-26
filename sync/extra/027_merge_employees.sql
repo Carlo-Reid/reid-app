@@ -52,12 +52,21 @@ WHERE id = 2321 AND merged_into IS NULL AND EXISTS (SELECT 1 FROM public.employe
 UPDATE public.employees SET merged_into = 64781134
 WHERE id = 64780756 AND merged_into IS NULL AND EXISTS (SELECT 1 FROM public.employees WHERE id = 64781134);
 
-SELECT public._merge_employee(id, merged_into) FROM public.employees WHERE merged_into IS NOT NULL;
-
 -- names that stay the way you set them (the nightly ServiceTitan copy would change them back)
 ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS keep_first_name text;
 ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS keep_last_name text;
 UPDATE public.employees SET keep_first_name = 'Randall', keep_last_name = 'Mackenzie' WHERE id = 12867323 AND keep_last_name IS NULL;
 UPDATE public.employees SET keep_first_name = 'Tim', keep_last_name = 'Mahoney' WHERE id = 64781134 AND keep_last_name IS NULL;
-UPDATE public.employees SET first_name = coalesce(keep_first_name, first_name), last_name = coalesce(keep_last_name, last_name)
-WHERE (keep_first_name IS NOT NULL AND first_name IS DISTINCT FROM keep_first_name) OR (keep_last_name IS NOT NULL AND last_name IS DISTINCT FROM keep_last_name);
+-- after every ServiceTitan copy (and now): move anything new onto the kept records, keep the names, keep the duplicate switched off
+CREATE OR REPLACE FUNCTION public._staff_after_sync()
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $f$
+BEGIN
+  PERFORM public._merge_employee(id, merged_into) FROM employees WHERE merged_into IS NOT NULL;
+  UPDATE employees SET active = false WHERE merged_into IS NOT NULL AND active IS DISTINCT FROM false;
+  UPDATE employees k SET is_technician = true FROM employees d
+   WHERE d.merged_into = k.id AND d.is_technician AND k.is_technician IS NOT TRUE;
+  UPDATE employees SET first_name = coalesce(keep_first_name, first_name), last_name = coalesce(keep_last_name, last_name)
+   WHERE (keep_first_name IS NOT NULL AND first_name IS DISTINCT FROM keep_first_name) OR (keep_last_name IS NOT NULL AND last_name IS DISTINCT FROM keep_last_name);
+END $f$;
+REVOKE EXECUTE ON FUNCTION public._staff_after_sync() FROM PUBLIC, anon, authenticated;
+SELECT public._staff_after_sync();
