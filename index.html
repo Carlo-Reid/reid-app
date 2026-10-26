@@ -3567,7 +3567,9 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 :root[data-theme="desert"] .pb-sp { background: rgba(220,179,134,.18); border-color: rgba(220,179,134,.55); color: #f2d29b; }
 .pb-sp.hidden { display: none; }
 /* ===== Sales call (site visit) screen ===== */
-.sl-sp-pick { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 12px; } .sl-sp-pick select { max-width: 170px; font-size: 13px; padding: 3px 6px; }
+.sl-sp-pick { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.sl-find { display: flex; gap: 10px; align-items: center; margin: 0 0 10px; } .sl-find input { flex: 1; max-width: 520px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: var(--panel); color: var(--ink); }
+.sl-t th .sl-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; font-weight: 700; } .sl-t th .sl-sort:hover, .sl-t th .sl-sort.on { color: var(--blue, #1f6fd1); } .sl-sp-pick select { max-width: 170px; font-size: 13px; padding: 3px 6px; }
 .sl-kind { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 700; color: var(--steel); }
 .sl-act .btn.sc-here { background: var(--green) !important; border-color: var(--green) !important; color: var(--on-accent) !important; }
 .scall .sc-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin: 0 0 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 6px 16px rgba(0,0,0,.05); max-width: 760px; }
@@ -6476,9 +6478,9 @@ const rpcErr = e => e.code === "PGRST202" || /could not find the function|schema
 /* ---------- book a call ---------- */
 let BK = null;
 /* ---------------- Sales page: sales jobs → booked → estimate → closed deal ---------------- */
-const SALES = { tab: "open", seller: "", people: [], rows: null };
+const SALES = { tab: "open", seller: "", people: [], rows: null, q: "", sort: "", dir: 1 };
 try { Object.assign(SALES, JSON.parse(localStorage.getItem("reid.sales") || "{}")); } catch {}
-const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller })); } catch {} };
+const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller, sort: SALES.sort, dir: SALES.dir })); } catch {} };
 const salesBoss = () => ME.role === "owner" || can("calls.dispatch");
 async function openSales(msg) {
   setPage("sales", "sales", "Sales");
@@ -6495,10 +6497,10 @@ async function openSales(msg) {
 const salesSrc = r => r.stage === "install" ? (SALES.rows || []).find(x => x.est_id && x.est_id === r.est_id && x.stage !== "install") : r;
 function salesSpPick(r) {
   const src = salesSrc(r), cur = src?.sales_person || "";
-  if (!salesBoss()) return cur && !SALES.seller ? `<div class="sl-sp">${esc(cur)}</div>` : "";
+  if (!salesBoss()) return cur ? `<div class="sl-sp">${esc(cur)}</div>` : "";
   if (!src) return "";
   const P = SALES.people || [], hit = P.find(x => x.name === cur);
-  return `<label class="sl-sp-pick" title="The sales person on this deal"><span class="quiet">Sales person</span><select data-sl-sp="${src.job_id}">
+  return `<label class="sl-sp-pick" title="The sales person on this deal"><select aria-label="Sales person" data-sl-sp="${src.job_id}">
     <option value="" ${!hit ? "selected" : ""}>${cur && !hit ? esc(cur) : "No one yet"}</option>${P.map(x => `<option value="${x.id}" ${hit && hit.id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>`;
 }
 // the drop-down of sales people: owners/dispatchers always; a sales person only when an owner let them see someone else's page
@@ -6512,7 +6514,16 @@ function salesWhoPicker() {
 function renderSales(msg) {
   spHome();
   const R = SALES.rows || [], n = k => R.filter(r => k === "all" || (k === "open" ? ["booked", "estimate"].includes(r.stage) : r.stage === k)).length;
-  const rows = R.filter(r => SALES.tab === "all" || (SALES.tab === "open" ? ["booked", "estimate"].includes(r.stage) : r.stage === SALES.tab));
+  const qq = (SALES.q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const spOf = r => salesSrc(r)?.sales_person || "";
+  const hay = r => [r.customer, r.street, r.city, r.job_number, r.est_number, spOf(r), r.seller, r.type, r.partner || "Reid", r.summary].join(" ").toLowerCase();
+  let rows = R.filter(r => SALES.tab === "all" || (SALES.tab === "open" ? ["booked", "estimate"].includes(r.stage) : r.stage === SALES.tab));
+  if (qq.length) rows = rows.filter(r => { const h = hay(r); return qq.every(w => h.includes(w)); });
+  const SORDER = { booked: 1, estimate: 2, closed: 3, install: 4, lost: 5 };
+  const SKEY = { stage: r => SORDER[r.stage] || 9, sp: r => spOf(r).toLowerCase() || "~", cust: r => (r.customer || "").toLowerCase(), call: r => r.visit_date ? r.visit_date + (r.visit_from || "") : "~",
+    for: r => ((r.partner || "Reid") + " " + (r.type || "")).toLowerCase(), prop: r => Number(r.stage === "closed" || r.stage === "install" ? r.sold_total : r.est_total) || 0 };
+  if (SALES.sort && SKEY[SALES.sort]) { const f = SKEY[SALES.sort], d = SALES.dir || 1; rows = rows.slice().sort((a, b) => { const x = f(a), y = f(b); return (x < y ? -1 : x > y ? 1 : 0) * d || String(b.sort || "").localeCompare(String(a.sort || "")); }); }
+  const th = (k, t, cls) => `<th class="${cls || ""}"><button type="button" class="sl-sort ${SALES.sort === k ? "on" : ""}" data-sl-sort="${k}" title="Sort by ${t.toLowerCase()}">${t}${SALES.sort === k ? (SALES.dir > 0 ? " ▲" : " ▼") : ""}</button></th>`;
   const t = x => x ? new Date(x).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\s?([ap])\.?m\.?/i, "$1") : "";
   const STAGE = { booked: ["Booked", "sl-booked"], estimate: ["Proposal", "sl-est"], closed: ["Closed deal", "sl-won"], lost: ["Not sold", "sl-lost"], install: ["Install", "sl-inst"] };
   const won = R.filter(r => r.stage === "closed").reduce((s, r) => s + Number(r.sold_total || 0), 0);
@@ -6525,8 +6536,11 @@ function renderSales(msg) {
         `<button type="button" data-sl-tab="${k}" aria-pressed="${SALES.tab === k}">${x} <span class="sl-n">${n(k)}</span></button>`).join("")}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button>
       ${salesWhoPicker()}</div>
-    ${rows.length ? `<table class="calls-table sl-t"><thead><tr><th>Stage</th><th>Customer</th><th>Call</th><th>For</th><th class="r">Proposal</th><th></th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div>${salesSpPick(r)}</td>
+    <div class="sl-find"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
+      ${qq.length ? `<span class="quiet">${rows.length} found</span>` : ""}</div>
+    ${rows.length ? `<table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("for", "For")}${th("prop", "Proposal", "r")}<th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
+        <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
         <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${r.visit_date ? `${esc(fmtDate(r.visit_date))}<div class="quiet">${r.visit_from ? esc(t(r.visit_from) + (r.visit_to ? "–" + t(r.visit_to) : "")) : "any time"}${r.seller ? " · " + esc(r.seller) : ""}</div>` : `<span class="quiet">${r.stage === "install" ? "Install not booked yet" : "Not booked yet"}</span>`}</td>
         <td>${esc(r.partner || "Reid")}<div class="quiet">${esc(r.type || "")}</div></td>
@@ -6536,9 +6550,12 @@ function renderSales(msg) {
           : r.stage === "estimate" ? `<button class="btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>`
           : r.stage === "install" ? `<button class="btn quiet-btn" type="button" data-sl-cust="${r.customer_id}">Open the file</button>`
           : r.est_id ? `<button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>` : ""}${(r.stage === "closed" || r.stage === "install") && r.est_id ? `<button class="btn quiet-btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>${estSoldBtns(r.est_id, !!r.st_id)}` : ""}${["booked", "estimate"].includes(r.stage) ? `<button class="btn quiet-btn sl-cancel" type="button" data-sl-cancel="${r.job_id}" title="Cancel this sales job and its proposal">Cancel</button>` : ""}</td></tr>`).join("")}</tbody></table>`
-      : `<p class="quiet">${SALES.tab === "open" ? "No open sales jobs. Press + New sales job to start one." : "Nothing here."}</p>`}
+      : `<p class="quiet">${qq.length ? "Nothing matches your search." : SALES.tab === "open" ? "No open sales jobs. Press + New sales job to start one." : "Nothing here."}</p>`}
   </article>`;
   document.querySelectorAll("[data-sl-tab]").forEach(b => b.addEventListener("click", () => { SALES.tab = b.dataset.slTab; salesSave(); renderSales(); }));
+  // search as you type (keeps your place in the box); click a column heading to sort, again to reverse
+  $("#sl-q")?.addEventListener("input", e => { SALES.q = e.target.value; const pos = e.target.selectionStart; renderSales(); const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(pos, pos); } catch {} } });
+  document.querySelectorAll("[data-sl-sort]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.slSort; if (SALES.sort === k) SALES.dir = -(SALES.dir || 1); else { SALES.sort = k; SALES.dir = k === "prop" ? -1 : 1; } salesSave(); renderSales(); }));
   $("#sl-who")?.addEventListener("change", e => { const me = (SALES.people || []).find(x => x.me); SALES.seller = me && String(me.id) === e.target.value ? "" : e.target.value; salesSave(); openSales(); });
   $("#sl-new").addEventListener("click", () => { SALES_FIND = true; openSearchScreen(); });
   document.querySelectorAll("[data-sl-sp]").forEach(sel => sel.addEventListener("change", async () => { sel.disabled = true;
