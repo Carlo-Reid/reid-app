@@ -3568,6 +3568,7 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 :root[data-theme="desert"] .pb-sp { background: rgba(220,179,134,.18); border-color: rgba(220,179,134,.55); color: #f2d29b; }
 .pb-sp.hidden { display: none; }
 /* ===== Sales call (site visit) screen ===== */
+.sl-comm { white-space: nowrap; } .sl-comm .sl-comm-st { font-size: 11px; margin-top: 3px; display: inline-block; } .sl-comm-sum { display: block; margin-top: 4px; }
 .sl-sp-pick { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
 .sl-find { display: flex; gap: 10px; align-items: center; margin: 0 0 10px; flex-wrap: wrap; }
 .sl-dates label { display: flex; gap: 6px; align-items: center; font-weight: 650; font-size: 13px; } .sl-dates select, .sl-dates input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--panel); color: var(--ink); } .sl-find input { flex: 1; max-width: 520px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: var(--panel); color: var(--ink); }
@@ -6502,12 +6503,23 @@ async function openSales(msg) {
   // whose page: your own, or (if an owner allowed it) another sales person's; owners can pick anyone or Everyone
   const ppl = await db.rpc("sales_people"); SALES.people = ppl.error ? [] : ppl.data || [];
   if (SALES.seller && !SALES.people.some(x => String(x.id) === String(SALES.seller))) SALES.seller = "";
-  const { data, error } = await db.rpc("sales_list", { p_seller: SALES.seller ? Number(SALES.seller) : null });
+  const seeComm = can("installs.manage") || ["owner", "accounting"].includes(ME.role), y = new Date().getFullYear();
+  const [{ data, error }, ins] = await Promise.all([db.rpc("sales_list", { p_seller: SALES.seller ? Number(SALES.seller) : null }),
+    seeComm ? db.rpc("install_list", { p_from: (y - 2) + "-01-01", p_to: (y + 1) + "-12-31" }) : Promise.resolve({ data: null })]);
+  SALES.comm = ins.error || !ins.data ? null : new Map(ins.data.map(r => [r.job_id, r]));
   if (document.body.dataset.page !== "sales") return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load sales</h2>${/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</div></div>`; return; }
   SALES.rows = data || []; renderSales(msg);
 }
 // the sales person on a deal: owners/dispatchers can add or change it right here (an Install row changes the deal it came from)
+// the install a deal turned into (its commission lives there)
+const salesInstOf = r => r.stage === "install" ? r.job_id : r.est_id ? (SALES.rows || []).find(x => x.stage === "install" && x.est_id === r.est_id)?.job_id : null;
+function salesCommCell(r) {
+  const c = SALES.comm?.get(salesInstOf(r));
+  if (!c) return r.stage === "closed" ? `<span class="quiet">after the install</span>` : `<span class="quiet">—</span>`;
+  const [, label, cls] = insState(c);
+  return `${c.commission_amount != null ? `<b>${money(c.commission_amount)}</b>${c.commission_pct != null ? ` <span class="quiet">${+Number(c.commission_pct)}%</span>` : ""}` : ""}<div><span class="status ${cls} sl-comm-st">${esc(label)}</span></div>`;
+}
 const salesSrc = r => r.stage === "install" ? (SALES.rows || []).find(x => x.est_id && x.est_id === r.est_id && x.stage !== "install") : r;
 function salesSpPick(r) {
   const src = salesSrc(r), cur = src?.sales_person || "";
@@ -6536,7 +6548,13 @@ function renderSales(msg) {
   if (qq.length) rows = rows.filter(r => { const h = hay(r); return qq.every(w => h.includes(w)); });
   const SORDER = { booked: 1, estimate: 2, closed: 3, install: 4, lost: 5 };
   const SKEY = { stage: r => SORDER[r.stage] || 9, sp: r => spOf(r).toLowerCase() || "~", cust: r => (r.customer || "").toLowerCase(), call: r => r.visit_date ? r.visit_date + (r.visit_from || "") : "~",
-    for: r => ((r.partner || "Reid") + " " + (r.type || "")).toLowerCase(), prop: r => Number(r.stage === "closed" || r.stage === "install" ? r.sold_total : r.est_total) || 0 };
+    for: r => ((r.partner || "Reid") + " " + (r.type || "")).toLowerCase(), prop: r => Number(r.stage === "closed" || r.stage === "install" ? r.sold_total : r.est_total) || 0,
+    comm: r => Number(SALES.comm?.get(salesInstOf(r))?.commission_amount ?? -1) };
+  // commission for the deals in these dates: each install once
+  const cs = { now: 0, wait: 0, paid: 0 }; if (SALES.comm) { const seen = new Set();
+    R.forEach(r => { const id = salesInstOf(r); if (!id || seen.has(id)) return; seen.add(id); const c = SALES.comm.get(id); if (!c) return;
+      const k = insState(c)[0], a = Number(c.paid_at ? c.paid_amount ?? c.commission_amount : c.commission_amount) || 0;
+      if (k === "paid" || k === "early") cs.paid += a; else if (k === "ready") cs.now += a; else cs.wait += a; }); }
   if (SALES.sort && SKEY[SALES.sort]) { const f = SKEY[SALES.sort], d = SALES.dir || 1; rows = rows.slice().sort((a, b) => { const x = f(a), y = f(b); return (x < y ? -1 : x > y ? 1 : 0) * d || String(b.sort || "").localeCompare(String(a.sort || "")); }); }
   const th = (k, t, cls) => `<th class="${cls || ""}"><button type="button" class="sl-sort ${SALES.sort === k ? "on" : ""}" data-sl-sort="${k}" title="Sort by ${t.toLowerCase()}">${t}${SALES.sort === k ? (SALES.dir > 0 ? " ▲" : " ▼") : ""}</button></th>`;
   const t = x => x ? new Date(x).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\s?([ap])\.?m\.?/i, "$1") : "";
@@ -6545,7 +6563,7 @@ function renderSales(msg) {
   $("#main").innerHTML = `<article class="staff sales">
     <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Sales</span><h1>Sales</h1>
       <p>Your sales calls: book the call, make the proposal, close the deal. To start a new one, press <b>+ New sales job</b>, find the customer (or add them) and press <b>+ Book a sales call</b>.</p></div>
-      <div class="cl-hero-range"><span>Closed deals${SALES.from || SALES.to ? " · " + esc(SALES.range && SALES.range !== "custom" ? SALES_RANGES.find(x => x[0] === SALES.range)[1] : [SALES.from ? fmtDate(SALES.from) : "start", SALES.to ? fmtDate(SALES.to) : "today"].join(" – ")) : ""}</span><strong class="ow-hero-amt">${money(won)}</strong><em>${n("closed")} sold · ${n("open")} open</em></div></header>
+      <div class="cl-hero-range"><span>Closed deals${SALES.from || SALES.to ? " · " + esc(SALES.range && SALES.range !== "custom" ? SALES_RANGES.find(x => x[0] === SALES.range)[1] : [SALES.from ? fmtDate(SALES.from) : "start", SALES.to ? fmtDate(SALES.to) : "today"].join(" – ")) : ""}</span><strong class="ow-hero-amt">${money(won)}</strong><em>${n("closed")} sold · ${n("open")} open</em>${SALES.comm ? `<em class="sl-comm-sum">Commission: <b>${money(cs.now)}</b> to pay now · ${money(cs.wait)} waiting · ${money(cs.paid)} paid</em>` : ""}</div></header>
     ${msg ? `<div class="staff-msg ok" role="status">${esc(msg)}</div>` : ""}
     <div class="sl-bar"><span class="seg sl-tabs" role="group">${[["open", "Open"], ["booked", "Booked"], ["estimate", "Proposals"], ["closed", "Closed deals"], ["install", "Installs"], ["lost", "Not sold"], ["all", "All"]].map(([k, x]) =>
         `<button type="button" data-sl-tab="${k}" aria-pressed="${SALES.tab === k}">${x} <span class="sl-n">${n(k)}</span></button>`).join("")}</span>
@@ -6556,13 +6574,14 @@ function renderSales(msg) {
       ${SALES.from || SALES.to ? `<button class="link" type="button" id="sl-alldates">Show all dates</button>` : ""}</div>
     <div class="sl-find"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
       ${qq.length ? `<span class="quiet">${rows.length} found</span>` : ""}</div>
-    ${rows.length ? `<table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("for", "For")}${th("prop", "Proposal", "r")}<th></th></tr></thead><tbody>
+    ${rows.length ? `<table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}<th></th></tr></thead><tbody>
       ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
         <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${r.visit_date ? `${esc(fmtDate(r.visit_date))}<div class="quiet">${r.visit_from ? esc(t(r.visit_from) + (r.visit_to ? "–" + t(r.visit_to) : "")) : "any time"}${r.seller ? " · " + esc(r.seller) : ""}</div>` : `<span class="quiet">${r.stage === "install" ? "Install not booked yet" : "Not booked yet"}</span>`}</td>
         <td>${esc(r.partner || "Reid")}<div class="quiet">${esc(r.type || "")}</div></td>
         <td class="r num">${r.est_id ? `${esc(r.est_number)}<div class="quiet">${r.stage === "closed" || r.stage === "install" ? "sold " + money(r.sold_total) : r.est_total != null ? "up to " + money(r.est_total) : "empty"}</div>` : `<span class="quiet">none yet</span>`}</td>
+        ${SALES.comm ? `<td class="r num sl-comm">${salesCommCell(r)}</td>` : ""}
         <td class="sl-act">${r.stage === "booked" && r.kind === "site" ? `<button class="btn ${r.on_site ? "sc-here" : ""}" type="button" data-sl-call="${r.job_id}">Open the call</button>`
           : r.stage === "booked" ? `<button class="btn" type="button" data-sl-est="${r.job_id}">Make the proposal</button>`
           : r.stage === "estimate" ? `<button class="btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>`
