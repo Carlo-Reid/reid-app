@@ -6888,21 +6888,25 @@ function estLineCost(l) {   // cost of one line: the item, plus the materials it
   // materials = the rest (install parts, or the formula's Material $). mat stays the two together.
   const statParts = parts.filter(isStat).reduce((s, p) => s + pc(p), 0), isUnit = !!f || allParts.length > 0;
   const eq = (isUnit ? own : 0) + (f && !hasStat ? fx("addon") : 0) + statParts;
+  // each large piece on its own: the unit, then the thermostat or coil (the formula's, or the kit's thermostat parts)
+  const bigs = [...(isUnit && own ? [{ name: l.description || "The unit", what: "unit", cost: own }] : []),
+    ...(f && !hasStat && fx("addon") ? [{ name: f.addon_name || "Thermostat or coil", what: "comes with it (pricing formula)", cost: fx("addon") }] : []),
+    ...parts.filter(isStat).map(p => ({ name: p.name, what: "add-on kit", cost: pc(p) }))];
   const war = (f && !hasWar ? fx("warranty") : 0) + warParts, off = fx("office");
   if (x.lab && x.lab.hours != null) {   // the kit's labour (hours to install × techs × cost per hour), or the item's own override
     const h = (Number(x.lab.hours) || 0) * (Number(x.lab.techs) || 1), r = x.lab.rate != null ? Number(x.lab.rate) : rate;
-    return { mat: q * mat, eq: q * eq, lab: q * h * r, hrs: q * h, war: q * war, off: q * off, known: true };
+    return { mat: q * mat, eq: q * eq, bigs: bigs.map(b => ({ ...b, cost: q * b.cost })), lab: q * h * r, hrs: q * h, war: q * war, off: q * off, known: true };
   }
-  if (f) return { mat: q * mat, eq: q * eq, lab: q * fx("labour"), hrs: 0, war: q * war, off: q * off, known: true };
+  if (f) return { mat: q * mat, eq: q * eq, bigs: bigs.map(b => ({ ...b, cost: q * b.cost })), lab: q * fx("labour"), hrs: 0, war: q * war, off: q * off, known: true };
   const hrs = (Number(x.hours) || 0) + parts.reduce((s, p) => s + (Number(p.qty) || 0) * (Number(p.hours) || 0), 0);
-  return { mat: q * mat, eq: q * eq, lab: q * hrs * rate, hrs: q * hrs, war: 0, off: 0, known: true };
+  return { mat: q * mat, eq: q * eq, bigs: bigs.map(b => ({ ...b, cost: q * b.cost })), lab: q * hrs * rate, hrs: q * hrs, war: 0, off: 0, known: true };
 }
 function estCostCard(o, i) {
   if (EST.costErr) return `<div class="ec-card"><b>Costing</b><p class="quiet">${/function|schema|PGRST202/i.test(EST.costErr) ? "This turns on after tonight's update." : esc(EST.costErr)}</p></div>`;
   const rate = Number(COMPANY?.labour_cost_per_hour) || 55;
   return [o].map(o => {
     const price = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
-    const cs = o.lines.map(estLineCost), mat = cs.reduce((s, c) => s + c.mat, 0), eqp = cs.reduce((s, c) => s + (c.eq || 0), 0), lab = cs.reduce((s, c) => s + c.lab, 0), hrs = cs.reduce((s, c) => s + c.hrs, 0);
+    const cs = o.lines.map(estLineCost), mat = cs.reduce((s, c) => s + c.mat, 0), eqp = cs.reduce((s, c) => s + (c.eq || 0), 0), bigs = cs.flatMap(c => c.bigs || []), lab = cs.reduce((s, c) => s + c.lab, 0), hrs = cs.reduce((s, c) => s + c.hrs, 0);
     const war = cs.reduce((s, c) => s + (c.war || 0), 0), off = cs.reduce((s, c) => s + (c.off || 0), 0), veh = o.lines.some(l => l.item_id) ? Number(COMPANY?.vehicle_cost_default) || 0 : 0;
     // the sales commission is part of the cost (owners: worked out by type of work); it grows with the price, so the
     // price that keeps the goal is (other costs) ÷ (1 − goal − commission %)
@@ -6914,7 +6918,7 @@ function estCostCard(o, i) {
     return `<div class="ec-card ${margin == null ? "" : ok ? "ok" : "low"}">
       <div class="ec-title">Costing <b>${esc(o.name || "Option " + (i + 1))}</b> <span class="quiet">only you see this</span> <button class="link ec-how" type="button" data-ec-how title="How the costing works">How it works</button></div>
       <div class="ec-row"><span>Price before HST</span><b>${money(price)}</b></div>
-      <div class="ec-row"><span>Equipment <span class="quiet">the unit and its thermostat or coil</span></span><span>${money(eqp)}</span></div>
+      ${bigs.map(b => `<div class="ec-row"><span>Equipment: ${esc(pbName(String(b.name).split("\n")[0]))} <span class="quiet">${b.what === "unit" ? "the unit" : esc(b.what)}</span></span><span>${money(b.cost)}</span></div>`).join("") || (eqp ? `<div class="ec-row"><span>Equipment</span><span>${money(eqp)}</span></div>` : "")}
       <div class="ec-row"><span>Materials <span class="quiet">install parts</span></span><span>${money(mat - eqp)}</span></div>
       <div class="ec-row"><span>Labour <span class="quiet">${hrs ? (Math.round(hrs * 10) / 10) + " tech-hours" : lab ? "from the pricing formula" : ""}</span></span><span>${money(lab)}</span></div>
       ${war ? `<div class="ec-row"><span>Warranty</span><span>${money(war)}</span></div>` : ""}
@@ -15269,7 +15273,7 @@ async function pbiCosting(id) {
   box.innerHTML = `<h2>Job costing <span class="quiet pbi-jc-who">only people who see costs see this</span></h2>
     <table class="pbi-jc-t"><thead><tr><th></th><th class="r">$</th><th class="r">% of price</th></tr></thead><tbody>
       <tr class="pbi-jc-price"><td><b>Price</b> <span class="quiet">before HST</span></td><td class="r num"><b>${money(price)}</b></td><td class="r num quiet">100%</td></tr>
-      ${c.eq ? row("Equipment", c.eq, "the unit and its thermostat or coil") : ""}
+      ${(c.bigs || []).map(b => row(b.what === "unit" ? "Equipment: the unit" : `Equipment: ${esc(pbName(b.name))}`, b.cost, b.what === "unit" ? esc(pbName(r.name)) : b.what)).join("")}
       ${row("Materials", c.mat - (c.eq || 0), (ECOST.get(id)?.parts || []).length ? "add-on kit parts" : "")}
       ${row("Labour", c.lab, c.hrs ? (Math.round(c.hrs * 10) / 10) + " tech-hours" : c.lab ? "from the pricing formula" : "")}
       ${c.war ? row("Warranty", c.war) : ""}${c.off ? row("Office", c.off, "from the pricing formula") : ""}${veh ? row("Vehicle", veh, "the usual amount for a job") : ""}
