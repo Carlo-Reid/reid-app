@@ -2309,6 +2309,13 @@
   .pbi-cmp-row .pbi-cmp-name { font-weight: 700; color: var(--blue, #1d4f91); background: var(--paper) !important; }
   .pbi-cmp-row input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
   .pbi-cmp-t { width: 100%; border-collapse: collapse; } .pbi-cmp-t th, .pbi-cmp-t td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  .pbi-jc { border-left: 5px solid var(--line); } .pbi-jc.ok { border-left-color: var(--green); } .pbi-jc.low { border-left-color: var(--red); }
+  .pbi-jc h2 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; } .pbi-jc-who { font-size: 12px; font-weight: 400; }
+  .pbi-jc-t { width: 100%; border-collapse: collapse; font-size: 14px; } .pbi-jc-t th { font-size: 11.5px; color: var(--steel); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 0 0 4px; }
+  .pbi-jc-t td { padding: 4px 0; border-top: 1px solid var(--line); } .pbi-jc-t .r { text-align: right; padding-left: 12px; } .pbi-jc-tot td { background: var(--paper); }
+  .pbi-jc-big { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } .pbi-jc-big > div { background: var(--paper); border-radius: 10px; padding: 8px 12px; }
+  .pbi-jc-big span { display: block; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--steel); font-weight: 700; } .pbi-jc-big strong { font-size: 24px; }
+  .pbi-jc.ok .pbi-jc-big > div:first-child strong { color: var(--green); } .pbi-jc.low .pbi-jc-big > div:first-child strong { color: var(--red); } .pbi-jc-warn { color: var(--red); }
   .pbi-box { display: flex; flex-direction: column; gap: 10px; } .pbi-box h2 { margin: 0; font-size: calc(17px * var(--fs, 1)); } .pbi-box p { margin: 0; }
   .pbi-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
   .pbi-form label, .pbi-yform > label { display: flex; flex-direction: column; gap: 4px; font-weight: 650; margin: 0; }
@@ -14992,12 +14999,42 @@ async function pbiLabour(id, edit, msg) {
   const tot = () => { const h = n(fm.h.value), t = n(fm.t.value) ?? 1, r = n(fm.r.value) ?? rate0; $("#pbi-lab-tot").textContent = h != null && r != null ? `${money(h * t * r)}  (${h} h × ${t} tech${t === 1 ? "" : "s"} × ${money(r)})` : "—"; };
   fm.addEventListener("input", tot); tot();
   const save = async (h, t, r, okMsg) => { const { error: e2 } = await db.rpc("set_pb_item_labour", { p_item: id, p_hours: h, p_techs: t, p_rate: r });
-    if (e2) { $("#pbi-lab-msg").innerHTML = `<div class="staff-msg err">Not saved: ${esc(rpcErr(e2))}</div>`; return; } pbiLabour(id, edit, okMsg); };
+    if (e2) { $("#pbi-lab-msg").innerHTML = `<div class="staff-msg err">Not saved: ${esc(rpcErr(e2))}</div>`; return; } pbiLabour(id, edit, okMsg); pbiCosting(id); };
   fm.addEventListener("submit", e => { e.preventDefault(); const h = n(fm.h.value), t = Math.max(1, Math.round(n(fm.t.value) ?? 1)), r = n(fm.r.value);
     if (h == null || h < 0) { $("#pbi-lab-msg").innerHTML = `<div class="staff-msg err">Type the hours as a number.</div>`; return; }
     save(h, t, r ?? rate0, "Saved."); });
   $("#pbi-lab-kit")?.addEventListener("click", () => save(null, null, null, "Back to the kit's pricing."));
   $("#pbi-lab-clear")?.addEventListener("click", () => save(null, null, null, "Cleared."));
+}
+// Job costing on the part page: the same costing the proposal uses (kit parts, labour, warranty, office), for one of this item
+async function pbiCosting(id) {
+  const box = $("#pbi-jc"); if (!box) return;
+  const r = (PB.rows || []).find(x => x.id === id); if (!r) return;
+  ECOST.delete(id); EST.costErr = ""; await estCosting([id]);
+  if (!$("#pbi-jc") || PB.itemPage !== id) return;
+  if (EST.costErr) { box.innerHTML = `<h2>Job costing</h2><p class="staff-msg err">Couldn't load the costing: ${esc(EST.costErr)}</p><button class="btn quiet-btn" type="button" id="pbi-jc-retry">Try again</button>`;
+    $("#pbi-jc-retry")?.addEventListener("click", () => pbiCosting(id)); return; }
+  const price = Number(r.unit_price) || 0, c = estLineCost({ item_id: id, qty: 1, price });
+  const cost = c.mat + c.lab + (c.war || 0) + (c.off || 0), profit = price - cost, margin = price > 0 ? profit / price : null;
+  const pc = v => price > 0 ? (v / price * 100).toFixed(1) + "%" : "—", ok = margin != null && margin >= EST_MARGIN - 0.0005;
+  const at40 = cost / (1 - EST_MARGIN), mem = pbHasMember(r) ? Number(r.member_price) || 0 : null;
+  const row = (t, v, sub) => `<tr><td>${t}${sub ? ` <span class="quiet">${sub}</span>` : ""}</td><td class="r num">${money(v)}</td><td class="r num quiet">${pc(v)}</td></tr>`;
+  box.className = "cl-tools pbi-box pbi-jc " + (margin == null ? "" : ok ? "ok" : "low");
+  box.innerHTML = `<h2>Job costing <span class="quiet pbi-jc-who">only people who see costs see this</span></h2>
+    <table class="pbi-jc-t"><thead><tr><th></th><th class="r">$</th><th class="r">% of price</th></tr></thead><tbody>
+      <tr class="pbi-jc-price"><td><b>Price</b> <span class="quiet">before HST</span></td><td class="r num"><b>${money(price)}</b></td><td class="r num quiet">100%</td></tr>
+      ${row("Materials", c.mat, (ECOST.get(id)?.parts || []).length ? "item + add-on kit" : "")}
+      ${row("Labour", c.lab, c.hrs ? (Math.round(c.hrs * 10) / 10) + " tech-hours" : c.lab ? "from the pricing formula" : "")}
+      ${c.war ? row("Warranty", c.war) : ""}${c.off ? row("Office", c.off, "from the pricing formula") : ""}
+      <tr class="pbi-jc-tot"><td><b>Total cost</b></td><td class="r num"><b>${money(cost)}</b></td><td class="r num">${pc(cost)}</td></tr>
+      <tr class="pbi-jc-tot"><td><b>Profit</b></td><td class="r num"><b>${money(profit)}</b></td><td class="r num">${pc(profit)}</td></tr>
+    </tbody></table>
+    <div class="pbi-jc-big"><div><span>Margin</span><strong>${margin == null ? "—" : (margin * 100).toFixed(1) + "%"}</strong></div>
+      <div><span>Markup</span><strong>${cost > 0 ? ((price / cost - 1) * 100).toFixed(1) + "%" : "—"}</strong></div></div>
+    ${margin == null ? `<p class="quiet">No price set, so there's no margin yet.</p>` : ok ? `<p class="quiet">Above the ${EST_MARGIN * 100}% goal. You could discount up to <b>${money(Math.max(0, price - at40))}</b> and still keep ${EST_MARGIN * 100}%.</p>`
+      : `<p class="pbi-jc-warn">Below the ${EST_MARGIN * 100}% goal. A price of <b>${money(at40)}</b> gets it to ${EST_MARGIN * 100}%.</p>`}
+    ${mem != null ? `<p class="quiet">Member price ${money(mem)}: profit ${money(mem - cost)}, margin ${mem > 0 ? ((mem - cost) / mem * 100).toFixed(1) + "%" : "—"}.</p>` : ""}
+    ${c.known ? "" : `<p class="quiet">No cost found for this item, so it shows as $0.</p>`}`;
 }
 // Compare details: 10 lines (name + value) that line up when this item is compared side by side with others
 const CMP_SUGGEST = ["Efficiency", "Heating output (BTU)", "Cooling size (tons)", "SEER2 / HSPF2", "Stages", "Blower / fan", "Sound level", "Warranty: parts", "Warranty: labour", "Size (H × W × D)"];
@@ -15047,6 +15084,7 @@ function renderPbItemPage(msg) {
           <div class="pbi-form"><label>Type<select id="pbi-type">${PB_TYPES.slice(1).map(([k, t]) => `<option value="${k}" ${k === r.item_type ? "selected" : ""}>${t}</option>`).join("")}</select></label>
             <button class="btn quiet-btn" type="button" id="pbi-move">Move it</button></div>
           <p class="quiet">For example from Materials to Equipment. Its categories stay the same; change those under Categories on the left.</p></section>` : ""}
+        ${estCanCost() ? `<section class="cl-tools pbi-box pbi-jc" id="pbi-jc"><h2>Job costing</h2><div class="quiet">Loading…</div></section>` : ""}
         ${seeCost() ? `<section class="cl-tools pbi-box pbi-lab" id="pbi-lab"><h2>Labour cost</h2><div class="quiet">Loading…</div></section>` : ""}
         <section class="cl-tools pbi-box"><h2>Add it to an invoice</h2>
           <form id="pbi-inv" class="pbi-form"><label>Invoice number<input name="n" placeholder="e.g. R10023" required autocomplete="off"></label>
@@ -15062,6 +15100,7 @@ function renderPbItemPage(msg) {
       </div>
     </div></article>`;
   showPbItem(id); pbiCompare(id, edit);
+  if (estCanCost()) pbiCosting(id);
   if (seeCost()) pbiLabour(id, edit);
   const say = (el, t, err) => { el.innerHTML = `<div class="staff-msg ${err ? "err" : "ok"}">${t}</div>`; };
   $("#pbi-move")?.addEventListener("click", async () => {
