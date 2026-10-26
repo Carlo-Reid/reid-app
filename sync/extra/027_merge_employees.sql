@@ -15,11 +15,12 @@ BEGIN
       SELECT cl.relname::text AS tbl, a.attname::text AS col
       FROM pg_constraint k JOIN pg_class cl ON cl.oid = k.conrelid JOIN pg_namespace ns ON ns.oid = cl.relnamespace
       JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = k.conkey[1]
-      WHERE k.contype = 'f' AND k.confrelid = 'public.employees'::regclass AND ns.nspname = 'public' AND array_length(k.conkey, 1) = 1
+      WHERE k.contype = 'f' AND cl.relkind = 'r' AND k.confrelid = 'public.employees'::regclass AND ns.nspname = 'public' AND array_length(k.conkey, 1) = 1
       UNION
-      SELECT table_name::text, column_name::text FROM information_schema.columns
-      WHERE table_schema = 'public' AND data_type IN ('bigint', 'integer')
-        AND column_name IN ('employee_id', 'salesperson_id', 'sold_by_employee_id', 'performed_by_employee_id', 'technician_id', 'tech_id', 'lead_tech_id', 'assigned_employee_id')
+      SELECT c.table_name::text, c.column_name::text FROM information_schema.columns c
+      JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name AND t.table_type = 'BASE TABLE'
+      WHERE c.table_schema = 'public' AND c.data_type IN ('bigint', 'integer')
+        AND c.column_name IN ('employee_id', 'salesperson_id', 'sold_by_employee_id', 'performed_by_employee_id', 'technician_id', 'tech_id', 'lead_tech_id', 'assigned_employee_id')
     ) x WHERE NOT (tbl = 'employees')
   LOOP
     -- row by row, so a row that would become a duplicate (e.g. the same person twice on one visit) is dropped instead
