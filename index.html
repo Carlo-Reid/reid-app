@@ -3571,6 +3571,7 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .sl-pay { display: inline-flex; gap: 4px; align-items: center; } .sl-pay input[type=date] { font-size: 12px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 6px; max-width: 132px; }
 .sl-pay.paid { color: var(--steel); font-size: 12px; } .sl-pay.paid input[type=date] { background: #ebfbee; border-color: #8fd19e; }
 .ins-paid-d { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; }
+.sl-pay select { font-size: 12px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 6px; max-width: 150px; } .sl-pay.on select { border-color: #e8a33a; background: #fff6e5; } .sl-pay.paid select { background: #ebfbee; border-color: #8fd19e; }
 .sl-pay.on input[type=date] { border-color: #e8a33a; background: #fff6e5; } .sl-payall { background: #fff6e5; border-radius: 10px; padding: 8px 10px; }
 .sl-inst-tag { display: inline-block; margin-top: 4px; font-size: 11px; }
 .sl-comm { white-space: nowrap; }
@@ -6575,17 +6576,33 @@ async function salesLoadPaid() {
   renderSales(); $("#main").scrollTop = top;
   if (typing != null) { const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(typing, typing); } catch {} } }
 }
+const PAYROLL = { anchor: "2026-10-22", every: 14 };   // payroll is every second Thursday
+const payDayAdd = (d, n) => { const x = new Date(d + "T12:00:00"); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
+// the pay days from `back` before today to `ahead` after, newest last
+function payDays(backDays = 400, aheadDays = 100) {
+  const t = salesToday(), out = []; let d = PAYROLL.anchor;
+  while (d > payDayAdd(t, -backDays)) d = payDayAdd(d, -PAYROLL.every);
+  while (d <= payDayAdd(t, aheadDays)) { if (d >= payDayAdd(t, -backDays)) out.push(d); d = payDayAdd(d, PAYROLL.every); }
+  return out;
+}
+const nextPayDay = () => payDays(0, 30).find(d => d >= salesToday());
+const isPayDay = d => !!d && ((Date.parse(d + "T12:00:00") - Date.parse(PAYROLL.anchor + "T12:00:00")) / 864e5) % PAYROLL.every === 0;
+// a pick list of pay days (keeps an odd date that's already set, so nothing changes by itself)
+function payDaySelect(attrs, value, list, first) {
+  const L = list.slice(); if (value && !L.includes(value)) L.push(value); L.sort();
+  return `<select ${attrs}>${first ? `<option value="">${first}</option>` : ""}${L.map(d => `<option value="${d}" ${d === value ? "selected" : ""}>${esc(fmtDate(d))}${d === nextPayDay() ? " (next)" : ""}${isPayDay(d) ? "" : " (not a pay day)"}</option>`).join("")}</select>`;
+}
 const salesToday = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
 // payroll: pick the pay day a commission goes out on (on that day it's marked paid)
 function salesPayCell(r) {
   const id = salesInstOf(r); if (!id) return `<span class="quiet">—</span>`;
   const pd = salesPaidOf(id);
-  if (pd) return `<label class="sl-pay paid" title="The day it was paid: change it here">${pd.paid_at ? "Paid" : "Paid early"} <input type="date" data-sl-paid="${id}" value="${esc(insLocalDay(pd.paid_at || pd.prepaid_at))}" aria-label="Day it was paid"></label>`;
+  if (pd) return `<label class="sl-pay paid" title="The day it was paid: change it here">${pd.paid_at ? "Paid" : "Paid early"} ${payDaySelect(`data-sl-paid="${id}" aria-label="Pay day it was paid"`, insLocalDay(pd.paid_at || pd.prepaid_at), payDays(400, 0))}</label>`;
   const on = SALES.pay?.get(id) || "", c = SALES.comm?.get(id);
   if (!on && !c) return SALES.comm ? `<span class="quiet">—</span>` : `<span class="quiet">…</span>`;
   if (!on && c.commission_amount == null) return `<span class="quiet">—</span>`;
   return `<label class="sl-pay ${on ? "on" : ""}" title="${on ? "On payroll: paid on this day" : "Pick the pay day to put it on payroll"}"><input type="checkbox" data-sl-paychk="${id}" ${on ? "checked" : ""} aria-label="For payroll">
-    <input type="date" data-sl-pay="${id}" value="${esc(on)}" aria-label="Pay day"></label>`;
+    ${payDaySelect(`data-sl-pay="${id}" aria-label="Pay day"`, on, payDays(28, 100), "Pay day…")}</label>`;
 }
 // the Installed column: the day it was installed, or when it's booked
 function salesInstCell(r) {
@@ -6677,7 +6694,7 @@ function renderSales(msg) {
       <label>From <input type="date" id="sl-from" value="${esc(SALES.from || "")}"></label><label>To <input type="date" id="sl-to" value="${esc(SALES.to || "")}"></label>
       ${SALES.from || SALES.to ? `<button class="link" type="button" id="sl-alldates">Show all dates</button>` : ""}</div>
     ${SALES.pay && cs.ready.length ? `<div class="sl-find sl-payall"><span>Put all <b>${cs.ready.length}</b> ready to pay (<b>${money(cs.now)}</b>${SALES.from || SALES.to ? " in these dates" : ""}) on payroll for</span>
-      <input type="date" id="sl-payall-d" value="${esc(SALES.payDay || "")}" aria-label="Pay day"><button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
+      ${payDaySelect(`id="sl-payall-d" aria-label="Pay day"`, SALES.payDay && SALES.payDay >= salesToday() ? SALES.payDay : nextPayDay(), payDays(28, 100))}<button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
     <div class="sl-find"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
       ${qq.length ? `<span class="quiet">${rows.length} found${SALES.from || SALES.to || SALES.tab !== "all" ? " (searching all dates and stages)" : ""}</span>` : ""}</div>
     ${rows.length ? `<table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
@@ -6708,7 +6725,7 @@ function renderSales(msg) {
     if (error) { alertMsg("Not saved: " + (/function|schema|PGRST202/i.test(error.message || "") ? "run RUN SETUP NOW.bat first." : rpcErr(error))); return; }
     openSales(`Paid day changed to ${fmtDate(inp.value)}.`); }));
   document.querySelectorAll("[data-sl-paychk]").forEach(ch => ch.addEventListener("change", async () => { const id = Number(ch.dataset.slPaychk), d = document.querySelector(`[data-sl-pay="${id}"]`);
-    if (ch.checked) { if (SALES.payDay && SALES.payDay >= salesToday()) { d.value = SALES.payDay; d.dispatchEvent(new Event("change")); } else { ch.checked = false; try { d.showPicker(); } catch { d.focus(); } } return; }
+    if (ch.checked) { d.value = SALES.payDay && SALES.payDay >= salesToday() ? SALES.payDay : nextPayDay(); d.dispatchEvent(new Event("change")); return; }
     if (await paySet(id, null)) openSales("Taken off payroll."); }));
   $("#sl-payall")?.addEventListener("click", async e => { const day = $("#sl-payall-d").value; if (!day) { try { $("#sl-payall-d").showPicker(); } catch { $("#sl-payall-d").focus(); } return; }
     const b = e.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = `Sure? ${cs.ready.length} on ${fmtDate(day)}`; return; }
