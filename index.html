@@ -3575,6 +3575,9 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .sl-pay.on input[type=date] { border-color: #e8a33a; background: #fff6e5; } .sl-payall { background: #fff6e5; border-radius: 10px; padding: 8px 10px; }
 .sl-inst-tag { display: inline-block; margin-top: 4px; font-size: 11px; }
 .sl-comm { white-space: nowrap; }
+.sl-tablewrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.sl-tablewrap .top-sbar { top: 0; background: var(--panel); margin-bottom: 0; }
+.sl-tablewrap .sl-t { margin: 0; } .sl-tablewrap .sl-t thead th { position: sticky; top: var(--sl-bar, 0px); z-index: 2; background: var(--panel); box-shadow: 0 1px 0 var(--line); }
 /* the Sales page summary box: bigger and easier to read */
 article.sales .cl-hero-range { padding: 18px 24px; gap: 6px; min-width: 380px; border-radius: 16px; }
 article.sales .cl-hero-range > span { font-size: calc(15px * var(--fs, 1)); }
@@ -6564,6 +6567,16 @@ function salesPaidDaysPick() {
   const list = [...days.entries()].sort((a, b) => b[0].localeCompare(a[0])), one = SALES.from && SALES.from === SALES.to ? SALES.from : "";
   return `<label>Paid on <select id="sl-paidday"><option value="">${list.length ? "Pick a pay day…" : "Nothing paid yet"}</option>${list.map(([d, x]) => `<option value="${d}" ${one === d ? "selected" : ""}>${esc(fmtDate(d))} — ${x.n} paid, ${money(x.amt)}</option>`).join("")}</select></label>`;
 }
+// the Sales list fills the screen: its box runs from where it starts to the bottom of the window (or the whole window
+// once you scroll down to it, if the top of the page is too tall), with the sideways bar and the headings pinned at its top
+function salesFitList() {
+  const w = $("#sl-tw"), main = $("#main"); if (!w || !main) return;
+  const mr = main.getBoundingClientRect(), wr = w.getBoundingClientRect(), bottom = Math.min(mr.bottom, innerHeight);
+  const fromTop = wr.top - mr.top + main.scrollTop, left = mr.height - fromTop - 12;
+  w.style.height = Math.max(left, Math.min(bottom - Math.max(mr.top, 0), innerHeight) - 16, 260) + "px";
+  const bar = w.querySelector(".top-sbar"); w.style.setProperty("--sl-bar", (bar && bar.style.display !== "none" ? bar.offsetHeight + 2 : 0) + "px");
+}
+window.addEventListener("resize", () => { if (document.body.dataset.page === "sales") salesFitList(); });
 // the quick list of paid / payroll days (no amounts to work out, so it's back in a moment)
 async function salesLoadPaid() {
   if (!(can("installs.manage") || ["owner", "accounting"].includes(ME.role))) return;
@@ -6697,7 +6710,7 @@ function renderSales(msg) {
       ${payDaySelect(`id="sl-payall-d" aria-label="Pay day"`, SALES.payDay && SALES.payDay >= salesToday() ? SALES.payDay : nextPayDay(), payDays(28, 100))}<button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
     <div class="sl-find"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
       ${qq.length ? `<span class="quiet">${rows.length} found${SALES.from || SALES.to || SALES.tab !== "all" ? " (searching all dates and stages)" : ""}</span>` : ""}</div>
-    ${rows.length ? `<table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
+    ${rows.length ? `<div class="staff-wrap sl-tablewrap" id="sl-tw"><table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
       ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
         <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
@@ -6710,9 +6723,10 @@ function renderSales(msg) {
           : r.stage === "booked" ? `<button class="btn" type="button" data-sl-est="${r.job_id}">Make the proposal</button>`
           : r.stage === "estimate" ? `<button class="btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>`
           : r.stage === "install" ? `<button class="btn quiet-btn" type="button" data-sl-cust="${r.customer_id}">Open the file</button>`
-          : r.est_id ? `<button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>` : ""}${(r.stage === "closed" || r.stage === "install") && r.est_id ? `<button class="btn quiet-btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>${estSoldBtns(r.est_id, !!r.st_id)}` : ""}${["booked", "estimate"].includes(r.stage) ? `<button class="btn quiet-btn sl-cancel" type="button" data-sl-cancel="${r.job_id}" title="Cancel this sales job and its proposal">Cancel</button>` : ""}</td></tr>`).join("")}</tbody></table>`
+          : r.est_id ? `<button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>` : ""}${(r.stage === "closed" || r.stage === "install") && r.est_id ? `<button class="btn quiet-btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>${estSoldBtns(r.est_id, !!r.st_id)}` : ""}${["booked", "estimate"].includes(r.stage) ? `<button class="btn quiet-btn sl-cancel" type="button" data-sl-cancel="${r.job_id}" title="Cancel this sales job and its proposal">Cancel</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="quiet">${qq.length ? "Nothing matches your search." : SALES.tab === "open" ? "No open sales jobs. Press + New sales job to start one." : "Nothing here."}</p>`}
   </article>`;
+  salesFitList(); setTimeout(salesFitList, 200);   // again once the sideways bar is in
   document.querySelectorAll("[data-sl-tab]").forEach(b => b.addEventListener("click", () => { SALES.tab = b.dataset.slTab; salesSave(); renderSales(); }));
   // payroll: tick or pick a pay day (ticking with no day asks for one); clear the tick to take it off
   const paySet = async (id, day, msg) => { const c = SALES.comm?.get(id);
