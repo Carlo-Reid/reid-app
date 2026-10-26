@@ -34,6 +34,8 @@ BEGIN
     END LOOP;
   END LOOP;
   UPDATE employees SET active = false WHERE id = p_from AND active IS DISTINCT FROM false;
+  -- a duplicate that was a technician (e.g. the ServiceTitan tech account) keeps the person on the dispatch board
+  UPDATE employees SET is_technician = true WHERE id = p_to AND is_technician IS NOT TRUE AND (SELECT is_technician FROM employees WHERE id = p_from);
   IF n > 0 THEN
     INSERT INTO audit_log (table_name, row_id, action, new_values)
     VALUES ('employees', p_from, 'update', jsonb_build_object('change', 'merged into staff record ' || p_to, 'rows_moved', n));
@@ -46,4 +48,16 @@ REVOKE EXECUTE ON FUNCTION public._merge_employee(bigint, bigint) FROM PUBLIC, a
 UPDATE public.employees SET merged_into = 12867323
 WHERE id = 2321 AND merged_into IS NULL AND EXISTS (SELECT 1 FROM public.employees WHERE id = 12867323);
 
+-- Tim M (ServiceTitan tech record) is Tim Mahoney (his sales record, which his app login uses)
+UPDATE public.employees SET merged_into = 64781134
+WHERE id = 64780756 AND merged_into IS NULL AND EXISTS (SELECT 1 FROM public.employees WHERE id = 64781134);
+
 SELECT public._merge_employee(id, merged_into) FROM public.employees WHERE merged_into IS NOT NULL;
+
+-- names that stay the way you set them (the nightly ServiceTitan copy would change them back)
+ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS keep_first_name text;
+ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS keep_last_name text;
+UPDATE public.employees SET keep_first_name = 'Randall', keep_last_name = 'Mackenzie' WHERE id = 12867323 AND keep_last_name IS NULL;
+UPDATE public.employees SET keep_first_name = 'Tim', keep_last_name = 'Mahoney' WHERE id = 64781134 AND keep_last_name IS NULL;
+UPDATE public.employees SET first_name = coalesce(keep_first_name, first_name), last_name = coalesce(keep_last_name, last_name)
+WHERE (keep_first_name IS NOT NULL AND first_name IS DISTINCT FROM keep_first_name) OR (keep_last_name IS NOT NULL AND last_name IS DISTINCT FROM keep_last_name);
