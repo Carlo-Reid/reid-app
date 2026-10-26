@@ -6584,12 +6584,15 @@ function renderSales(msg) {
   spHome();
   if (SALES.range && SALES.range !== "custom") [SALES.from, SALES.to] = salesRangeDates(SALES.range);   // "This month" etc. move with the calendar
   const inTab = (r, k) => k === "all" || (k === "open" ? ["booked", "estimate"].includes(r.stage) : k === "install" ? (r.stage === "install" || !!r.installs) : r.stage === k);
-  const R = (SALES.rows || []).filter(r => { const d = salesDate(r); return (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); }), n = k => R.filter(r => inTab(r, k)).length;
+  // dates: a sale counts on the day it was sold; on the Installs tab it's the install's day
+  const instDate = r => r.installs?.length ? (r.installs[0].visit_date || salesDate(r.installs[0])) : salesDate(r);
+  const inRange = (r, k) => { const d = k === "install" ? instDate(r) : salesDate(r); return (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); };
+  const R = (SALES.rows || []).filter(r => inRange(r, "")), n = k => (SALES.rows || []).filter(r => inTab(r, k) && inRange(r, k)).length;
   const qq = (SALES.q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
   const spOf = r => salesSrc(r)?.sales_person || "";
   const hay = r => [r.customer, r.street, r.city, r.job_number, ...(r.installs || []).map(i => i.job_number), r.est_number, spOf(r), r.seller, r.type, r.partner || "Reid", r.summary].join(" ").toLowerCase();
-  let rows = R.filter(r => inTab(r, SALES.tab));
-  if (qq.length) rows = rows.filter(r => { const h = hay(r); return qq.every(w => h.includes(w)); });
+  // searching looks at every date and stage, so a name or job number is always found
+  let rows = qq.length ? (SALES.rows || []).filter(r => { const h = hay(r); return qq.every(w => h.includes(w)); }) : (SALES.rows || []).filter(r => inTab(r, SALES.tab) && inRange(r, SALES.tab));
   const SORDER = { booked: 1, estimate: 2, closed: 3, install: 4, lost: 5 };
   const SKEY = { stage: r => SORDER[r.stage] || 9, sp: r => spOf(r).toLowerCase() || "~", cust: r => (r.customer || "").toLowerCase(), call: r => r.visit_date ? r.visit_date + (r.visit_from || "") : "~",
     for: r => ((r.partner || "Reid") + " " + (r.type || "")).toLowerCase(), prop: r => Number(r.stage === "closed" || r.stage === "install" ? r.sold_total : r.est_total) || 0,
@@ -6620,7 +6623,7 @@ function renderSales(msg) {
     ${SALES.pay && cs.ready.length ? `<div class="sl-find sl-payall"><span>Put all <b>${cs.ready.length}</b> ready to pay (<b>${money(cs.now)}</b>${SALES.from || SALES.to ? " in these dates" : ""}) on payroll for</span>
       <input type="date" id="sl-payall-d" value="${esc(SALES.payDay || "")}" aria-label="Pay day"><button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
     <div class="sl-find"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
-      ${qq.length ? `<span class="quiet">${rows.length} found</span>` : ""}</div>
+      ${qq.length ? `<span class="quiet">${rows.length} found${SALES.from || SALES.to || SALES.tab !== "all" ? " (searching all dates and stages)" : ""}</span>` : ""}</div>
     ${rows.length ? `<table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
       ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}${r.installs ? salesInstTag(r.installs[0]) : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
