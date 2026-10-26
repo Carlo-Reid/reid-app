@@ -4347,7 +4347,7 @@ AS $function$
                     OR EXISTS (SELECT 1 FROM app_users u WHERE u.id = jb.booked_by_user_id AND u.role <> 'technician')
                ELSE EXISTS (SELECT 1 FROM tgt WHERE tgt.uid = jb.sales_user_id OR (jb.sales_user_id IS NULL AND (tgt.uid = jb.booked_by_user_id OR tgt.emp = jb.sold_by_employee_id))
                               OR (jb.sales_user_id IS NULL AND tgt.emp IN (SELECT va.employee_id FROM visits v JOIN visit_assignments va ON va.visit_id = v.id WHERE v.job_id = jb.id))) END
-    ORDER BY jb.created_at DESC LIMIT 400),
+    ORDER BY jb.created_at DESC LIMIT 1500),
   rows AS (
     SELECT jsonb_build_object(
       'job_id', j.id, 'job_number', j.job_number, 'status', j.status, 'summary', j.summary, 'type', t.name, 'kind', j.sales_kind, 'on_site', j.sales_on_site_at,
@@ -4373,7 +4373,7 @@ AS $function$
       AND EXISTS (SELECT 1 FROM jobs ij WHERE ij.id <> sj.id AND (ij.sold_estimate_id = e.id OR ij.from_estimate_id = e.id))
       AND CASE WHEN (SELECT seller FROM who) IS NULL THEN true
                ELSE EXISTS (SELECT 1 FROM tgt WHERE tgt.uid = sj.sales_user_id OR (sj.sales_user_id IS NULL AND tgt.emp = e.sold_by_employee_id)) END
-    ORDER BY e.created_at DESC LIMIT 300),
+    ORDER BY e.created_at DESC LIMIT 2000),
   orows AS (
     SELECT jsonb_build_object(
       'job_id', sj.id, 'job_number', sj.job_number, 'status', sj.status, 'summary', sj.summary, 'type', t.name, 'kind', NULL, 'from_call', true,
