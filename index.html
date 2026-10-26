@@ -2350,6 +2350,11 @@
   .vs-bad { color: var(--red); font-weight: 700; } .vs-good { color: var(--green); font-weight: 700; } .ie-vs-v { margin: 4px 0; padding-left: 18px; font-size: 13px; }
   .pctl-ct input.pctl-cin { width: 58px; } .pctl-kw { width: 200px; font-size: 13px; } .pctl-usual td { background: var(--paper); }
   .pctl-nav { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 14px; font-weight: 700; color: var(--steel); }
+  .est-comm { margin-top: 10px; } .est-comm-d { border: 1px dashed #b197fc; border-radius: 10px; padding: 8px 12px; background: #f8f5ff; }
+  .est-comm-d summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; } .est-comm-tot { margin-left: auto; font-weight: 800; color: #5f3dc4; }
+  .est-comm-who { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; font-weight: 700; }
+  .est-comm-t { width: 100%; border-collapse: collapse; font-size: 13.5px; } .est-comm-t th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--steel); }
+  .est-comm-t td { border-top: 1px solid #e5dbff; padding: 4px 6px; } .est-comm-t .r { text-align: right; } .est-comm-sum td { background: #efe9ff; }
   .pctl-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); } .pctl-tab { border: 1px solid var(--line); border-bottom: 0; background: var(--paper); border-radius: 8px 8px 0 0; padding: 7px 14px; font-weight: 700; cursor: pointer; margin-bottom: -2px; }
   .pctl-tab[aria-selected="true"] { background: #fff; border-color: var(--blue, #1d4f91); border-bottom: 2px solid #fff; color: var(--blue, #1d4f91); } .pctl-tab .quiet { font-weight: 400; font-size: 12px; }
   .pctl-unset td { color: var(--steel); } .pctl-ghost::placeholder { color: #adb5bd; } .pctl-acts { white-space: nowrap; } .pctl-acts .link { margin-left: 6px; }
@@ -7181,6 +7186,37 @@ const estToolsHtml = (o, i) => `<div class="est-tools no-print"><div class="est-
   <button class="btn quiet-btn est-tool" type="button" data-onote="${i}:note_price" title="Text with an amount">Add a note with $</button>
   <button class="btn quiet-btn est-tool" type="button" data-odisc="${i}" title="Money off the option">Rebate or discount</button>
   ${(() => { const P = estPromos(o); return P.length ? `<div class="est-tools-h est-mydisc-h">Promo on this option</div>${P.map(({ d, l }) => `<button class="btn quiet-btn est-tool est-mydisc" type="button" data-omydisc="${i}:${d.item_id}" title="Adds the promo for ${esc(l.description)} as a discount line">${esc(l.description)}<span>${discWord(d, l.price)}</span></button>`).join("")}` : ""; })()}</div>`;
+// SA 2, owners only: the sales commission on each option, line by line (type of work, the person's %, the amount) and the total.
+// It uses the proposal's sales person; pick another to see what they'd get. Never printed or shown to the customer.
+const ECOMM = { items: new Map(), people: null, emp: null, est: null };
+async function estCommFill() {
+  if (ME.role !== "owner") return; const boxes = document.querySelectorAll("[data-est-comm]"); if (!boxes.length) return;
+  if (ECOMM.est !== EST.id) { ECOMM.est = EST.id; ECOMM.emp = EST.x?.sold_by_employee_id || null; }
+  if (!ECOMM.people) { const r = await db.rpc("comm_setup_get"); ECOMM.people = r.error ? [] : r.data?.people || []; }
+  const want = [...new Set(EST.opts.flatMap(o => o.lines.map(l => Number(l.item_id)).filter(Boolean)))].filter(id => !ECOMM.items.has(id));
+  if (want.length) { const r = await db.rpc("comm_for_items", { p_ids: want }); (r.data || []).forEach(x => ECOMM.items.set(Number(x.item_id), x)); want.forEach(id => { if (!ECOMM.items.has(id)) ECOMM.items.set(id, null); }); }
+  const P = ECOMM.people, me = P.find(x => x.employee_id === ECOMM.emp), usual = me?.pct != null ? Number(me.pct) : null;
+  document.querySelectorAll("[data-est-comm]").forEach(box => {
+    const o = EST.opts[Number(box.dataset.estComm)]; if (!o) return;
+    const rows = o.lines.filter(l => !(l.kind === "note") && (Number(l.qty) || 0) * (Number(l.price) || 0) !== 0).map(l => {
+      const amt = (Number(l.qty) || 0) * (Number(l.price) || 0), it = l.item_id ? ECOMM.items.get(Number(l.item_id)) : null;
+      const pct = ECOMM.emp == null ? null : it ? it.rates?.[ECOMM.emp] ?? usual : usual;
+      return { d: l.disc ? (l.description || "Rebate or discount") : l.description, grp: l.disc ? "Rebate / discount" : it?.group || "Usual rate", amt, pct, c: pct != null ? Math.round(amt * pct) / 100 : null }; });
+    const total = rows.reduce((a, r) => a + (r.c || 0), 0), sale = rows.reduce((a, r) => a + r.amt, 0), anyRate = rows.some(r => r.pct != null);
+    box.innerHTML = `<details class="est-comm-d" ${ECOMM.open?.has(box.dataset.estComm) ? "open" : ""}><summary><b>Sales commission</b> <span class="quiet">only owners see this</span>
+        <span class="est-comm-tot">${anyRate ? money(total) : "no rate"}${anyRate && sale ? ` <span class="quiet">(${(total / sale * 100).toFixed(2)}% of ${money(sale)})</span>` : ""}</span></summary>
+      <label class="est-comm-who">Paid to <select data-est-comm-who><option value="">Pick the sales person…</option>${P.map(x => `<option value="${x.employee_id}" ${x.employee_id === ECOMM.emp ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>
+        ${EST.x?.sold_by_employee_id && ECOMM.emp !== EST.x.sold_by_employee_id ? `<span class="quiet">(not the proposal's sales person: just to compare)</span>` : ""}</label>
+      ${rows.length ? `<table class="est-comm-t"><thead><tr><th>Line</th><th>Type of work</th><th class="r">Amount</th><th class="r">Rate</th><th class="r">Commission</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td>${esc(String(r.d || "").split("\n")[0])}</td><td>${esc(r.grp)}</td><td class="r num">${money(r.amt)}</td><td class="r num">${r.pct != null ? +Number(r.pct) + "%" : "—"}</td><td class="r num">${r.c != null ? money(r.c) : "—"}</td></tr>`).join("")}
+        <tr class="est-comm-sum"><td colspan="2"><b>Total commission</b></td><td class="r num">${money(sale)}</td><td class="r num">${sale && anyRate ? (total / sale * 100).toFixed(2) + "%" : ""}</td><td class="r num"><b>${money(total)}</b></td></tr></tbody></table>`
+        : `<p class="quiet">Nothing priced on this option yet.</p>`}
+      ${ECOMM.emp != null && !anyRate ? `<p class="quiet">No commission rates are set for this person. Set them on Pricing control (Settings), section 7.</p>` : ""}
+      <p class="quiet">Rates by type of work from Pricing control, section 7. Rebates and discounts come off at the person's usual rate.</p></details>`;
+    box.querySelector("details").addEventListener("toggle", e => { ECOMM.open = ECOMM.open || new Set(); e.target.open ? ECOMM.open.add(box.dataset.estComm) : ECOMM.open.delete(box.dataset.estComm); });
+    box.querySelector("[data-est-comm-who]").addEventListener("change", e => { ECOMM.emp = e.target.value ? Number(e.target.value) : null; ECOMM.open = ECOMM.open || new Set(); ECOMM.open.add(box.dataset.estComm); estCommFill(); });
+  });
+}
 function renderEstEdit() {
   if (!MYDISC_AT) loadMyDisc().then(ch => { if (ch && document.querySelector(".est-sheet")) renderEstEdit(); });
   { const ids = EST.opts.flatMap(o => o.lines.map(l => l.item_id)).filter(id => id && !EINFO.has(id));
@@ -7253,6 +7289,7 @@ function renderEstEdit() {
           <td class="r est-off">−<input class="est-p" data-lpd="${i}:${k}" value="${Math.abs(Number(l.price) || 0).toFixed(2)}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="Amount off"></td>
           <td>${closed ? "" : `<button class="link danger" type="button" data-ldel="${i}:${k}" title="Take it off">✕</button>`}</td></tr>`).join("")}</tbody></table>` : ""}
         <div class="est-tot"><span>Subtotal <b>${money(tot(o))}</b></span><span>HST (13%) <b>${money(tot(o) * HST)}</b></span><span class="est-big">Total <b>${money(tot(o) * (1 + HST))}</b></span><span class="est-fin" title="${esc(estFinNote())}">Est. financing <b>${estFin(tot(o) * (1 + HST)) ? money(estFin(tot(o) * (1 + HST))) + "/mo" : "—"}</b></span></div>
+        ${ME.role === "owner" ? `<div class="est-comm no-print" data-est-comm="${i}"></div>` : ""}
       </section>`).join("")}
         ${!closed && EST.opts.length < 3 ? `<button type="button" class="est-newopt" id="est-newopt">+ Add another option <span class="quiet">(up to 3)</span></button>` : ""}</div>
       ${estAuthHtml()}
@@ -7260,7 +7297,7 @@ function renderEstEdit() {
     </div></div>
     <div id="est-dlg"></div>
   </article>`;
-  wireEstEdit();
+  wireEstEdit(); estCommFill();
 }
 // the floating right column follows the option you're looking at
 function estPickFloat() {
@@ -7281,7 +7318,7 @@ function wireEstEdit() {
   const m = $("#main"), ij = s => s.split(":").map(Number), dirty = () => { EST.dirty = true; };
   const refreshTotals = i => { const ec = m.querySelector(`[data-ec="${i}"] .ec-costwrap`); if (ec) ec.innerHTML = estCostCard(EST.opts[i], i); const sec = m.querySelector(`[data-oi="${i}"]`), o = EST.opts[i], tot = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
     sec.querySelectorAll(".est-lt").forEach(td => { const l = o.lines[Number(td.dataset.lt)]; if (l) td.textContent = money((Number(l.qty) || 0) * (Number(l.price) || 0)); });
-    const b = sec.querySelectorAll(".est-tot b"); b[0].textContent = money(tot); b[1].textContent = money(tot * 0.13); b[2].textContent = money(tot * 1.13);
+    const b = sec.querySelectorAll(".est-tot b"); b[0].textContent = money(tot); b[1].textContent = money(tot * 0.13); b[2].textContent = money(tot * 1.13); estCommFill();
     if (b[3]) { const f = estFin(tot * 1.13); b[3].textContent = f ? money(f) + "/mo" : "—"; } };
   m.querySelectorAll("[data-oname]").forEach(el => el.addEventListener("input", () => { EST.opts[Number(el.dataset.oname)].name = el.value; dirty(); }));
   m.querySelectorAll("[data-orec]").forEach(el => el.addEventListener("change", () => { EST.opts.forEach((o, i) => o.recommended = i === Number(el.dataset.orec)); dirty(); renderEstEdit(); }));
