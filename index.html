@@ -2379,7 +2379,7 @@
   .prc-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: center; } .prc-head h2 { margin: 0; } .prc-head label { display: flex; gap: 6px; align-items: center; font-weight: 700; } .prc-head select { max-width: 380px; }
   .prc-t { border-collapse: collapse; width: 100%; font-size: 14px; } .prc-t th, .prc-t td { padding: 5px 10px; border-top: 1px solid var(--line); white-space: nowrap; } .prc-t thead th { background: var(--paper); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--steel); }
   .prc-t tbody th { text-align: left; font-weight: 500; } .prc-t .r { text-align: right; } .prc-tot td, .prc-tot th { background: #f1f5fb; } .prc-price td, .prc-price th { background: #ebfbee; font-size: 16px; } .prc-sm td, .prc-sm th { font-size: 12.5px; color: var(--steel); }
-  .prc-in { text-align: right; } .prc-addon { max-width: 230px; margin-left: 6px; } .prc-x { margin-left: 4px; font-size: 15px; } .prc-addp { display: flex; gap: 6px; align-items: center; font-weight: 700; }
+  .prc-in { text-align: right; } .prc-ref th { background: var(--paper); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--steel); font-weight: 700; } .prc-addon { max-width: 230px; margin-left: 6px; } .prc-x { margin-left: 4px; font-size: 15px; } .prc-addp { display: flex; gap: 6px; align-items: center; font-weight: 700; }
   .prc-addm { margin-top: 8px; } .prc-addm input { width: 100%; max-width: 520px; } .prc-more h2 { margin-top: 0; }
   .pctl-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); } .pctl-tab { border: 1px solid var(--line); border-bottom: 0; background: var(--paper); border-radius: 8px 8px 0 0; padding: 7px 14px; font-weight: 700; cursor: pointer; margin-bottom: -2px; }
   .pctl-tab[aria-selected="true"] { background: #fff; border-color: var(--blue, #1d4f91); border-bottom: 2px solid #fff; color: var(--blue, #1d4f91); } .pctl-tab .quiet { font-weight: 400; font-size: 12px; }
@@ -15637,6 +15637,9 @@ function renderPricing(msg) {
             ${line("<b>Sell price</b>", () => `<b>${v("price")}</b>`, "prc-price")}
             ${line("Owner take home", () => v("ownerT"), "prc-sm")}
             ${line("Profit after costs, commission and partner fee", () => v("profit"), "prc-sm")}
+            <tr class="prc-ref"><th colspan="${cols.length + 1}">Price book levels <span class="quiet">(for price books set to the HSG or Sales level, not the sell price)</span></th></tr>
+            ${line(`HSG price: total ÷ ${num("hsg_factor", f.hsg_factor, 64)}`, (c, i) => i ? `<span class="quiet">—</span>` : v("hsg"), "prc-sm")}
+            ${line(`Sales price: HSG price ÷ ${num("sales_factor", f.sales_factor, 64)}`, (c, i) => i ? `<span class="quiet">—</span>` : v("sales"), "prc-sm")}
           </tbody></table></div>
           ${edit && addable.length ? `<div class="set-tools"><label class="prc-addp">Add a partner column <select id="prc-addp"><option value="">Pick…</option>${addable.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select></label><span class="quiet">A partner uses the same numbers plus its partner fee. Save to keep it.</span></div>` : ""}
           <p class="quiet" id="prc-note"></p>
@@ -15676,7 +15679,8 @@ function prcCalc() {
     put("unit", m ? money(cost) : "—"); put("addon", money(addon)); put("mat", money(mat)); put("war", money(war)); put("lab", money(lab)); put("tot", money(tot));
     put("marked", money(S.marked)); put("owner", money(S.owner)); put("sub1", money(S.sub1)); put("comm", money(S.comm)); put("sub2", money(S.sub2));
     put("fee", money(S.fee)); put("sub3", money(S.sub3)); put("rounded", money(S.rounded)); put("add", money(S.add)); put("price", money(S.price));
-    put("ownerT", money(S.owner)); put("profit", money(S.price - tot - S.comm - S.fee)); }));
+    put("ownerT", money(S.owner)); put("profit", money(S.price - tot - S.comm - S.fee));
+    const hf = g("hsg_factor"), sf = g("sales_factor"); put("hsg", hf > 0 ? money(tot / hf) : "—"); put("sales", hf > 0 && sf > 0 ? money(tot / hf / sf) : "—"); }));
   const dv = sh.querySelector('[data-v="div"]'); if (dv) dv.textContent = (1 - g("gp_pct") / 100).toFixed(2);
   const now = m ? Number(m.price) : null, newP = pfSteps(tot, F0).price, n = $("#prc-note");
   if (n) n.textContent = m ? (Math.abs(now - newP) > 0.5 ? `In the price book now: ${money(now)} for this model. Save and reprice makes it ${money(newP)}.` : `Matches the price book (${money(now)}).`) : "";
@@ -15691,11 +15695,12 @@ function wirePricing() {
   $("#prc-save")?.addEventListener("click", async e => {
     const f = PRC.F.find(x => x.id === PRC.sel), sh = $("#prc-sheet"), b = e.currentTarget; if (!f || !sh) return;
     const val = k => String(sh.querySelector(`[data-k="${k}"]`)?.value ?? "").replace(/[$,%\s]/g, "");
-    for (const k of ["material", "warranty", "labour", "gp_pct", "owner_pct", "commission_pct", "round_to", "adder"]) if (val(k) !== "" && !isFinite(Number(val(k)))) return renderPricing("Not saved: type numbers only.");
+    if ([val("hsg_factor"), val("sales_factor")].some(x => x !== "" && !(Number(x) > 0))) return renderPricing("Not saved: the HSG and Sales factors have to be more than 0 (for example 0.8).");
+    for (const k of ["material", "warranty", "labour", "gp_pct", "owner_pct", "commission_pct", "round_to", "adder", "hsg_factor", "sales_factor"]) if (val(k) !== "" && !isFinite(Number(val(k)))) return renderPricing("Not saved: type numbers only.");
     if (Number(val("gp_pct")) >= 95) return renderPricing("Not saved: the GP % has to be under 95.");
     b.disabled = true; b.textContent = "Repricing…";
     const p = { addon_item_id: sh.querySelector('[data-k="addon_item_id"]').value, material: val("material"), warranty: val("warranty"), labour: val("labour"), gp_pct: String(Number(val("gp_pct")) / 100),
-      owner_pct: val("owner_pct"), commission_pct: val("commission_pct"), round_to: val("round_to"), adder: val("adder") };
+      owner_pct: val("owner_pct"), commission_pct: val("commission_pct"), round_to: val("round_to"), adder: val("adder"), hsg_factor: val("hsg_factor"), sales_factor: val("sales_factor") };
     const errs = []; let r = await db.rpc("save_price_formula", { p_id: f.id, p }); if (r.error) errs.push(rpcErr(r.error));
     for (const c of PRC.cols) { r = await db.rpc("price_formula_partner_set", { p_formula: f.id, p_partner: c.id, p: { material: p.material, warranty: p.warranty, labour: p.labour, gp_pct: p.gp_pct, round_to: p.round_to, adder: p.adder, office: "0", partner_fee_pct: val("fee_" + c.id) } }); if (r.error) errs.push(rpcErr(r.error)); }
     for (const id of PRC.drop || []) { r = await db.rpc("price_formula_partner_set", { p_formula: f.id, p_partner: id, p: null }); if (r.error) errs.push(rpcErr(r.error)); }
