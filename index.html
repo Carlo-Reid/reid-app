@@ -2381,6 +2381,9 @@
   .prc-t tbody th { text-align: left; font-weight: 500; } .prc-t .r { text-align: right; } .prc-tot td, .prc-tot th { background: #f1f5fb; } .prc-price td, .prc-price th { background: #ebfbee; font-size: 16px; } .prc-sm td, .prc-sm th { font-size: 12.5px; color: var(--steel); }
   .prc-in { text-align: right; } .prc-ref th { background: var(--paper); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--steel); font-weight: 700; } .prc-addon { max-width: 230px; margin-left: 6px; } .prc-x { margin-left: 4px; font-size: 15px; } .prc-addp { display: flex; gap: 6px; align-items: center; font-weight: 700; }
   .prc-addm { margin-top: 8px; } .prc-addm input { width: 100%; max-width: 520px; } .prc-more h2 { margin-top: 0; }
+  .prc-say { font-size: 15px; } .prc-types { display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 10px; } .prc-ex th { width: 90px; }
+  .prc-try { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; padding: 8px 10px; background: #ebfbee; border-radius: 10px; font-size: 15px; } .prc-try label { font-weight: 700; }
+  .prc-opts { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; } .prc-opts label { display: flex; gap: 6px; align-items: center; }
   .pctl-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); } .pctl-tab { border: 1px solid var(--line); border-bottom: 0; background: var(--paper); border-radius: 8px 8px 0 0; padding: 7px 14px; font-weight: 700; cursor: pointer; margin-bottom: -2px; }
   .pctl-tab[aria-selected="true"] { background: #fff; border-color: var(--blue, #1d4f91); border-bottom: 2px solid #fff; color: var(--blue, #1d4f91); } .pctl-tab .quiet { font-weight: 400; font-size: 12px; }
   .pctl-unset td { color: var(--steel); } .pctl-ghost::placeholder { color: #adb5bd; } .pctl-acts { white-space: nowrap; } .pctl-acts .link { margin-left: 6px; }
@@ -15574,13 +15577,15 @@ function pfSteps(tot, f, z) {
 // One set of numbers per series; Reid and each partner side by side; a partner only adds its partner fee %.
 //   total ÷ (1 − GP%) + owner take home % = sub total; + commission % = sub total 2; [+ partner fee % = sub total 3]; round; + adder
 const PRC = { sel: null, model: null, cols: null };
-async function openPricing(sel, msg) {
-  if (sel) PRC.sel = sel;
+async function openPricing(sel, msg, part) {
+  if (sel) { PRC.sel = sel; PRC.part = null; }
+  if (part) PRC.part = part;
   setPage("pricing" + (PRC.sel ? "=" + PRC.sel : ""), "pricing", "Pricing");
   if (!(ME.role === "owner" || (can("pricebook.edit") && seeCost()))) { $("#main").innerHTML = `<div class="empty"><div><h2>Owners only</h2>Pricing is for owners and people who edit the price book and see costs.</div></div>`; return; }
   if (!document.querySelector(".prc")) $("#main").innerHTML = `<div class="loading">Loading the pricing…</div>`;
   const [f, fp, ps, bk, bp, co] = await Promise.all([db.rpc("price_formula_list"), db.rpc("price_formula_partner_list"), db.rpc("partner_sales"), db.rpc("price_book_list"), db.rpc("price_book_partner_list"), db.from("company_settings").select("*").limit(1).maybeSingle()]);
   if (co.data) COMPANY = co.data;
+  await loadPbPricing().catch(() => {});
   PRC.F = (f.data || []).filter(x => x.active !== false); PRC.err = f.error ? rpcErr(f.error) : ""; PRC.fp = fp.data || []; PRC.partners = (ps.data || []).filter(x => x.sales_ok);
   PRC.books = bk.data?.books || []; PRC.bp = bp.data || [];
   if (!PRC.F.some(x => x.id === PRC.sel)) PRC.sel = PRC.F[0]?.id || null;
@@ -15608,13 +15613,15 @@ function renderPricing(msg) {
   const line = (lab, cell, cls = "") => `<tr class="${cls}"><th>${lab}</th>${cols.map((c, i) => `<td class="r num">${cell(c, i)}</td>`).join("")}</tr>`;
   const v = id => `<span data-v="${id}">—</span>`;
   $("#main").innerHTML = `<article class="staff prc">
-    <div class="pos-head"><h1>Pricing</h1>${edit && f ? `<span><button class="btn" type="button" id="prc-save">Save and reprice ${esc(f.name)}</button></span>` : ""}</div>
+    <div class="pos-head"><h1>Pricing</h1>${edit && f && !PRC.part ? `<span><button class="btn" type="button" id="prc-save">Save and reprice ${esc(f.name)}</button></span>` : ""}</div>
     <p class="lead">Pick a series on the left. Its numbers are on the right, laid out like your sheet: Reid and each partner side by side. Change any white box and every line updates; press <b>Save and reprice</b> and every model in the series gets its new price, for Reid and every partner.</p>
     ${msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"}" role="status">${esc(msg)}</div>` : ""}${PRC.err ? `<p class="staff-msg err">${esc(PRC.err)}</p>` : ""}
     <div class="prc-grid">
-      <nav class="prc-list cl-tools">${secs.map(g => `<div class="prc-sec">${esc(g.name)}</div>${g.rows.map(x => `<button type="button" class="prc-s ${x.id === PRC.sel ? "on" : ""}" data-prc-s="${x.id}"><b>${esc(x.name)}</b><span>${x.items} model${x.items === 1 ? "" : "s"}</span></button>`).join("")}`).join("")}
+      <nav class="prc-list cl-tools">${secs.map(g => `<div class="prc-sec">${esc(g.name)}</div>${g.rows.map(x => `<button type="button" class="prc-s ${!PRC.part && x.id === PRC.sel ? "on" : ""}" data-prc-s="${x.id}"><b>${esc(x.name)}</b><span>${x.items} model${x.items === 1 ? "" : "s"}</span></button>`).join("")}`).join("")}
+        <div class="prc-sec">Parts and services</div>
+        ${PRC_PARTS.map(([k, t, sub]) => `<button type="button" class="prc-s ${PRC.part === k ? "on" : ""}" data-prc-part="${k}"><b>${t}</b><span>${sub}</span></button>`).join("")}
         ${edit ? `<form id="prc-new" class="prc-new"><input name="n" placeholder="New series name" maxlength="60" required><input name="s" placeholder="Section (e.g. Gas Furnaces)" maxlength="60" list="prc-secs"><datalist id="prc-secs">${secs.map(g => `<option value="${esc(g.name)}">`).join("")}</datalist><button class="btn quiet-btn" type="submit">+ New series</button></form>` : ""}</nav>
-      <div class="prc-main">${!f ? `<p class="quiet">No series yet.</p>` : `
+      <div class="prc-main">${PRC.part ? prcPartHtml(edit) : !f ? `<p class="quiet">No series yet.</p>` : `
         <section class="cl-tools prc-sheet" id="prc-sheet">
           <div class="prc-head"><h2>${esc(f.name)} <span class="quiet">${esc(f.section || "")}</span></h2>
             ${it.length ? `<label>Model <select id="prc-model">${it.map(x => `<option value="${x.id}" ${x.id === PRC.model ? "selected" : ""}>${esc(pbName(x.name))} · ${esc(x.sku)}</option>`).join("")}</select></label>` : `<span class="quiet">Add a model below to see real numbers.</span>`}</div>
@@ -15660,7 +15667,7 @@ function renderPricing(msg) {
           <form class="pctl-co" id="prc-co"><label>Labour cost per hour<span class="pctl-in">$<input name="rate" inputmode="decimal" value="${COMPANY?.labour_cost_per_hour != null ? Number(COMPANY.labour_cost_per_hour).toFixed(2) : ""}" placeholder="55.00"></span><span class="quiet">What one tech hour costs you (item labour, proposals).</span></label>
             <label>Margin goal on proposals<span class="pctl-in"><input name="goal" inputmode="decimal" value="${Math.round(estMargin() * 1000) / 10}">%</span><span class="quiet">Green or red on proposal costing.</span></label>
             <div><button class="btn" type="submit">Save</button> <span class="staff-msg" id="prc-co-msg" role="status"></span></div></form>
-          <p class="quiet">Sales people's commission rates are on the <button class="link" type="button" data-set-pb="commission">Commissions</button> page. Markup rules for parts: <button class="link" type="button" data-set-pb="pricing-rules">Markup and member prices</button>.</p></section>
+          <p class="quiet">Sales people's commission rates are on the <button class="link" type="button" data-set-pb="commission">Commissions</button> page.</p></section>
       </div></div></article>`;
   $("#main").scrollTop = top;
   wirePricing();
@@ -15687,7 +15694,9 @@ function prcCalc() {
 }
 function wirePricing() {
   const reload = (m, keep) => openPricing(null, m);
-  document.querySelectorAll("[data-prc-s]").forEach(b => b.addEventListener("click", async () => { PRC.sel = Number(b.dataset.prcS); setPage("pricing=" + PRC.sel, "pricing", "Pricing"); await prcLoadSeries(); renderPricing(); }));
+  document.querySelectorAll("[data-prc-part]").forEach(b => b.addEventListener("click", () => { PRC.part = b.dataset.prcPart; PRC.rulesEdit = null; renderPricing(); }));
+  if (PRC.part) wirePrcPart();
+  document.querySelectorAll("[data-prc-s]").forEach(b => b.addEventListener("click", async () => { PRC.part = null; PRC.sel = Number(b.dataset.prcS); setPage("pricing=" + PRC.sel, "pricing", "Pricing"); await prcLoadSeries(); renderPricing(); }));
   $("#prc-model")?.addEventListener("change", e => { PRC.model = Number(e.target.value); prcCalc(); });
   $("#prc-sheet")?.addEventListener("input", prcCalc); $("#prc-sheet")?.addEventListener("change", prcCalc); prcCalc();
   $("#prc-addp")?.addEventListener("change", e => { const id = Number(e.target.value); if (!id) return; PRC.cols.push({ id, fee: 20, fresh: true }); const keep = prcRead(); renderPricing(`Added ${(PRC.partners.find(x => x.id === id) || {}).name}. Set its partner fee, then Save and reprice.`); prcWrite(keep); });
@@ -15728,6 +15737,89 @@ function wirePricing() {
     const r = n(fm.rate.value), g = n(fm.goal.value); if ((r != null && !isFinite(r)) || g == null || !isFinite(g)) { m.className = "staff-msg err"; m.textContent = "Type numbers only."; return; }
     const { error } = await db.rpc("pricing_control_set", { p_labour: r, p_margin: g, p_commission: COMPANY?.commission_default_pct ?? null });
     if (error) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; } reload("Saved the company numbers."); });
+}
+// ---------- Pricing page: parts and services that aren't in a series (markup rules), and member prices ----------
+const PRC_PARTS = [["material", "Materials", "markup by cost"], ["service", "Services", "markup by cost"], ["equipment", "Equipment not in a series", "markup by cost"], ["member", "Member prices", "plan customers"]];
+const PRC_TYPE = { material: "Materials", service: "Services", equipment: "Equipment not in a series" };
+const prcRulePrice = (rules, cost, rt) => { const r = rules.find(x => cost >= Number(x.cost_from || 0) && (x.cost_to === "" || x.cost_to == null || cost < Number(x.cost_to)));
+  if (!r || r.markup_pct === "" || r.markup_pct == null) return null; rt = Number(rt) || 0.01; return { r, price: Math.round(Math.round(cost * (1 + Number(r.markup_pct) / 100) / rt) * rt * 100) / 100 }; };
+function prcPartHtml(edit) {
+  const P = PB.pricing, d = edit ? "" : "disabled";
+  if (!P) return `<section class="cl-tools prc-sheet"><p class="staff-msg err">Markup rules and member prices aren't switched on yet.</p></section>`;
+  const RT = [["0.01", "the cent"], ["0.05", "5 cents"], ["0.25", "25 cents"], ["0.5", "50 cents"], ["1", "the dollar"], ["5", "$5"]];
+  if (PRC.part === "member") {
+    const T = [["material", "Materials"], ["equipment", "Equipment"], ["service", "Services"], ["fee", "Fees"], ["labour", "Labour"]];
+    return `<section class="cl-tools prc-sheet" id="prc-part"><div class="prc-head"><h2>Member prices <span class="quiet">${Number(P.members).toLocaleString()} customers are on a plan</span></h2></div>
+      <p class="prc-say">Plan customers pay the item's <b>own member price</b> if it has one (typed on the item). Otherwise they get
+        ${`<input class="ie-num prc-in" id="prc-mpct" inputmode="decimal" value="${Number(P.member_discount_pct)}" ${d} style="width:64px">`} <b>% off</b> on:</p>
+      <div class="prc-types">${T.map(([k, t]) => `<label class="pb-check"><input type="checkbox" class="prc-mt" value="${k}" ${P.member_types.includes(k) ? "checked" : ""} ${d}> ${t}</label>`).join("")}</div>
+      <table class="prc-t prc-ex"><tbody><tr><th>Example</th><td class="r num" id="prc-mex"></td></tr></tbody></table>
+      ${edit ? `<div class="set-tools"><button class="btn" type="button" id="prc-psave">Save member prices</button></div>` : ""}</section>`;
+  }
+  const t = PRC.part; if (!PRC.rulesEdit) PRC.rulesEdit = P.rules.filter(r => r.item_type === t).map(r => ({ cost_from: r.cost_from, cost_to: r.cost_to ?? "", markup_pct: r.markup_pct })).sort((a, b) => Number(a.cost_from) - Number(b.cost_from));
+  const R = PRC.rulesEdit, inp = (i, k, v, ph) => `<input class="ie-num prc-in" data-ri="${i}" data-rk="${k}" inputmode="decimal" value="${v ?? ""}" placeholder="${ph || ""}" ${d} style="width:90px">`;
+  return `<section class="cl-tools prc-sheet" id="prc-part"><div class="prc-head"><h2>${PRC_TYPE[t]} <span class="quiet">price = what it costs you + markup %</span></h2></div>
+    <p class="quiet">Set a markup for each cost range, cheapest first. Most shops use a big markup on cheap parts and a smaller one on expensive parts. ${t === "equipment" ? "Equipment in a series is priced by its series instead; this is only for equipment that isn't in one." : ""}</p>
+    <table class="prc-t"><thead><tr><th>Costs from</th><th>Up to</th><th class="r">Markup</th><th class="r">Example</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
+      ${R.map((r, i) => `<tr><td>$ ${inp(i, "cost_from", r.cost_from, "0")}</td><td>$ ${inp(i, "cost_to", r.cost_to, "and up")}</td><td class="r">${inp(i, "markup_pct", r.markup_pct, "%")} %</td><td class="r num quiet" data-rex="${i}"></td>
+        ${edit ? `<td><button class="link danger" type="button" data-rdel="${i}" title="Take this step off">×</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="5" class="quiet">No markup set: these keep the price typed in the price book. Add a step to start.</td></tr>`}
+    </tbody></table>
+    ${edit ? `<button class="link" type="button" id="prc-radd">+ Add a step</button>` : ""}
+    <div class="prc-try"><label>Try a cost $ <input class="ie-num" id="prc-try" inputmode="decimal" value="${PRC.tryCost ?? 40}" style="width:90px"></label><span id="prc-tryout"></span></div>
+    <div class="prc-opts"><label>Round prices to <select id="prc-round" ${d}>${RT.map(([v, x]) => `<option value="${v}" ${Number(v) === Number(P.round_to) ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+      <label>Show items more than <input class="ie-num" id="prc-tol" inputmode="decimal" value="${Number(P.rule_tolerance_pct)}" ${d} style="width:56px"> % off their rule price</label></div>
+    ${edit ? `<div class="set-tools"><button class="btn" type="button" id="prc-psave">Save ${PRC_TYPE[t].toLowerCase()} markup</button><span class="quiet">Saving doesn't change any price. Use the list below to set items to the rule price.</span></div>` : ""}
+  </section>
+  <section class="cl-tools prc-models"><h2>${PRC_TYPE[t]} off the markup <span class="quiet">price now vs the rule price (as saved)</span></h2><div id="prc-off"><span class="quiet">Loading…</span></div></section>`;
+}
+function wirePrcPart() {
+  const P = PB.pricing; if (!P) return;
+  const msg = (t, err) => renderPricing(t);
+  const pl = over => ({ member_discount_pct: Number(P.member_discount_pct) || 0, member_types: P.member_types, rule_tolerance_pct: Number(P.rule_tolerance_pct) || 5, round_to: Number(P.round_to) || 0.01,
+    rules: P.rules.map(r => ({ item_type: r.item_type, cost_from: r.cost_from, cost_to: r.cost_to ?? "", markup_pct: r.markup_pct })), ...over });
+  const save = async (over, okMsg) => { const { error } = await db.rpc("save_pb_pricing", { p: pl(over) }); if (error) return msg("Not saved: " + rpcErr(error));
+    await loadPbPricing(); PRC.rulesEdit = null; renderPricing(okMsg); };
+  if (PRC.part === "member") {
+    const ex = () => { const v = Number($("#prc-mpct").value) || 0, on = [...document.querySelectorAll(".prc-mt:checked")].map(x => x.value);
+      $("#prc-mex").textContent = on.length && v ? `A $200.00 ${on.includes("service") ? "service" : on[0]} item: members pay ${money(200 * (1 - v / 100))} (unless it has its own member price)` : "No discount: members pay the regular price unless an item has its own member price."; };
+    $("#prc-part").addEventListener("input", ex); $("#prc-part").addEventListener("change", ex); ex();
+    $("#prc-psave")?.addEventListener("click", () => { const v = Number(String($("#prc-mpct").value).replace(/[%\s]/g, "")); if (!isFinite(v) || v < 0 || v >= 100) return msg("Not saved: type a % between 0 and 99.");
+      save({ member_discount_pct: v, member_types: [...document.querySelectorAll(".prc-mt:checked")].map(x => x.value) }, "Saved the member prices."); });
+    return;
+  }
+  const t = PRC.part, R = PRC.rulesEdit, n = v => { const x = String(v ?? "").trim().replace(/[$,%\s]/g, ""); return x === "" ? null : Number(x); };
+  const read = () => { document.querySelectorAll("[data-ri]").forEach(el => { R[Number(el.dataset.ri)][el.dataset.rk] = el.value; }); };
+  const calc = () => { read(); const rt = $("#prc-round").value;
+    R.forEach((r, i) => { const a = n(r.cost_from) ?? 0, b = n(r.cost_to), c = b != null ? Math.round((a + b) / 2) : Math.max(a * 2, a + 100), x = prcRulePrice(R, c, rt), el = document.querySelector(`[data-rex="${i}"]`);
+      if (el) el.textContent = x ? `costs ${money(c)} → ${money(x.price)}` : ""; });
+    const c = n($("#prc-try").value); PRC.tryCost = c; const x = c != null ? prcRulePrice(R, c, rt) : null;
+    $("#prc-tryout").innerHTML = c == null ? "" : x ? `→ ${money(c)} + ${+Number(x.r.markup_pct)}% = <b>${money(x.price)}</b>` : `<span class="quiet">no step covers ${money(c)}: it keeps its typed price</span>`; };
+  $("#prc-part").addEventListener("input", calc); $("#prc-part").addEventListener("change", calc); calc();
+  $("#prc-radd")?.addEventListener("click", () => { read(); const last = R[R.length - 1]; R.push({ cost_from: last ? (last.cost_to || "") : 0, cost_to: "", markup_pct: "" }); renderPricing(); });
+  document.querySelectorAll("[data-rdel]").forEach(b => b.addEventListener("click", () => { read(); R.splice(Number(b.dataset.rdel), 1); renderPricing(); }));
+  $("#prc-psave")?.addEventListener("click", () => { read(); const out = [];
+    for (const r of R) { const a = n(r.cost_from) ?? 0, b = n(r.cost_to), m = n(r.markup_pct);
+      if (m == null && b == null && !a) continue;
+      if ([a, b, m].some(x => x != null && (!isFinite(x) || x < 0)) || m == null) return msg("Not saved: each step needs a markup %, numbers only.");
+      if (b != null && b <= a) return msg('Not saved: "Up to" has to be more than "Costs from".');
+      out.push({ item_type: t, cost_from: a, cost_to: b ?? "", markup_pct: m }); }
+    const tol = n($("#prc-tol").value);
+    save({ rules: [...pl({}).rules.filter(r => r.item_type !== t), ...out], round_to: Number($("#prc-round").value), rule_tolerance_pct: tol != null && isFinite(tol) ? tol : 5 }, `Saved the ${PRC_TYPE[t].toLowerCase()} markup.`); });
+  // the items whose price is off the saved rule, with buttons to use the rule price
+  (async () => { const box = $("#prc-off"); if (!box) return;
+    if (!P.rules.some(r => r.item_type === t)) { box.innerHTML = `<p class="quiet">Save at least one step to see which items are off the markup.</p>`; return; }
+    const { data, error } = await db.rpc("pb_list", { p_search: null, p_type: t, p_active: true, p_category: null, p_flag: "off_rule", p_limit: 300 });
+    if (!$("#prc-off") || PRC.part !== t) return; if (error) { box.innerHTML = `<p class="staff-msg err">${esc(rpcErr(error))}</p>`; return; }
+    const L = (data || []).filter(r => r.rule_price != null && Math.abs(Number(r.rule_price) - Number(r.unit_price)) > 0.004);
+    box.innerHTML = L.length ? `<div class="set-tools"><button class="btn" type="button" id="prc-allrule">Set all ${L.length} to the rule price</button><span class="quiet">or one at a time below</span></div>
+      <div class="staff-wrap"><table class="calls-table"><thead><tr><th>Item</th><th class="r">Cost</th><th class="r">Price now</th><th class="r">Rule price</th><th></th></tr></thead><tbody>
+      ${L.map(r => `<tr><td><button class="link" type="button" data-prc-item="${r.id}"><b>${esc(pbName(r.name))}</b></button><div class="quiet">${esc(r.sku)}</div></td><td class="r num">${money(r.unit_cost)}</td><td class="r num">${money(r.unit_price)}</td><td class="r num"><b>${money(r.rule_price)}</b></td>
+        <td><button class="btn quiet-btn" type="button" data-prc-torule="${r.id}">Use rule price</button></td></tr>`).join("")}</tbody></table></div>`
+      : `<p class="quiet">Every ${PRC_TYPE[t].toLowerCase()} item is within ${Number(P.rule_tolerance_pct)}% of its rule price.</p>`;
+    box.querySelectorAll("[data-prc-item]").forEach(b => b.addEventListener("click", () => openPbItemPage(Number(b.dataset.prcItem))));
+    const apply = async (ids, b) => { if (b) b.disabled = true; const { data: k, error: e } = await db.rpc("pb_apply_rule", { p_ids: ids }); renderPricing(e ? "Not changed: " + rpcErr(e) : `Set ${k} ${k === 1 ? "price" : "prices"} to the markup.`); };
+    box.querySelectorAll("[data-prc-torule]").forEach(b => b.addEventListener("click", () => apply([Number(b.dataset.prcTorule)], b)));
+    $("#prc-allrule")?.addEventListener("click", e => { const b = e.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = `Sure? Change ${L.length} prices`; return; } apply(L.map(r => r.id), b); }); })();
 }
 // keep typed (unsaved) numbers when a partner column is added or taken off
 const prcRead = () => Object.fromEntries([...document.querySelectorAll("#prc-sheet [data-k]")].map(el => [el.dataset.k, el.value]));
@@ -16992,7 +17084,7 @@ function renderPricebook(msg) {
   $("#pb-import")?.addEventListener("click", () => { PB.importOpen = !PB.importOpen; renderPricebook(); $("#imp-box")?.scrollIntoView({ behavior: "smooth", block: "start" }); });
   $("#pb-new")?.addEventListener("click", () => { PB.sel = "new"; document.querySelectorAll(".po-row.sel, .pb-card.sel").forEach(x => x.classList.remove("sel")); showPbItem("new"); $("#pb-panel").scrollIntoView({ block: "nearest" }); });
   // markup rules and member prices
-  $("#pb-pricing-open")?.addEventListener("click", () => { PB.showPricing = !PB.showPricing; renderPricebook(); });
+  $("#pb-pricing-open")?.addEventListener("click", () => openPricing(null, null, "material"));
   $("#pb-tools-toggle")?.addEventListener("click", () => { PB.toolsOpen = !PB.toolsOpen; renderPricebook(); });
   $("#pb-pricing-close")?.addEventListener("click", () => { PB.showPricing = false; renderPricebook(); });
   const pf = $("#pb-pricing");
@@ -17994,7 +18086,7 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
   const k = b.dataset.setPb;
   if (k === "formulas") return openFormulas(); if (k === "pics") return openPictureLibrary(); if (k === "books") return openPriceBooks();
   if (k === "print") return openPrintBook(); if (k === "kits") return openAddonKits(); if (k === "control") return openPriceControl(); if (k === "pricing") return openPricing(); if (k === "commission") return openCommissions();
-  if (k === "pricing-rules") { PB.showPricing = true; await openPricebook(); }   // the price book page with the markup & member prices panel open
+  if (k === "pricing-rules") return openPricing(null, null, "material");   // the price book page with the markup & member prices panel open
 });
 // Settings (owners): while testing, proposals and invoices go to these instead of the customer. Empty the email to go live.
 async function sendTestBox() {
@@ -18056,7 +18148,6 @@ function renderSettings(slots, note) {
     ${ME.role === "owner" || can("pricebook.view") || can("pricebook.edit") ? `<section class="block"><h2>Price book tools</h2>
       <p class="quiet">Tools for setting up the price book.</p>
       <div class="set-tools">
-        <button class="btn quiet-btn" type="button" data-set-pb="pricing-rules">Markup &amp; member prices</button>
         <button class="btn quiet-btn" type="button" data-set-pb="pics">Equipment pictures</button>
         ${can("pricebook.edit") && can("staff.manage") ? `<button class="btn quiet-btn" type="button" data-set-pb="books">Price books</button>` : ""}
         <button class="btn quiet-btn" type="button" data-set-pb="print">Print book</button>
