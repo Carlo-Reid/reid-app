@@ -6,21 +6,21 @@ ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS merged_into bigint REFEREN
 
 CREATE OR REPLACE FUNCTION public._merge_employee(p_from bigint, p_to bigint)
 RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $f$
-DECLARE c record; r record; n int := 0; k int;
+DECLARE c record; r record; n int := 0;
 BEGIN
   IF p_from IS NULL OR p_to IS NULL OR p_from = p_to THEN RETURN 0; END IF;
   -- every column that points at a staff record: real links to employees, plus the usual names for ones without a link
   FOR c IN
     SELECT DISTINCT tbl, col FROM (
       SELECT cl.relname::text AS tbl, a.attname::text AS col
-      FROM pg_constraint k JOIN pg_class cl ON cl.oid = k.conrelid JOIN pg_namespace ns ON ns.oid = cl.relnamespace
-      JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = k.conkey[1]
-      WHERE k.contype = 'f' AND cl.relkind = 'r' AND k.confrelid = 'public.employees'::regclass AND ns.nspname = 'public' AND array_length(k.conkey, 1) = 1
+      FROM pg_constraint fk JOIN pg_class cl ON cl.oid = fk.conrelid JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+      JOIN pg_attribute a ON a.attrelid = fk.conrelid AND a.attnum = fk.conkey[1]
+      WHERE fk.contype = 'f' AND cl.relkind = 'r' AND fk.confrelid = 'public.employees'::regclass AND ns.nspname = 'public' AND array_length(fk.conkey, 1) = 1
       UNION
-      SELECT c.table_name::text, c.column_name::text FROM information_schema.columns c
-      JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name AND t.table_type = 'BASE TABLE'
-      WHERE c.table_schema = 'public' AND c.data_type IN ('bigint', 'integer')
-        AND c.column_name IN ('employee_id', 'salesperson_id', 'sold_by_employee_id', 'performed_by_employee_id', 'technician_id', 'tech_id', 'lead_tech_id', 'assigned_employee_id')
+      SELECT ic.table_name::text, ic.column_name::text FROM information_schema.columns ic
+      JOIN information_schema.tables it ON it.table_schema = ic.table_schema AND it.table_name = ic.table_name AND it.table_type = 'BASE TABLE'
+      WHERE ic.table_schema = 'public' AND ic.data_type IN ('bigint', 'integer')
+        AND ic.column_name IN ('employee_id', 'salesperson_id', 'sold_by_employee_id', 'performed_by_employee_id', 'technician_id', 'tech_id', 'lead_tech_id', 'assigned_employee_id')
     ) x WHERE NOT (tbl = 'employees')
   LOOP
     -- row by row, so a row that would become a duplicate (e.g. the same person twice on one visit) is dropped instead
