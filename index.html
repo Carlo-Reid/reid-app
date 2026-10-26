@@ -6515,7 +6515,7 @@ async function openSales(msg) {
   all.forEach(r => { delete r.installs; });
   SALES.rows = all.filter(r => { if (r.stage !== "install") return true; const d = byEst.get(r.est_id); if (!d) return true; (d.installs ||= []).push(r); return false; });
   renderSales(msg);
-  salesLoadComm();   // commission and payroll fill in a moment later
+  salesLoadPaid(); salesLoadComm();   // paid days come fast; commission amounts a moment later
 }
 // commission (the same numbers as the Installs page), in half-year pieces two at a time (all at once is too much for the database)
 async function salesLoadComm() {
@@ -6529,9 +6529,10 @@ async function salesLoadComm() {
   let rows = await getAll(); if (seq !== SALES.commSeq) return;
   if (!rows) { SALES.comm = SALES.pay = null; return; }
   SALES.comm = new Map(rows.map(r => [r.job_id, r]));
-  const pr = await db.rpc("commission_payroll");   // pays any whose pay day has come
-  SALES.pay = pr.error || !pr.data ? null : new Map(pr.data.map(x => [x.job_id, x.payroll_on]));
-  if (SALES.pay && pr.data.some(x => { const c = SALES.comm.get(x.job_id); return c && !c.paid_at && x.payroll_on <= salesToday(); })) {
+  let pr = { data: [] };
+  if (!SALES.paidList) { pr = await db.rpc("commission_payroll");   // (until setup 99zzzR: the older way)
+    SALES.pay = pr.error || !pr.data ? null : new Map(pr.data.map(x => [x.job_id, x.payroll_on])); }
+  if (SALES.pay && (pr.data || []).some(x => { const c = SALES.comm.get(x.job_id); return c && !c.paid_at && x.payroll_on <= salesToday(); })) {
     rows = await getAll(); if (rows) SALES.comm = new Map(rows.map(r => [r.job_id, r])); }
   if (seq !== SALES.commSeq || document.body.dataset.page !== "sales") return;
   const typing = document.activeElement?.id === "sl-q" ? document.activeElement.selectionStart : null, top = $("#main").scrollTop;
@@ -6540,14 +6541,37 @@ async function salesLoadComm() {
 }
 // the sales person on a deal: owners/dispatchers can add or change it right here (an Install row changes the deal it came from)
 // the day a deal's commission was paid (or paid early), if it was
-const salesPaidDay = r => { const c = SALES.comm?.get(salesInstOf(r)); return c ? insLocalDay(c.paid_at || c.prepaid_at) : ""; };
+const salesPaidOf = id => { const p = SALES.paid?.get(id); if (p) return p; const c = SALES.comm?.get(id); return c && (c.paid_at || c.prepaid_at) ? c : null; };
+const salesPaidDay = r => { const p = salesPaidOf(salesInstOf(r)); return p ? insLocalDay(p.paid_at || p.prepaid_at) : ""; };
+// "Paid on": every day commission was paid, with how many and how much (pick one to see that payout)
+function salesPaidDaysPick() {
+  const days = new Map();
+  for (const [, p] of (SALES.paid || new Map())) { const d = insLocalDay(p.paid_at || p.prepaid_at); if (!d) continue; const x = days.get(d) || { n: 0, amt: 0 }; x.n++; x.amt += Number(p.paid_at ? p.paid_amount : p.prepaid_amount) || 0; days.set(d, x); }
+  if (!SALES.paid) for (const [, c] of (SALES.comm || new Map())) { const d = insLocalDay(c.paid_at || c.prepaid_at); if (!d) continue; const x = days.get(d) || { n: 0, amt: 0 }; x.n++; x.amt += Number(c.paid_at ? c.paid_amount : c.prepaid_amount) || 0; days.set(d, x); }
+  const list = [...days.entries()].sort((a, b) => b[0].localeCompare(a[0])), one = SALES.from && SALES.from === SALES.to ? SALES.from : "";
+  return `<label>Paid on <select id="sl-paidday"><option value="">${list.length ? "Pick a pay day…" : "Nothing paid yet"}</option>${list.map(([d, x]) => `<option value="${d}" ${one === d ? "selected" : ""}>${esc(fmtDate(d))} — ${x.n} paid, ${money(x.amt)}</option>`).join("")}</select></label>`;
+}
+// the quick list of paid / payroll days (no amounts to work out, so it's back in a moment)
+async function salesLoadPaid() {
+  if (!(can("installs.manage") || ["owner", "accounting"].includes(ME.role))) return;
+  const r = await db.rpc("commission_paid_list"); if (r.error || !r.data) { SALES.paidList = false; return; }
+  SALES.paidList = true;
+  SALES.paid = new Map(r.data.filter(x => x.paid_at || x.prepaid_at).map(x => [x.job_id, x]));
+  SALES.pay = new Map(r.data.filter(x => x.payroll_on && !x.paid_at).map(x => [x.job_id, x.payroll_on]));
+  if (document.body.dataset.page !== "sales") return;
+  const typing = document.activeElement?.id === "sl-q" ? document.activeElement.selectionStart : null, top = $("#main").scrollTop;
+  renderSales(); $("#main").scrollTop = top;
+  if (typing != null) { const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(typing, typing); } catch {} } }
+}
 const salesToday = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
 // payroll: pick the pay day a commission goes out on (on that day it's marked paid)
 function salesPayCell(r) {
-  const id = salesInstOf(r), c = SALES.comm?.get(id);
-  if (!c || c.commission_amount == null) return `<span class="quiet">—</span>`;
-  if (c.paid_at || c.prepaid_at) return `<label class="sl-pay paid" title="The day it was paid: change it here">${c.paid_at ? "Paid" : "Paid early"} <input type="date" data-sl-paid="${id}" value="${esc(insLocalDay(c.paid_at || c.prepaid_at))}" aria-label="Day it was paid"></label>`;
-  const on = SALES.pay?.get(id) || "";
+  const id = salesInstOf(r); if (!id) return `<span class="quiet">—</span>`;
+  const pd = salesPaidOf(id);
+  if (pd) return `<label class="sl-pay paid" title="The day it was paid: change it here">${pd.paid_at ? "Paid" : "Paid early"} <input type="date" data-sl-paid="${id}" value="${esc(insLocalDay(pd.paid_at || pd.prepaid_at))}" aria-label="Day it was paid"></label>`;
+  const on = SALES.pay?.get(id) || "", c = SALES.comm?.get(id);
+  if (!on && !c) return SALES.comm ? `<span class="quiet">—</span>` : `<span class="quiet">…</span>`;
+  if (!on && c.commission_amount == null) return `<span class="quiet">—</span>`;
   return `<label class="sl-pay ${on ? "on" : ""}" title="${on ? "On payroll: paid on this day" : "Pick the pay day to put it on payroll"}"><input type="checkbox" data-sl-paychk="${id}" ${on ? "checked" : ""} aria-label="For payroll">
     <input type="date" data-sl-pay="${id}" value="${esc(on)}" aria-label="Pay day"></label>`;
 }
@@ -6633,7 +6657,8 @@ function renderSales(msg) {
         `<button type="button" data-sl-tab="${k}" aria-pressed="${SALES.tab === k}">${x} <span class="sl-n">${n(k)}</span></button>`).join("")}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button>
       ${salesWhoPicker()}</div>
-    <div class="sl-find sl-dates"><label>Dates by <select id="sl-dateby"><option value="sold" ${by(SALES.tab) === "sold" ? "selected" : ""}>Sold date</option><option value="installed" ${by(SALES.tab) === "installed" ? "selected" : ""}>Install date</option>${SALES.comm ? `<option value="paid" ${by(SALES.tab) === "paid" ? "selected" : ""}>Commission paid date</option>` : ""}</select></label>
+    <div class="sl-find sl-dates"><label>Dates by <select id="sl-dateby"><option value="sold" ${by(SALES.tab) === "sold" ? "selected" : ""}>Sold date</option><option value="installed" ${by(SALES.tab) === "installed" ? "selected" : ""}>Install date</option>${SALES.comm || SALES.paid ? `<option value="paid" ${by(SALES.tab) === "paid" ? "selected" : ""}>Commission paid date</option>` : ""}</select></label>
+      ${by(SALES.tab) === "paid" ? salesPaidDaysPick() : ""}
       <label>Dates <select id="sl-range">${SALES_RANGES.map(([k, t]) => `<option value="${k}" ${(SALES.range || "") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <label>From <input type="date" id="sl-from" value="${esc(SALES.from || "")}"></label><label>To <input type="date" id="sl-to" value="${esc(SALES.to || "")}"></label>
       ${SALES.from || SALES.to ? `<button class="link" type="button" id="sl-alldates">Show all dates</button>` : ""}</div>
@@ -6677,6 +6702,7 @@ function renderSales(msg) {
     SALES.payDay = day; openSales(`${ok} commissions (${money(cs.now)}) on payroll for ${fmtDate(day)}.`); });
   // dates: a quick pick, or your own From / To (picking your own dates switches the list to "Pick dates…")
   $("#sl-dateby")?.addEventListener("change", e => { SALES.dateBy = e.target.value; salesSave(); renderSales(); });
+  $("#sl-paidday")?.addEventListener("change", e => { const d = e.target.value; SALES.range = d ? "custom" : ""; SALES.from = SALES.to = d; salesSave(); renderSales(); });
   $("#sl-range")?.addEventListener("change", e => { SALES.range = e.target.value; if (!SALES.range) SALES.from = SALES.to = ""; salesSave(); renderSales(); });
   ["from", "to"].forEach(k => $("#sl-" + k)?.addEventListener("change", e => { SALES[k] = e.target.value; SALES.range = SALES.from || SALES.to ? "custom" : ""; salesSave(); renderSales(); }));
   $("#sl-alldates")?.addEventListener("click", () => { SALES.range = ""; SALES.from = SALES.to = ""; salesSave(); renderSales(); });
