@@ -4370,7 +4370,7 @@ AS $function$
     WHERE e.status = 'accepted' AND e.cancelled_at IS NULL AND e.created_at > now() - interval '18 months' AND (SELECT ok FROM ok)
       AND NOT (st.job_class = 'sales' AND public._is_install_sale(st.name))      -- sales jobs are above
       AND sj.sales_cancelled_at IS NULL
-      AND EXISTS (SELECT 1 FROM jobs ij WHERE ij.id <> sj.id AND (ij.sold_estimate_id = e.id OR ij.from_estimate_id = e.id))
+      AND EXISTS (SELECT 1 FROM jobs ij JOIN job_types it ON it.id = ij.job_type_id WHERE ij.id <> sj.id AND it.job_class = 'install' AND (ij.sold_estimate_id = e.id OR ij.from_estimate_id = e.id))
       AND CASE WHEN (SELECT seller FROM who) IS NULL THEN true
                ELSE EXISTS (SELECT 1 FROM tgt WHERE tgt.uid = sj.sales_user_id OR (sj.sales_user_id IS NULL AND tgt.emp = e.sold_by_employee_id)) END
     ORDER BY e.created_at DESC LIMIT 2000),
@@ -4404,7 +4404,7 @@ AS $function$
     FROM deals r JOIN jobs ij ON (ij.from_estimate_id = r.est OR ij.sold_estimate_id = r.est) AND ij.id <> r.jid JOIN estimates e ON e.id = r.est
     JOIN job_types t ON t.id = ij.job_type_id JOIN customers c ON c.id = ij.customer_id LEFT JOIN locations l ON l.id = ij.location_id
     LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = ij.id ORDER BY v.visit_number DESC LIMIT 1) v ON true
-    WHERE r.est IS NOT NULL
+    WHERE r.est IS NOT NULL AND t.job_class = 'install'   -- only real install jobs (not a follow-up service call)
     ORDER BY ij.id)
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb
               ELSE coalesce((SELECT jsonb_agg(x ORDER BY x->>'sort' DESC) FROM (SELECT x FROM deals UNION ALL SELECT x FROM inst) a), '[]'::jsonb) END
