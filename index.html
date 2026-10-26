@@ -2349,6 +2349,7 @@
   .ie-find-row { display: flex; gap: 8px; } .ie-find-row input { flex: 1; min-width: 0; }
   .ie-vs { margin: 6px 0 10px; } .ie-vs h3 { margin: 4px 0; font-size: 15px; } .ie-vs table { width: 100%; } .ie-vs th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--steel); }
   .vs-bad { color: var(--red); font-weight: 700; } .vs-good { color: var(--green); font-weight: 700; } .ie-vs-v { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+  .pctl-addp { display: flex; gap: 8px; align-items: center; font-weight: 700; flex-wrap: wrap; }
   .pctl-ct input.pctl-cin { width: 58px; } .pctl-kw { width: 200px; font-size: 13px; } .pctl-usual td { background: var(--paper); }
   .pctl-nav { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 14px; font-weight: 700; color: var(--steel); }
   .est-comm { margin-top: 10px; } .est-comm-d { border: 1px dashed #b197fc; border-radius: 10px; padding: 8px 12px; background: #f8f5ff; }
@@ -15645,7 +15646,10 @@ function wirePctlGrid() {
 function pctlCommHtml(msg) {
   const C = PCTL.comm; if (!C) return `<p class="staff-msg err">${esc(PCTL.commErr || "Couldn't load the commission rates.")}</p>`;
   const P = C.people.filter(x => x.pct != null || Object.keys(x.groups || {}).length || !PCTL.commShowOnly), G = C.groups;
-  const shown = PCTL.commAll ? C.people : C.people.filter(x => x.pct != null || Object.keys(x.groups || {}).length);
+  PCTL.commAdd = PCTL.commAdd || new Set();
+  const added = (C.staff || []).filter(x => PCTL.commAdd.has(x.employee_id) && !C.people.some(p => p.employee_id === x.employee_id)).map(x => ({ employee_id: x.employee_id, name: x.name, pct: null, groups: {} }));
+  const shown = [...(PCTL.commAll ? C.people : C.people.filter(x => x.pct != null || Object.keys(x.groups || {}).length || PCTL.commAdd.has(x.employee_id))), ...added];
+  const canAdd = (C.staff || []).filter(x => !shown.some(p => p.employee_id === x.employee_id));
   const cell = (x, gid) => { const v = gid ? x.groups?.[gid] : x.pct; return `<td class="r"><input class="ie-num pctl-cin" data-cemp="${x.employee_id}" data-cgrp="${gid || ""}" data-was="${v ?? ""}" inputmode="decimal" value="${v != null ? +Number(v) : ""}" placeholder="${gid ? (x.pct != null ? +Number(x.pct) : "") : ""}" aria-label="${esc(x.name)} ${gid ? "" : "usual "}rate">${v != null ? "%" : ""}</td>`; };
   return `<p class="quiet">Each sales person's % of the sale (before HST), by type of work. A blank box (grey number) uses their usual rate in the last row. An item's type comes from words in its name, then its price book categories, checked from the top down; change the words to move items between types.
       The Installs page and the invoice job costing work commission out line by line with these. A rate typed on one install still wins.</p>
@@ -15654,6 +15658,8 @@ function pctlCommHtml(msg) {
       ${G.map(g => `<tr><td><b>${esc(g.name)}</b></td><td><input class="pctl-kw" data-cgkw="${g.id}" data-was="${esc(g.keywords || "")}" value="${esc(g.keywords || "")}" placeholder="${g.name === "Other" ? "anything else" : "words"}" aria-label="Words for ${esc(g.name)}"></td>${shown.map(x => cell(x, g.id)).join("")}</tr>`).join("")}
       <tr class="pctl-usual"><td><b>Usual rate</b><br><span class="quiet">anything not in a type above, or a box left blank</span></td><td></td>${shown.map(x => cell(x, null)).join("")}</tr>
     </tbody></table></div>
+    <div class="set-tools"><label class="pctl-addp">Add a sales person <select id="pctl-cadd"><option value="">Pick someone…</option>${canAdd.map(x => `<option value="${x.employee_id}">${esc(x.name)}${x.title ? " (" + esc(x.title) + ")" : ""}</option>`).join("")}</select></label>
+      <span class="quiet">They get a column: type their rates and press Save commission.</span></div>
     <div class="set-tools"><button class="btn" type="button" id="pctl-csave">Save commission</button>
       <button class="link" type="button" id="pctl-call">${PCTL.commAll ? "Show only people with rates" : `Show everyone who sells (${C.people.length})`}</button>
       <span class="quiet">Words: separate with | (for example <code>water tank|water heater</code>).</span></div>`;
@@ -15664,6 +15670,9 @@ async function pctlCommReload(msg) {
 }
 function wirePctlComm() {
   $("#pctl-call")?.addEventListener("click", () => { PCTL.commAll = !PCTL.commAll; pctlCommReload(); });
+  $("#pctl-cadd")?.addEventListener("change", e => { const id = Number(e.target.value); if (!id) return; PCTL.commAdd = PCTL.commAdd || new Set(); PCTL.commAdd.add(id);
+    const nm = e.target.selectedOptions[0].textContent; const box = $("#pctl-comm"); box.innerHTML = `<h2>${box.dataset.h || "Rates by type of work"}</h2>${pctlCommHtml(`Added ${nm}. Type their rates (at least the Usual rate at the bottom), then press Save commission.`)}`; wirePctlComm();
+    box.querySelector(`.pctl-cin[data-cemp="${id}"][data-cgrp=""]`)?.focus(); });
   $("#pctl-csave")?.addEventListener("click", async e => {
     const b = e.currentTarget; b.disabled = true; let n = 0; const errs = [];
     for (const el of document.querySelectorAll("#pctl-comm [data-cgkw]")) { if (el.value.trim() === el.dataset.was) continue;
