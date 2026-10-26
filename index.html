@@ -15540,8 +15540,8 @@ function renderPriceControl(msg) {
         <div class="pf-step pf-tot"><b>Total cost</b></div><i>÷</i>
         <div class="pf-step"><b>(1 − Gross profit %)</b><span>35% GP: ÷ 0.65</span></div><i>→</i>
         <div class="pf-step"><b>Round</b><span>to the nearest $100</span></div><i>+</i>
-        <div class="pf-step"><b>Adder</b><span>e.g. $90, so it ends in 90</span></div><i>+</i>
-        <div class="pf-step"><b>Commission</b><span>flat $, added last</span></div><i>=</i>
+        <div class="pf-step"><b>Adder</b><span>e.g. $90, so it ends in 90</span></div><i>→</i>
+        <div class="pf-step"><b>Commission %</b><span>added last: ÷ (1 − commission %)</span></div><i>=</i>
         <div class="pf-step pf-sell"><b>Sell price</b><span>what the customer pays before HST</span></div>
       </div>
       <p class="quiet">When a supplier cost changes (and you approve it), or you change a number in a formula below, every model in that series gets its new price right away.</p>
@@ -15619,12 +15619,12 @@ function pctlGrid(F, secs, edit, d) {
   const head = tab ? `<p class="quiet">${pn}'s numbers for each series. A series that isn't set for ${pn} gives ${pn} the Reid price. Type numbers and press <b>Set for ${pn}</b> (blank boxes start from Reid's).
       Partner prices show on ${pn} print books (Price books, section 6, decides who can print them).</p>${PCTL.fpErr ? `<p class="staff-msg err">${esc(PCTL.fpErr)}</p>` : ""}`
     : `<p class="quiet">Reid's own prices. One line per series. Change a number and press Save on that line: every model in the series is repriced right away. Actual GP is what the models really make after rounding. Click a series name to see its models.</p>${PCTL.fErr ? `<p class="staff-msg err">${esc(PCTL.fErr)}</p>` : ""}`;
-  return `${head}<div class="staff-wrap pctl-wrap"><table class="calls-table pctl-ft"><thead><tr><th>Series</th><th class="r">Models</th><th>Comes with</th><th class="r">Material $</th><th class="r">Warranty $</th><th class="r">Labour $</th><th class="r">GP %</th><th class="r">Round to $</th><th class="r">Then add $</th><th class="r">Commission $</th><th class="r">Actual GP</th>${edit ? "<th></th>" : ""}</tr></thead>
+  return `${head}<div class="staff-wrap pctl-wrap"><table class="calls-table pctl-ft"><thead><tr><th>Series</th><th class="r">Models</th><th>Comes with</th><th class="r">Material $</th><th class="r">Warranty $</th><th class="r">Labour $</th><th class="r">GP %</th><th class="r">Round to $</th><th class="r">Then add $</th><th class="r">Commission %</th><th class="r">Actual GP</th>${edit ? "<th></th>" : ""}</tr></thead>
     ${secs.map(x => `<tbody><tr class="pctl-sec"><td colspan="${edit ? 12 : 11}">${esc(x.name)}</td></tr>${x.rows.map(f => {
       const pr = tab ? PCTL.fp.find(z => z.formula_id === f.id && z.partner_id === tab) : null, src = tab ? pr || f : f, g = (tab ? pr?.gp : f.gp) || {};
       const inp = (k, v) => `<td class="r"><input class="ie-num ${tab && !pr ? "pctl-ghost" : ""}" data-pk="${k}" inputmode="decimal" value="${tab && !pr ? "" : v ?? ""}" placeholder="${tab && !pr ? v ?? "" : ""}" ${d} aria-label="${k} for ${esc(f.name)}"></td>`;
       return `<tr data-pctl-f="${f.id}" class="${tab && !pr ? "pctl-unset" : ""}"><td><button class="link" type="button" data-pctl-open="${f.id}"><b>${esc(f.name)}</b></button>${tab && !pr ? `<div class="quiet">uses Reid's price</div>` : ""}</td><td class="r num">${f.items}</td><td class="quiet">${f.addon_name ? `${esc(pbName(f.addon_name))} ${money(f.addon_cost)}` : "—"}</td>
-        ${inp("material", src.material)}${inp("warranty", src.warranty)}${inp("labour", src.labour)}${inp("gp_pct", pctlPct(src.gp_pct))}${inp("round_to", src.round_to)}${inp("adder", src.adder)}${tab ? `<td class="r quiet">${money(f.commission || 0)}</td>` : inp("commission", f.commission ?? 0)}
+        ${inp("material", src.material)}${inp("warranty", src.warranty)}${inp("labour", src.labour)}${inp("gp_pct", pctlPct(src.gp_pct))}${inp("round_to", src.round_to)}${inp("adder", src.adder)}${tab ? `<td class="r quiet">${+Number(f.commission_pct || 0)}%</td>` : inp("commission_pct", +Number(f.commission_pct ?? 0))}
         <td class="r num ${g.min != null && g.min < estMargin() - 0.1 ? "pb-low" : ""}">${g.min != null ? (Math.abs(g.min - g.max) < 0.0005 ? pct(g.min) : `${pct(g.min)} – ${pct(g.max)}`) : "—"}</td>
         ${edit ? `<td class="pctl-acts">${tab ? `<button class="btn quiet-btn" type="button" data-pctl-psave="${f.id}">${pr ? "Save" : "Set for " + pn}</button>${pr ? `<button class="link danger" type="button" data-pctl-pdel="${f.id}">Use Reid's price</button>` : ""}`
           : `<button class="btn quiet-btn" type="button" data-pctl-save="${f.id}">Save</button>`}</td>` : ""}</tr>`; }).join("")}</tbody>`).join("") || `<tbody><tr><td colspan="12" class="quiet">No pricing formulas yet.</td></tr></tbody>`}
@@ -15734,7 +15734,8 @@ async function pctlWalk() {
     const items = (await db.rpc("price_formula_items", { p_formula: f.id })).data || [], me = items.find(z => z.id === id), c = me?.calc || {};
     const gp = c.gp != null ? Number(c.gp) : Number(f.gp_pct), addon = c.addon != null ? Number(c.addon) : Number(f.addon_cost) || 0;
     const sub2 = c.sub2 != null ? Number(c.sub2) : cost + addon + Number(f.material) + Number(f.warranty) + Number(f.labour) + Number(f.office);
-    const raw = sub2 / (1 - gp), rt = Number(f.round_to) || 1, rounded = Math.round(raw / rt) * rt, fcomm = Number(f.commission) || 0, calc = rounded + Number(f.adder || 0) + fcomm;
+    const raw = sub2 / (1 - gp), rt = Number(f.round_to) || 1, rounded = Math.round(raw / rt) * rt, before = rounded + Number(f.adder || 0), cpct = Number(f.commission_pct) || 0;
+    const calc = (cpct > 0 ? Math.round(before / (1 - cpct / 100)) : before) + (Number(f.commission) || 0), fcomm = calc - before;
     const addonName = me?.addon_name || f.addon_name;
     body = `<p>Priced by the <b>${esc(f.name)}</b> formula (${esc(f.section || "")}).${me?.gp_override != null ? ` This model has its own GP of ${pct(me.gp_override)}.` : ""}</p>
       <table class="pctl-walk-t"><tbody>
@@ -15744,14 +15745,14 @@ async function pctlWalk() {
         ${row("= Total cost", money(sub2), "pctl-sum")}
         ${row(`÷ (1 − ${pct(gp)} gross profit) <span class='quiet'>÷ ${(1 - gp).toFixed(2)}</span>`, money(raw))}
         ${row(`Round to the nearest ${money(rt)}`, money(rounded))}
-        ${row("+ Then add", money(f.adder || 0))}${fcomm ? row("+ Commission <span class='quiet'>flat, added last</span>", money(fcomm)) : ""}
+        ${row("+ Then add", money(f.adder || 0))}${fcomm ? row(`+ Commission <span class='quiet'>${cpct}% of the final price, added last</span>`, money(fcomm)) : ""}
         ${row("= Sell price", money(calc), "pctl-sell")}
       </tbody></table>
       ${Math.abs(calc - price) > 0.5 ? `<p class="staff-msg err">The price book has ${money(price)}, not ${money(calc)}. It may have been typed by hand or be waiting for a new cost.</p>` : `<p class="staff-msg ok">Matches the price book: ${money(price)}.</p>`}
       <p class="quiet">What it really makes: profit ${money(price - sub2)}, ${price ? pct((price - sub2) / price) : "—"} gross profit (rounding and the adder move it off the ${pct(gp)} target).
         ${c.hsg != null ? `HSG price (reference) ${money(c.hsg)}, Sales price ${money(c.sales)}.` : ""}</p>
       ${(() => { const rows = PCTL.fp.filter(z => z.formula_id === f.id).map(z => { const P = PCTL.partners.find(x => x.id === z.partner_id); if (!P) return "";
-          const s2 = cost + addon + Number(z.material) + Number(z.warranty) + Number(z.labour) + Number(z.office), g2 = Number(z.gp_pct), rt2 = Number(z.round_to) || 1, pp = Math.round(s2 / (1 - g2) / rt2) * rt2 + Number(z.adder) + (Number(f.commission) || 0);
+          const s2 = cost + addon + Number(z.material) + Number(z.warranty) + Number(z.labour) + Number(z.office), g2 = Number(z.gp_pct), rt2 = Number(z.round_to) || 1, pb0 = Math.round(s2 / (1 - g2) / rt2) * rt2 + Number(z.adder), pp = (Number(f.commission_pct) > 0 ? Math.round(pb0 / (1 - Number(f.commission_pct) / 100)) : pb0) + (Number(f.commission) || 0);
           return `<tr><td>${esc(P.name)}</td><td class="r num">${money(s2)}</td><td class="r num">${pct(g2)}</td><td class="r num"><b>${money(pp)}</b></td><td class="r num">${pp ? pct((pp - s2) / pp) : "—"}</td></tr>`; }).join("");
         return rows ? `<h3>Partner prices for this model</h3><table class="calls-table pctl-walk-p"><thead><tr><th>Partner</th><th class="r">Total cost</th><th class="r">GP target</th><th class="r">Price</th><th class="r">Really makes</th></tr></thead><tbody>${rows}</tbody></table>`
           : `<p class="quiet">No partner has its own numbers for this series, so partners get the Reid price.</p>`; })()}`;
@@ -15829,7 +15830,7 @@ function renderFormulas(msg) {
   const tstats = PF.rows.find(f => /thermostat/i.test(f.name));
   $("#main").innerHTML = `<article class="staff pf">
     <div class="pos-head"><h1>Pricing formulas</h1><span>${edit ? `<button class="btn" type="button" id="pf-new">+ New formula</button>` : ""}</span></div>
-    <p class="lead">Sell price = (unit cost + thermostat or coil + material + warranty + labour) ÷ (1 − GP%), rounded to the nearest $100, plus the adder, plus the flat commission (added last). Prices update by themselves when a cost or a formula changes.</p>
+    <p class="lead">Sell price = (unit cost + thermostat or coil + material + warranty + labour) ÷ (1 − GP%), rounded to the nearest $100, plus the adder, then the commission % added last (÷ (1 − commission %), to the dollar). Prices update by themselves when a cost or a formula changes.</p>
     <details class="rules-box"><summary>How this compares with the proposal costing</summary>${COST_RULES}</details>
     ${msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"}" role="status">${esc(msg)}</div>` : ""}
     ${PF.newOpen ? `<form class="cl-tools ak-newf" id="pf-newf"><label>Name (the series)<input name="n" required maxlength="60" placeholder="e.g. EL296V"></label>
@@ -15870,7 +15871,7 @@ function pfSettings(f, edit, tstats) {
       <tr><td>Gross profit target</td><td class="r num">${inp("gp_pct", Math.round(Number(f.gp_pct) * 1000) / 10, 70)} %</td><td class="r num quiet">÷ <span id="pf-div">—</span></td></tr>
       <tr><td>Round to the nearest</td><td class="r num">$ ${inp("round_to", f.round_to, 70)}</td><td></td></tr>
       <tr><td>Then add</td><td class="r num">$ ${inp("adder", f.adder, 70)}</td><td></td></tr>
-      <tr><td>Commission <span class="quiet">flat, added last (after the markup)</span></td><td class="r num">$ ${inp("commission", f.commission ?? 0, 70)}</td><td class="r num quiet" id="pf-p-comm"></td></tr>
+      <tr><td>Commission <span class="quiet">added last (after the markup): this % of the final price</span></td><td class="r num">${inp("commission_pct", +Number(f.commission_pct ?? 0), 70)} %</td><td class="r num quiet" id="pf-p-comm"></td></tr>
       <tr class="pbi-jc-price"><td><b>Sell price</b> <span class="quiet">before HST</span></td><td class="r num"><b id="pf-c-price">—</b></td><td class="r num quiet">100%</td></tr>
       <tr class="pbi-jc-tot"><td><b>Profit</b> <span class="quiet">after costs and commission</span></td><td class="r num"><b id="pf-c-profit">—</b></td><td class="r num" id="pf-p-profit"></td></tr>
     </tbody></table>
@@ -15888,9 +15889,10 @@ function pfCalc() {
   const g = k => { const el = fm.querySelector(`[data-pf-f="${k}"]`); const v = Number(String(el?.value ?? "").replace(/[$,%\s]/g, "")); return isFinite(v) ? v : 0; };
   const m = (PF.items || []).find(x => x.id === PF.model), cost = m ? Number(m.cost) || 0 : 0;
   const addonSel = fm.querySelector('[data-pf-f="addon_item_id"]').value, addon = m?.addon_item_id ? Number(m.addon_cost) || 0 : addonSel ? PF.addonCost[addonSel] ?? 0 : 0;
-  const mat = g("material"), war = g("warranty"), lab = g("labour"), gp = g("gp_pct") / 100, rt = g("round_to") || 1, add = g("adder"), comm = g("commission");
-  // the commission is part of the price and paid out, so it isn't profit
-  const tot = cost + addon + mat + war + lab, price = gp < 0.95 ? Math.round(tot / (1 - gp) / rt) * rt + add + comm : 0, profit = price - tot - comm;
+  const mat = g("material"), war = g("warranty"), lab = g("labour"), gp = g("gp_pct") / 100, rt = g("round_to") || 1, add = g("adder"), cp = Math.min(49, g("commission_pct")) / 100;
+  // the commission is added last: the price is grossed up so it's that % of the final price; it's paid out, so it isn't profit
+  const tot = cost + addon + mat + war + lab, before = gp < 0.95 ? Math.round(tot / (1 - gp) / rt) * rt + add : 0;
+  const price = cp > 0 ? Math.round(before / (1 - cp)) : before, comm = price - before, profit = price - tot - comm;
   const pc = v => price > 0 ? (v / price * 100).toFixed(1) + "%" : "";
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   set("pf-c-unit", m ? money(cost) : "—"); set("pf-p-unit", m ? pc(cost) : "");
@@ -15898,7 +15900,7 @@ function pfCalc() {
   if (m?.addon_item_id) set("pf-c-addon", money(addon) + " (" + pbName(m.addon_name || "own coil") + ")");
   set("pf-p-mat", pc(mat)); set("pf-p-war", pc(war)); set("pf-p-lab", pc(lab));
   set("pf-c-tot", money(tot)); set("pf-p-tot", pc(tot)); set("pf-div", (1 - gp).toFixed(2));
-  set("pf-c-price", money(price)); set("pf-c-profit", money(profit)); set("pf-p-profit", pc(profit)); set("pf-p-comm", comm ? pc(comm) : "");
+  set("pf-c-price", money(price)); set("pf-c-profit", money(profit)); set("pf-p-profit", pc(profit)); set("pf-p-comm", comm ? money(comm) : "");
   const mg = price > 0 ? profit / price : null; set("pf-b-margin", mg != null ? (mg * 100).toFixed(1) + "%" : "—"); set("pf-b-markup", tot > 0 ? ((price / tot - 1) * 100).toFixed(1) + "%" : "—");
   const ok = mg != null && mg >= estMargin() - 0.0005; fm.classList.toggle("ok", ok); fm.classList.toggle("low", mg != null && !ok);
   const now = m ? Number(m.price) : null, goal = Math.round(estMargin() * 1000) / 10;
