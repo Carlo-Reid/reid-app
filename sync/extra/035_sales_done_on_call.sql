@@ -4,8 +4,9 @@
 -- when no separate install job was made for it. They show on the Sales, Installs and Commissions pages,
 -- and the sale / commission is the sold proposal (not the visit charges on the same invoice). Safe to run more than once.
 -- =====================================================================
+DROP FUNCTION IF EXISTS public._comm_sale_jobs();
 CREATE OR REPLACE FUNCTION public._comm_sale_jobs()
-RETURNS TABLE (job_id bigint, est_id bigint) LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public SET jit = off AS $f$
+RETURNS TABLE (job_id bigint, est_id bigint, sale_job_id bigint) LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public SET jit = off AS $f$
   WITH earners AS (SELECT employee_id FROM commission_rates UNION SELECT employee_id FROM commission_group_rates),
   sold AS (
     SELECT e.id, e.job_id, e.accepted_option_id FROM estimates e JOIN jobs j ON j.id = e.job_id JOIN job_types t ON t.id = j.job_type_id
@@ -16,9 +17,13 @@ RETURNS TABLE (job_id bigint, est_id bigint) LANGUAGE sql STABLE SECURITY DEFINE
                       WHERE ij.id <> e.job_id AND it.job_class = 'install' AND (ij.sold_estimate_id = e.id OR ij.from_estimate_id = e.id))),
   items AS (SELECT DISTINCT x.item_id FROM sold s JOIN estimate_lines x ON x.estimate_option_id = s.accepted_option_id WHERE x.item_id IS NOT NULL),
   counts AS (SELECT i.item_id FROM items i JOIN commission_groups g ON g.id = public._comm_group(i.item_id) WHERE g.name <> 'Other')
-  SELECT DISTINCT ON (s.job_id) s.job_id, s.id FROM sold s
+  SELECT DISTINCT ON (w.work_job) w.work_job, s.id, s.job_id FROM sold s
+  CROSS JOIN LATERAL (SELECT coalesce((SELECT lj.id FROM jobs lj JOIN job_types lt ON lt.id = lj.job_type_id
+                                       WHERE lj.id <> s.job_id AND lt.job_class <> 'sales' AND lj.status <> 'cancelled'
+                                         AND (lj.sold_estimate_id = s.id OR lj.from_estimate_id = s.id)
+                                       ORDER BY lj.created_at DESC LIMIT 1), s.job_id) AS work_job) w
   WHERE EXISTS (SELECT 1 FROM estimate_lines x JOIN counts c ON c.item_id = x.item_id WHERE x.estimate_option_id = s.accepted_option_id)
-  ORDER BY s.job_id, s.id DESC
+  ORDER BY w.work_job, s.id DESC
 $f$;
 REVOKE EXECUTE ON FUNCTION public._comm_sale_jobs() FROM PUBLIC, anon, authenticated;
 
@@ -44,7 +49,8 @@ CREATE OR REPLACE FUNCTION public.install_list(p_from date, p_to date)
  STABLE SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-  WITH d AS (   -- each install job's day: when it was done, or (not done yet) its booked day, else the day it was sold
+  WITH cs AS (SELECT * FROM public._comm_sale_jobs()),
+  d AS (   -- each install job's day: when it was done, or (not done yet) its booked day, else the day it was sold
     SELECT j.id, CASE WHEN j.status IN ('completed', 'invoiced', 'closed')
                       THEN coalesce(j.completed_at::date, (SELECT max(v.completed_at) FROM visits v WHERE v.job_id = j.id)::date,
                                     coalesce((SELECT e.accepted_at FROM estimates e WHERE e.id = j.sold_estimate_id), j.created_at)::date)
@@ -52,12 +58,13 @@ AS $function$
                                     coalesce((SELECT e.accepted_at FROM estimates e WHERE e.id = j.sold_estimate_id), j.created_at)::date) END AS day
     FROM jobs j JOIN job_types t ON t.id = j.job_type_id
     WHERE public._can_installs() AND j.status <> 'cancelled'
-      AND (t.job_class = 'install' OR j.id IN (SELECT cs.job_id FROM public._comm_sale_jobs() cs))),   -- or work sold and done on the same call
+      AND (t.job_class = 'install' OR j.id IN (SELECT cs.job_id FROM cs))),   -- or work sold and done on the same call
   pick AS (SELECT d.id, d.day FROM d WHERE (p_from IS NULL OR d.day >= p_from) AND (p_to IS NULL OR d.day <= p_to) ORDER BY d.day DESC, d.id DESC LIMIT 3000),
   base AS (
     SELECT j.*, t.name AS type_name, coalesce(j.completed_at, (SELECT max(v.completed_at) FROM visits v WHERE v.job_id = j.id))::date AS done_on,
            it.*, it.job_id AS it_job,
            coalesce(it.salesperson_id, (SELECT e.sold_by_employee_id FROM estimates e WHERE e.id = j.sold_estimate_id), j.sold_by_employee_id,
+                    (SELECT e.sold_by_employee_id FROM cs JOIN estimates e ON e.id = cs.est_id WHERE cs.job_id = j.id LIMIT 1),
                     (SELECT e.sold_by_employee_id FROM estimates e WHERE e.job_id = j.id AND e.status = 'accepted' ORDER BY e.accepted_at DESC NULLS LAST LIMIT 1)) AS sp,
            (SELECT coalesce(sum(i.subtotal), 0) FROM invoices i WHERE i.job_id = j.id AND i.status NOT IN ('void', 'draft')) AS inv_sub,
            (SELECT coalesce(sum(i.balance_due) FILTER (WHERE i.not_owed_reason IS NULL), 0) FROM invoices i WHERE i.job_id = j.id AND i.status NOT IN ('void', 'draft')) AS inv_owing,
@@ -65,7 +72,8 @@ AS $function$
            coalesce((SELECT e.accepted_at FROM estimates e WHERE e.id = j.sold_estimate_id), j.created_at)::date AS sold_day,
            (SELECT min(v.scheduled_date) FROM visits v WHERE v.job_id = j.id AND v.status <> 'cancelled') AS first_visit,
            t.job_class <> 'install' AS here,   -- sold and done on the same call: the sale is the sold proposal, not the whole invoice
-           (SELECT e.id FROM estimates e WHERE e.job_id = j.id AND e.status = 'accepted' ORDER BY e.accepted_at DESC NULLS LAST, e.id DESC LIMIT 1) AS here_est
+           coalesce((SELECT cs.est_id FROM cs WHERE cs.job_id = j.id LIMIT 1),
+                    (SELECT e.id FROM estimates e WHERE e.job_id = j.id AND e.status = 'accepted' ORDER BY e.accepted_at DESC NULLS LAST, e.id DESC LIMIT 1)) AS here_est
     FROM pick pk JOIN jobs j ON j.id = pk.id
     JOIN job_types t ON t.id = j.job_type_id
     LEFT JOIN install_tracking it ON it.job_id = j.id
@@ -158,7 +166,7 @@ AS $function$
       AND NOT (st.job_class = 'sales' AND public._is_install_sale(st.name))      -- sales jobs are above
       AND sj.sales_cancelled_at IS NULL
       AND (EXISTS (SELECT 1 FROM jobs ij JOIN job_types it ON it.id = ij.job_type_id WHERE ij.id <> sj.id AND it.job_class = 'install' AND (ij.sold_estimate_id = e.id OR ij.from_estimate_id = e.id))
-           OR EXISTS (SELECT 1 FROM csj WHERE csj.job_id = sj.id AND csj.est_id = e.id))
+           OR EXISTS (SELECT 1 FROM csj WHERE csj.sale_job_id = sj.id AND csj.est_id = e.id))
       AND CASE WHEN (SELECT seller FROM who) IS NULL THEN true
                ELSE EXISTS (SELECT 1 FROM tgt WHERE tgt.uid = sj.sales_user_id OR (sj.sales_user_id IS NULL AND tgt.emp = e.sold_by_employee_id)) END
     ORDER BY e.created_at DESC LIMIT 2000),
@@ -204,7 +212,7 @@ AS $function$
       'est_id', e.id, 'est_number', e.estimate_number, 'est_status', e.status,
       'sold_total', (SELECT sum(el.line_total) FROM estimate_lines el WHERE el.estimate_option_id = e.accepted_option_id),
       'stage', 'install', 'sort', j2.created_at) AS x
-    FROM deals r JOIN csj ON csj.job_id = r.jid AND csj.est_id = r.est JOIN jobs j2 ON j2.id = r.jid JOIN estimates e ON e.id = r.est
+    FROM deals r JOIN csj ON csj.sale_job_id = r.jid AND csj.est_id = r.est JOIN jobs j2 ON j2.id = csj.job_id JOIN estimates e ON e.id = r.est
     JOIN job_types t ON t.id = j2.job_type_id JOIN customers c ON c.id = j2.customer_id LEFT JOIN locations l ON l.id = j2.location_id
     LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = j2.id ORDER BY v.visit_number DESC LIMIT 1) v ON true)
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb
