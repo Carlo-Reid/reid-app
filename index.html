@@ -3575,6 +3575,9 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .sl-pay.on input[type=date] { border-color: #e8a33a; background: #fff6e5; } .sl-payall { background: #fff6e5; border-radius: 10px; padding: 8px 10px; }
 .sl-inst-tag { display: inline-block; margin-top: 4px; font-size: 11px; }
 .sl-comm { white-space: nowrap; }
+.side-nav-list button.view-merged { display: none !important; }
+.view-switch { display: inline-flex; margin: 0 0 12px; position: relative; z-index: 4; } .view-switch button { font-size: 15px; padding: 8px 18px; font-weight: 700; }
+#search-page > .view-switch { margin: 12px 16px 0; }
 .sl-views { margin: 0 0 12px; display: inline-flex; } .sl-views button { font-size: 15px; padding: 8px 18px; font-weight: 700; }
 .sl-cf-note { background: #fff6e5; border-radius: 8px; padding: 4px 10px; font-size: 13px; }
 .sl-tablewrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
@@ -4311,7 +4314,7 @@ async function showApp() {
   $("#partners-link").classList.toggle("hidden", !canPartnerPay());
   $("#marketing-link").classList.toggle("hidden", !can("email.send"));
   $("#installs-link").classList.toggle("hidden", !(can("installs.manage") || ["owner", "accounting"].includes(ME.role)));
-  $("#commissions-link").classList.add("hidden");   // Commissions is a view on the Sales page now
+  $("#commissions-link").classList.toggle("hidden", !(can("installs.manage") || ["owner", "accounting"].includes(ME.role)));
   $("#pos-link").classList.toggle("hidden", !ME.role || !(can("po.create") || ["owner", "admin", "accounting", "warehouse", "office", "dispatcher"].includes(ME.role)));
   $("#dispatch-link").classList.toggle("hidden", !ME.booking || !(can("calls.dispatch") || can("calls.book")));
   $("#dispatchmap-link").classList.toggle("hidden", !ME.booking || !(can("calls.dispatch") || can("calls.book")));
@@ -5320,7 +5323,8 @@ function setPage(hash, kind, label) {
   if (hash !== "dispatch") document.body.classList.remove("dsp-mapmode");
   if (hash !== "stock") try { stkCamStop(); } catch {}
   document.body.classList.toggle("dsp-sales", hash === "sales-dispatch");
-  document.querySelectorAll(".side-nav-list button").forEach(b => b.classList.toggle("cur", b.dataset.page === (hash === "sales-dispatch" ? "sales-dispatch" : kind === "commissions" ? "sales" : kind)));
+  const curView = hash === "sales-dispatch" ? "sales-dispatch" : kind, grp = viewGroupOf(curView);
+  document.querySelectorAll(".side-nav-list button").forEach(b => b.classList.toggle("cur", b.dataset.page === (grp ? viewGroupMainBtn(grp)?.dataset.page : curView)));
   setTimeout(showLastCust, 0);
   if (location.hash !== h) { if (h) location.hash = hash; else history.pushState(null, "", location.pathname); }
   const top = NAV.stack[NAV.stack.length - 1];
@@ -6669,7 +6673,7 @@ function salesSpPick(r) {
 }
 // Sales and Commissions are one page: two views at the top
 const salesSeeComm = () => can("installs.manage") || ["owner", "accounting"].includes(ME.role);
-const salesViews = on => salesSeeComm() ? `<div class="seg sl-views" role="tablist" aria-label="Sales page">
+const salesViews = on => false ? `<div class="seg sl-views" role="tablist" aria-label="Sales page">
     <button type="button" role="tab" data-sl-view="deals" aria-pressed="${on === "deals"}">Deals</button><button type="button" role="tab" data-sl-view="commissions" aria-pressed="${on === "commissions"}">Commissions</button></div>` : "";
 function wireSalesViews() { document.querySelectorAll("[data-sl-view]").forEach(b => b.addEventListener("click", () => b.dataset.slView === "commissions" ? openCommissions() : openSales())); }
 // the drop-down of sales people: owners/dispatchers always; a sales person only when an owner let them see someone else's page
@@ -20248,6 +20252,52 @@ const sideIsMini = () => document.body.dataset.side === "mini";
 })();
 
 
+// ===== Pages that belong together are one page with views at the top (Sales: Deals · Commissions · Installs, and so on).
+// Only the main one stays in the side bar; each view still has its own link and permission, and shows only to people who can open it.
+const PAGE_GROUPS = [
+  [["sales", "Deals", "sales-link"], ["commissions", "Commissions", "commissions-link"], ["installs", "Installs", "installs-link"]],
+  [["dispatch", "Board", "dispatch-link"], ["dispatchmap", "Map", "dispatchmap-link"], ["sales-dispatch", "Sales calls", "sdsp-link"]],
+  [["accounting", "Accounting", "accounting-link"], ["tax", "Tax payments", "tax-link"]],
+  [["staff", "Staff", "staff-link"], ["logins", "Log-ins", "logins-link"]],
+  [["pricebook", "Price book", "pricebook-link"], ["autoupdate", "New costs", "au-link"]],
+  [["stock", "Stock", "stock-link"], ["pos", "Purchase orders", "pos-link"]],
+  [["search", "Customers", "search-link"], ["dupes", "Duplicates", "dupes-link"]],
+];
+const viewBtn = id => document.getElementById(id);
+const viewCan = v => { const b = viewBtn(v[2]); return !!b && !b.classList.contains("hidden"); };
+const viewGroupOf = k => PAGE_GROUPS.find(g => g.some(v => v[0] === k)) || null;
+const viewGroupMainBtn = g => { const v = g.find(viewCan) || g[0]; return viewBtn(v[2]); };
+const viewNow = () => { const k = document.body.dataset.page || "search"; return k === "dispatch" && document.body.classList.contains("dsp-sales") ? "sales-dispatch" : k; };
+// side bar: only the first view you can open shows for each group
+function viewSideBar() {
+  for (const g of PAGE_GROUPS) { const first = g.find(viewCan);
+    g.forEach(v => { const b = viewBtn(v[2]); if (b) b.classList.toggle("view-merged", !!first && v !== first); });
+    const fb = first && viewBtn(first[2]); if (fb && fb.dataset.viewLabel == null) { fb.dataset.viewLabel = fb.textContent; } }
+}
+// the views bar at the top of the page
+function viewBar() {
+  viewSideBar();
+  const k = viewNow(), g = viewGroupOf(k), host = k === "search" ? document.getElementById("search-page") : document.getElementById("main");
+  document.querySelectorAll(".view-switch").forEach(x => { if (x.parentElement !== host || !g) x.remove(); });
+  if (!g || !host) return;
+  const vis = g.filter(viewCan); if (vis.length < 2) { host.querySelector(":scope > .view-switch")?.remove(); return; }
+  const want = vis.map(v => v[0] + (v[0] === k ? "*" : "")).join(",");
+  let bar = host.querySelector(":scope > .view-switch");
+  if (bar && bar.dataset.v === want && host.firstElementChild === bar) return;
+  bar?.remove(); bar = document.createElement("div"); bar.className = "view-switch seg no-print"; bar.dataset.v = want; bar.setAttribute("role", "tablist");
+  bar.innerHTML = vis.map(v => `<button type="button" role="tab" data-view="${v[2]}" aria-pressed="${v[0] === k}">${esc(v[1])}</button>`).join("");
+  bar.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => { if (b.getAttribute("aria-pressed") === "true") return; viewBtn(b.dataset.view)?.click(); }));
+  host.prepend(bar);
+}
+(function viewBars() {
+  let t; const run = () => { clearTimeout(t); t = setTimeout(viewBar, 30); };
+  const watch = () => { const m = document.getElementById("main"), sp = document.getElementById("search-page");
+    if (m) new MutationObserver(run).observe(m, { childList: true });
+    if (sp) new MutationObserver(run).observe(sp, { childList: true });
+    new MutationObserver(run).observe(document.body, { attributes: true, attributeFilter: ["data-page", "class"] });
+    const side = document.querySelector(".side-nav-list"); if (side) new MutationObserver(run).observe(side, { attributes: true, subtree: true, attributeFilter: ["class"] }); };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => { watch(); run(); }); else { watch(); run(); }
+})();
 // Every wide table (anything in a .staff-wrap) gets a second sideways scroll bar right above its columns, kept in step
 // with the table's own one at the bottom, so you never have to scroll down to the end of a long table to slide it across.
 (function topScrollBars() {
