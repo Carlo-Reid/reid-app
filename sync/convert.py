@@ -402,9 +402,12 @@ if DELTA is None:
      if not cid or cid == parent or (parent, cid) in seen: continue
      seen.add((parent, cid)); w.add(parent_item_id=parent, component_item_id=cid, quantity=qty if qty and qty > 0 else 1)
  w.close()
+pb_any = {}                                     # ServiceTitan id -> item, whatever its type here
+for (t_, st_), nid_ in pb_id.items(): pb_any.setdefault(st_, nid_)
 def pb_lookup(stype, sku_id):
+    # items moved to another type in the app (e.g. Materials -> Parts or Security) are still found by their ServiceTitan id
     t = {"Service": "service", "Material": "material", "Equipment": "equipment"}.get(stype)
-    return pb_id.get((t, sku_id)) if t else None
+    return (pb_id.get((t, sku_id)) if t else None) or pb_any.get(sku_id)
 
 # ---------------------------------------------------------------------------
 # 6. Projects
