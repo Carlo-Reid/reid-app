@@ -6469,7 +6469,7 @@ const PBB = { cats: null, open: new Set(), cat: null, items: null, q: "", oi: 0,
 // Pictures on a proposal: the person's own print book (the categories ticked on the Print book page), each item with Add
 const PBPK = { key: null, html: null, added: new Set(), oi: 0 };
 async function openPrintPicks(oi) {
-  PBPK.oi = oi; PBPK.added = new Set();
+  PBPK.oi = oi; PBPK.added = new Set(); PBPK.inv = new Map();
   let back = document.getElementById("pbpk-back");
   if (!back) { back = document.createElement("div"); back.id = "pbpk-back"; back.className = "pbb-back"; document.body.appendChild(back);
     back.addEventListener("click", e => { if (e.target === back) closePrintPicks(); }); }
@@ -6501,12 +6501,22 @@ async function openPrintPicks(oi) {
   if (document.getElementById("pbpk-back")?.hidden) return;
   back.querySelector(".pbpk-body").innerHTML = `<div class="pbp-doc pbp-c${PBP.opt.cols || 2}">${PBPK.html}</div>`;
   { const m = back.querySelector("#pbpk-msg"); m.className = "staff-msg"; m.textContent = PBPK.note || ""; }
-  pbpkSyncCmp();
-  back.querySelectorAll("[data-pbp-addinv]").forEach(b => b.addEventListener("click", async () => {   // straight onto the sale's invoice
-    const inv = EST.ij?.invoice_id, m = back.querySelector("#pbpk-msg"); if (!inv) return; b.disabled = true;
-    const { data: n, error } = await db.rpc("inv_add_item", { p_invoice: inv, p_item: Number(b.dataset.pbpAddinv), p_qty: 1 });
-    if (error) { b.disabled = false; m.className = "staff-msg err"; m.textContent = "Not added to the invoice: " + rpcErr(error); return; }
-    b.textContent = "On the invoice ✓"; b.classList.add("pbb-added"); m.className = "staff-msg ok"; m.textContent = `Added to the invoice${n ? `, with ${n} add-on kit part${n > 1 ? "s" : ""}` : ""}.`; }));
+  pbpkSyncCmp(); pbpkMarks();
+  back.querySelectorAll("[data-pbp-addinv]").forEach(b => b.addEventListener("click", async () => {   // straight onto the sale's invoice; click again to take it off
+    const inv = EST.ij?.invoice_id, m = back.querySelector("#pbpk-msg"), id = Number(b.dataset.pbpAddinv); if (!inv) return; b.disabled = true;
+    const say = (t, err) => { m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; };
+    PBPK.inv = PBPK.inv || new Map();
+    if (PBPK.inv.has(id)) {
+      const { error } = await db.rpc("inv_update_line", { p_line: PBPK.inv.get(id), p: { quantity: 0 } }); b.disabled = false;
+      if (error) return say("Not taken off the invoice: " + rpcErr(error), true);
+      PBPK.inv.delete(id); pbpkMarks(); return say("Taken back off the invoice.");
+    }
+    const before = new Set(((await db.rpc("inv_editor", { p_invoice: inv })).data?.lines || []).map(l => l.id));
+    const { data: n, error } = await db.rpc("inv_add_item", { p_invoice: inv, p_item: id, p_qty: 1 }); b.disabled = false;
+    if (error) return say("Not added to the invoice: " + rpcErr(error), true);
+    const made = ((await db.rpc("inv_editor", { p_invoice: inv })).data?.lines || []).filter(l => !before.has(l.id) && Number(l.item_id) === id && !l.kit_parent).pop();
+    if (made) PBPK.inv.set(id, made.id); pbpkMarks();
+    say(`Added to the invoice${n ? `, with ${n} add-on kit part${n > 1 ? "s" : ""}` : ""}.${made ? " Click it again to take it off." : ""}`); }));
   back.querySelectorAll("[data-pbp-cmp]").forEach(cb => cb.addEventListener("change", () => {
     const id = Number(cb.dataset.pbpCmp), it = pbpkItems().find(x => x.id === id);
     if (cb.checked) { if (SHOW.cmp.length >= 3 && !inCmp(id)) { cb.checked = false; const m = back.querySelector("#pbpk-msg"); m.className = "staff-msg err"; m.textContent = "Up to 3 to compare. Untick one first."; return; }
@@ -6516,10 +6526,25 @@ async function openPrintPicks(oi) {
   back.querySelectorAll("[data-pbp-show]").forEach(b => b.addEventListener("click", () => {
     const list = pbpkItems();
     SHOW.list = list; SHOW.at = Math.max(0, list.findIndex(x => x.id === Number(b.dataset.pbpShow))); SHOW.cmpOpen = false; drawShow(); }));
-  back.querySelectorAll("[data-pbp-add]").forEach(b => b.addEventListener("click", () => {
-    const id = Number(b.dataset.pbpAdd);
-    EST.opts[PBPK.oi].lines.push({ item_id: id, description: b.dataset.pbpName, qty: 1, price: Number(b.dataset.pbpPrice) || 0 }); EST.dirty = true;
-    PBPK.added.add(id); b.textContent = "Added ✓"; b.classList.add("pbb-added"); back.querySelector("#pbpk-done").textContent = `Done (${PBPK.added.size} added)`; }));
+  back.querySelectorAll("[data-pbp-add]").forEach(b => b.addEventListener("click", () => pbpkToggle(Number(b.dataset.pbpAdd), b.dataset.pbpName, Number(b.dataset.pbpPrice) || 0)));
+}
+// Add to the option from the price book pop-up; clicking "Added" again takes it back off (in case it was a mistake)
+function pbpkToggle(id, name, price) {
+  const o = EST.opts[PBPK.oi]; if (!o) return;
+  if (PBPK.added.has(id)) {
+    for (let k = o.lines.length - 1; k >= 0; k--) if (Number(o.lines[k].item_id) === id && !o.lines[k].disc && !o.lines[k].kind) { o.lines.splice(k, 1); break; }
+    PBPK.added.delete(id);
+  } else { o.lines.push({ item_id: id, description: name, qty: 1, price }); PBPK.added.add(id); }
+  EST.dirty = true; pbpkMarks();
+}
+function pbpkMarks() {   // every Add button in the pop-up (and the big view) shows whether it's on the option
+  const nm = esc(EST.opts[PBPK.oi]?.name || "the option");
+  document.querySelectorAll("#pbpk-back [data-pbp-add], .show [data-show-add]").forEach(b => { const on = PBPK.added.has(Number(b.dataset.pbpAdd || b.dataset.showAdd));
+    b.classList.toggle("pbb-added", on); b.innerHTML = on ? "Added ✓ <small>(click to take off)</small>" : (b.dataset.showAdd ? "＋ " : "") + "Add to " + nm;
+    b.title = on ? "Take it back off the option" : ""; });
+  document.querySelectorAll("#pbpk-back [data-pbp-addinv]").forEach(b => { const on = PBPK.inv?.has(Number(b.dataset.pbpAddinv));
+    b.classList.toggle("pbb-added", !!on); b.innerHTML = on ? "On the invoice ✓ <small>(click to take off)</small>" : "Add to the invoice"; b.title = on ? "Take it back off the invoice" : "Puts it on the invoice for this sale"; });
+  const dn = document.querySelector("#pbpk-done"); if (dn) dn.textContent = PBPK.added.size ? `Done (${PBPK.added.size} added)` : "Done";
 }
 // the items in the price book pop-up, and its Compare ticks kept in step with the comparison
 const pbpkItems = () => [...document.querySelectorAll("#pbpk-back [data-pbp-add]")].map(x => ({ id: Number(x.dataset.pbpAdd), name: x.dataset.pbpName, price: Number(x.dataset.pbpPrice) || 0, opt: "Price book", key: "b" + x.dataset.pbpAdd, book: true }));
@@ -6912,11 +6937,8 @@ async function drawShow() {
         <div class="show-price">${money(it.price)}</div>
         <div class="show-desc">${showDesc(it) || `<span class="quiet">No description in the price book yet.</span>`}</div></div></div></div>`;
   wireShow(b);
-  b.querySelector("[data-show-add]")?.addEventListener("click", () => {   // from the price book: put it on the option
-    if (PBPK.added.has(it.id)) return;
-    EST.opts[PBPK.oi].lines.push({ item_id: it.id, description: it.name, qty: 1, price: it.price }); EST.dirty = true; PBPK.added.add(it.id);
-    const pb = document.querySelector(`#pbpk-back [data-pbp-add="${it.id}"]`); if (pb) { pb.textContent = "Added ✓"; pb.classList.add("pbb-added"); }
-    const dn = document.querySelector("#pbpk-done"); if (dn) dn.textContent = `Done (${PBPK.added.size} added)`; drawShow(); });
+  b.querySelector("[data-show-add]")?.addEventListener("click", () => { pbpkToggle(it.id, it.name, it.price); drawShow(); });   // from the price book: on the option, or back off
+  pbpkMarks();
   if (!EINFO.has(it.id)) { await estInfo([it.id]).catch(() => {}); if (SHOW.list[SHOW.at] === it && !SHOW.cmpOpen) return drawShow(); }
   if (!SHOW.photos.has(it.id)) { await showPhoto(it.id); if (SHOW.list[SHOW.at] === it && !SHOW.cmpOpen) drawShow(); }
 }
