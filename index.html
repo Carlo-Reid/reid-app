@@ -2381,6 +2381,7 @@
   .prc-t tbody th { text-align: left; font-weight: 500; } .prc-t .r { text-align: right; } .prc-tot td, .prc-tot th { background: #f1f5fb; } .prc-price td, .prc-price th { background: #ebfbee; font-size: 16px; } .prc-sm td, .prc-sm th { font-size: 12.5px; color: var(--steel); }
   .prc-in { text-align: right; } .prc-ref th { background: var(--paper); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--steel); font-weight: 700; } .prc-addon { max-width: 230px; margin-left: 6px; } .prc-x { margin-left: 4px; font-size: 15px; } .prc-addp { display: flex; gap: 6px; align-items: center; font-weight: 700; }
   .prc-addm { margin-top: 8px; } .prc-addm input { width: 100%; max-width: 520px; } .prc-more h2 { margin-top: 0; }
+  .prc-mk td, .prc-mk th { white-space: nowrap; } .prc-mk td .quiet { font-size: 12px; } .prc-key { font-size: 13px; margin-top: 6px; }
   .prc-say { font-size: 15px; } .prc-types { display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 10px; } .prc-ex th { width: 90px; }
   .prc-try { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; padding: 8px 10px; background: #ebfbee; border-radius: 10px; font-size: 15px; } .prc-try label { font-weight: 700; }
   .prc-opts { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; } .prc-opts label { display: flex; gap: 6px; align-items: center; }
@@ -15741,7 +15742,7 @@ function wirePricing() {
 // ---------- Pricing page: parts and services that aren't in a series (markup rules), and member prices ----------
 const PRC_PARTS = [["material", "Materials", "markup by cost"], ["service", "Services", "markup by cost"], ["equipment", "Equipment not in a series", "markup by cost"], ["member", "Member prices", "plan customers"]];
 const PRC_TYPE = { material: "Materials", service: "Services", equipment: "Equipment not in a series" };
-const prcRulePrice = (rules, cost, rt) => { const r = rules.find(x => cost >= Number(x.cost_from || 0) && (x.cost_to === "" || x.cost_to == null || cost < Number(x.cost_to)));
+const prcRulePrice = (rules, cost, rt) => { const nn = v => String(v ?? "").trim().replace(/[$,%\s]/g, ""); const r = rules.find(x => cost >= Number(nn(x.cost_from) || 0) && (nn(x.cost_to) === "" || cost <= Number(nn(x.cost_to))));
   if (!r || r.markup_pct === "" || r.markup_pct == null) return null; rt = Number(rt) || 0.01; return { r, price: Math.round(Math.round(cost * (1 + Number(r.markup_pct) / 100) / rt) * rt * 100) / 100 }; };
 function prcPartHtml(edit) {
   const P = PB.pricing, d = edit ? "" : "disabled";
@@ -15756,15 +15757,18 @@ function prcPartHtml(edit) {
       <table class="prc-t prc-ex"><tbody><tr><th>Example</th><td class="r num" id="prc-mex"></td></tr></tbody></table>
       ${edit ? `<div class="set-tools"><button class="btn" type="button" id="prc-psave">Save member prices</button></div>` : ""}</section>`;
   }
-  const t = PRC.part; if (!PRC.rulesEdit) PRC.rulesEdit = P.rules.filter(r => r.item_type === t).map(r => ({ cost_from: r.cost_from, cost_to: r.cost_to ?? "", markup_pct: r.markup_pct })).sort((a, b) => Number(a.cost_from) - Number(b.cost_from));
+  const t = PRC.part; if (!PRC.rulesEdit) PRC.rulesEdit = P.rules.filter(r => r.item_type === t).map(r => ({ cost_from: (+r.cost_from).toFixed(2), cost_to: r.cost_to == null || r.cost_to === "" ? "" : (Number(r.cost_to) - 0.01).toFixed(2), markup_pct: +r.markup_pct })).sort((a, b) => Number(a.cost_from) - Number(b.cost_from));
   const R = PRC.rulesEdit, inp = (i, k, v, ph) => `<input class="ie-num prc-in" data-ri="${i}" data-rk="${k}" inputmode="decimal" value="${v ?? ""}" placeholder="${ph || ""}" ${d} style="width:90px">`;
-  return `<section class="cl-tools prc-sheet" id="prc-part"><div class="prc-head"><h2>${PRC_TYPE[t]} <span class="quiet">price = what it costs you + markup %</span></h2></div>
-    <p class="quiet">Set a markup for each cost range, cheapest first. Most shops use a big markup on cheap parts and a smaller one on expensive parts. ${t === "equipment" ? "Equipment in a series is priced by its series instead; this is only for equipment that isn't in one." : ""}</p>
-    <table class="prc-t"><thead><tr><th>Costs from</th><th>Up to</th><th class="r">Markup</th><th class="r">Example</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
-      ${R.map((r, i) => `<tr><td>$ ${inp(i, "cost_from", r.cost_from, "0")}</td><td>$ ${inp(i, "cost_to", r.cost_to, "and up")}</td><td class="r">${inp(i, "markup_pct", r.markup_pct, "%")} %</td><td class="r num quiet" data-rex="${i}"></td>
-        ${edit ? `<td><button class="link danger" type="button" data-rdel="${i}" title="Take this step off">×</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="5" class="quiet">No markup set: these keep the price typed in the price book. Add a step to start.</td></tr>`}
-    </tbody></table>
-    ${edit ? `<button class="link" type="button" id="prc-radd">+ Add a step</button>` : ""}
+  return `<section class="cl-tools prc-sheet" id="prc-part"><div class="prc-head"><h2>${PRC_TYPE[t]} <span class="quiet">sell price = what we paid + mark up %</span></h2></div>
+    <p class="quiet">One line per cost range, cheapest first. A part that costs exactly the Max is in that line. ${t === "equipment" ? "Equipment in a series is priced by its series instead; this is only for equipment that isn't in one." : ""}</p>
+    <div class="staff-wrap"><table class="prc-t prc-mk"><thead><tr><th>Min</th><th>Max</th><th class="r">Mark up</th><th class="r" title="What we make: what we sold it for minus what we paid">Gross profit</th><th class="r" title="What we paid × this = the sell price">Markup</th><th class="r" title="Of every dollar the customer pays, how much is profit">Real</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
+      ${R.map((r, i) => `<tr><td>$ ${inp(i, "cost_from", r.cost_from, "0.00")}</td><td>$ ${inp(i, "cost_to", r.cost_to, "and up")}</td><td class="r">${inp(i, "markup_pct", r.markup_pct, "")} %</td>
+        <td class="r num" data-rgp="${i}"></td><td class="r num" data-rmx="${i}"></td><td class="r num" data-rreal="${i}"></td>
+        ${edit ? `<td><button class="link danger" type="button" data-rdel="${i}" title="Take this line off">×</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="7" class="quiet">No mark up set: these keep the price typed in the price book. Add a line to start.</td></tr>`}
+    </tbody></table></div>
+    <p class="quiet prc-key"><b>Gross profit</b>: the difference between what we paid and what we sold it for, at the bottom and top of the range. <b>Markup</b>: what we paid × this = the sell price. <b>Real</b>: the real margin, the part of the sell price that's profit.</p>
+    <div id="prc-gapmsg"></div>
+    ${edit ? `<button class="link" type="button" id="prc-radd">+ Add a line</button>` : ""}
     <div class="prc-try"><label>Try a cost $ <input class="ie-num" id="prc-try" inputmode="decimal" value="${PRC.tryCost ?? 40}" style="width:90px"></label><span id="prc-tryout"></span></div>
     <div class="prc-opts"><label>Round prices to <select id="prc-round" ${d}>${RT.map(([v, x]) => `<option value="${v}" ${Number(v) === Number(P.round_to) ? "selected" : ""}>${x}</option>`).join("")}</select></label>
       <label>Show items more than <input class="ie-num" id="prc-tol" inputmode="decimal" value="${Number(P.rule_tolerance_pct)}" ${d} style="width:56px"> % off their rule price</label></div>
@@ -15790,19 +15794,34 @@ function wirePrcPart() {
   const t = PRC.part, R = PRC.rulesEdit, n = v => { const x = String(v ?? "").trim().replace(/[$,%\s]/g, ""); return x === "" ? null : Number(x); };
   const read = () => { document.querySelectorAll("[data-ri]").forEach(el => { R[Number(el.dataset.ri)][el.dataset.rk] = el.value; }); };
   const calc = () => { read(); const rt = $("#prc-round").value;
-    R.forEach((r, i) => { const a = n(r.cost_from) ?? 0, b = n(r.cost_to), c = b != null ? Math.round((a + b) / 2) : Math.max(a * 2, a + 100), x = prcRulePrice(R, c, rt), el = document.querySelector(`[data-rex="${i}"]`);
-      if (el) el.textContent = x ? `costs ${money(c)} → ${money(x.price)}` : ""; });
+    const put = (k, i, h) => { const el = document.querySelector(`[data-${k}="${i}"]`); if (el) el.innerHTML = h; };
+    R.forEach((r, i) => { const a = n(r.cost_from) ?? 0, b = n(r.cost_to), m = n(r.markup_pct);
+      if (m == null || !isFinite(m)) { ["rgp", "rmx", "rreal"].forEach(k => put(k, i, `<span class="quiet">—</span>`)); return; }
+      const sell = c => Math.round(Math.round(c * (1 + m / 100) / (Number(rt) || 0.01)) * (Number(rt) || 0.01) * 100) / 100, gp = c => money(sell(c) - c);
+      put("rgp", i, b != null ? `${gp(a)} – ${gp(b)}<div class="quiet">${money(b)} sells for ${money(sell(b))}</div>` : `${gp(a)} and up<div class="quiet">${money(a)} sells for ${money(sell(a))}</div>`);
+      put("rmx", i, `× ${(1 + m / 100).toFixed(2)}`); put("rreal", i, `${(m / (100 + m) * 100).toFixed(1)}%`); });
+    const g = prcGaps(); $("#prc-gapmsg").innerHTML = g ? `<p class="staff-msg err">${esc(g)}</p>` : "";
     const c = n($("#prc-try").value); PRC.tryCost = c; const x = c != null ? prcRulePrice(R, c, rt) : null;
-    $("#prc-tryout").innerHTML = c == null ? "" : x ? `→ ${money(c)} + ${+Number(x.r.markup_pct)}% = <b>${money(x.price)}</b>` : `<span class="quiet">no step covers ${money(c)}: it keeps its typed price</span>`; };
+    $("#prc-tryout").innerHTML = c == null ? "" : x ? `→ ${money(c)} + ${+Number(n(x.r.markup_pct))}% = <b>${money(x.price)}</b> <span class="quiet">(gross profit ${money(x.price - c)})</span>` : `<span class="quiet">no line covers ${money(c)}: it keeps its typed price</span>`; };
+  // lines have to follow on from each other: next Min = last Max + 1 cent
+  function prcGaps() { const L = R.map(r => ({ a: n(r.cost_from) ?? 0, b: n(r.cost_to), m: n(r.markup_pct) })).filter(x => !(x.m == null && x.b == null && !x.a)).sort((x, y) => x.a - y.a);
+    for (let i = 0; i < L.length; i++) { const x = L[i], nx = L[i + 1];
+      if (x.b != null && x.b <= x.a) return `The line starting at ${money(x.a)}: Max has to be more than Min.`;
+      if (!nx) break;
+      if (x.b == null) return `Only the last line can be left with no Max (the line starting at ${money(x.a)} has none).`;
+      const want = Math.round((x.b + 0.01) * 100) / 100;
+      if (nx.a < want) return `The lines ${money(x.a)}–${money(x.b)} and the one starting at ${money(nx.a)} overlap. The next Min should be ${money(want)}.`;
+      if (nx.a > want) return `Parts costing ${money(want)} to ${money(nx.a - 0.01)} aren't in any line. The next Min should be ${money(want)}.`; }
+    return ""; }
   $("#prc-part").addEventListener("input", calc); $("#prc-part").addEventListener("change", calc); calc();
-  $("#prc-radd")?.addEventListener("click", () => { read(); const last = R[R.length - 1]; R.push({ cost_from: last ? (last.cost_to || "") : 0, cost_to: "", markup_pct: "" }); renderPricing(); });
+  $("#prc-radd")?.addEventListener("click", () => { read(); const last = R[R.length - 1]; R.push({ cost_from: last ? (n(last.cost_to) != null ? (n(last.cost_to) + 0.01).toFixed(2) : "") : "0.00", cost_to: "", markup_pct: "" }); renderPricing(); });
   document.querySelectorAll("[data-rdel]").forEach(b => b.addEventListener("click", () => { read(); R.splice(Number(b.dataset.rdel), 1); renderPricing(); }));
   $("#prc-psave")?.addEventListener("click", () => { read(); const out = [];
     for (const r of R) { const a = n(r.cost_from) ?? 0, b = n(r.cost_to), m = n(r.markup_pct);
       if (m == null && b == null && !a) continue;
       if ([a, b, m].some(x => x != null && (!isFinite(x) || x < 0)) || m == null) return msg("Not saved: each step needs a markup %, numbers only.");
-      if (b != null && b <= a) return msg('Not saved: "Up to" has to be more than "Costs from".');
-      out.push({ item_type: t, cost_from: a, cost_to: b ?? "", markup_pct: m }); }
+      out.push({ item_type: t, cost_from: a, cost_to: b == null ? "" : Math.round((b + 0.01) * 100) / 100, markup_pct: m }); }
+    const gap = prcGaps(); if (gap) return msg("Not saved: " + gap);
     const tol = n($("#prc-tol").value);
     save({ rules: [...pl({}).rules.filter(r => r.item_type !== t), ...out], round_to: Number($("#prc-round").value), rule_tolerance_pct: tol != null && isFinite(tol) ? tol : 5 }, `Saved the ${PRC_TYPE[t].toLowerCase()} markup.`); });
   // the items whose price is off the saved rule, with buttons to use the rule price
