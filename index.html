@@ -6484,7 +6484,7 @@ const rpcErr = e => e.code === "PGRST202" || /could not find the function|schema
 /* ---------- book a call ---------- */
 let BK = null;
 /* ---------------- Sales page: sales jobs → booked → estimate → closed deal ---------------- */
-const SALES = { tab: "open", seller: "", people: [], rows: null, q: "", sort: "", dir: 1, range: "", from: "", to: "" };
+const SALES = { tab: "open", seller: "", people: [], rows: null, q: "", sort: "", dir: 1, range: "", from: "", to: "", dateBy: "" };
 // the date a deal counts on: its call date, or (no call) the last change to its proposal / when the job was made
 const salesDate = r => r.visit_date || String(r.sort || "").slice(0, 10);
 const SALES_RANGES = [["", "All dates"], ["month", "This month"], ["lastmonth", "Last month"], ["3m", "Last 3 months"], ["year", "This year"], ["lastyear", "Last year"], ["custom", "Pick dates…"]];
@@ -6498,7 +6498,7 @@ function salesRangeDates(k) {
   return ["", ""];
 }
 try { Object.assign(SALES, JSON.parse(localStorage.getItem("reid.sales") || "{}")); } catch {}
-const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller, sort: SALES.sort, dir: SALES.dir, range: SALES.range, from: SALES.from, to: SALES.to })); } catch {} };
+const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller, sort: SALES.sort, dir: SALES.dir, range: SALES.range, from: SALES.from, to: SALES.to, dateBy: SALES.dateBy })); } catch {} };
 const salesBoss = () => ME.role === "owner" || can("calls.dispatch");
 async function openSales(msg) {
   setPage("sales", "sales", "Sales");
@@ -6547,6 +6547,14 @@ function salesPayCell(r) {
   return `<label class="sl-pay ${on ? "on" : ""}" title="${on ? "On payroll: paid on this day" : "Pick the pay day to put it on payroll"}"><input type="checkbox" data-sl-paychk="${id}" ${on ? "checked" : ""} aria-label="For payroll">
     <input type="date" data-sl-pay="${id}" value="${esc(on)}" aria-label="Pay day"></label>`;
 }
+// the Installed column: the day it was installed, or when it's booked
+function salesInstCell(r) {
+  const i = r.installs?.[0] || (r.stage === "install" ? r : null);
+  if (!i) return r.stage === "closed" ? `<span class="quiet">not booked yet</span>` : `<span class="quiet">—</span>`;
+  const d = i.visit_date ? fmtDate(i.visit_date) : "";
+  return i.status === "completed" ? `<b>${esc(d || "done")}</b><div class="quiet">Job ${esc(i.job_number)}</div>`
+    : d ? `booked ${esc(d)}<div class="quiet">Job ${esc(i.job_number)}</div>` : `<span class="quiet">not booked yet</span><div class="quiet">Job ${esc(i.job_number)}</div>`;
+}
 // where the install of a sold deal is at (it's on the same row as the sale: one sale, one row)
 function salesInstTag(i) {
   const done = i.status === "completed", when = i.visit_date ? fmtDate(i.visit_date) : "";
@@ -6586,15 +6594,18 @@ function renderSales(msg) {
   const inTab = (r, k) => k === "all" || (k === "open" ? ["booked", "estimate"].includes(r.stage) : k === "install" ? (r.stage === "install" || !!r.installs) : r.stage === k);
   // dates: a sale counts on the day it was sold; on the Installs tab it's the install's day
   const instDate = r => r.installs?.length ? (r.installs[0].visit_date || salesDate(r.installs[0])) : salesDate(r);
-  const inRange = (r, k) => { const d = k === "install" ? instDate(r) : salesDate(r); return (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); };
-  const R = (SALES.rows || []).filter(r => inRange(r, "")), n = k => (SALES.rows || []).filter(r => inTab(r, k) && inRange(r, k)).length;
+  const by = k => SALES.dateBy || (k === "install" ? "installed" : "sold");
+  const inRange = (r, k) => { if (!SALES.from && !SALES.to) return true; const inst = by(k) === "installed";
+    if (inst && !(r.installs?.length || r.stage === "install")) return false; const d = inst ? instDate(r) : salesDate(r); return (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); };
+  const R = (SALES.rows || []).filter(r => inRange(r, SALES.tab === "install" ? "install" : "")), n = k => (SALES.rows || []).filter(r => inTab(r, k) && inRange(r, k)).length;
   const qq = (SALES.q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
   const spOf = r => salesSrc(r)?.sales_person || "";
-  const hay = r => [r.customer, r.street, r.city, r.job_number, ...(r.installs || []).map(i => i.job_number), r.est_number, spOf(r), r.seller, r.type, r.partner || "Reid", r.summary].join(" ").toLowerCase();
+  const hay = r => [r.customer, r.street, r.city, r.job_number, ...(r.installs || []).flatMap(i => [i.job_number, i.visit_date || "", i.visit_date ? fmtDate(i.visit_date) : ""]), salesDate(r), fmtDate(salesDate(r)), r.est_number, spOf(r), r.seller, r.type, r.partner || "Reid", r.summary].join(" ").toLowerCase();
   // searching looks at every date and stage, so a name or job number is always found
   let rows = qq.length ? (SALES.rows || []).filter(r => { const h = hay(r); return qq.every(w => h.includes(w)); }) : (SALES.rows || []).filter(r => inTab(r, SALES.tab) && inRange(r, SALES.tab));
   const SORDER = { booked: 1, estimate: 2, closed: 3, install: 4, lost: 5 };
   const SKEY = { stage: r => SORDER[r.stage] || 9, sp: r => spOf(r).toLowerCase() || "~", cust: r => (r.customer || "").toLowerCase(), call: r => r.visit_date ? r.visit_date + (r.visit_from || "") : "~",
+    inst: r => { const i = r.installs?.[0] || (r.stage === "install" ? r : null); return i?.visit_date || "~"; },
     for: r => ((r.partner || "Reid") + " " + (r.type || "")).toLowerCase(), prop: r => Number(r.stage === "closed" || r.stage === "install" ? r.sold_total : r.est_total) || 0,
     comm: r => Number(SALES.comm?.get(salesInstOf(r))?.commission_amount ?? -1),
     pay: r => { const id = salesInstOf(r), c = SALES.comm?.get(id); return c?.paid_at ? "2" + c.paid_at.slice(0, 10) : SALES.pay?.get(id) ? "1" + SALES.pay.get(id) : c ? "0" : "3"; } };
@@ -6617,18 +6628,20 @@ function renderSales(msg) {
         `<button type="button" data-sl-tab="${k}" aria-pressed="${SALES.tab === k}">${x} <span class="sl-n">${n(k)}</span></button>`).join("")}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button>
       ${salesWhoPicker()}</div>
-    <div class="sl-find sl-dates"><label>Dates <select id="sl-range">${SALES_RANGES.map(([k, t]) => `<option value="${k}" ${(SALES.range || "") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+    <div class="sl-find sl-dates"><label>Dates by <select id="sl-dateby"><option value="sold" ${by(SALES.tab) === "sold" ? "selected" : ""}>Sold date</option><option value="installed" ${by(SALES.tab) === "installed" ? "selected" : ""}>Install date</option></select></label>
+      <label>Dates <select id="sl-range">${SALES_RANGES.map(([k, t]) => `<option value="${k}" ${(SALES.range || "") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <label>From <input type="date" id="sl-from" value="${esc(SALES.from || "")}"></label><label>To <input type="date" id="sl-to" value="${esc(SALES.to || "")}"></label>
       ${SALES.from || SALES.to ? `<button class="link" type="button" id="sl-alldates">Show all dates</button>` : ""}</div>
     ${SALES.pay && cs.ready.length ? `<div class="sl-find sl-payall"><span>Put all <b>${cs.ready.length}</b> ready to pay (<b>${money(cs.now)}</b>${SALES.from || SALES.to ? " in these dates" : ""}) on payroll for</span>
       <input type="date" id="sl-payall-d" value="${esc(SALES.payDay || "")}" aria-label="Pay day"><button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
     <div class="sl-find"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
       ${qq.length ? `<span class="quiet">${rows.length} found${SALES.from || SALES.to || SALES.tab !== "all" ? " (searching all dates and stages)" : ""}</span>` : ""}</div>
-    ${rows.length ? `<table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}${r.installs ? salesInstTag(r.installs[0]) : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
+    ${rows.length ? `<table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
         <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${r.visit_date ? `${esc(fmtDate(r.visit_date))}<div class="quiet">${r.visit_from ? esc(t(r.visit_from) + (r.visit_to ? "–" + t(r.visit_to) : "")) : "any time"}${r.seller ? " · " + esc(r.seller) : ""}</div>` : `<span class="quiet">${r.stage === "install" ? "Install not booked yet" : "Not booked yet"}</span>`}</td>
+        <td>${salesInstCell(r)}</td>
         <td>${esc(r.partner || "Reid")}<div class="quiet">${esc(r.type || "")}</div></td>
         <td class="r num">${r.est_id ? `${esc(r.est_number)}<div class="quiet">${r.stage === "closed" || r.stage === "install" ? "sold " + money(r.sold_total) : r.est_total != null ? "up to " + money(r.est_total) : "empty"}</div>` : `<span class="quiet">none yet</span>`}</td>
         ${SALES.comm ? `<td class="r num sl-comm">${salesCommCell(r)}</td>` : ""}${SALES.pay ? `<td>${salesPayCell(r)}</td>` : ""}
@@ -6654,6 +6667,7 @@ function renderSales(msg) {
     b.disabled = true; let ok = 0; for (const c of cs.ready) if (await paySet(c.job_id, day)) ok++;
     SALES.payDay = day; openSales(`${ok} commissions (${money(cs.now)}) on payroll for ${fmtDate(day)}.`); });
   // dates: a quick pick, or your own From / To (picking your own dates switches the list to "Pick dates…")
+  $("#sl-dateby")?.addEventListener("change", e => { SALES.dateBy = e.target.value; salesSave(); renderSales(); });
   $("#sl-range")?.addEventListener("change", e => { SALES.range = e.target.value; if (!SALES.range) SALES.from = SALES.to = ""; salesSave(); renderSales(); });
   ["from", "to"].forEach(k => $("#sl-" + k)?.addEventListener("change", e => { SALES[k] = e.target.value; SALES.range = SALES.from || SALES.to ? "custom" : ""; salesSave(); renderSales(); }));
   $("#sl-alldates")?.addEventListener("click", () => { SALES.range = ""; SALES.from = SALES.to = ""; salesSave(); renderSales(); });
