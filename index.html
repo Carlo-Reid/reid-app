@@ -6539,6 +6539,8 @@ async function salesLoadComm() {
   if (typing != null) { const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(typing, typing); } catch {} } }
 }
 // the sales person on a deal: owners/dispatchers can add or change it right here (an Install row changes the deal it came from)
+// the day a deal's commission was paid (or paid early), if it was
+const salesPaidDay = r => { const c = SALES.comm?.get(salesInstOf(r)); return c ? insLocalDay(c.paid_at || c.prepaid_at) : ""; };
 const salesToday = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
 // payroll: pick the pay day a commission goes out on (on that day it's marked paid)
 function salesPayCell(r) {
@@ -6598,6 +6600,7 @@ function renderSales(msg) {
   const instDate = r => r.installs?.length ? (r.installs[0].visit_date || salesDate(r.installs[0])) : salesDate(r);
   const by = k => SALES.dateBy || (k === "install" ? "installed" : "sold");
   const inRange = (r, k) => { if (!SALES.from && !SALES.to) return true; const inst = by(k) === "installed";
+    if (by(k) === "paid") { const d = salesPaidDay(r); return !!d && (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); }
     if (inst && !(r.installs?.length || r.stage === "install")) return false; const d = inst ? instDate(r) : salesDate(r); return (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); };
   const R = (SALES.rows || []).filter(r => inRange(r, SALES.tab === "install" ? "install" : "")), n = k => (SALES.rows || []).filter(r => inTab(r, k) && inRange(r, k)).length;
   const qq = (SALES.q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -6610,7 +6613,7 @@ function renderSales(msg) {
     inst: r => { const i = r.installs?.[0] || (r.stage === "install" ? r : null); return i?.visit_date || "~"; },
     for: r => ((r.partner || "Reid") + " " + (r.type || "")).toLowerCase(), prop: r => Number(r.stage === "closed" || r.stage === "install" ? r.sold_total : r.est_total) || 0,
     comm: r => Number(SALES.comm?.get(salesInstOf(r))?.commission_amount ?? -1),
-    pay: r => { const id = salesInstOf(r), c = SALES.comm?.get(id); return c?.paid_at ? "2" + c.paid_at.slice(0, 10) : SALES.pay?.get(id) ? "1" + SALES.pay.get(id) : c ? "0" : "3"; } };
+    pay: r => { const d = salesPaidDay(r) || SALES.pay?.get(salesInstOf(r)) || ""; return d || (SALES.dir > 0 ? "9999" : "0000"); } };
   // commission for the deals in these dates: each install once
   const cs = { now: 0, wait: 0, paid: 0, pay: 0, ready: [] }; if (SALES.comm) { const seen = new Set();
     R.forEach(r => { const id = salesInstOf(r); if (!id || seen.has(id)) return; seen.add(id); const c = SALES.comm.get(id); if (!c) return;
@@ -6630,7 +6633,7 @@ function renderSales(msg) {
         `<button type="button" data-sl-tab="${k}" aria-pressed="${SALES.tab === k}">${x} <span class="sl-n">${n(k)}</span></button>`).join("")}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button>
       ${salesWhoPicker()}</div>
-    <div class="sl-find sl-dates"><label>Dates by <select id="sl-dateby"><option value="sold" ${by(SALES.tab) === "sold" ? "selected" : ""}>Sold date</option><option value="installed" ${by(SALES.tab) === "installed" ? "selected" : ""}>Install date</option></select></label>
+    <div class="sl-find sl-dates"><label>Dates by <select id="sl-dateby"><option value="sold" ${by(SALES.tab) === "sold" ? "selected" : ""}>Sold date</option><option value="installed" ${by(SALES.tab) === "installed" ? "selected" : ""}>Install date</option>${SALES.comm ? `<option value="paid" ${by(SALES.tab) === "paid" ? "selected" : ""}>Commission paid date</option>` : ""}</select></label>
       <label>Dates <select id="sl-range">${SALES_RANGES.map(([k, t]) => `<option value="${k}" ${(SALES.range || "") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <label>From <input type="date" id="sl-from" value="${esc(SALES.from || "")}"></label><label>To <input type="date" id="sl-to" value="${esc(SALES.to || "")}"></label>
       ${SALES.from || SALES.to ? `<button class="link" type="button" id="sl-alldates">Show all dates</button>` : ""}</div>
@@ -6679,7 +6682,7 @@ function renderSales(msg) {
   $("#sl-alldates")?.addEventListener("click", () => { SALES.range = ""; SALES.from = SALES.to = ""; salesSave(); renderSales(); });
   // search as you type (keeps your place in the box); click a column heading to sort, again to reverse
   $("#sl-q")?.addEventListener("input", e => { SALES.q = e.target.value; const pos = e.target.selectionStart; renderSales(); const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(pos, pos); } catch {} } });
-  document.querySelectorAll("[data-sl-sort]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.slSort; if (SALES.sort === k) SALES.dir = -(SALES.dir || 1); else { SALES.sort = k; SALES.dir = k === "prop" || k === "comm" ? -1 : 1; } salesSave(); renderSales(); }));
+  document.querySelectorAll("[data-sl-sort]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.slSort; if (SALES.sort === k) SALES.dir = -(SALES.dir || 1); else { SALES.sort = k; SALES.dir = k === "prop" || k === "comm" || k === "pay" ? -1 : 1; } salesSave(); renderSales(); }));
   $("#sl-who")?.addEventListener("change", e => { const me = (SALES.people || []).find(x => x.me); SALES.seller = me && String(me.id) === e.target.value ? "" : e.target.value; salesSave(); openSales(); });
   $("#sl-new").addEventListener("click", () => { SALES_FIND = true; openSearchScreen(); });
   document.querySelectorAll("[data-sl-sp]").forEach(sel => sel.addEventListener("change", async () => { sel.disabled = true;
