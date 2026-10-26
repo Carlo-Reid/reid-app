@@ -15389,9 +15389,7 @@ function renderPriceControl(msg) {
       </form></section>
 
     <section class="cl-tools pctl-box"><h2>4. Equipment pricing formulas</h2>
-      <div class="pctl-tabs" role="tablist">${[{ id: 0, name: "Reid" }, ...PCTL.partners].map(t => { const n = t.id ? PCTL.fp.filter(x => x.partner_id === t.id).length : F.length;
-        return `<button type="button" role="tab" class="pctl-tab" data-pctl-tab="${t.id}" aria-selected="${(PCTL.tab || 0) === t.id}">${esc(t.name)}${t.id ? ` <span class="quiet">${n ? n + " set" : "not set"}</span>` : ""}</button>`; }).join("")}</div>
-      ${pctlGrid(F, secs, edit, d)}
+      <div id="pctl-grid">${pctlGridBox(edit)}</div>
       <div class="set-tools"><button class="btn quiet-btn" type="button" data-set-pb="formulas">Open the Pricing formulas page</button><span class="quiet">to add a series, add models to one, give one model its own GP %, or change what comes with it.</span></div></section>
 
     <section class="cl-tools pctl-box"><h2>5. Markup rules and member prices</h2>
@@ -15416,6 +15414,23 @@ function renderPriceControl(msg) {
   wirePriceControl(edit);
 }
 // one tab of the formulas grid: Reid's own numbers, or one partner's (a series not set for the partner shows Reid's numbers greyed: that partner gets Reid's price)
+function pctlGridBox(edit, msg) {
+  const F = PCTL.f, d = edit ? "" : "disabled", secs = [];
+  for (const f of F) { let x = secs.find(z => z.name === (f.section || "Other")); if (!x) secs.push(x = { name: f.section || "Other", rows: [] }); x.rows.push(f); }
+  return `<div class="pctl-tabs" role="tablist">${[{ id: 0, name: "Reid" }, ...PCTL.partners].map(t => { const n = t.id ? PCTL.fp.filter(x => x.partner_id === t.id).length : F.length;
+        return `<button type="button" role="tab" class="pctl-tab" data-pctl-tab="${t.id}" aria-selected="${(PCTL.tab || 0) === t.id}">${esc(t.name)}${t.id ? ` <span class="quiet">${n ? n + " set" : "not set"}</span>` : ""}</button>`; }).join("")}</div>
+    ${msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"}" role="status">${esc(msg)}</div>` : ""}
+    ${pctlGrid(F, secs, edit, d)}`;
+}
+// only the formulas box is redrawn (tab clicks and saves): the rest of the page stays still
+async function pctlRedrawGrid(msg, reload) {
+  const box = $("#pctl-grid"); if (!box) return;
+  if (reload) { const [f, fp] = await Promise.all([db.rpc("price_formula_list"), db.rpc("price_formula_partner_list")]);
+    if (!f.error) PCTL.f = f.data || []; if (!fp.error) PCTL.fp = fp.data || []; if (!$("#pctl-grid")) return; }
+  const edit = ME.role === "owner" || can("pricebook.edit"), wrap = box.querySelector(".staff-wrap"), sl = wrap ? wrap.scrollLeft : 0;
+  box.innerHTML = pctlGridBox(edit, msg); const w2 = box.querySelector(".staff-wrap"); if (w2) w2.scrollLeft = sl;
+  wirePctlGrid();
+}
 function pctlGrid(F, secs, edit, d) {
   const tab = PCTL.tab || 0, P = tab ? PCTL.partners.find(x => x.id === tab) : null, pn = P ? esc(P.name) : "";
   const head = tab ? `<p class="quiet">${pn}'s numbers for each series. A series that isn't set for ${pn} gives ${pn} the Reid price. Type numbers and press <b>Set for ${pn}</b> (blank boxes start from Reid's).
@@ -15432,38 +15447,41 @@ function pctlGrid(F, secs, edit, d) {
           : `<button class="btn quiet-btn" type="button" data-pctl-save="${f.id}">Save</button>`}</td>` : ""}</tr>`; }).join("")}</tbody>`).join("") || `<tbody><tr><td colspan="12" class="quiet">No pricing formulas yet.</td></tr></tbody>`}
     </table></div>`;
 }
-function wirePriceControl(edit) {
-  $("#pctl-back").addEventListener("click", () => openSettings());
-  document.querySelectorAll("[data-pctl-tab]").forEach(b => b.addEventListener("click", () => { PCTL.tab = Number(b.dataset.pctlTab); renderPriceControl(); }));
+function wirePctlGrid() {
+  document.querySelectorAll("[data-pctl-tab]").forEach(b => b.addEventListener("click", () => { PCTL.tab = Number(b.dataset.pctlTab); pctlRedrawGrid(); }));
   document.querySelectorAll("[data-pctl-psave]").forEach(b => b.addEventListener("click", async () => {
     const id = Number(b.dataset.pctlPsave), tr = b.closest("tr"), f = PCTL.f.find(x => x.id === id), P = PCTL.partners.find(x => x.id === PCTL.tab), p = {};
-    for (const el of tr.querySelectorAll("[data-pk]")) { let v = String(el.value).replace(/[$,%\s]/g, ""); if (v !== "" && !isFinite(Number(v))) return renderPriceControl(`Not saved: type numbers only for ${f.name}.`);
-      if (el.dataset.pk === "gp_pct" && v !== "") { if (Number(v) >= 95) return renderPriceControl("Not saved: the gross profit has to be under 95%."); v = String(Number(v) / 100); } p[el.dataset.pk] = v; }
+    for (const el of tr.querySelectorAll("[data-pk]")) { let v = String(el.value).replace(/[$,%\s]/g, ""); if (v !== "" && !isFinite(Number(v))) return pctlRedrawGrid(`Not saved: type numbers only for ${f.name}.`);
+      if (el.dataset.pk === "gp_pct" && v !== "") { if (Number(v) >= 95) return pctlRedrawGrid("Not saved: the gross profit has to be under 95%."); v = String(Number(v) / 100); } p[el.dataset.pk] = v; }
     b.disabled = true;
     const { error } = await db.rpc("price_formula_partner_set", { p_formula: id, p_partner: PCTL.tab, p });
-    openPriceControl(error ? "Not saved: " + rpcErr(error) : `Saved: ${P.name} prices for the ${f.name} series.`); }));
+    pctlRedrawGrid(error ? "Not saved: " + rpcErr(error) : `Saved: ${P.name} prices for the ${f.name} series.`, true); }));
   document.querySelectorAll("[data-pctl-pdel]").forEach(b => b.addEventListener("click", async () => {
     const id = Number(b.dataset.pctlPdel), f = PCTL.f.find(x => x.id === id), P = PCTL.partners.find(x => x.id === PCTL.tab);
     const { error } = await db.rpc("price_formula_partner_set", { p_formula: id, p_partner: PCTL.tab, p: null });
-    openPriceControl(error ? "Not saved: " + rpcErr(error) : `${P.name} gets Reid's price for the ${f.name} series again.`); }));
+    pctlRedrawGrid(error ? "Not saved: " + rpcErr(error) : `${P.name} gets Reid's price for the ${f.name} series again.`, true); }));
+  document.querySelectorAll("[data-pctl-open]").forEach(b => b.addEventListener("click", () => { PF.open = Number(b.dataset.pctlOpen); openFormulas(); }));
+  document.querySelectorAll("[data-pctl-save]").forEach(b => b.addEventListener("click", async () => {
+    const id = Number(b.dataset.pctlSave), tr = b.closest("tr"), f = PCTL.f.find(x => x.id === id), p = {};
+    for (const el of tr.querySelectorAll("[data-pk]")) { let v = String(el.value).replace(/[$,%\s]/g, ""); if (v !== "" && !isFinite(Number(v))) return pctlRedrawGrid(`Not saved: type numbers only for ${f.name}.`);
+      if (el.dataset.pk === "gp_pct" && v !== "") { if (Number(v) >= 95) return pctlRedrawGrid("Not saved: the gross profit has to be under 95%."); v = String(Number(v) / 100); } p[el.dataset.pk] = v; }
+    b.disabled = true; b.textContent = "Repricing…";
+    const { error } = await db.rpc("save_price_formula", { p_id: id, p });
+    pctlRedrawGrid(error ? "Not saved: " + rpcErr(error) : `Saved. All ${f.items} ${f.name} model${f.items === 1 ? " was" : "s were"} repriced.`, true); }));
+}
+function wirePriceControl(edit) {
+  $("#pctl-back").addEventListener("click", () => openSettings());
   document.querySelectorAll("[data-pctl-bp]").forEach(b => b.addEventListener("click", async () => {
     const book = Number(b.dataset.pctlBp), ids = [...document.querySelectorAll(`[data-pctl-bpc="${book}"]:checked`)].map(x => Number(x.value));
     const { error } = await db.rpc("price_book_partners_set", { p_book: book, p_partners: ids });
     openPriceControl(error ? "Not saved: " + rpcErr(error) : "Saved: who can print which partner books."); }));
-  document.querySelectorAll("[data-pctl-open]").forEach(b => b.addEventListener("click", () => { PF.open = Number(b.dataset.pctlOpen); openFormulas(); }));
   $("#pctl-co")?.addEventListener("submit", async e => { e.preventDefault(); const f = e.target, m = $("#pctl-co-msg"), n = v => String(v).trim() === "" ? null : Number(String(v).replace(/[$,%\s]/g, ""));
     const r = n(f.rate.value), g = n(f.goal.value);
     if ((r != null && !isFinite(r)) || g == null || !isFinite(g)) { m.className = "staff-msg err"; m.textContent = "Type numbers only."; return; }
     const { error } = await db.rpc("pricing_control_set", { p_labour: r, p_margin: g });
     if (error) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
     openPriceControl("Saved. Proposals use the new numbers from now on."); });
-  document.querySelectorAll("[data-pctl-save]").forEach(b => b.addEventListener("click", async () => {
-    const id = Number(b.dataset.pctlSave), tr = b.closest("tr"), f = PCTL.f.find(x => x.id === id), p = {};
-    for (const el of tr.querySelectorAll("[data-pk]")) { let v = String(el.value).replace(/[$,%\s]/g, ""); if (v !== "" && !isFinite(Number(v))) return openPriceControl(`Not saved: type numbers only for ${f.name}.`);
-      if (el.dataset.pk === "gp_pct" && v !== "") { if (Number(v) >= 95) return openPriceControl("Not saved: the gross profit has to be under 95%."); v = String(Number(v) / 100); } p[el.dataset.pk] = v; }
-    b.disabled = true; b.textContent = "Repricing…";
-    const { error } = await db.rpc("save_price_formula", { p_id: id, p });
-    openPriceControl(error ? "Not saved: " + rpcErr(error) : `Saved. All ${f.items} ${f.name} model${f.items === 1 ? " was" : "s were"} repriced.`); }));
+  wirePctlGrid();
   let t, seq = 0; const q = $("#pctl-q"), res = $("#pctl-res");
   q.addEventListener("input", () => { clearTimeout(t); t = setTimeout(async () => { const s = q.value.trim(), my = ++seq; if (s.length < 2) { res.innerHTML = ""; return; }
     const { data } = await db.rpc("pb_list", { p_search: s, p_type: "all", p_active: true, p_category: null, p_flag: null, p_limit: 10 }); if (my !== seq) return;
@@ -15472,7 +15490,7 @@ function wirePriceControl(edit) {
   pctlWalk();
 }
 async function pctlWalk() {
-  const box = $("#pctl-walk"); if (!box) return; box.innerHTML = `<span class="quiet">Working it out…</span>`;
+  const box = $("#pctl-walk"); if (!box) return; box.style.minHeight = box.offsetHeight + "px"; box.innerHTML = `<span class="quiet">Working it out…</span>`;
   const id = PCTL.item, [it, ec] = await Promise.all([db.rpc("pb_item", { p_id: id }), db.rpc("est_costing", { p_ids: [id] })]);
   const r = it.data?.[0], x = ec.data?.[0]; if (!$("#pctl-walk")) return;
   if (!r) { box.innerHTML = `<p class="quiet">Couldn't open that item.</p>`; return; }
@@ -15511,7 +15529,7 @@ async function pctlWalk() {
         ${rp != null ? row("Markup rule price", money(rp)) : ""}${row("= Sell price in the price book", money(price), "pctl-sell")}</tbody></table>
       <p class="quiet">${price && cost ? `Markup ${pct(price / cost - 1)}, gross profit ${pct((price - cost) / price)} on the part alone.` : ""}${rp != null && Math.abs(rp - price) > 0.5 ? ` The rule would make it ${money(rp)}.` : ""}</p>`;
   }
-  box.innerHTML = `<h3>${pbNameHtml(r)} <span class="quiet">${esc(r.sku)}</span> <button class="link" type="button" id="pctl-openit">Open the item</button></h3>${body}`;
+  box.style.minHeight = ""; box.innerHTML = `<h3>${pbNameHtml(r)} <span class="quiet">${esc(r.sku)}</span> <button class="link" type="button" id="pctl-openit">Open the item</button></h3>${body}`;
   $("#pctl-openit").addEventListener("click", () => openPbItemPage(id));
 }
 // ---------- Pricing formulas: sell = (cost + thermostat/coil + material + warranty + labour + office) ÷ (1 − GP%), to $100, + adder ----------
