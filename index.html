@@ -2344,6 +2344,7 @@
   .pbi-comm { display: flex; flex-direction: column; gap: 6px; } .pbi-comm-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; } .pbi-comm-row label { display: flex; flex-direction: column; font-size: 12px; font-weight: 700; color: var(--steel); }
   .pbi-comm-row select { max-width: 260px; } .pbi-comm-pct { flex-direction: row !important; align-items: center; gap: 4px; } .pbi-comm-pct input { width: 70px; }
   .pbi-own td { background: #fff9db; } .pbi-own.neg td { background: #fff5f5; color: var(--red); }
+  .ie-find-row { display: flex; gap: 8px; } .ie-find-row input { flex: 1; min-width: 0; }
   .pctl-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); } .pctl-tab { border: 1px solid var(--line); border-bottom: 0; background: var(--paper); border-radius: 8px 8px 0 0; padding: 7px 14px; font-weight: 700; cursor: pointer; margin-bottom: -2px; }
   .pctl-tab[aria-selected="true"] { background: #fff; border-color: var(--blue, #1d4f91); border-bottom: 2px solid #fff; color: var(--blue, #1d4f91); } .pctl-tab .quiet { font-weight: 400; font-size: 12px; }
   .pctl-unset td { color: var(--steel); } .pctl-ghost::placeholder { color: #adb5bd; } .pctl-acts { white-space: nowrap; } .pctl-acts .link { margin-left: 6px; }
@@ -6491,13 +6492,13 @@ function renderSales(msg) {
 const PBB = { cats: null, open: new Set(), cat: null, items: null, q: "", oi: 0, added: new Set(), seq: 0, mode: "list", big: null, thumbs: new Map(), photos: new Map() };
 // Pictures on a proposal: the person's own print book (the categories ticked on the Print book page), each item with Add
 const PBPK = { key: null, html: null, added: new Set(), oi: 0 };
-async function openPrintPicks(oi) {
-  PBPK.oi = oi; PBPK.added = new Set(); PBPK.inv = new Map();
+async function openPrintPicks(oi, invOpt) {   // invOpt { id, number }: the same pop-up on an invoice, adding straight onto it
+  PBPK.oi = oi; PBPK.added = new Set(); PBPK.inv = new Map(); PBPK.invId = invOpt?.id || null; PBPK.invNum = invOpt?.number || ""; PBPK.invChanged = false;
   let back = document.getElementById("pbpk-back");
   if (!back) { back = document.createElement("div"); back.id = "pbpk-back"; back.className = "pbb-back"; document.body.appendChild(back);
     back.addEventListener("click", e => { if (e.target === back) closePrintPicks(); }); }
   back.hidden = false;
-  const o = EST.opts[oi] || {}, head = `<div class="pbb-head"><div><b>Price book</b> <span class="quiet">adding to ${esc(o.name || "Option " + (oi + 1))}</span></div>
+  const o = EST.opts[oi] || {}, head = `<div class="pbb-head"><div><b>Price book</b> <span class="quiet">adding to ${PBPK.invId ? `invoice ${esc(PBPK.invNum)}` : esc(o.name || "Option " + (oi + 1))}</span></div>
     <span class="staff-msg" id="pbpk-msg" role="status"></span><button class="btn quiet-btn" type="button" id="pbpk-cmp">Compare side by side (${SHOW.cmp.length}/3)</button><button class="btn" type="button" id="pbpk-done">Done</button></div>`;
   back.innerHTML = `<div class="pbb pbpk">${head}<div class="pbpk-body"><p class="quiet" style="padding:20px">Opening your print book…</p></div></div>`;
   back.querySelector("#pbpk-done").addEventListener("click", closePrintPicks);
@@ -6512,7 +6513,7 @@ async function openPrintPicks(oi) {
   if (!PBP.picked.size) { tempAll = PBP.picked; PBP.picked = new Set((PB.cats || []).filter(c => c.active !== false).map(c => c.id)); }
   if (!COMPANY) { const { data } = await db.from("company_settings").select("*").limit(1).maybeSingle(); COMPANY = data || { company_name: "Reid Heating & Cooling" }; }
   if (!PBP.picked.size) { back.querySelector(".pbpk-body").innerHTML = `<p class="quiet" style="padding:20px">There's nothing in your price book yet.</p>`; return; }
-  const key = JSON.stringify([[...PBP.picked].sort(), PBP.book ?? "", PBP.opt.nopic, PBP.opt.desc, PBP.opt.member, EST.ij?.invoice_id || 0, EST.opts.length]);
+  const key = JSON.stringify([[...PBP.picked].sort(), PBP.book ?? "", PBP.opt.nopic, PBP.opt.desc, PBP.opt.member, EST.ij?.invoice_id || 0, EST.opts.length, PBPK.invId || 0]);
   if (PBPK.key !== key || !PBPK.html) { let b = null; PBPK.note = "";
     try { b = await makePrintBook(true);
       if (!b && !tempAll) {   // their print book's categories have nothing in them: show their whole price book instead of an empty pop-up
@@ -6525,21 +6526,7 @@ async function openPrintPicks(oi) {
   back.querySelector(".pbpk-body").innerHTML = `<div class="pbp-doc pbp-c${PBP.opt.cols || 2}">${PBPK.html}</div>`;
   { const m = back.querySelector("#pbpk-msg"); m.className = "staff-msg"; m.textContent = PBPK.note || ""; }
   pbpkSyncCmp(); pbpkMarks();
-  back.querySelectorAll("[data-pbp-addinv]").forEach(b => b.addEventListener("click", async () => {   // straight onto the sale's invoice; click again to take it off
-    const inv = EST.ij?.invoice_id, m = back.querySelector("#pbpk-msg"), id = Number(b.dataset.pbpAddinv); if (!inv) return; b.disabled = true;
-    const say = (t, err) => { m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; };
-    PBPK.inv = PBPK.inv || new Map();
-    if (PBPK.inv.has(id)) {
-      const { error } = await db.rpc("inv_update_line", { p_line: PBPK.inv.get(id), p: { quantity: 0 } }); b.disabled = false;
-      if (error) return say("Not taken off the invoice: " + rpcErr(error), true);
-      PBPK.inv.delete(id); pbpkMarks(); return say("Taken back off the invoice.");
-    }
-    const before = new Set(((await db.rpc("inv_editor", { p_invoice: inv })).data?.lines || []).map(l => l.id));
-    const { data: n, error } = await db.rpc("inv_add_item", { p_invoice: inv, p_item: id, p_qty: 1 }); b.disabled = false;
-    if (error) return say("Not added to the invoice: " + rpcErr(error), true);
-    const made = ((await db.rpc("inv_editor", { p_invoice: inv })).data?.lines || []).filter(l => !before.has(l.id) && Number(l.item_id) === id && !l.kit_parent).pop();
-    if (made) PBPK.inv.set(id, made.id); pbpkMarks();
-    say(`Added to the invoice${n ? `, with ${n} add-on kit part${n > 1 ? "s" : ""}` : ""}.${made ? " Click it again to take it off." : ""}`); }));
+  back.querySelectorAll("[data-pbp-addinv]").forEach(b => b.addEventListener("click", () => pbpkInvToggle(EST.ij?.invoice_id, Number(b.dataset.pbpAddinv), b)));   // straight onto the sale's invoice
   back.querySelectorAll("[data-pbp-cmp]").forEach(cb => cb.addEventListener("change", () => {
     const id = Number(cb.dataset.pbpCmp), it = pbpkItems().find(x => x.id === id);
     if (cb.checked) { if (SHOW.cmp.length >= 3 && !inCmp(id)) { cb.checked = false; const m = back.querySelector("#pbpk-msg"); m.className = "staff-msg err"; m.textContent = "Up to 3 to compare. Untick one first."; return; }
@@ -6549,7 +6536,24 @@ async function openPrintPicks(oi) {
   back.querySelectorAll("[data-pbp-show]").forEach(b => b.addEventListener("click", () => {
     const list = pbpkItems();
     SHOW.list = list; SHOW.at = Math.max(0, list.findIndex(x => x.id === Number(b.dataset.pbpShow))); SHOW.cmpOpen = false; drawShow(); }));
-  back.querySelectorAll("[data-pbp-add]").forEach(b => b.addEventListener("click", () => pbpkToggle(Number(b.dataset.pbpAdd), b.dataset.pbpName, Number(b.dataset.pbpPrice) || 0)));
+  back.querySelectorAll("[data-pbp-add]").forEach(b => b.addEventListener("click", () => PBPK.invId ? pbpkInvToggle(PBPK.invId, Number(b.dataset.pbpAdd), b) : pbpkToggle(Number(b.dataset.pbpAdd), b.dataset.pbpName, Number(b.dataset.pbpPrice) || 0)));
+}
+// put an item on an invoice from the pop-up; clicking it again takes that line back off
+async function pbpkInvToggle(inv, id, b) {
+  const m = document.querySelector("#pbpk-msg"); if (!inv) return; if (b) b.disabled = true;
+  const say = (t, err) => { if (m) { m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; } };
+  PBPK.inv = PBPK.inv || new Map();
+  if (PBPK.inv.has(id)) {
+    const { error } = await db.rpc("inv_update_line", { p_line: PBPK.inv.get(id), p: { quantity: 0 } }); if (b) b.disabled = false;
+    if (error) return say("Not taken off the invoice: " + rpcErr(error), true);
+    PBPK.inv.delete(id); PBPK.invChanged = true; pbpkMarks(); return say("Taken back off the invoice.");
+  }
+  const before = new Set(((await db.rpc("inv_editor", { p_invoice: inv })).data?.lines || []).map(l => l.id));
+  const { data: n, error } = await db.rpc("inv_add_item", { p_invoice: inv, p_item: id, p_qty: 1 }); if (b) b.disabled = false;
+  if (error) return say("Not added to the invoice: " + rpcErr(error), true);
+  const made = ((await db.rpc("inv_editor", { p_invoice: inv })).data?.lines || []).filter(l => !before.has(l.id) && Number(l.item_id) === id && !l.kit_parent).pop();
+  if (made) PBPK.inv.set(id, made.id); PBPK.invChanged = true; pbpkMarks();
+  say(`Added to the invoice${n ? `, with ${n} add-on kit part${n > 1 ? "s" : ""}` : ""}.${made ? " Click it again to take it off." : ""}`);
 }
 // Add to the option from the price book pop-up; clicking "Added" again takes it back off (in case it was a mistake)
 function pbpkToggle(id, name, price) {
@@ -6560,7 +6564,12 @@ function pbpkToggle(id, name, price) {
   } else { o.lines.push({ item_id: id, description: name, qty: 1, price }); PBPK.added.add(id); }
   EST.dirty = true; pbpkMarks();
 }
-function pbpkMarks() {   // every Add button in the pop-up (and the big view) shows whether it's on the option
+function pbpkMarks() {   // every Add button in the pop-up (and the big view) shows whether it's on the option (or the invoice)
+  if (PBPK.invId) {
+    document.querySelectorAll("#pbpk-back [data-pbp-add], .show [data-show-add]").forEach(b => { const on = PBPK.inv.has(Number(b.dataset.pbpAdd || b.dataset.showAdd));
+      b.classList.toggle("pbb-added", on); b.innerHTML = on ? "On the invoice ✓ <small>(click to take off)</small>" : "Add to the invoice"; b.title = on ? "Take it back off the invoice" : ""; });
+    const dn = document.querySelector("#pbpk-done"); if (dn) dn.textContent = PBPK.inv.size ? `Done (${PBPK.inv.size} added)` : "Done"; return;
+  }
   const nm = esc(EST.opts[PBPK.oi]?.name || "the option");
   document.querySelectorAll("#pbpk-back [data-pbp-add], .show [data-show-add]").forEach(b => { const on = PBPK.added.has(Number(b.dataset.pbpAdd || b.dataset.showAdd));
     b.classList.toggle("pbb-added", on); b.innerHTML = on ? "Added ✓ <small>(click to take off)</small>" : (b.dataset.showAdd ? "＋ " : "") + "Add to " + nm;
@@ -6575,7 +6584,9 @@ function pbpkSyncCmp() {
   document.querySelectorAll("#pbpk-back [data-pbp-cmp]").forEach(cb => { cb.checked = inCmp(Number(cb.dataset.pbpCmp)); });
   const b = document.getElementById("pbpk-cmp"); if (b) { b.textContent = `Compare side by side (${SHOW.cmp.length}/3)`; b.classList.toggle("quiet-btn", !SHOW.cmp.length); }
 }
-function closePrintPicks() { const b = document.getElementById("pbpk-back"); if (b) b.hidden = true; if (PBPK.added.size) { PBPK.added = new Set(); renderEstEdit(); } }
+function closePrintPicks() { const b = document.getElementById("pbpk-back"); if (b) b.hidden = true;
+  if (PBPK.invId) { const id = PBPK.invId, n = PBPK.inv.size, ch = PBPK.invChanged; PBPK.invId = null; PBPK.inv = new Map(); if (ch) openInvoiceEditor(id, n ? `${n} item${n === 1 ? "" : "s"} added from the price book.` : "Updated."); return; }
+  if (PBPK.added.size) { PBPK.added = new Set(); renderEstEdit(); } }
 // a sales person's Price book on a proposal only shows what's in their print book (the categories, and everything inside them)
 async function salesBookCats() {
   if (ME.role !== "sales") return null;
@@ -6960,7 +6971,7 @@ async function drawShow() {
         <div class="show-price">${money(it.price)}</div>
         <div class="show-desc">${showDesc(it) || `<span class="quiet">No description in the price book yet.</span>`}</div></div></div></div>`;
   wireShow(b);
-  b.querySelector("[data-show-add]")?.addEventListener("click", () => { pbpkToggle(it.id, it.name, it.price); drawShow(); });   // from the price book: on the option, or back off
+  b.querySelector("[data-show-add]")?.addEventListener("click", async () => { if (PBPK.invId) await pbpkInvToggle(PBPK.invId, it.id); else pbpkToggle(it.id, it.name, it.price); drawShow(); });   // from the price book: on the option, or back off
   pbpkMarks();
   if (!EINFO.has(it.id)) { await estInfo([it.id]).catch(() => {}); if (SHOW.list[SHOW.at] === it && !SHOW.cmpOpen) return drawShow(); }
   if (!SHOW.photos.has(it.id)) { await showPhoto(it.id); if (SHOW.list[SHOW.at] === it && !SHOW.cmpOpen) drawShow(); }
@@ -7052,7 +7063,7 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
   SHOW.cmpOpen = true; SHOW.savedOpen = false; SHOW.msg = ""; await drawCompare(); });
 new MutationObserver(() => { const b = document.getElementById("cust-cmps"); if (b && !b._filled) { b._filled = true; custCmpsFill(); } }).observe(document.getElementById("main"), { childList: true, subtree: true });
 // put a compared item on the proposal: pick the option (when there's more than one), then Add
-const cmpAddHtml = it => { if (SHOW.cust) return ""; const closed = ["accepted", "lost", "declined", "expired"].includes(EST.x?.status) || !!EST.x?.cancelled_at; if (closed || !EST.opts?.length) return "";
+const cmpAddHtml = it => { if (SHOW.cust || PBPK.invId) return ""; const closed = ["accepted", "lost", "declined", "expired"].includes(EST.x?.status) || !!EST.x?.cancelled_at; if (closed || !EST.opts?.length) return "";
   const def = Math.min(SHOW.addTo ?? PBPK.oi ?? 0, EST.opts.length - 1);
   return `<div class="cmp-addto no-print">${EST.opts.length > 1 ? `<select data-cmp-opt="${it.id}" aria-label="Which option">${EST.opts.map((o, i) => `<option value="${i}" ${i === def ? "selected" : ""}>${esc(o.name || "Option " + (i + 1))}</option>`).join("")}</select>` : ""}
     <button class="btn" type="button" data-cmp-add="${it.id}">＋ Add to ${EST.opts.length > 1 ? "the option" : esc(EST.opts[0].name || "the proposal")}</button></div>`; };
@@ -14438,7 +14449,7 @@ function renderInvoiceEditor(msg) {
       </tbody></table>
       ${edit ? `<div class="ie-add">
         ${MYDISC.size ? `<div class="ie-mydisc"><span class="cl-label">Your discounts</span>${[...MYDISC.values()].map(d => { return `<button class="btn quiet-btn" type="button" data-ie-adddisc="${d.item_id}" title="Adds it with your discount">${esc(pbName(d.name))} <b>${discWord(d, d.unit_price)}</b></button>`; }).join("")}</div>` : ""}
-        <div class="ie-find"><input type="search" id="ie-q" placeholder="Add from the price book: name, code or model" autocomplete="off"><div class="ie-res" id="ie-res"></div></div>
+        <div class="ie-find"><div class="ie-find-row"><input type="search" id="ie-q" placeholder="Add from the price book: name, code or model" autocomplete="off"><button class="btn" type="button" id="ie-pbook" title="Your price book with pictures: click Add on what you want">Price book</button></div><div class="ie-res" id="ie-res"></div></div>
         <details class="ie-custom"><summary>Add a line that isn't in the price book (or a discount)</summary>
           <form id="ie-custom" class="ie-custom-f"><input name="d" placeholder="Description" required><input name="q" inputmode="decimal" value="1" aria-label="Quantity">
             <input name="p" inputmode="decimal" placeholder="Price (minus for a discount)" required><label class="pb-check"><input type="checkbox" name="t" checked> HST</label><button class="btn quiet-btn" type="submit">Add</button></form></details>
@@ -14513,6 +14524,7 @@ function wireInvoiceEditor() {
   const I = IE, reload = m => openInvoiceEditor(I.id, m);
   ieDiscWire = root => root.querySelectorAll("[data-ie-adddisc]").forEach(b => b.addEventListener("click", () => { b.disabled = true; ieAddWithDisc(I.id, b.dataset.ieAdddisc, reload); }));
   ieDiscWire(document.querySelector(".ie-mydisc") || document.createElement("div"));
+  $("#ie-pbook")?.addEventListener("click", () => openPrintPicks(0, { id: I.id, number: I.number || "" }));
   $("#ie-prates")?.addEventListener("click", async e => { e.currentTarget.disabled = true; reload(await ieApplyPartnerRates()); });
   document.querySelectorAll("[data-ie-tpick]").forEach(b => b.addEventListener("click", async () => {
     const { error } = await db.rpc("set_job_tank_payer", { p_job: I.job_id, p_who: b.dataset.ieTpick }); reload(error ? "Not saved: " + rpcErr(error) : "Saved: " + b.textContent + "."); }));
@@ -15069,7 +15081,7 @@ async function makePrintBook(forPick) {
         ${forPick ? `<label class="pbp-cmp"><input type="checkbox" data-pbp-cmp="${r.id}"> Compare</label>` : ""}
         ${forPick || PART ? "" : discTag(r.id, r.unit_price, "pbp-disc")}
         ${forPick ? `<button type="button" class="btn pbp-add" data-pbp-add="${r.id}" data-pbp-name="${esc(pbName(r.name))}" data-pbp-price="${Number(r.unit_price) || 0}">Add to ${esc(EST.opts[PBPK.oi]?.name || "the option")}</button>` : ""}
-        ${forPick && EST.ij?.invoice_id ? `<button type="button" class="btn quiet-btn pbp-add" data-pbp-addinv="${r.id}" title="Puts it on the invoice for this sale">Add to the invoice</button>` : ""}</div></div>`; };
+        ${forPick && !PBPK.invId && EST.ij?.invoice_id ? `<button type="button" class="btn quiet-btn pbp-add" data-pbp-addinv="${r.id}" title="Puts it on the invoice for this sale">Add to the invoice</button>` : ""}</div></div>`; };
   const built = `<section class="pbp-page pbp-cover">
       <div class="pbp-cover-top"><img class="pbp-logo" src="${esc(coLogo(c))}" alt="${esc(co)}"></div>
       <div class="pbp-cover-mid"><div class="pbp-title">${esc(PBP.title)}${PART ? `<div class="pbp-partner">${esc(PART.name)}</div>` : ""}</div>
