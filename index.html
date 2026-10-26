@@ -6505,21 +6505,32 @@ async function openSales(msg) {
   // whose page: your own, or (if an owner allowed it) another sales person's; owners can pick anyone or Everyone
   const ppl = await db.rpc("sales_people"); SALES.people = ppl.error ? [] : ppl.data || [];
   if (SALES.seller && !SALES.people.some(x => String(x.id) === String(SALES.seller))) SALES.seller = "";
-  const seeComm = can("installs.manage") || ["owner", "accounting"].includes(ME.role), y = new Date().getFullYear();
-  const [{ data, error }, ins] = await Promise.all([db.rpc("sales_list", { p_seller: SALES.seller ? Number(SALES.seller) : null }),
-    // installs from 18 months back to the end of next year, in half-year pieces at once (one big ask is too slow)
-    seeComm ? Promise.all([[y - 2, 2], [y - 1, 1], [y - 1, 2], [y, 1], [y, 2], [y + 1, 1], [y + 1, 2]].map(([yy, h]) =>
-      db.rpc("install_list", { p_from: yy + (h === 1 ? "-01-01" : "-07-01"), p_to: yy + (h === 1 ? "-06-30" : "-12-31") }))).then(rs => ({ data: rs.some(r => !r.error) ? rs.flatMap(r => r.data || []) : null }))
-      : Promise.resolve({ data: null })]);
-  SALES.comm = !ins.data ? null : new Map(ins.data.map(r => [r.job_id, r]));
-  const pr = SALES.comm ? await db.rpc("commission_payroll") : { data: null };   // after the list: pay days that came are paid first
-  SALES.pay = pr.error || !pr.data ? null : new Map(pr.data.map(x => [x.job_id, x.payroll_on]));
-  if (SALES.pay && pr.data.some(x => { const c = SALES.comm.get(x.job_id); return c && !c.paid_at && x.payroll_on <= salesToday(); })) {   // some just got paid: fresh numbers
-    const again = await Promise.all([[y - 2, 2], [y - 1, 1], [y - 1, 2], [y, 1], [y, 2], [y + 1, 1], [y + 1, 2]].map(([yy, h]) => db.rpc("install_list", { p_from: yy + (h === 1 ? "-01-01" : "-07-01"), p_to: yy + (h === 1 ? "-06-30" : "-12-31") })));
-    if (again.some(r => !r.error)) SALES.comm = new Map(again.flatMap(r => r.data || []).map(r => [r.job_id, r])); }
+  const { data, error } = await db.rpc("sales_list", { p_seller: SALES.seller ? Number(SALES.seller) : null });
   if (document.body.dataset.page !== "sales") return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load sales</h2>${/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</div></div>`; return; }
   SALES.rows = data || []; renderSales(msg);
+  salesLoadComm();   // commission and payroll fill in a moment later
+}
+// commission (the same numbers as the Installs page), in half-year pieces two at a time (all at once is too much for the database)
+async function salesLoadComm() {
+  if (!(can("installs.manage") || ["owner", "accounting"].includes(ME.role))) { SALES.comm = SALES.pay = null; return; }
+  const y = new Date().getFullYear(), seq = (SALES.commSeq = (SALES.commSeq || 0) + 1);
+  const parts = [[y - 2, 2], [y - 1, 1], [y - 1, 2], [y, 1], [y, 2], [y + 1, 1], [y + 1, 2]].map(([yy, h]) => ({ p_from: yy + (h === 1 ? "-01-01" : "-07-01"), p_to: yy + (h === 1 ? "-06-30" : "-12-31") }));
+  const getAll = async () => { const out = [], q = parts.slice(); let bad = 0;
+    const one = async a => { let r = await db.rpc("install_list", a); if (r.error) r = await db.rpc("install_list", a); if (r.error) bad++; else out.push(...(r.data || [])); };
+    await Promise.all([0, 1].map(async () => { while (q.length) await one(q.shift()); }));
+    return bad === parts.length ? null : out; };
+  let rows = await getAll(); if (seq !== SALES.commSeq) return;
+  if (!rows) { SALES.comm = SALES.pay = null; return; }
+  SALES.comm = new Map(rows.map(r => [r.job_id, r]));
+  const pr = await db.rpc("commission_payroll");   // pays any whose pay day has come
+  SALES.pay = pr.error || !pr.data ? null : new Map(pr.data.map(x => [x.job_id, x.payroll_on]));
+  if (SALES.pay && pr.data.some(x => { const c = SALES.comm.get(x.job_id); return c && !c.paid_at && x.payroll_on <= salesToday(); })) {
+    rows = await getAll(); if (rows) SALES.comm = new Map(rows.map(r => [r.job_id, r])); }
+  if (seq !== SALES.commSeq || document.body.dataset.page !== "sales") return;
+  const typing = document.activeElement?.id === "sl-q" ? document.activeElement.selectionStart : null, top = $("#main").scrollTop;
+  renderSales(); $("#main").scrollTop = top;
+  if (typing != null) { const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(typing, typing); } catch {} } }
 }
 // the sales person on a deal: owners/dispatchers can add or change it right here (an Install row changes the deal it came from)
 const salesToday = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
