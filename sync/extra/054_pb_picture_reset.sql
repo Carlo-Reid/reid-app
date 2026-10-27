@@ -17,6 +17,8 @@ DECLARE it bigint;
 BEGIN
   IF TG_OP = 'DELETE' THEN it := OLD.item_id; ELSE it := NEW.item_id; END IF;
   IF current_setting('app.pb_pic_undo', true) = '1' THEN IF TG_OP = 'DELETE' THEN RETURN OLD; END IF; RETURN NEW; END IF;
+  IF TG_OP = 'INSERT' AND TG_TABLE_NAME = 'pricebook_pictures' AND EXISTS (SELECT 1 FROM pricebook_pictures WHERE item_id = it) THEN RETURN NEW; END IF;
+  IF TG_OP = 'INSERT' AND TG_TABLE_NAME = 'pb_item_boxes' AND EXISTS (SELECT 1 FROM pb_item_boxes WHERE item_id = it) THEN RETURN NEW; END IF;
   IF TG_TABLE_NAME = 'pricebook_pictures' THEN
     IF TG_OP = 'UPDATE' AND OLD.thumb IS NOT DISTINCT FROM NEW.thumb AND OLD.photo IS NOT DISTINCT FROM NEW.photo THEN RETURN NEW; END IF;
     INSERT INTO pb_pic_history (item_id, kind, existed, thumb, photo, source_path, saved_by)
@@ -59,12 +61,14 @@ $$;
 
 CREATE OR REPLACE FUNCTION public.pb_item_pic_undo(p_item bigint)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE h pb_pic_history;
+DECLARE h pb_pic_history; t timestamptz; kinds text := '';
 BEGIN
   IF NOT public.has_permission('pricebook.edit') THEN RAISE EXCEPTION 'You don''t have permission to change the price book'; END IF;
-  SELECT * INTO h FROM pb_pic_history WHERE item_id = p_item ORDER BY id DESC LIMIT 1;
-  IF h.id IS NULL THEN RAISE EXCEPTION 'There is nothing to undo on this picture'; END IF;
+  SELECT saved_at INTO t FROM pb_pic_history WHERE item_id = p_item ORDER BY id DESC LIMIT 1;
+  IF t IS NULL THEN RAISE EXCEPTION 'There is nothing to undo on this picture'; END IF;
   PERFORM set_config('app.pb_pic_undo', '1', true);
+  FOR h IN SELECT * FROM pb_pic_history WHERE item_id = p_item AND saved_at = t ORDER BY id DESC LOOP
+  kinds := CASE WHEN kinds = '' OR kinds = h.kind THEN h.kind ELSE 'both' END;
   IF h.kind = 'picture' THEN
     IF h.existed THEN
       INSERT INTO pricebook_pictures (item_id, thumb, photo, source_path, updated_at) VALUES (p_item, h.thumb, h.photo, h.source_path, now())
@@ -77,10 +81,11 @@ BEGIN
     ELSE DELETE FROM pb_item_boxes WHERE item_id = p_item; END IF;
   END IF;
   DELETE FROM pb_pic_history WHERE id = h.id;
+  END LOOP;
   PERFORM set_config('app.pb_pic_undo', '', true);
   INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
-  VALUES ('pricebook_items', p_item, 'update', public.current_app_user_id(), jsonb_build_object('change', 'picture: last change undone (' || h.kind || ')'));
-  RETURN h.kind;
+  VALUES ('pricebook_items', p_item, 'update', public.current_app_user_id(), jsonb_build_object('change', 'picture: last change undone (' || kinds || ')'));
+  RETURN kinds;
 END $$;
 
 CREATE OR REPLACE FUNCTION public.pb_item_pic_reset(p_item bigint)
@@ -103,3 +108,6 @@ END $$;
 REVOKE EXECUTE ON FUNCTION public.pb_item_pic_state(bigint), public.pb_item_pic_undo(bigint), public.pb_item_pic_reset(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.pb_item_pic_state(bigint), public.pb_item_pic_undo(bigint), public.pb_item_pic_reset(bigint) TO authenticated;
 NOTIFY pgrst, 'reload schema';
+
+-- (the first version kept a wrong "there was none" step on a Reset; those few test rows are cleared)
+DELETE FROM public.pb_pic_history WHERE saved_at < '2026-10-27T23:45:00+00';
