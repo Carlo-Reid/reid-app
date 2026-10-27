@@ -38,6 +38,7 @@ ALTER TABLE public.supplier_invoices ENABLE ROW LEVEL SECURITY; ALTER TABLE publ
 ALTER TABLE public.supplier_statement_lines ENABLE ROW LEVEL SECURITY; ALTER TABLE public.supplier_doc_pages ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.supplier_invoices, public.supplier_statements, public.supplier_statement_lines, public.supplier_doc_pages FROM anon, authenticated;
 
+CREATE INDEX IF NOT EXISTS purchase_orders_po_base ON public.purchase_orders (split_part(po_number, '-', 1));
 CREATE OR REPLACE FUNCTION public._sinv_can_edit() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $$
   SELECT public.current_staff_role() = 'owner' OR public.has_permission('po.create') $$;
 -- the PO an invoice belongs to: the one picked by hand, or the PO with the number printed on it (same supplier first)
@@ -57,6 +58,8 @@ BEGIN
                       'file', s.file_name, 'pages', s.pages, 'lines', (SELECT count(*) FROM supplier_statement_lines l WHERE l.statement_id = s.id)) ORDER BY s.statement_date DESC), '[]')
                    FROM supplier_statements s JOIN suppliers sp ON sp.id = s.supplier_id WHERE p_supplier IS NULL OR s.supplier_id = p_supplier),
     'rows', (SELECT coalesce(jsonb_agg(r ORDER BY r.invoice_date DESC, r.number DESC), '[]') FROM (
+      WITH m AS MATERIALIZED (SELECT i.id AS inv_id, public._sinv_po(i) AS po_id FROM supplier_invoices i
+                              WHERE (p_supplier IS NULL OR i.supplier_id = p_supplier) AND (p_statement IS NULL OR i.statement_id = p_statement))
       SELECT i.id, i.supplier_id, btrim(sp.name) AS supplier, i.supplier_invoice_number AS number, i.invoice_date, i.doc_type, i.po_text, i.job_name,
              i.subtotal, i.hst, i.total, jsonb_array_length(i.lines) AS line_count, i.match_state, i.match_note, i.statement_id, i.handwriting, i.read_notes,
              (SELECT count(*) FROM supplier_doc_pages d WHERE d.supplier_invoice_id = i.id) AS pages,
@@ -64,11 +67,11 @@ BEGIN
              (po.supplier_id IS DISTINCT FROM i.supplier_id) AS po_other_supplier, i.purchase_order_id IS NOT NULL AS po_by_hand,
              (SELECT round(sum(pl.line_total), 2) FROM purchase_order_lines pl WHERE pl.purchase_order_id = po.id) AS po_amount,
              (SELECT count(*) FROM purchase_order_lines pl WHERE pl.purchase_order_id = po.id) AS po_lines,
-             (SELECT count(*) FROM supplier_invoices o WHERE o.id <> i.id AND public._sinv_po(o) = po.id) AS po_other_invoices
-      FROM supplier_invoices i JOIN suppliers sp ON sp.id = i.supplier_id
-      LEFT JOIN purchase_orders po ON po.id = public._sinv_po(i)
+             (SELECT count(*) FROM m o WHERE o.inv_id <> i.id AND o.po_id = po.id) AS po_other_invoices
+      FROM m JOIN supplier_invoices i ON i.id = m.inv_id JOIN suppliers sp ON sp.id = i.supplier_id
+      LEFT JOIN purchase_orders po ON po.id = m.po_id
       LEFT JOIN jobs j ON j.id = po.job_id LEFT JOIN customers c ON c.id = j.customer_id
-      WHERE (p_supplier IS NULL OR i.supplier_id = p_supplier) AND (p_statement IS NULL OR i.statement_id = p_statement)) r),
+      ) r),
     'statement_lines', CASE WHEN p_statement IS NULL THEN '[]'::jsonb ELSE (SELECT coalesce(jsonb_agg(jsonb_build_object('reference', l.reference, 'date', l.doc_date, 'code', l.code,
                       'amount', l.amount, 'branch', l.branch, 'invoice_id', l.supplier_invoice_id) ORDER BY l.id), '[]') FROM supplier_statement_lines l WHERE l.statement_id = p_statement) END,
     'can_edit', public._sinv_can_edit()));
