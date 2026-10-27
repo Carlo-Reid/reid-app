@@ -6724,6 +6724,7 @@ function cvRange(lvl = CV.lvl, d = CV.d) {
   if (lvl === "day") return [d, d];
   if (lvl === "month") return [cvIso(new Date(Date.UTC(Y, M - 1, 1))), cvIso(new Date(Date.UTC(Y, M, 0)))];
   if (lvl === "year") return [`${Y}-01-01`, `${Y}-12-31`];
+  if (lvl === "pp") { const f = cvPayDay(`${Y}-01-01`); let l = cvPayDay(`${Y}-12-31`); if (l > `${Y}-12-31`) l = cvAddDays(l, -PAYROLL.every); return [cvAddDays(f, 1 - PAYROLL.every), l]; }   // the pay days in that year
   return [null, null];
 }
 function cvShift(k) {
@@ -6732,7 +6733,7 @@ function cvShift(k) {
     CV.f = mv(CV.f); CV.t = mv(CV.t); CV.d = CV.t; return; }   // the same number of days back or forward
   if (CV.lvl === "day") CV.d = cvIso(new Date(Date.UTC(Y, M - 1, D + k)));
   else if (CV.lvl === "month") { const last = new Date(Date.UTC(Y, M + k, 0)).getUTCDate(); CV.d = cvIso(new Date(Date.UTC(Y, M - 1 + k, Math.min(D, last)))); }
-  else if (CV.lvl === "year") { const last = new Date(Date.UTC(Y + k, M, 0)).getUTCDate(); CV.d = cvIso(new Date(Date.UTC(Y + k, M - 1, Math.min(D, last)))); }
+  else if (CV.lvl === "year" || CV.lvl === "pp") { const last = new Date(Date.UTC(Y + k, M, 0)).getUTCDate(); CV.d = cvIso(new Date(Date.UTC(Y + k, M - 1, Math.min(D, last)))); }
 }
 const cvAddDays = (x, k) => { const [a, b, c] = x.split("-").map(Number); return cvIso(new Date(Date.UTC(a, b - 1, c + k))); };
 const cvPayDay = x => { const k = Math.round((Date.parse(x + "T00:00:00Z") - Date.parse(PAYROLL.anchor + "T00:00:00Z")) / 864e5), e = PAYROLL.every; return cvAddDays(x, ((e - (k % e)) % e)); };   // the pay day on or after a day
@@ -6819,7 +6820,7 @@ function cvRender() {
   const box = $("#sl-cv"); if (!box) return;
   const d = CV.d || salesToday(), Y = d.slice(0, 4), M = Number(d.slice(5, 7)), today = salesToday();
   const allDays = CV.days || [], spK = v => v || "__none", days = allDays.filter(x => !CV.sp || spK(x.sp) === CV.sp), [from, to] = cvRange();
-  const inPeriod = x => CV.lvl === "all" || CV.lvl === "pp" || (x.d >= from && x.d <= to);
+  const inPeriod = x => CV.lvl === "all" || (x.d >= from && x.d <= to);
   const add = L => L.reduce((a, x) => (a.n += Number(x.n) || 0, a.amt += Number(x.amt) || 0, a), { n: 0, amt: 0 });
   const tot = add(days.filter(inPeriod));
   // sales people: everyone who ever sold, biggest first; and who sold what in this period
@@ -6829,13 +6830,15 @@ function cvRender() {
   const spRows = CV.sp ? [] : spAll.map(k => ({ k, ...add(allDays.filter(x => spK(x.sp) === k && inPeriod(x))) })).filter(r => r.n).sort((a, b) => b.amt - a.amt);
   const spMax = Math.max(1, ...spRows.map(r => r.amt));
   const nice = x => new Date(x + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
-  const label = CV.lvl === "range" ? `${cvShort(from)} to ${cvShort(to)}` : CV.lvl === "day" ? nice(d) : CV.lvl === "month" ? `${CV_MONTHS[M - 1]} ${Y}` : CV.lvl === "year" ? Y : CV.lvl === "pp" ? "Every pay period" : "Every year";
+  const label = CV.lvl === "range" ? `${cvShort(from)} to ${cvShort(to)}` : CV.lvl === "day" ? nice(d) : CV.lvl === "month" ? `${CV_MONTHS[M - 1]} ${Y}` : CV.lvl === "year" ? Y : CV.lvl === "pp" ? `Pay periods ${Y}` : "Every year";
   // the breakdown one level down: years → months → days
   let rows = [];
-  if (CV.lvl === "pp") {   // Date paid by pay period: each pay day with the two weeks it covers (a day paid off a pay day goes with the next pay day)
+  if (CV.lvl === "pp") {   // every pay period in the year (pay day every second Thursday; it covers the two weeks up to and including the pay day), even empty ones
     const P = new Map(); days.forEach(x => { const pd = cvPayDay(x.d), a = P.get(pd) || { n: 0, amt: 0 }; a.n += Number(x.n) || 0; a.amt += Number(x.amt) || 0; P.set(pd, a); });
-    rows = [...P.keys()].sort().reverse().map(pd => { const st = cvAddDays(pd, 1 - PAYROLL.every);
-      return { go: `ppr|${st}~${pd}`, t: `Pay day ${cvShort(pd)} (${cvShort(st).replace(/, \d{4}$/, "")} – ${cvShort(pd).replace(/, \d{4}$/, "")})`, now: pd === cvPayDay(today), future: pd > today, ...P.get(pd) }; }); }
+    const last = [to, cvPayDay(today)].sort()[0], list = []; for (let pd = cvPayDay(`${Y}-01-01`); pd <= last; pd = cvAddDays(pd, PAYROLL.every)) list.push(pd);
+    const lastPaid = cvAddDays(cvPayDay(today), cvPayDay(today) === today ? 0 : -PAYROLL.every);   // the most recent pay day (today, if it's one)
+    rows = list.reverse().map(pd => { const st = cvAddDays(pd, 1 - PAYROLL.every), sh = x => cvShort(x).replace(/, \d{4}$/, "");
+      return { go: `ppr|${st}~${pd}`, t: `${pd > today ? "This pay period, pay day" : "Pay day"} ${cvShort(pd)} (${sh(st)} – ${sh(pd)})${pd === lastPaid ? " · last payroll" : ""}`, now: pd === lastPaid, n: 0, amt: 0, ...P.get(pd) }; }); }
   else if (CV.lvl === "all") { const ys = [...new Set(days.map(x => x.d.slice(0, 4)))].sort().reverse();
     rows = ys.map(y => ({ go: `year|${y}-${y === today.slice(0, 4) ? today.slice(5) : "01-01"}`, t: y, now: y === today.slice(0, 4), ...add(days.filter(x => x.d.startsWith(y))) })); }
   else if (CV.lvl === "year") rows = CV_MONTHS.map((m, i) => { const ym = `${Y}-${String(i + 1).padStart(2, "0")}`;
@@ -6845,13 +6848,13 @@ function cvRender() {
   else if (CV.lvl === "month" || CV.lvl === "range") rows = [...new Set(days.filter(x => x.d >= from && x.d <= to).map(x => x.d))].sort().reverse()   // one row a day (all sales people together)
     .map(dd => ({ go: `day|${dd}`, t: new Date(dd + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }), now: dd === today, future: dd > today, ...add(days.filter(x => x.d === dd)) }));
   const max = Math.max(1, ...rows.map(r => r.amt));
-  const crumbs = CV.lvl === "pp" ? [["all", "Every year", d], ["pp", "Pay periods", d]] : CV.lvl === "range" ? [["all", "Every year", d], ...(CV.ppBack ? [["pp", "Pay periods", d]] : []), ["range", label, d]] : [["all", "Every year", d], ...(CV.lvl !== "all" ? [["year", Y, d]] : []), ...(CV.lvl === "month" || CV.lvl === "day" ? [["month", CV_MONTHS[M - 1], d]] : []), ...(CV.lvl === "day" ? [["day", String(Number(d.slice(8))), d]] : [])];
+  const crumbs = CV.lvl === "pp" ? [["all", "Every year", d], ["pp", `${Y} pay periods`, d]] : CV.lvl === "range" ? [["all", "Every year", d], ...(CV.ppBack ? [["pp", "Pay periods", d]] : []), ["range", label, d]] : [["all", "Every year", d], ...(CV.lvl !== "all" ? [["year", Y, d]] : []), ...(CV.lvl === "month" || CV.lvl === "day" ? [["month", CV_MONTHS[M - 1], d]] : []), ...(CV.lvl === "day" ? [["day", String(Number(d.slice(8))), d]] : [])];
   const list = CV.list.get(cvRange().join("|"))?.filter(r => !CV.sp || spK(r.sales_person) === CV.sp);
   box.innerHTML = `<div class="cv-head"><h2>Carlo view</h2>
       <span class="seg cv-by" role="group" aria-label="Count sales by">${[["sold", "Date sold"], ["installed", "Date installed"], ["paid", "Date paid"], ["unpaid", "Not paid yet"]].map(([k, t]) => `<button type="button" data-cv-by="${k}" aria-pressed="${CV.by === k}">${t}</button>`).join("")}</span>
       <label class="sl-who cv-who"><span>Sales person</span><select id="cv-sp"><option value="">All sales people</option>${spAll.map(k => `<option value="${esc(k)}" ${CV.sp === k ? "selected" : ""}>${esc(spName(k))}</option>`).join("")}${CV.sp && !spAll.includes(CV.sp) ? `<option selected>${esc(CV.sp)}</option>` : ""}</select></label>
-      <span class="seg cv-lvl" role="group">${[["day", "Day"], ["month", "Month"], ["year", "Year"], ["all", "All years"], ...(CV.by === "paid" ? [["pp", "Pay periods"]] : []), ["range", "From – To"]].map(([k, t]) => `<button type="button" data-cv-lvl="${k}" aria-pressed="${CV.lvl === k}">${t}</button>`).join("")}</span>
-      <span class="cv-nav">${CV.lvl !== "all" && CV.lvl !== "pp" ? `<button class="btn quiet-btn" type="button" data-cv-step="-1" title="Back one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl}">‹</button><button class="btn quiet-btn" type="button" data-cv-step="1" title="Forward one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl}">›</button>` : ""}
+      <span class="seg cv-lvl" role="group">${[["day", "Day"], ["month", "Month"], ["year", "Year"], ["all", "All years"], ["pp", "Pay periods"], ["range", "From – To"]].map(([k, t]) => `<button type="button" data-cv-lvl="${k}" aria-pressed="${CV.lvl === k}">${t}</button>`).join("")}</span>
+      <span class="cv-nav">${CV.lvl !== "all" ? `<button class="btn quiet-btn" type="button" data-cv-step="-1" title="Back one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl === "pp" ? "year" : CV.lvl}">‹</button><button class="btn quiet-btn" type="button" data-cv-step="1" title="Forward one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl === "pp" ? "year" : CV.lvl}">›</button>` : ""}
         <button class="btn quiet-btn" type="button" data-cv-today ${CV.lvl === "day" && d === today ? "disabled" : ""}>Today</button>
         ${CV.lvl === "range" ? `<label class="cv-ft">From <input type="date" id="cv-from" value="${esc(from)}" max="${esc(to)}"></label><label class="cv-ft">To <input type="date" id="cv-to" value="${esc(to)}" min="${esc(from)}"></label>`
           : `<input type="date" id="cv-date" value="${esc(d)}" aria-label="Go to a day">`}</span></div>
@@ -6884,7 +6887,7 @@ function cvRender() {
     CV.lvl = lvl; if (dd) CV.d = dd; if (lvl === "day" || lvl === "month") CV.all = false; redo(true); };
   box.querySelectorAll("[data-cv-lvl]").forEach(b => b.addEventListener("click", () => go(b.dataset.cvLvl)));
   box.querySelectorAll("[data-cv-by]").forEach(b => b.addEventListener("click", () => { if (CV.by === b.dataset.cvBy) return;
-    CV.by = b.dataset.cvBy; try { localStorage.setItem("cvBy", CV.by); } catch {} CV.days = null; CV.list = new Map(); CV.unpaidAll = null; CV.err = ""; if (CV.by === "unpaid") { CV.lvl = "all"; CV.all = true; } else if (CV.by === "paid") { CV.lvl = "pp"; CV.ppBack = false; } else if (CV.lvl === "pp") CV.lvl = "all"; redo(true); }));   // not paid yet: start on every year, with the list
+    CV.by = b.dataset.cvBy; try { localStorage.setItem("cvBy", CV.by); } catch {} CV.days = null; CV.list = new Map(); CV.unpaidAll = null; CV.err = ""; if (CV.by === "unpaid") { CV.lvl = "all"; CV.all = true; } else if (CV.by === "paid") { CV.lvl = "pp"; CV.ppBack = false; } redo(true); }));   // not paid yet: start on every year, with the list
   box.querySelectorAll("[data-cv-go]").forEach(b => b.addEventListener("click", () => { const [l, x] = b.dataset.cvGo.split("|");
     if (l === "ppr") { const [f, t] = x.split("~"); CV.lvl = "range"; CV.f = f; CV.t = t; CV.ppBack = true; return go("range", t); }   // one pay period
     go(l, x); }));
