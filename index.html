@@ -3603,6 +3603,7 @@ article.staff.sales { max-width: none; }   /* Sales page uses the full window wi
 .pbt-card { display: flex; flex-direction: column; gap: 6px; text-align: left; padding: 16px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
 .pbt-card b { font-size: calc(16px * var(--fs, 1)); color: var(--blue); } .pbt-card span { color: var(--steel); font-size: calc(13px * var(--fs, 1)); }
 .pbt-card:hover { border-color: var(--blue); background: var(--blue-wash); }
+.cv-act { white-space: nowrap; } .cv-act .btn + .btn { margin-left: 6px; }
 .sl-tablewrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .sl-tablewrap .top-sbar { top: 0; background: var(--panel); margin-bottom: 0; }
 .sl-tablewrap .sl-t { margin: 0; overflow: visible !important; }   /* (a table that clips stops the headings sticking) */
@@ -6872,7 +6873,7 @@ function cvRender() {
           <td>${esc(r.sales_person || "—")}</td><td>${esc(r.job_type || "")}<div class="quiet">Job ${esc(r.job_number || "")}</div></td>
           <td class="r num"><b>${money(r.amount)}</b><div class="quiet">#${esc(r.est_number || "")}</div></td>
           ${SALES.comm ? cvCommCells(r) : ""}
-          <td><button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button></td></tr>`).join("")}</tbody></table></div>`
+          <td class="cv-act"><button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>${ME.role === "owner" ? `<button class="btn quiet-btn" type="button" data-cv-split="${r.est_id}" title="This sale was split up into other sales (for example a combo later sold as two): take it off the sales">✂ Split up</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
         : `<p class="quiet">No sales ${CV.lvl === "day" ? "on this day" : "here"}.</p>`) : `<p class="quiet">Loading the sales…</p>`) : ""}`;
   const redo = load => { if (salesCvLinked() && document.body.dataset.page === "sales") { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; } else load ? cvLoad() : cvRender(); };
   const go = (lvl, dd) => { if (lvl === "range" && CV.lvl !== "range") { const [f0, t0] = cvRange(CV.lvl === "all" || CV.lvl === "pp" ? "year" : CV.lvl); CV.f = f0; CV.t = t0 > today ? today : t0; if (CV.f > CV.t) CV.f = CV.t; }   // starts on what you were looking at
@@ -6893,6 +6894,15 @@ function cvRender() {
   box.querySelectorAll("[data-cv-sp]").forEach(b => b.addEventListener("click", () => { CV.sp = b.dataset.cvSp; redo(); }));
   box.querySelector("[data-cv-all]")?.addEventListener("click", () => { CV.all = !CV.all; cvLoad(); });
   box.querySelectorAll("[data-cv-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.cvCust))));
+  // a combo that was later sold as separate proposals: take it off the sales (owners; it can be put back)
+  box.querySelectorAll("[data-cv-split]").forEach(b => b.addEventListener("click", async () => {
+    const id = Number(b.dataset.cvSplit), r = [...CV.list.values()].flat().find(x => x.est_id === id);
+    const k = await askChoice("Take this sale off?", `${esc(r?.customer || "")}, proposal ${esc(r?.est_number || "")} for ${money(r?.amount || 0)}. Use this when it was split up into other sales, so it isn't counted twice. It comes off the sales totals and the commission lists. The proposal itself stays, and nothing changes in ServiceTitan.`, [["yes", "Take it off", true], ["", "Keep it"]]);
+    if (k !== "yes") return;
+    const { error } = await db.rpc("est_split_remove", { p_id: id, p_note: "Split up into other sales" });
+    if (error) { alertMsg("Not changed: " + (/function|schema|PGRST202/i.test(error.message || "") ? "run RUN SETUP NOW.bat first." : rpcErr(error))); return; }
+    CV.days = null; CV.list = new Map(); CV.unpaidAll = null; SALES.rows = null;
+    const top = $("#main").scrollTop; await openSales(`Proposal ${r?.est_number || ""} taken off the sales (split up).`); $("#main").scrollTop = top; }));
   box.querySelectorAll("[data-cv-paid]").forEach(inp => inp.addEventListener("change", async () => { if (!inp.value) return;
     const { error } = await db.rpc("set_commission_paid_date", { p_job_id: Number(inp.dataset.cvPaid), p_date: inp.value });
     if (error) { alertMsg("Not saved: " + (/function|schema|PGRST202/i.test(error.message || "") ? "run RUN SETUP NOW.bat first." : rpcErr(error))); return; }
