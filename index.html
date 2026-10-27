@@ -3668,6 +3668,7 @@ article.sales .cl-hero-range > em { font-size: calc(17px * var(--fs, 1)); opacit
 .sl-t td.sl-act .btn, .sl-t td.sl-act .btn.small { display: inline-block; vertical-align: top; width: 112px; height: 26px; min-height: 0; margin: 0 !important; padding: 0 6px; font-size: 11.5px; font-weight: 600; line-height: 24px; border-radius: 6px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; box-sizing: border-box; }
 .sl-t .sl-pay select, .sl-t .sl-pay input[type=date] { font-size: 11.5px; padding: 2px 3px; }
+.sl-snote { margin-top: 4px; padding: 2px 6px; border-radius: 6px; background: #fff9db; color: #5c3c00; font-size: 11.5px; white-space: normal; max-width: 220px; line-height: 1.3; }
 .sl-ptn { display: inline-block; font-size: 11px; font-weight: 800; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
 .sl-ptn-reid { background: var(--blue-wash, #e7f0fb); color: var(--blue, #1f6fd1); } .sl-ptn-p { background: #f3f0ff; color: #6741d9; }
 .sl-ptns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; }
@@ -6640,7 +6641,7 @@ async function openSales(msg) {
   salesTake(data);
   renderSales(msg);
   salesLoadPaid(); salesLoadComm();   // paid days come fast; commission amounts a moment later
-  if (can("installs.manage") || ["owner", "accounting"].includes(ME.role)) salesLoadHistInst();
+  if (can("installs.manage") || ["owner", "accounting"].includes(ME.role)) { salesLoadHistInst(); if (!SALES.notes) salesLoadNotes(); }
 }
 // commission (the same numbers as the Installs page), in half-year pieces two at a time (all at once is too much for the database)
 // the database's install match for every sale (the list Carlo view uses); loaded once in the background
@@ -6790,7 +6791,13 @@ const salesInstOf = r => { if (r.stage === "install") return r.job_id; const h =
   if (SALES.instByEstFor !== SALES.rows) { SALES.instByEstFor = SALES.rows; SALES.instByEst = new Map((SALES.rows || []).filter(x => x.stage === "install" && x.est_id).map(x => [x.est_id, x.job_id])); }
   return SALES.instByEst.get(r.est_id) || null; };
 // has the customer paid the install's invoice? (from the same numbers as the Installs page)
-function salesCustPaidCell(r) {
+// notes kept on a sale (e.g. "Costco payment received Aug 4", copied from the customer's pinned notes)
+const salesNotesHtml = r => { const L = (r.est_id && SALES.notes?.get(r.est_id)) || []; return L.map(n => `<div class="sl-snote" title="From the pinned notes at this address${n.noted_at ? ", " + esc(fmtDate(n.noted_at.slice(0, 10))) : ""}">📌 ${esc(n.body)}</div>`).join(""); };
+async function salesLoadNotes() { const { data, error } = await db.from("sale_notes").select("est_id, body, noted_at").order("noted_at"); if (error) return;
+  SALES.notes = new Map(); (data || []).forEach(n => { if (!SALES.notes.has(n.est_id)) SALES.notes.set(n.est_id, []); SALES.notes.get(n.est_id).push(n); });
+  if (document.body.dataset.page === "sales" && SALES.rows && data?.length) { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; } }
+function salesCustPaidCell(r) { return salesCustPaidCell0(r) + salesNotesHtml(r); }
+function salesCustPaidCell0(r) {
   const sold = r.stage === "closed" || r.stage === "install" || !!r.installs; if (!sold) return `<span class="quiet">—</span>`;
   const id = salesInstOf(r), c = id ? SALES.comm?.get(id) : null, inv = Number(c?.invoiced) || 0, ow = Number(c?.owing) || 0;
   if (!c || !inv) return `<span class="quiet">Not invoiced yet</span>`;
