@@ -3599,6 +3599,9 @@ body[data-page="customer"] .file > :not(.sec1a) { max-width: 1056px; }
 .sl-views { margin: 0 0 12px; display: inline-flex; } .sl-views button { font-size: 15px; padding: 8px 18px; font-weight: 700; }
 .sl-cf-note { background: #fff6e5; border-radius: 8px; padding: 4px 10px; font-size: 13px; }
 article.staff.sales { max-width: none; }   /* Sales page uses the full window width so rows stay on one line */
+.pbx { margin-top: 22px; max-width: 1100px; } .pbx-t td { vertical-align: top; } .pbx-t s { color: var(--steel); } .pbx-why { color: var(--red); }
+.pbx-sum { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; } .pbx-sum > div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px; min-width: 130px; }
+.pbx-sum b { display: block; font-size: 22px; } .pbx-sum span { color: var(--steel); font-size: 13px; } .pbx-sum .pbx-badn b { color: var(--red); }
 .pbt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; max-width: 1000px; }
 .pbt-card { display: flex; flex-direction: column; gap: 6px; text-align: left; padding: 16px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
 .pbt-card b { font-size: calc(16px * var(--fs, 1)); color: var(--blue); } .pbt-card span { color: var(--steel); font-size: calc(13px * var(--fs, 1)); }
@@ -18678,6 +18681,158 @@ async function loadSyncBox() {
   box.innerHTML = `<h2>ServiceTitan sync</h2>${body}`;
 }
 document.addEventListener("click", e => { if (e.target.closest("[data-set-staff]")) { e.preventDefault(); openStaff(); } });
+// ===== Price book in Excel: download every item, change it in Excel, upload it back (only what changed is saved)
+const PBX_COLS = [["id", "ID"], ["sku", "Code"], ["name", "Name"], ["type", "Type"], ["cat", "Category"], ["price", "Price"], ["cost", "Our cost"], ["member", "Member price"],
+  ["unit", "Sold per"], ["hours", "Labour hours"], ["maker", "Maker"], ["model", "Model"], ["supplier", "Usual supplier"], ["hst", "Charge HST"], ["inuse", "In use"], ["desc", "Description"]];
+const PBX_TYPES = [["equipment", "Equipment"], ["material", "Material"], ["service", "Part"], ["security", "Security"], ["fee", "Fee"], ["labour", "Labour"]];
+const PBX = { data: null, plan: null, busy: false, msg: "", file: "" };
+const pbxTypeName = k => (PBX_TYPES.find(t => t[0] === k) || [k, k])[1];
+const pbxType = v => { const s = String(v || "").trim().toLowerCase().replace(/s$/, ""); if (!s) return null;
+  const t = PBX_TYPES.find(([k, n]) => k === s || n.toLowerCase() === s || (k === "service" && s === "part")); return t ? t[0] : undefined; };
+const pbxNum = v => { if (v === "" || v == null) return null; if (typeof v === "number") return v; const s = String(v).replace(/[$,\s]/g, ""); if (s === "") return null; const n = Number(s); return isFinite(n) ? n : NaN; };
+const pbxYes = v => { const s = String(v ?? "").trim().toLowerCase(); if (s === "") return null; if (["yes", "y", "true", "1", "x", "✓"].includes(s)) return true; if (["no", "n", "false", "0"].includes(s)) return false; return undefined; };
+const pbxStr = v => String(v ?? "").replace(/\r\n?/g, "\n").trim();
+const pbxCats = v => String(v || "").split("|").map(x => x.split(">").map(y => y.trim()).filter(Boolean).join(" > ")).filter(Boolean).sort().join(" | ");
+const pbxUnit = v => { const s = pbxStr(v); return !s || ["each", "ea", "1"].includes(s.toLowerCase()) ? "each" : s; };
+async function pbxLoad() {
+  const { data, error } = await db.rpc("pb_export");
+  if (error) throw new Error(/function|schema|PGRST202/i.test(error.message || "") ? "Run RUN SETUP NOW.bat first (file 99zzzZ)." : rpcErr(error));
+  PBX.data = data; return data;
+}
+async function pbxDownload() {
+  const [X, d] = await Promise.all([loadXlsx(), pbxLoad()]); const cols = PBX_COLS.filter(([k]) => k !== "cost" || d.costs);
+  const rows = d.items.map(r => ({ id: r.id, sku: r.sku || "", name: r.name || "", type: pbxTypeName(r.item_type), cat: r.categories || "",
+    price: r.unit_price == null ? "" : Number(r.unit_price), cost: r.unit_cost == null ? "" : Number(r.unit_cost), member: r.member_price == null ? "" : Number(r.member_price),
+    unit: pbxUnit(r.unit_of_measure), hours: r.est_labour_hours == null ? "" : Number(r.est_labour_hours), maker: r.manufacturer || "", model: r.model || "",
+    supplier: r.supplier || "", hst: r.taxable ? "Yes" : "No", inuse: r.active ? "Yes" : "No", desc: pbText(r.description) }));
+  const ws = X.utils.aoa_to_sheet([cols.map(c => c[1]), ...rows.map(r => cols.map(([k]) => r[k]))]);
+  ws["!cols"] = cols.map(([k]) => ({ wch: { id: 9, sku: 22, name: 46, type: 11, cat: 40, desc: 60, supplier: 22, maker: 16, model: 20 }[k] || 12 }));
+  ws["!autofilter"] = { ref: X.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length, c: cols.length - 1 } }) };
+  const how = X.utils.aoa_to_sheet([["How to use this file"], [""],
+    ["1. Change what you need on the \"Price book\" sheet: prices, costs, names, codes, categories, and so on. Sorting and filtering is fine."],
+    ["2. Don't change the ID column. It's how the app knows which item each row is."],
+    ["3. To add a new item, add a row with no ID. It needs a Name; give it a Type and a Price too."],
+    ["4. Member price: leave it empty to use the automatic member discount."],
+    ["5. Category: copy a path from the \"Lists\" sheet (for example Furnaces > Lennox SLP99VK). For more than one, put | between them."],
+    ["6. Type, Charge HST and In use: use the words on the \"Lists\" sheet (Yes / No). Untick an item by putting No in In use."],
+    ["7. Don't delete rows to remove items: put No in In use. Rows you delete are just left as they are."],
+    ["8. Save it as Excel (.xlsx) and upload it on the Tools tab of the Price book. You'll see every change before anything is saved."]]);
+  how["!cols"] = [{ wch: 120 }];
+  const n = Math.max(PBX_TYPES.length, d.categories.length, (SUPPLIERS || []).length, 2);
+  const sup = (SUPPLIERS || await loadSuppliers() || []).map(s => s.name).sort();
+  const lists = X.utils.aoa_to_sheet([["Type", "Category", "Usual supplier", "Yes / No"], ...Array.from({ length: Math.max(n, sup.length) }, (_, i) =>
+    [PBX_TYPES[i]?.[1] || "", d.categories[i]?.path || "", sup[i] || "", ["Yes", "No"][i] || ""])]);
+  lists["!cols"] = [{ wch: 12 }, { wch: 60 }, { wch: 30 }, { wch: 9 }];
+  const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, ws, "Price book"); X.utils.book_append_sheet(wb, how, "How to"); X.utils.book_append_sheet(wb, lists, "Lists");
+  const name = `Price book ${ymd(new Date())}.xlsx`; X.writeFile(wb, name, { compression: true });
+  return `Downloaded ${name}: ${rows.length.toLocaleString()} items.`;
+}
+// read the file and work out what changed (nothing is saved yet)
+async function pbxRead(file) {
+  const [X, d] = await Promise.all([loadXlsx(), pbxLoad()]); await loadSuppliers();
+  const wb = X.read(await file.arrayBuffer(), { type: "array" }), sn = wb.SheetNames.find(n => /price ?book/i.test(n)) || wb.SheetNames[0];
+  const aoa = X.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: "" });
+  const hi = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === "name")); if (hi < 0) throw new Error("No \"Name\" column found. Use the file from Download.");
+  const col = {}; aoa[hi].forEach((h, i) => { const t = String(h).trim().toLowerCase(), c = PBX_COLS.find(([, l]) => l.toLowerCase() === t); if (c && col[c[0]] == null) col[c[0]] = i; });
+  if (col.cost != null && !d.costs) delete col.cost;
+  const byId = new Map(d.items.map(r => [r.id, r])), catId = new Map(d.categories.map(c => [c.path.toLowerCase(), c.id]));
+  const supId = new Map((SUPPLIERS || []).map(s => [String(s.name).trim().toLowerCase(), s.id]));
+  const skuUsed = new Map(d.items.filter(r => r.active && r.sku).map(r => [r.sku.trim().toLowerCase(), r.id]));
+  const plan = { changes: [], adds: [], bad: [], same: 0, seen: new Set() };
+  const money2 = v => v == null ? "—" : money(v);
+  for (let ri = hi + 1; ri < aoa.length; ri++) {
+    const row = aoa[ri], g = k => col[k] == null ? undefined : row[col[k]], line = ri + 1;
+    if (!row.some(c => String(c).trim() !== "")) continue;
+    const idv = pbxNum(g("id")), id = idv ? Math.round(idv) : null, cur = id ? byId.get(id) : null;
+    const name = pbxStr(g("name")), errs = [], pl = {}, what = [];
+    if (id && !cur) { plan.bad.push({ line, name, why: `ID ${id} isn't in the price book (don't change the ID column)` }); continue; }
+    if (id && plan.seen.has(id)) { plan.bad.push({ line, name, why: `ID ${id} is on more than one row` }); continue; }
+    if (id) plan.seen.add(id);
+    if (!name) { if (cur) errs.push("the Name is empty"); else continue; }
+    const txt = (k, key, curV, label) => { const v = g(k); if (v === undefined) return; const s = pbxStr(v); if (s !== pbxStr(curV ?? "")) { pl[key] = s; what.push([label, curV || "—", s || "—"]); } };
+    const num = (k, key, curV, label, blankOk, fmt = money2) => { const v = g(k); if (v === undefined) return; const n = pbxNum(v);
+      if (Number.isNaN(n) || (n != null && n < 0)) { errs.push(`${label} isn't a number`); return; }
+      if (n == null) { if (blankOk && curV != null) { pl[key] = ""; what.push([label, fmt(Number(curV)), "empty"]); } return; }
+      if (curV == null || Math.abs(n - Number(curV)) > 0.004) { pl[key] = String(Math.round(n * 100) / 100); what.push([label, curV == null ? "—" : fmt(Number(curV)), fmt(n)]); } };
+    if (!cur) { pl.name = name; what.push(["New item", "", name]); } else if (name && name !== pbxStr(cur.name)) { pl.name = name; what.push(["Name", cur.name, name]); }
+    { const v = g("sku"); if (v !== undefined) { const s = pbxStr(v);
+      if (s && s.toLowerCase() !== String(cur?.sku || "").trim().toLowerCase()) { const o = skuUsed.get(s.toLowerCase()); if (o && o !== id) errs.push(`the code ${s} is already used by another item`); else { pl.sku = s; what.push(["Code", cur?.sku || "—", s]); } } } }
+    { const v = g("type"); if (v !== undefined && pbxStr(v)) { const t = pbxType(v); if (!t) errs.push(`Type "${pbxStr(v)}" isn't one of: ${PBX_TYPES.map(x => x[1]).join(", ")}`);
+      else if (t !== cur?.item_type) { pl.item_type = t; if (cur) what.push(["Type", pbxTypeName(cur.item_type), pbxTypeName(t)]); } } }
+    num("price", "unit_price", cur?.unit_price, "Price");
+    num("cost", "unit_cost", cur?.unit_cost, "Our cost");
+    num("member", "member_price", cur?.member_price, "Member price", true);
+    num("hours", "est_labour_hours", cur?.est_labour_hours, "Labour hours", true, x => String(x));
+    { const v = g("unit"); if (v !== undefined) { const u = pbxUnit(v); if (u !== pbxUnit(cur?.unit_of_measure)) { pl.unit_of_measure = u; if (cur) what.push(["Sold per", pbxUnit(cur.unit_of_measure), u]); } } }
+    txt("maker", "manufacturer", cur?.manufacturer, "Maker");
+    txt("model", "model", cur?.model, "Model");
+    { const v = g("supplier"); if (v !== undefined) { const s = pbxStr(v);
+      if (s.toLowerCase() !== String(cur?.supplier || "").trim().toLowerCase()) { if (s && !supId.has(s.toLowerCase())) errs.push(`supplier "${s}" isn't on the supplier list`);
+        else { pl.preferred_supplier_id = s ? String(supId.get(s.toLowerCase())) : ""; what.push(["Usual supplier", cur?.supplier || "—", s || "none"]); } } } }
+    for (const [k, key, label] of [["hst", "taxable", "Charge HST"], ["inuse", "active", "In use"]]) { const v = g(k); if (v === undefined) continue; const b = pbxYes(v);
+      if (b === undefined) { errs.push(`${label} should be Yes or No`); continue; } if (b == null) continue;
+      if (!cur || b !== !!cur[key]) { if (cur || key === "taxable") pl[key] = b; if (cur) what.push([label, cur[key] ? "Yes" : "No", b ? "Yes" : "No"]); else if (key === "active" && !b) errs.push("a new item can't start as not in use"); } }
+    { const v = g("desc"); if (v !== undefined) { const s = pbxStr(v); if (s !== pbxStr(pbText(cur?.description))) { pl.description = s; what.push(["Description", cur ? "(changed)" : "", s ? s.slice(0, 60) + (s.length > 60 ? "…" : "") : "empty"]); } } }
+    let cats = null;
+    { const v = g("cat"); if (v !== undefined) { const c = pbxCats(v); if (c.toLowerCase() !== pbxCats(cur?.categories).toLowerCase()) {
+      const ids = c ? c.split(" | ").map(p => [p, catId.get(p.toLowerCase())]) : [];
+      const miss = ids.filter(x => !x[1]); if (miss.length) errs.push(`category "${miss[0][0]}" isn't in the price book (copy it from the Lists sheet)`);
+      else { cats = ids.map(x => x[1]); what.push(["Category", cur?.categories || "—", c || "none"]); } } } }
+    if (!cur && pl.unit_price == null) errs.push("a new item needs a Price");
+    if (errs.length) { plan.bad.push({ line, name: name || cur?.name || "", why: errs.join("; ") }); continue; }
+    if (!Object.keys(pl).length && !cats) { plan.same++; continue; }
+    (cur ? plan.changes : plan.adds).push({ line, id, name: name || cur.name, sku: pl.sku || cur?.sku || "", pl, cats, what });
+  }
+  return plan;
+}
+async function pbxApply(plan, say) {
+  const all = [...plan.changes, ...plan.adds], fails = []; let done = 0, ok = 0;
+  const one = async x => {
+    try {
+      let id = x.id;
+      if (Object.keys(x.pl).length || !id) { const { data, error } = await db.rpc("save_pb_item", { p_id: id || null, p: x.pl }); if (error) throw error; id = id || data; }
+      if (x.cats) { const { error } = await db.rpc("set_pb_item_categories", { p_item: id, p_ids: x.cats }); if (error) throw error; }
+      ok++;
+    } catch (e) { fails.push({ line: x.line, name: x.name, why: rpcErr(e) }); }
+    done++; say(`Saving… ${done.toLocaleString()} of ${all.length.toLocaleString()}`);
+  };
+  const q = all.slice(); await Promise.all([0, 1, 2, 3].map(async () => { while (q.length) await one(q.shift()); }));
+  PB.rows = null; return { ok, fails };
+}
+function pbxBox() {
+  const box = $("#pbx-box"); if (!box) return;
+  const P = PBX.plan, edit = can("pricebook.edit");
+  const tbl = L => `<div class="staff-wrap"><table class="calls-table pbx-t"><thead><tr><th>Row</th><th>Item</th><th>What changes</th></tr></thead><tbody>${L.slice(0, 400).map(x => `<tr><td>${x.line}</td>
+      <td><b>${esc(x.name)}</b>${x.sku ? `<div class="quiet">${esc(x.sku)}</div>` : ""}</td>
+      <td>${x.what.map(([l, a, b]) => l === "New item" ? `<div><span class="sl-stage sl-won">New</span></div>` : `<div><span class="quiet">${esc(l)}:</span> ${a !== "" ? `<s>${esc(String(a))}</s> → ` : ""}<b>${esc(String(b))}</b></div>`).join("")}${x.cats && !x.what.some(w => w[0] === "Category") ? "" : ""}</td></tr>`).join("")}</tbody></table></div>
+    ${L.length > 400 ? `<p class="quiet">…and ${(L.length - 400).toLocaleString()} more.</p>` : ""}`;
+  box.innerHTML = `<h2>Work on it in Excel</h2>
+    <p class="quiet">Download every item into Excel, change what you need (prices, costs, names, codes, categories, in use…), then upload the file here. You'll see every change before anything is saved, and only what changed is saved.</p>
+    ${edit ? `<div class="set-tools"><button class="btn" type="button" id="pbx-dl" ${PBX.busy ? "disabled" : ""}>⬇ Download the price book (Excel)</button>
+      <label class="btn quiet-btn ${PBX.busy ? "disabled" : ""}">⬆ Upload my changes<input type="file" id="pbx-file" accept=".xlsx,.xls,.csv" hidden ${PBX.busy ? "disabled" : ""}></label>
+      ${P ? `<button class="btn quiet-btn" type="button" id="pbx-clear">Start over</button>` : ""}</div>` : `<p class="quiet">Ask Carlo for "Edit the price book" to use this.</p>`}
+    ${PBX.msg ? `<div class="staff-msg ${PBX.err ? "err" : "ok"}" role="status">${esc(PBX.msg)}</div>` : ""}
+    ${P ? `<div class="pbx-sum"><div><b>${P.changes.length.toLocaleString()}</b><span>items changed</span></div><div><b>${P.adds.length.toLocaleString()}</b><span>new items</span></div>
+        <div class="${P.bad.length ? "pbx-badn" : ""}"><b>${P.bad.length.toLocaleString()}</b><span>rows with a problem (skipped)</span></div><div><b>${P.same.toLocaleString()}</b><span>no change</span></div></div>
+      ${P.changes.length + P.adds.length && !P.done ? `<p><button class="btn" type="button" id="pbx-go" ${PBX.busy ? "disabled" : ""}>Save ${(P.changes.length + P.adds.length).toLocaleString()} ${P.changes.length + P.adds.length === 1 ? "change" : "changes"}</button> <span class="quiet">from ${esc(PBX.file)}</span></p>` : ""}
+      ${P.bad.length ? `<h3>Rows with a problem</h3><div class="staff-wrap"><table class="calls-table pbx-t"><thead><tr><th>Row</th><th>Item</th><th>Problem</th></tr></thead><tbody>
+        ${P.bad.slice(0, 300).map(b => `<tr><td>${b.line}</td><td>${esc(b.name)}</td><td class="pbx-why">${esc(b.why)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${P.changes.length && !P.done ? `<h3>Changes</h3>${tbl(P.changes)}` : ""}
+      ${P.adds.length && !P.done ? `<h3>New items</h3>${tbl(P.adds)}` : ""}` : ""}`;
+  const say = (t, err) => { PBX.msg = t; PBX.err = !!err; const m = box.querySelector(".staff-msg"); if (m) { m.textContent = t; m.className = "staff-msg " + (err ? "err" : "ok"); } else pbxBox(); };
+  box.querySelector("#pbx-dl")?.addEventListener("click", async () => { PBX.busy = true; say("Getting every item…"); pbxBox();
+    try { PBX.msg = await pbxDownload(); PBX.err = false; } catch (e) { PBX.msg = "Not downloaded: " + (e.message || e); PBX.err = true; } PBX.busy = false; pbxBox(); });
+  box.querySelector("#pbx-file")?.addEventListener("change", async e => { const f = e.target.files[0]; if (!f) return; PBX.busy = true; PBX.plan = null; PBX.file = f.name; say("Reading " + f.name + "…"); pbxBox();
+    try { PBX.plan = await pbxRead(f); const P = PBX.plan; PBX.msg = P.changes.length + P.adds.length ? "Check the changes below, then press Save." : "Nothing to save: the file matches the price book."; PBX.err = false; }
+    catch (er) { PBX.msg = "Couldn't read it: " + (er.message || er); PBX.err = true; } PBX.busy = false; pbxBox(); });
+  box.querySelector("#pbx-clear")?.addEventListener("click", () => { PBX.plan = null; PBX.msg = ""; pbxBox(); });
+  box.querySelector("#pbx-go")?.addEventListener("click", async () => { const P = PBX.plan, n = P.changes.length + P.adds.length;
+    const k = await askChoice(`Save ${n.toLocaleString()} ${n === 1 ? "change" : "changes"}?`, `${P.changes.length.toLocaleString()} items changed and ${P.adds.length.toLocaleString()} new, from ${esc(PBX.file)}.${P.bad.length ? ` ${P.bad.length} rows with a problem are skipped.` : ""} Every change is kept in History.`, [["yes", "Save them", true], ["", "Not yet"]]);
+    if (k !== "yes") return;
+    PBX.busy = true; pbxBox(); const r = await pbxApply(P, t => say(t)); PBX.busy = false;
+    P.done = true; P.bad = [...r.fails, ...P.bad];
+    PBX.msg = `Saved ${r.ok.toLocaleString()} of ${n.toLocaleString()}.${r.fails.length ? ` ${r.fails.length} didn't save: see the list below.` : ""}`; PBX.err = !!r.fails.length; pbxBox(); });
+}
 // Price book tools: a tab next to Price book and New costs (they used to be on the Settings page)
 function openPbTools() {
   setPage("pbtools", "pbtools", "Price book tools");
@@ -18687,7 +18842,9 @@ function openPbTools() {
     ["print", "Print book", "A printable copy of the price book, by category."],
     ["kits", "Add-on kits", "Groups of parts that get added together with an item."]];
   $("#main").innerHTML = `<article class="staff pbt"><h1>Price book tools</h1><p class="lead">Tools for setting up the price book.</p>
-    <div class="pbt-grid">${T.map(([k, t, d]) => `<button type="button" class="pbt-card" data-set-pb="${k}"><b>${esc(t)}</b><span>${esc(d)}</span></button>`).join("")}</div></article>`;
+    <div class="pbt-grid">${T.map(([k, t, d]) => `<button type="button" class="pbt-card" data-set-pb="${k}"><b>${esc(t)}</b><span>${esc(d)}</span></button>`).join("")}</div>
+    <section class="block pbx" id="pbx-box"></section></article>`;
+  pbxBox();
 }
 // the tool buttons (Price book tools tab)
 document.addEventListener("click", async e => { const b = e.target.closest("[data-set-pb]"); if (!b) return; e.preventDefault();
