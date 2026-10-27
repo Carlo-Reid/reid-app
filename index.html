@@ -3641,6 +3641,7 @@ article.staff.sales { max-width: none; }   /* Sales page uses the full window wi
 .eqa { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; } .eqa:empty { display: none; }
 .eqa-c { display: inline-block; font-size: 12px; font-weight: 400; line-height: 1.3; padding: 1px 7px; border-radius: 999px; background: var(--blue-wash, #e7f0fb); color: var(--ink); white-space: nowrap; }
 .eqa-c b { font-weight: 700; } .eqa-c.eqa-mid { background: #fff1d6; color: #7a4a00; } .eqa-c.eqa-old { background: #fde2e1; color: #a61b1b; }
+.eq-tag.eq-older { background: #f1f3f5; color: #6b7480; border-color: #dee2e6; }
 .eqa-none { font-size: 12px; color: var(--steel); }
 .sl-tablewrap .sl-t { margin: 0; overflow: visible !important; }   /* (a table that clips stops the headings sticking) */
 @media (min-width: 900px) { article.sales > .cl-hero { flex-wrap: nowrap; align-items: center; } article.sales > .cl-hero .cl-hero-text { flex: 1 1 280px; min-width: 0; } article.sales > .cl-hero .cl-hero-range { flex: 0 0 auto; } } .sl-tablewrap .sl-t thead th { position: sticky; top: 0; z-index: 2; background: var(--panel); box-shadow: 0 1px 0 var(--line); }
@@ -19845,8 +19846,18 @@ async function requestInstallDate(id, btn) {
   await reloadEquipment();
   return data;
 }
+// the kind of a piece of equipment (same as the database's _eq_kind): furnace, A/C, heat pump, boiler, water heater, fireplace
+const eqKind = t => { t = String(t || ""); if (/(coil|tin package|oil tank|trim|kit|module|liner|surround|return air|sensor|circ|condensate)/i.test(t)) return null;
+  if (/heat ?pump/i.test(t)) return "Heat pump"; if (/(tank|water h|water  h|hwt|hot wat|tnkls|tankless)/i.test(t)) return "Water heater"; if (/boil/i.test(t)) return "Boiler";
+  if (/furna/i.test(t)) return "Furnace"; if (/(a\/c|(^|[^a-z])ac([^a-z]|$)|air con|air cont|^13acx|^rac13|ycd|ycg)/i.test(t)) return "A/C"; if (/(fire ?p|firplace|firepalce)/i.test(t)) return "Fireplace"; return null; };
+// two of the same kind at one address (e.g. 2 furnaces): the newest with a real date is the main one; the other is ignored (no age)
+function eqMainSet(list) { const best = new Map();
+  for (const e of list) { const k = e.status === "active" && eqKind(e.equipment_types?.name); if (!k || !(e.install_date >= "1950")) continue; const key = e.location_id + "|" + k, b = best.get(key);
+    if (!b || e.install_date > b.install_date) best.set(key, e); }
+  const older = new Map(); for (const e of list) { const k = e.status === "active" && eqKind(e.equipment_types?.name); if (!k) continue; const b = best.get(e.location_id + "|" + k); if (b && b.id !== e.id) older.set(e.id, k); }
+  return older; }
 function equipmentHtml(list) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10), OLDER = eqMainSet(list);
   const items = list.map(e => {
     const cov = e.warranty_coverages || [];
     const partsEnd = cov.filter(w => w.covers_parts && w.status !== "void").map(w => w.end_date).sort().pop();
@@ -19873,8 +19884,9 @@ function equipmentHtml(list) {
         <div class="eq-facts">
           <span><i>Model</i>${e.model_number ? esc(e.model_number) : `<em>not recorded</em>`}</span>
           <span><i>Serial</i>${e.serial_number ? esc(e.serial_number) : serialNA(e.equipment_types?.name) ? `<em>not applicable</em>` : `<em>not recorded</em>`}</span>
-          <span><i>Installed</i>${e.install_date ? `${esc(fmtDate(e.install_date))}${e.status === "active" && e.install_date >= "1950" ? ` <b class="eqa-c ${eqAgeCls(eqYears(e.install_date))}">${eqAgeText(eqYears(e.install_date))} old</b>` : ""}` : `<em>unknown</em>`}</span>
+          <span><i>Installed</i>${e.install_date ? `${esc(fmtDate(e.install_date))}${e.status === "active" && e.install_date >= "1950" && !OLDER.has(e.id) ? ` <b class="eqa-c ${eqAgeCls(eqYears(e.install_date))}">${eqAgeText(eqYears(e.install_date))} old</b>` : ""}` : `<em>unknown</em>`}</span>
           ${e.location_in_home ? `<span><i>Where</i>${esc(e.location_in_home)}</span>` : ""}
+          ${OLDER.has(e.id) ? `<span class="eq-tags"><b class="eq-tag eq-older" title="There's a newer ${esc(OLDER.get(e.id).toLowerCase())} at this address: that one is the main one">Older ${esc(OLDER.get(e.id).toLowerCase())} · not the main one</b></span>` : ""}
           ${e.installed_by_company || e.owner_type === "partner" ? `<span class="eq-tags">${e.installed_by_company ? `<b class="eq-tag">Installed by us</b>` : ""}${e.owner_type === "partner" ? `<b class="eq-tag">Rental</b>` : ""}</span>` : ""}
         </div>
         ${e.notes ? `<div class="eq-note">${esc(e.notes)}</div>` : ""}${editable ? `<div class="eq-edit-hint">Edit</div>` : ""}</div>

@@ -64,8 +64,8 @@ ALTER TABLE public.fix_reports ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS owner_read ON public.fix_reports;
 CREATE POLICY owner_read ON public.fix_reports FOR SELECT TO authenticated USING ((SELECT public.current_staff_role()) = 'owner');
 GRANT SELECT ON public.fix_reports TO authenticated;
--- tonight's check (report only; nothing is changed until it's switched on)
-INSERT INTO public.fix_reports (name, report) VALUES ('install_dates_preview', public._fill_install_dates(true))
+-- every night: fill them in (only undated equipment is touched), and keep what was done
+INSERT INTO public.fix_reports (name, report) VALUES ('install_dates', public._fill_install_dates(false))
 ON CONFLICT (name) DO UPDATE SET report = EXCLUDED.report, made_at = now();
 GRANT EXECUTE ON FUNCTION public._fill_install_dates(boolean) TO authenticated;
 NOTIFY pgrst, 'reload schema';
