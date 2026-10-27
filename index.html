@@ -3609,6 +3609,10 @@ article.staff.sales { max-width: none; }   /* Sales page uses the full window wi
 .cv-act { white-space: nowrap; } .cv-act .btn + .btn { margin-left: 6px; }
 .sl-tablewrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .sl-tablewrap .top-sbar { top: 0; background: var(--panel); margin-bottom: 0; }
+.eqa { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; } .eqa:empty { display: none; }
+.eqa-c { display: inline-block; font-size: 12px; font-weight: 400; line-height: 1.3; padding: 1px 7px; border-radius: 999px; background: var(--blue-wash, #e7f0fb); color: var(--ink); white-space: nowrap; }
+.eqa-c b { font-weight: 700; } .eqa-c.eqa-mid { background: #fff1d6; color: #7a4a00; } .eqa-c.eqa-old { background: #fde2e1; color: #a61b1b; }
+.eqa-none { font-size: 12px; color: var(--steel); }
 .sl-tablewrap .sl-t { margin: 0; overflow: visible !important; }   /* (a table that clips stops the headings sticking) */
 @media (min-width: 900px) { article.sales > .cl-hero { flex-wrap: nowrap; align-items: center; } article.sales > .cl-hero .cl-hero-text { flex: 1 1 280px; min-width: 0; } article.sales > .cl-hero .cl-hero-range { flex: 0 0 auto; } } .sl-tablewrap .sl-t thead th { position: sticky; top: 0; z-index: 2; background: var(--panel); box-shadow: 0 1px 0 var(--line); }
 .sl-tablewrap .top-sbar:not([style*="display: none"]) ~ .sl-t thead th { top: 16px; }   /* under the sideways bar when it's showing */
@@ -6875,12 +6879,13 @@ function cvRender() {
     ${CV.lvl === "year" || CV.lvl === "all" || CV.lvl === "pp" || (CV.lvl === "range" && cvDays(from, to) > 92) ? `<p><button class="link" type="button" data-cv-all>${CV.all ? "Hide the sales" : `Show all ${tot.n} sales`}</button></p>` : ""}
     ${cvWantList() ? (list ? (list.length ? `<div class="staff-wrap cv-listwrap"><table class="calls-table cv-t"><thead><tr><th>Sold</th><th>Installed</th><th>Customer</th><th>Sales person</th><th>For</th><th class="r">Sale</th>${SALES.comm ? `<th class="r">Commission due</th><th>Commission paid</th>` : ""}<th></th></tr></thead><tbody>
         ${list.map(r => `<tr><td>${esc(fmtDate(r.sold_on))}</td><td>${cvInstCell(r)}</td>
-          <td><button class="link" type="button" data-cv-cust="${r.customer_id}"><b>${esc(r.customer || "")}</b></button><div class="quiet">${esc(r.address || "")}</div></td>
+          <td><button class="link" type="button" data-cv-cust="${r.customer_id}"><b>${esc(r.customer || "")}</b></button><div class="quiet">${esc(r.address || "")}</div>${eqAgeSlot(r.job_id)}</td>
           <td>${esc(r.sales_person || "—")}</td><td>${esc(r.job_type || "")}<div class="quiet">Job ${esc(r.job_number || "")}</div></td>
           <td class="r num"><b>${money(r.amount)}</b><div class="quiet">#${esc(r.est_number || "")}</div></td>
           ${SALES.comm ? cvCommCells(r) : ""}
           <td class="cv-act"><button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>${ME.role === "owner" ? `<button class="btn quiet-btn" type="button" data-cv-split="${r.est_id}" title="This sale was split up into other sales (for example a combo later sold as two): take it off the sales">✂ Split up</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
         : `<p class="quiet">No sales ${CV.lvl === "day" ? "on this day" : "here"}.</p>`) : `<p class="quiet">Loading the sales…</p>`) : ""}`;
+  eqAgeFill();
   const redo = load => { if (salesCvLinked() && document.body.dataset.page === "sales") { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; } else load ? cvLoad() : cvRender(); };
   const go = (lvl, dd) => { if (lvl === "range" && CV.lvl !== "range") { const [f0, t0] = cvRange(CV.lvl === "all" || CV.lvl === "pp" ? "year" : CV.lvl); CV.f = f0; CV.t = t0 > today ? today : t0; if (CV.f > CV.t) CV.f = CV.t; }   // starts on what you were looking at
     if (lvl !== "range") CV.ppBack = false;
@@ -6914,6 +6919,32 @@ function cvRender() {
     if (error) { alertMsg("Not saved: " + (/function|schema|PGRST202/i.test(error.message || "") ? "run RUN SETUP NOW.bat first." : rpcErr(error))); return; }
     const top = $("#main").scrollTop; await openSales(`Paid day changed to ${fmtDate(inp.value)}.`); $("#main").scrollTop = top; }));
   window.atagRun?.();
+}
+// ===== Age of the equipment at the home of a sales job (setup 99zzzZc): "Furnace 18 yrs · A/C 12 yrs · Water heater 6 yrs".
+// What was there before the sale, so a unit we just put in doesn't show as new. 15+ years is red, 10+ amber.
+const EQAGE = new Map();   // job id -> [{ kind, d, gone }]
+const eqYears = d => { const a = new Date(d + "T12:00:00"), b = new Date(); let y = b.getFullYear() - a.getFullYear(); if (b.getMonth() < a.getMonth() || (b.getMonth() === a.getMonth() && b.getDate() < a.getDate())) y--; return Math.max(0, y); };
+const eqAgeText = y => y < 1 ? "under 1 yr" : y === 1 ? "1 yr" : y + " yrs";
+const eqAgeCls = y => y >= 15 ? "eqa-old" : y >= 10 ? "eqa-mid" : "";
+const eqAgeSlot = jobId => jobId ? `<div class="eqa" data-eqage="${Number(jobId)}"></div>` : "";
+function eqAgeDraw(el) {
+  const L = EQAGE.get(Number(el.dataset.eqage)); if (!L) return;
+  el.innerHTML = L.length ? L.map(x => { const y = eqYears(x.d);
+    return `<span class="eqa-c ${eqAgeCls(y)}" title="${esc(x.kind)} installed ${esc(fmtDate(x.d))}${x.gone ? " (since replaced)" : ""}">${esc(x.kind)} <b>${eqAgeText(y)}</b></span>`; }).join("")
+    : `<span class="eqa-none">No equipment ages on file</span>`;
+  el.dataset.done = "1";
+}
+let eqAgeBusy = null;
+async function eqAgeFill() {
+  const els = [...document.querySelectorAll("[data-eqage]:not([data-done])")]; if (!els.length) return;
+  els.filter(e => EQAGE.has(Number(e.dataset.eqage))).forEach(eqAgeDraw);
+  const need = [...new Set(els.map(e => Number(e.dataset.eqage)).filter(id => !EQAGE.has(id)))]; if (!need.length) return;
+  if (eqAgeBusy) { await eqAgeBusy; return eqAgeFill(); }
+  eqAgeBusy = (async () => { for (let i = 0; i < need.length; i += 400) { const part = need.slice(i, i + 400);
+    const { data, error } = await db.rpc("sales_equipment_ages", { p_jobs: part }); if (error) { part.forEach(id => EQAGE.set(id, null)); continue; }
+    part.forEach(id => EQAGE.set(id, [])); for (const x of data || []) EQAGE.get(x.job_id).push(x); } })();
+  try { await eqAgeBusy; } finally { eqAgeBusy = null; }
+  document.querySelectorAll("[data-eqage]:not([data-done])").forEach(e => { if (EQAGE.get(Number(e.dataset.eqage)) === null) { e.dataset.done = "1"; return; } eqAgeDraw(e); });
 }
 function renderSales(msg) {
   spHome();
@@ -6977,7 +7008,7 @@ function renderSales(msg) {
     ${rows.length ? `<div class="staff-wrap sl-tablewrap" id="sl-tw"><table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
       ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
-        <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
+        <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>${eqAgeSlot(r.job_id)}</td>
         <td>${r.visit_date ? `${esc(fmtDate(r.visit_date))}<div class="quiet">${r.visit_from ? esc(t(r.visit_from) + (r.visit_to ? "–" + t(r.visit_to) : "")) : "any time"}${r.seller ? " · " + esc(r.seller) : ""}</div>` : `<span class="quiet">${r.stage === "install" ? "Install not booked yet" : "Not booked yet"}</span>`}</td>
         <td>${salesInstCell(r)}</td>
         <td>${esc(r.partner || "Reid")}<div class="quiet">${esc(r.type || "")}</div></td>
@@ -6990,6 +7021,7 @@ function renderSales(msg) {
           : r.est_id ? `<button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>` : ""}${(r.stage === "closed" || r.stage === "install") && r.est_id ? `<button class="btn quiet-btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>${estSoldBtns(r.est_id, !!r.st_id)}` : ""}${["booked", "estimate"].includes(r.stage) ? `<button class="btn quiet-btn sl-cancel" type="button" data-sl-cancel="${r.job_id}" title="Cancel this sales job and its proposal">Cancel</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="quiet">${qq.length ? "Nothing matches your search." : SALES.tab === "open" ? "No open sales jobs. Press + New sales job to start one." : "Nothing here."}</p>`}
   </article>`;
+  eqAgeFill();   // equipment ages under each customer
   viewBar();   // put the Deals · Commissions · Installs bar back now, not a moment later (that made the page creep up a little on every click)
   wireSalesViews(); salesFitList(); setTimeout(salesFitList, 200);   // again once the sideways bar is in
   cvLoad();   // Carlo view
@@ -19568,7 +19600,7 @@ function equipmentHtml(list) {
         <div class="eq-facts">
           <span><i>Model</i>${e.model_number ? esc(e.model_number) : `<em>not recorded</em>`}</span>
           <span><i>Serial</i>${e.serial_number ? esc(e.serial_number) : serialNA(e.equipment_types?.name) ? `<em>not applicable</em>` : `<em>not recorded</em>`}</span>
-          <span><i>Installed</i>${e.install_date ? esc(fmtDate(e.install_date)) : `<em>unknown</em>`}</span>
+          <span><i>Installed</i>${e.install_date ? `${esc(fmtDate(e.install_date))}${e.status === "active" ? ` <b class="eqa-c ${eqAgeCls(eqYears(e.install_date))}">${eqAgeText(eqYears(e.install_date))} old</b>` : ""}` : `<em>unknown</em>`}</span>
           ${e.location_in_home ? `<span><i>Where</i>${esc(e.location_in_home)}</span>` : ""}
           ${e.installed_by_company || e.owner_type === "partner" ? `<span class="eq-tags">${e.installed_by_company ? `<b class="eq-tag">Installed by us</b>` : ""}${e.owner_type === "partner" ? `<b class="eq-tag">Rental</b>` : ""}</span>` : ""}
         </div>
