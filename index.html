@@ -3673,6 +3673,8 @@ article.sales .cl-hero-range > em { font-size: calc(17px * var(--fs, 1)); opacit
 .sl-t td.sl-act .btn, .sl-t td.sl-act .btn.small { display: inline-block; vertical-align: top; width: 112px; height: 26px; min-height: 0; margin: 0 !important; padding: 0 6px; font-size: 11.5px; font-weight: 600; line-height: 24px; border-radius: 6px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; box-sizing: border-box; }
 .sl-t .sl-pay select, .sl-t .sl-pay input[type=date] { font-size: 11.5px; padding: 2px 3px; }
+.sl-toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 3000; box-shadow: 0 8px 24px rgba(0,0,0,.25); max-width: min(560px, 90vw); animation: slToast 4s forwards; pointer-events: none; }
+@keyframes slToast { 0%, 85% { opacity: 1; } 100% { opacity: 0; } }
 .sl-snote { margin-top: 4px; padding: 2px 6px; border-radius: 6px; background: #fff9db; color: #5c3c00; font-size: 11.5px; white-space: normal; max-width: 220px; line-height: 1.3; }
 .sl-ptn { display: inline-block; font-size: 11px; font-weight: 800; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
 .sl-ptn-reid { background: var(--blue-wash, #e7f0fb); color: var(--blue, #1f6fd1); } .sl-ptn-p { background: #f3f0ff; color: #6741d9; }
@@ -6639,7 +6641,7 @@ const scKey = k => `sales:${ME.id || ""}:${k}`;
 async function scGet(k) { const d = await scOpen(); if (!d) return null; return new Promise(res => { try { const q = d.transaction("kv").objectStore("kv").get(scKey(k)); q.onsuccess = () => res(q.result ?? null); q.onerror = () => res(null); } catch { res(null); } }); }
 async function scSet(k, v) { const d = await scOpen(); if (!d) return; try { d.transaction("kv", "readwrite").objectStore("kv").put(v, scKey(k)); } catch {} }
 const salesRerender = () => { if (document.body.dataset.page !== "sales" || !SALES.rows) return; const typing = document.activeElement?.id === "sl-q" ? document.activeElement.selectionStart : null, top = $("#main").scrollTop;
-  renderSales(); $("#main").scrollTop = top; if (typing != null) { const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(typing, typing); } catch {} } } };
+  renderSales(); if (typing != null) { const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(typing, typing); } catch {} } } };
 async function openSales(msg) {
   setPage("sales", "sales", "Sales");
   SALES.seller = "";   // no "Sales page of" pick any more: owners see everyone, a sales person sees their own
@@ -6970,8 +6972,12 @@ async function cvLoad() {
     cvRender();
   }
 }
+// when the Sales page redraws, the row you're looking at stays where it is on the screen (nothing jumps)
+function slAnchorGet() { const m = $("#main"); if (!m || !m.querySelector(".sl-t")) return null; const mt = m.getBoundingClientRect().top;
+  const a = [...m.querySelectorAll(".sl-t tbody tr[data-k]")].find(tr => tr.getBoundingClientRect().bottom > mt + 60); return a ? { k: a.dataset.k, y: a.getBoundingClientRect().top } : null; }
+function slAnchorPut(a) { if (!a) return; const tr = $("#main")?.querySelector(`.sl-t tbody tr[data-k="${CSS.escape(a.k)}"]`); if (tr) $("#main").scrollTop += tr.getBoundingClientRect().top - a.y; }
 function cvRender() {
-  const box = $("#sl-cv"); if (!box) return;
+  const box = $("#sl-cv"); if (!box) return; const anc = slAnchorGet();
   box.style.minHeight = !CV.days && CV.minH ? CV.minH + "px" : ""; if (CV.days) CV.minH = 0;
   const d = CV.d || salesToday(), Y = d.slice(0, 4), M = Number(d.slice(5, 7)), today = salesToday();
   const rawDays = CV.days || [], ptOf = x => x.pt || "Reid", ptNames = [...new Set(rawDays.map(ptOf))].sort((a, b) => a === "Reid" ? -1 : b === "Reid" ? 1 : a.localeCompare(b));
@@ -7010,6 +7016,7 @@ function cvRender() {
   const max = Math.max(1, ...rows.map(r => r.amt));
   const crumbs = CV.lvl === "pp" ? [["all", "Every year", d], ["pp", `${Y} pay periods`, d]] : CV.lvl === "range" ? [["all", "Every year", d], ...(CV.ppBack ? [["pp", "Pay periods", d]] : []), ["range", label, d]] : [["all", "Every year", d], ...(CV.lvl !== "all" ? [["year", Y, d]] : []), ...(CV.lvl === "month" || CV.lvl === "day" ? [["month", CV_MONTHS[M - 1], d]] : []), ...(CV.lvl === "day" ? [["day", String(Number(d.slice(8))), d]] : [])];
   const list = CV.list.get(cvRange().join("|"))?.filter(r => !CV.sp || spK(r.sales_person) === CV.sp);
+  queueMicrotask(() => slAnchorPut(anc));
   box.innerHTML = `<div class="cv-head"><h2>Carlo view</h2>
       <span class="seg cv-by" role="group" aria-label="Count sales by">${[["sold", "Date sold"], ["installed", "Date installed"], ["paid", "Date paid"], ["unpaid", "Not paid yet"], ["all", "Show all"]].map(([k, t]) => `<button type="button" data-cv-by="${k}" aria-pressed="${CV.by === k}">${t}</button>`).join("")}</span>
       <label class="sl-who cv-who"><span>Sales person</span><select id="cv-sp"><option value="">All sales people</option>${spAll.map(k => `<option value="${esc(k)}" ${CV.sp === k ? "selected" : ""}>${esc(spName(k))}</option>`).join("")}${CV.sp && !spAll.includes(CV.sp) ? `<option selected>${esc(CV.sp)}</option>` : ""}</select></label>
@@ -7162,6 +7169,7 @@ function renderSales(msg) {
   const t = x => x ? new Date(x).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\s?([ap])\.?m\.?/i, "$1") : "";
   const STAGE = { booked: ["Booked", "sl-booked"], estimate: ["Proposal", "sl-est"], closed: ["Closed deal", "sl-won"], lost: ["Not sold", "sl-lost"], install: ["Install", "sl-inst"] };
   const won = R.filter(r => r.stage === "closed").reduce((s, r) => s + Number(r.sold_total || 0), 0);
+  const anc = slAnchorGet();
   $("#main").innerHTML = `<article class="staff sales">
     ${salesViews("deals")}
     <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Sales</span><h1>Sales</h1>
@@ -7170,7 +7178,7 @@ function renderSales(msg) {
         <div><b>${money(cs.now)}</b><small>to pay now</small></div>${SALES.pay ? `<div><b>${money(cs.pay)}</b><small>on payroll</small></div>` : ""}
         <div><b>${money(cs.wait)}</b><small>waiting</small></div><div><b>${money(cs.paid)}</b><small>paid</small></div></div>` : ""}</div></header>
     ${ME.role === "owner" ? `<section class="sl-cv" id="sl-cv" data-atag-fixed="Carlo view"></section>` : ""}
-    ${msg ? `<div class="staff-msg ok" role="status">${esc(msg)}</div>` : ""}
+    ${msg ? `<div class="staff-msg ok sl-toast" role="status">${esc(msg)}</div>` : ""}
     ${SALES.pay && cs.ready.length ? `<div class="sl-find sl-payall"><span>Put all <b>${cs.ready.length}</b> ready to pay (<b>${money(cs.now)}</b>${SALES.from || SALES.to ? " in these dates" : ""}) on payroll for</span>
       ${payDaySelect(`id="sl-payall-d" aria-label="Pay day"`, SALES.payDay && SALES.payDay >= salesToday() ? SALES.payDay : nextPayDay(), payDays(28, 100))}<button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
     ${!cvOn && (ptnCount.size > 1 || SALES.ptn) ? `<div class="sl-ptns" role="group" aria-label="Reid or partner"><span class="quiet">Show:</span>
@@ -7182,7 +7190,7 @@ function renderSales(msg) {
       <span class="quiet">${qq.length ? `${rows.length} found${SALES.from || SALES.to ? " (searching all dates)" : ""}` : `${rows.length} ${rows.length === 1 ? "sale" : "sales"}`}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button></div>
     ${rows.length ? `<div class="staff-wrap sl-tablewrap" id="sl-tw"><table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("sold", "Sold")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("cpaid", "Customer paid") + th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
+      ${rows.map(r => `<tr data-k="${esc(String(r.est_id || "j" + r.job_id) + ":" + r.stage)}"><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
         <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>${eqAgeSlot(r.job_id)}</td>
         <td>${r.visit_date ? `${esc(fmtDate(r.visit_date))}<div class="quiet">${r.visit_from ? esc(t(r.visit_from) + (r.visit_to ? "–" + t(r.visit_to) : "")) : "any time"}${r.seller ? " · " + esc(r.seller) : ""}</div>` : `<span class="quiet">${r.stage === "install" ? "Install not booked yet" : "Not booked yet"}</span>`}</td>
@@ -7212,20 +7220,27 @@ function renderSales(msg) {
   viewBar();   // put the Deals · Commissions · Installs bar back now, not a moment later (that made the page creep up a little on every click)
   wireSalesViews(); salesFitList(); setTimeout(salesFitList, 200);   // again once the sideways bar is in
   cvLoad();   // Carlo view
+  slAnchorPut(anc); requestAnimationFrame(() => slAnchorPut(anc));   // (after anyone who puts the old scroll back)
   document.querySelectorAll("[data-sl-tab]").forEach(b => b.addEventListener("click", () => { SALES.tab = b.dataset.slTab; salesSave(); renderSales(); }));
   // payroll: tick or pick a pay day (ticking with no day asks for one); clear the tick to take it off
   const paySet = async (id, day, msg) => { const c = SALES.comm?.get(id);
     const { error } = await db.rpc("set_commission_payroll", { p_job_id: id, p_date: day || null, p_amount: c?.commission_amount ?? null });
     if (error) { alertMsg("Not saved: " + rpcErr(error)); return false; } return true; };
-  document.querySelectorAll("[data-sl-pay]").forEach(inp => inp.addEventListener("change", async () => { const id = Number(inp.dataset.slPay);
-    if (!inp.value) return; if (await paySet(id, inp.value)) { SALES.payDay = inp.value; openSales(`On payroll for ${fmtDate(inp.value)}${inp.value <= salesToday() ? " (paid)" : ""}.`); } }));
+  // picking a pay day shows at once; it saves in the background (and goes back, with a message, if it can't)
+  const payToast = t => { document.querySelectorAll(".sl-toast").forEach(x => x.remove()); const d = document.createElement("div"); d.className = "staff-msg ok sl-toast"; d.setAttribute("role", "status"); d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 4200); };
+  const payNow = async (id, day) => { const was = SALES.pay?.get(id) || "";
+    SALES.pay ||= new Map(); if (day) SALES.pay.set(id, day); else SALES.pay.delete(id); if (day) SALES.payDay = day;
+    salesRerender(); payToast(day ? `On payroll for ${fmtDate(day)}${day <= salesToday() ? " (paid)" : ""}.` : "Taken off payroll.");
+    if (await paySet(id, day || null)) { if (day && day <= salesToday()) openSales(); else salesLoadPaid(); return; }
+    if (was) SALES.pay.set(id, was); else SALES.pay.delete(id); salesRerender(); };
+  document.querySelectorAll("[data-sl-pay]").forEach(inp => inp.addEventListener("change", () => { if (inp.value) payNow(Number(inp.dataset.slPay), inp.value); }));
   document.querySelectorAll("[data-sl-paid]").forEach(inp => inp.addEventListener("change", async () => { if (!inp.value) return;
     const { error } = await db.rpc("set_commission_paid_date", { p_job_id: Number(inp.dataset.slPaid), p_date: inp.value });
     if (error) { alertMsg("Not saved: " + (/function|schema|PGRST202/i.test(error.message || "") ? "run RUN SETUP NOW.bat first." : rpcErr(error))); return; }
-    openSales(`Paid day changed to ${fmtDate(inp.value)}.`); }));
+    openSales(); payToast(`Paid day changed to ${fmtDate(inp.value)}.`); }));
   document.querySelectorAll("[data-sl-paychk]").forEach(ch => ch.addEventListener("change", async () => { const id = Number(ch.dataset.slPaychk), d = document.querySelector(`[data-sl-pay="${id}"]`);
     if (ch.checked) { d.value = SALES.payDay && SALES.payDay >= salesToday() ? SALES.payDay : nextPayDay(); d.dispatchEvent(new Event("change")); return; }
-    if (await paySet(id, null)) openSales("Taken off payroll."); }));
+    payNow(id, null); }));
   $("#sl-payall")?.addEventListener("click", async e => { const day = $("#sl-payall-d").value; if (!day) { try { $("#sl-payall-d").showPicker(); } catch { $("#sl-payall-d").focus(); } return; }
     const b = e.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = `Sure? ${cs.ready.length} on ${fmtDate(day)}`; return; }
     b.disabled = true; let ok = 0; for (const c of cs.ready) if (await paySet(c.job_id, day)) ok++;
