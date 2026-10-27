@@ -3689,6 +3689,11 @@ article.sales .cl-hero-range > em { font-size: calc(17px * var(--fs, 1)); opacit
 @keyframes slToast { 0%, 85% { opacity: 1; } 100% { opacity: 0; } }
 .sl-snote { margin-top: 4px; padding: 2px 6px; border-radius: 6px; background: #fff9db; color: #5c3c00; font-size: 11.5px; white-space: normal; max-width: 220px; line-height: 1.3; }
 .sl-ptn { display: inline-block; font-size: 11px; font-weight: 800; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.sl-ptn-ed { border: 0; cursor: pointer; font-family: inherit; } .sl-ptn-ed:hover { outline: 2px solid currentColor; }
+.sl-ptn-pop { position: fixed; z-index: 9999; background: var(--panel, #fff); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; display: flex; flex-direction: column; min-width: 160px; max-height: 60vh; overflow: auto; font-size: 13px; }
+.sl-note-pop { position: fixed; z-index: 9999; left: 50%; bottom: 24px; transform: translateX(-50%); background: #222; color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; }
+.sl-ptn-pop button { text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; font: inherit; color: var(--ink); }
+.sl-ptn-pop button:hover { background: var(--blue-wash, #e7f0fb); } .sl-ptn-pop button.on { font-weight: 800; color: var(--blue, #1f6fd1); }
 .sl-ptn-reid { background: var(--blue-wash, #e7f0fb); color: var(--blue, #1f6fd1); } .sl-ptn-p { background: #f3f0ff; color: #6741d9; }
 .sl-ptns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; }
 .sl-ptnb { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 13px; cursor: pointer; }
@@ -6623,11 +6628,40 @@ function salesRangeDates(k) {
   return ["", ""];
 }
 try { Object.assign(SALES, JSON.parse(localStorage.getItem("reid.sales") || "{}")); } catch {}
-const salesPartner = r => { if (r.partner) return r.partner;
+const salesPartner = r => { const fx = SALES.pfix?.get(Number(r.job_id)); if (fx) return fx; if (r.partner) return r.partner;
   if (SALES.ptnFor !== SALES.rows) { SALES.ptnFor = SALES.rows; SALES.ptnNames = [...new Set((SALES.rows || []).map(x => x.partner).filter(Boolean))]; }
   const t = String(r.type || "").toLowerCase(), w = t.split(/[\s-]+/)[0];
   return (w && SALES.ptnNames.find(p => p.toLowerCase().split(/\s+/)[0] === w)) || "Reid"; };
-const salesPtnBadge = r => { const p = salesPartner(r); return `<span class="sl-ptn ${p === "Reid" ? "sl-ptn-reid" : "sl-ptn-p"}">${esc(p)}</span>`; };
+const salesPtnBadge = r => { const p = salesPartner(r), ed = salesBoss() && r.job_id;
+  return ed ? `<button type="button" class="sl-ptn sl-ptn-ed ${p === "Reid" ? "sl-ptn-reid" : "sl-ptn-p"}" data-ptn-job="${esc(r.job_id)}" title="Wrong? Click to change who this sale is for">${esc(p)} ▾</button>`
+            : `<span class="sl-ptn ${p === "Reid" ? "sl-ptn-reid" : "sl-ptn-p"}">${esc(p)}</span>`; };
+// who a sale is for, fixed by hand on the Sales page (job id -> "Reid" or the partner's name)
+async function salesLoadPtnFix() { const { data, error } = await db.from("sale_partner_fix").select("job_id, partner_id"); if (error) return;
+  const nm = await salesPtnList(); SALES.pfix = new Map((data || []).map(f => [Number(f.job_id), f.partner_id ? (nm.find(x => x.id === f.partner_id)?.name || "") : "Reid"]).filter(x => x[1]));
+  if (document.body.dataset.page === "sales" && SALES.rows && data?.length) salesRerender(); }
+function slNote(t) { const d = document.createElement("div"); d.className = "sl-note-pop"; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 3500); }
+async function salesPtnList() { if (!SALES.ptnAll) { const { data } = await db.rpc("partner_sales"); SALES.ptnAll = (data || []).map(x => ({ id: Number(x.id), name: String(x.name || "").trim() })); } return SALES.ptnAll; }
+async function salesPtnPick(btn) {
+  document.querySelector(".sl-ptn-pop")?.remove();
+  const job = Number(btn.dataset.ptnJob), cur = btn.textContent.replace("▾", "").trim(), list = await salesPtnList();
+  const pop = document.createElement("div"); pop.className = "sl-ptn-pop";
+  pop.innerHTML = `<div class="quiet" style="padding:2px 6px 6px">Who is this sale for?</div>` +
+    [{ id: 0, name: "Reid" }, ...list].map(x => `<button type="button" data-pid="${x.id}" class="${x.name === cur ? "on" : ""}">${esc(x.name)}</button>`).join("");
+  document.body.appendChild(pop); const b = btn.getBoundingClientRect();
+  pop.style.top = Math.min(b.bottom + 4, innerHeight - pop.offsetHeight - 8) + "px"; pop.style.left = Math.min(b.left, innerWidth - pop.offsetWidth - 8) + "px";
+  const close = e => { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener("mousedown", close, true); } };
+  setTimeout(() => document.addEventListener("mousedown", close, true));
+  pop.addEventListener("click", async e => { const o = e.target.closest("[data-pid]"); if (!o) return;
+    const pid = Number(o.dataset.pid) || null, name = pid ? o.textContent : "Reid"; pop.remove(); document.removeEventListener("mousedown", close, true);
+    if (name === cur) return;
+    const a = slAnchorGet(); (SALES.pfix ||= new Map()).set(job, name);
+    [SALES.rows, CV.unpaidAll, ...(CV.list ? [...CV.list.values()] : [])].forEach(L => (L || []).forEach(r => { if (Number(r.job_id) === job) r.partner = pid || L !== SALES.rows ? name : null; }));
+    salesRerender(); slAnchorPut(a);
+    const { error } = await db.rpc("sales_set_partner", { p_job: job, p_partner: pid });
+    if (error) { slNote("Couldn't change it: " + rpcErr(error)); SALES.pfix.delete(job); salesLoadPtnFix(); salesRerender(); return; }
+    slNote(`Saved: this sale is for ${name}`); CV.fresh = {}; if ($("#sl-cv")) cvLoad(); });
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-ptn-job]"); if (b) { e.preventDefault(); e.stopPropagation(); salesPtnPick(b); } }, true);
 const salesSave = () => { try { const o = SALES.own || SALES; localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller, sort: SALES.sort, dir: SALES.dir, range: o.range, from: o.from, to: o.to, dateBy: o.dateBy, commF: SALES.commF, cvLink: SALES.cvLink, ptn: SALES.ptn || "" })); } catch {} };
 // owners: the sales list below Carlo view follows it (its year / month / day and sales person) unless they pick "Use my own dates"
 const salesCvLinked = () => ME.role === "owner";
@@ -6678,6 +6712,7 @@ async function openSales(msg) {
   salesTake(data); scSet("list", { rows: data, since: SALES.since, people: SALES.people });
   if (shown) salesRerender(); else { renderSales(msg); salesLoadPaid(); salesLoadComm(); }
   if (can("installs.manage") || ["owner", "accounting"].includes(ME.role)) { salesLoadHistInst(); if (!SALES.notes) salesLoadNotes(); }
+  if (!SALES.pfix) salesLoadPtnFix();
 }
 // commission (the same numbers as the Installs page), in half-year pieces two at a time (all at once is too much for the database)
 // the database's install match for every sale (the list Carlo view uses); loaded once in the background
