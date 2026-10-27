@@ -6760,7 +6760,7 @@ function payDays(backDays = 400, aheadDays = 100) {
   while (d <= payDayAdd(t, aheadDays)) { if (d >= payDayAdd(t, -backDays)) out.push(d); d = payDayAdd(d, PAYROLL.every); }
   return out;
 }
-const nextPayDay = () => payDays(0, 30).find(d => d >= salesToday());
+const nextPayDay = () => { const t = salesToday(); if (nextPayDay.on !== t) { nextPayDay.on = t; nextPayDay.v = payDays(0, 30).find(d => d >= t); } return nextPayDay.v; };
 const isPayDay = d => !!d && ((Math.round((Date.parse(d.slice(0, 10)) - Date.parse(PAYROLL.anchor)) / 864e5) % PAYROLL.every) + PAYROLL.every) % PAYROLL.every === 0;   // whole days (UTC), so daylight saving can't throw it off
 // every pay day from Jan 1 two years ago to Dec 31 next year (every second Thursday: Jan 1, Jan 15, Jan 29, Feb 12 … Dec 31, 2026, and on the same pattern before and after)
 function payDaysAll() {
@@ -6770,15 +6770,25 @@ function payDaysAll() {
   return out;
 }
 // a pick list of pay days, by month ("October 2026: Oct 8, Oct 22"); keeps an odd date that's already set, so nothing changes by itself
-function payDaySelect(attrs, value, list, first, fromYear) {
+// a pick list of pay days, by month ("October 2026: Oct 8, Oct 22"), starting at the call's year; keeps an odd date that's already set.
+// The full list is only built when it's clicked (dozens of these on a page with ~100 days each made every redraw slow).
+const PD_LBL = new Map(), pdDay = d => PD_LBL.get(d) || (PD_LBL.set(d, new Date(d + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric" })), PD_LBL.get(d));
+const PD_MON = new Map(), pdMon = k => PD_MON.get(k) || (PD_MON.set(k, new Date(k + "-15T12:00:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" })), PD_MON.get(k));
+function payDayOptions(value, first, fromYear) {
   let L = [...new Set([...payDaysAll(), ...(value ? [value] : [])])].sort(); const nx = nextPayDay(), groups = new Map();
   if (fromYear) { const y = String(fromYear); L = [...L.filter(d => d >= y), ...L.filter(d => d < y)]; }   // opens at the call's year; earlier years after
   L.forEach(d => { const k = d.slice(0, 7); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(d); });
-  const mName = k => new Date(k + "-15T12:00:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" });
-  const day = d => new Date(d + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric" });
-  return `<select ${attrs}>${first ? `<option value="">${first}</option>` : ""}${[...groups].map(([k, ds]) => `<optgroup label="${esc(mName(k))}">${ds.map(d =>
-    `<option value="${d}" ${d === value ? "selected" : ""}>${esc(day(d))}${d === nx ? " (next)" : ""}${isPayDay(d) ? "" : " (not a pay day)"}</option>`).join("")}</optgroup>`).join("")}</select>`;
+  return `${first ? `<option value="">${first}</option>` : ""}${[...groups].map(([k, ds]) => `<optgroup label="${esc(pdMon(k))}">${ds.map(d =>
+    `<option value="${d}" ${d === value ? "selected" : ""}>${esc(pdDay(d))}${d === nx ? " (next)" : ""}${isPayDay(d) ? "" : " (not a pay day)"}</option>`).join("")}</optgroup>`).join("")}`;
 }
+function payDaySelect(attrs, value, list, first, fromYear) {
+  const label = value ? `${pdDay(value)}, ${value.slice(0, 4)}${value === nextPayDay() ? " (next)" : ""}${isPayDay(value) ? "" : " (not a pay day)"}` : "";
+  return `<select ${attrs} data-pd="${esc(JSON.stringify([value || "", first || "", fromYear || ""]))}">${first ? `<option value="" ${value ? "" : "selected"}>${first}</option>` : ""}${value ? `<option value="${value}" selected>${esc(label)}</option>` : ""}</select>`;
+}
+// fill a pay day list the moment it's clicked or tabbed to (before it opens)
+const pdFill = e => { const s = e.target.closest?.("select[data-pd]"); if (!s || s.dataset.pdFull) return; s.dataset.pdFull = "1";
+  const [v, f, y] = JSON.parse(s.dataset.pd); const cur = s.value; s.innerHTML = payDayOptions(cur || v, f, y); s.value = cur || v; };
+document.addEventListener("mousedown", pdFill, true); document.addEventListener("focusin", pdFill, true); document.addEventListener("touchstart", pdFill, { capture: true, passive: true });
 const salesToday = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
 // payroll: pick the pay day a commission goes out on (on that day it's marked paid)
 const salesCallYear = r => String(r.visit_date || r.sold_on || salesDate(r) || "").slice(0, 4) || null;   // the year of the sales call
