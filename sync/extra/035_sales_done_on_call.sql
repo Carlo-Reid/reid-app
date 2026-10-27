@@ -203,11 +203,37 @@ AS $function$
       'est_id', e.id, 'est_number', e.estimate_number, 'est_status', e.status,
       'sold_total', (SELECT sum(el.line_total) FROM estimate_lines el WHERE el.estimate_option_id = e.accepted_option_id),
       'stage', 'install', 'sort', ij.created_at) AS x
-    FROM deals r JOIN jobs ij ON (ij.from_estimate_id = r.est OR ij.sold_estimate_id = r.est) AND ij.id <> r.jid JOIN estimates e ON e.id = r.est
+    FROM deals r JOIN jobs ij ON ij.id <> r.jid
+         AND (ij.from_estimate_id = r.est OR ij.sold_estimate_id = r.est
+              OR ij.sold_estimate_id IN (SELECT es.id FROM estimates es WHERE es.job_id = r.jid)    -- another proposal on the same sales call
+              OR ij.from_estimate_id IN (SELECT es.id FROM estimates es WHERE es.job_id = r.jid))
+         JOIN estimates e ON e.id = r.est
     JOIN job_types t ON t.id = ij.job_type_id JOIN customers c ON c.id = ij.customer_id LEFT JOIN locations l ON l.id = ij.location_id
     LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = ij.id ORDER BY v.visit_number DESC LIMIT 1) v ON true
     WHERE r.est IS NOT NULL AND t.job_class = 'install'   -- only real install jobs (not a follow-up service call)
     ORDER BY ij.id),
+  -- a sold deal with no linked install: the customer's install job made in ServiceTitan without a link
+  -- (made from a week before to 6 months after the sale, not tied to any proposal), the first one
+  inst2 AS (
+    SELECT DISTINCT ON (r.est) jsonb_build_object(
+      'job_id', ij.id, 'job_number', ij.job_number, 'status', ij.status, 'summary', ij.summary, 'type', t.name,
+      'customer_id', c.id, 'customer', c.display_name, 'street', l.street, 'city', l.city,
+      'partner', (SELECT name FROM partners WHERE id = ij.partner_id),
+      'visit_date', v.scheduled_date, 'visit_from', v.arrival_start, 'visit_to', v.arrival_end,
+      'seller', public._emp_name(coalesce(ij.sold_by_employee_id, e.sold_by_employee_id)),
+      'est_id', e.id, 'est_number', e.estimate_number, 'est_status', e.status,
+      'sold_total', (SELECT sum(el.line_total) FROM estimate_lines el WHERE el.estimate_option_id = e.accepted_option_id),
+      'stage', 'install', 'guessed', true, 'sort', ij.created_at) AS x
+    FROM deals r JOIN estimates e ON e.id = r.est AND e.status = 'accepted'
+    JOIN jobs ij ON ij.customer_id = e.customer_id AND ij.id <> r.jid AND ij.sold_estimate_id IS NULL AND ij.from_estimate_id IS NULL
+         AND ij.created_at BETWEEN coalesce(e.accepted_at, e.created_at) - interval '7 days' AND coalesce(e.accepted_at, e.created_at) + interval '6 months'
+    JOIN job_types t ON t.id = ij.job_type_id AND t.job_class = 'install'
+    JOIN customers c ON c.id = ij.customer_id LEFT JOIN locations l ON l.id = ij.location_id
+    LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = ij.id ORDER BY v.visit_number DESC LIMIT 1) v ON true
+    WHERE r.est IS NOT NULL AND (r.x->>'stage') = 'closed'
+      AND NOT EXISTS (SELECT 1 FROM inst WHERE (inst.x->>'est_id')::bigint = r.est)
+      AND NOT EXISTS (SELECT 1 FROM csj WHERE csj.sale_job_id = r.jid AND csj.est_id = r.est)
+    ORDER BY r.est, ij.created_at),
   here AS (
     SELECT jsonb_build_object(
       'job_id', j2.id, 'job_number', j2.job_number, 'status', j2.status, 'summary', j2.summary, 'type', t.name, 'same_call', true,
@@ -222,7 +248,7 @@ AS $function$
     JOIN job_types t ON t.id = j2.job_type_id JOIN customers c ON c.id = j2.customer_id LEFT JOIN locations l ON l.id = j2.location_id
     LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = j2.id ORDER BY v.visit_number DESC LIMIT 1) v ON true)
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb
-              ELSE coalesce((SELECT jsonb_agg(x ORDER BY x->>'sort' DESC) FROM (SELECT x FROM deals UNION ALL SELECT x FROM inst UNION ALL SELECT x FROM here) a), '[]'::jsonb) END
+              ELSE coalesce((SELECT jsonb_agg(x ORDER BY x->>'sort' DESC) FROM (SELECT x FROM deals UNION ALL SELECT x FROM inst UNION ALL SELECT x FROM inst2 UNION ALL SELECT x FROM here) a), '[]'::jsonb) END
 $function$;
 
 REVOKE EXECUTE ON FUNCTION public.sales_list(bigint) FROM PUBLIC, anon;

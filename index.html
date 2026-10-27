@@ -3364,6 +3364,19 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .est-close-btn { background: var(--green) !important; border-color: var(--green) !important; color: var(--on-accent) !important; }
 .sl-find { margin: 0 0 16px; } .sl-find .sp-wrap { max-width: 760px; margin: 0; padding: 0; } .sl-find .sp-head h1 { font-size: 22px; }
 .book .lead button.link, .cl-hero p button.link, :root[data-theme] .cl-hero p button.link { color: inherit !important; text-decoration: underline; }
+.sl-cv { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin: 0 0 18px; color: var(--ink); }
+.cv-head { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; } .cv-head h2 { margin: 0 8px 0 0; font-size: 20px; }
+.cv-nav { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; } .cv-nav input { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.cv-crumbs { margin: 10px 0 12px; font-size: 14px; } .cv-crumbs .link { font-size: inherit; }
+.cv-sum { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 14px; } .cv-sum > div { flex: 1 1 160px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; }
+.cv-sum span { display: block; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; opacity: .7; } .cv-sum strong { font-size: 26px; }
+.cv-rows { display: flex; flex-direction: column; gap: 2px; margin: 0 0 10px; }
+.cv-row { display: grid; grid-template-columns: minmax(110px, 160px) 1fr 90px 130px; gap: 12px; align-items: center; width: 100%; text-align: left; border: 0; border-radius: 8px; background: transparent; font: inherit; color: var(--ink); padding: 6px 8px; cursor: pointer; }
+.cv-row:hover:not(:disabled) { background: var(--blue-wash); } .cv-row.now .cv-t { font-weight: 800; color: var(--blue); } .cv-row:disabled { opacity: .45; cursor: default; }
+.cv-bar { height: 12px; border-radius: 6px; background: color-mix(in srgb, var(--line) 60%, transparent); overflow: hidden; } .cv-bar i { display: block; height: 100%; background: var(--blue); border-radius: 6px; }
+.cv-n { font-size: 13px; opacity: .75; text-align: right; } .cv-a { text-align: right; font-variant-numeric: tabular-nums; }
+.cv-listwrap { max-height: 520px; overflow: auto; } .cv-h3 { margin: 14px 0 6px; font-size: 15px; } .cv-h3:empty { display: none; } .cv-spnote { margin: 4px 0 10px; }
+@media (max-width: 640px) { .cv-row { grid-template-columns: 1fr auto; } .cv-bar { grid-column: 1 / -1; } .cv-n { text-align: left; } .cv-nav { margin-left: 0; } }
 .sl-who { display: inline-flex; gap: 8px; align-items: center; font-weight: 700; } .cl-hero .sl-who { display: flex; width: max-content; margin: 0 0 18px; color: #fff; } .sl-who select { font: inherit; font-weight: 600; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
 .st-sl { display: flex; flex-direction: column; gap: 8px; } .st-sl-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); } .st-sl-chips { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .sl-sp { font-size: 12px; font-weight: 700; color: var(--blue); }
@@ -6643,8 +6656,8 @@ function salesInstCell(r) {
   const i = r.installs?.[0] || (r.stage === "install" ? r : null);
   if (!i) return r.stage === "closed" ? `<span class="quiet">not booked yet</span>` : `<span class="quiet">—</span>`;
   const d = i.visit_date ? fmtDate(i.visit_date) : "";
-  return i.status === "completed" ? `<b>${esc(d || "done")}</b><div class="quiet">Job ${esc(i.job_number)}</div>`
-    : d ? `booked ${esc(d)}<div class="quiet">Job ${esc(i.job_number)}</div>` : `<span class="quiet">not booked yet</span><div class="quiet">Job ${esc(i.job_number)}</div>`;
+  return i.status === "completed" ? `<b>${esc(d || "done")}</b><div class="quiet">Job ${esc(i.job_number)}${i.guessed ? " · matched by customer" : ""}</div>`
+    : d ? `<span class="sl-instday">Install booked for <b>${esc(d)}</b></span><div class="quiet">Job ${esc(i.job_number)}${i.guessed ? " · matched by customer" : ""}</div>` : `<span class="quiet">not booked yet</span><div class="quiet">Job ${esc(i.job_number)}</div>`;
 }
 // where the install of a sold deal is at (it's on the same row as the sale: one sale, one row)
 function salesInstTag(i) {
@@ -6683,6 +6696,108 @@ function salesWhoPicker() {
   return `<label class="sl-who"><span>Sales page of</span><select id="sl-who">
     ${boss ? `<option value="" ${!SALES.seller ? "selected" : ""}>Everyone</option>` : ""}
     ${P.map(x => `<option value="${x.id}" ${String(SALES.seller) === String(x.id) || (!boss && !SALES.seller && x.me) ? "selected" : ""}>${esc(x.me ? x.name + " (me)" : x.name)}</option>`).join("")}</select></label>`;
+}
+/* ---------- Sales · Carlo view (owners): every sale made, by year → month → day. Starts on today. ----------
+   A sale = a sold proposal (not cancelled, more than $0), on the day it was sold. All sales people, or pick one. */
+const CV = { lvl: "day", d: null, days: null, list: new Map(), err: "", all: false, sp: "" };
+const CV_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const cvIso = dt => dt.toISOString().slice(0, 10);
+function cvRange(lvl = CV.lvl, d = CV.d) {
+  const [Y, M] = d.split("-").map(Number);
+  if (lvl === "day") return [d, d];
+  if (lvl === "month") return [cvIso(new Date(Date.UTC(Y, M - 1, 1))), cvIso(new Date(Date.UTC(Y, M, 0)))];
+  if (lvl === "year") return [`${Y}-01-01`, `${Y}-12-31`];
+  return [null, null];
+}
+function cvShift(k) {
+  const [Y, M, D] = CV.d.split("-").map(Number);
+  if (CV.lvl === "day") CV.d = cvIso(new Date(Date.UTC(Y, M - 1, D + k)));
+  else if (CV.lvl === "month") { const last = new Date(Date.UTC(Y, M + k, 0)).getUTCDate(); CV.d = cvIso(new Date(Date.UTC(Y, M - 1 + k, Math.min(D, last)))); }
+  else if (CV.lvl === "year") { const last = new Date(Date.UTC(Y + k, M, 0)).getUTCDate(); CV.d = cvIso(new Date(Date.UTC(Y + k, M - 1, Math.min(D, last)))); }
+}
+const cvWantList = () => CV.lvl === "day" || CV.lvl === "month" || CV.all;
+async function cvLoad() {
+  if (!$("#sl-cv")) return;
+  if (!CV.d) CV.d = salesToday();
+  cvRender();
+  if (!CV.days) {
+    const { data, error } = await db.rpc("sales_history_days", { p_seller: null });
+    if (error) { CV.err = /function|schema|PGRST202/i.test(error.message || "") ? "Run RUN SETUP NOW.bat to switch this on." : rpcErr(error); cvRender(); return; }
+    CV.days = data || []; cvRender();
+  }
+  const lk = cvRange().join("|");
+  if (cvWantList() && !CV.list.has(lk)) {
+    const [f, t] = cvRange();
+    const { data, error } = await db.rpc("sales_history", { p_seller: null, p_from: f, p_to: t });
+    if (error) CV.err = rpcErr(error); else CV.list.set(lk, data || []);
+    cvRender();
+  }
+}
+function cvRender() {
+  const box = $("#sl-cv"); if (!box) return;
+  const d = CV.d || salesToday(), Y = d.slice(0, 4), M = Number(d.slice(5, 7)), today = salesToday();
+  const allDays = CV.days || [], days = allDays.filter(x => !CV.sp || (x.sp || "") === CV.sp), [from, to] = cvRange();
+  const inPeriod = x => CV.lvl === "all" || (x.d >= from && x.d <= to);
+  const add = L => L.reduce((a, x) => (a.n += Number(x.n) || 0, a.amt += Number(x.amt) || 0, a), { n: 0, amt: 0 });
+  const tot = add(days.filter(inPeriod));
+  // sales people: everyone who ever sold, biggest first; and who sold what in this period
+  const spTot = new Map(); allDays.forEach(x => { const k = x.sp || ""; const a = spTot.get(k) || { n: 0, amt: 0 }; a.n += Number(x.n) || 0; a.amt += Number(x.amt) || 0; spTot.set(k, a); });
+  const spAll = [...spTot.entries()].sort((a, b) => b[1].amt - a[1].amt).map(([k]) => k);
+  const spName = k => k || "No sales person";
+  const spRows = CV.sp ? [] : spAll.map(k => ({ k, ...add(allDays.filter(x => (x.sp || "") === k && inPeriod(x))) })).filter(r => r.n).sort((a, b) => b.amt - a.amt);
+  const spMax = Math.max(1, ...spRows.map(r => r.amt));
+  const nice = x => new Date(x + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  const label = CV.lvl === "day" ? nice(d) : CV.lvl === "month" ? `${CV_MONTHS[M - 1]} ${Y}` : CV.lvl === "year" ? Y : "Every year";
+  // the breakdown one level down: years → months → days
+  let rows = [];
+  if (CV.lvl === "all") { const ys = [...new Set(days.map(x => x.d.slice(0, 4)))].sort().reverse();
+    rows = ys.map(y => ({ go: `year|${y}-${y === today.slice(0, 4) ? today.slice(5) : "01-01"}`, t: y, now: y === today.slice(0, 4), ...add(days.filter(x => x.d.startsWith(y))) })); }
+  else if (CV.lvl === "year") rows = CV_MONTHS.map((m, i) => { const ym = `${Y}-${String(i + 1).padStart(2, "0")}`;
+    return { go: `month|${ym}-${ym === today.slice(0, 7) ? today.slice(8) : "01"}`, t: m, now: ym === today.slice(0, 7), future: ym > today.slice(0, 7), ...add(days.filter(x => x.d.startsWith(ym))) }; });
+  else if (CV.lvl === "month") rows = days.filter(x => x.d >= from && x.d <= to).slice().reverse()
+    .map(x => ({ go: `day|${x.d}`, t: new Date(x.d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }), now: x.d === today, n: Number(x.n), amt: Number(x.amt) }));
+  const max = Math.max(1, ...rows.map(r => r.amt));
+  const crumbs = [["all", "Every year", d], ...(CV.lvl !== "all" ? [["year", Y, d]] : []), ...(CV.lvl === "month" || CV.lvl === "day" ? [["month", CV_MONTHS[M - 1], d]] : []), ...(CV.lvl === "day" ? [["day", String(Number(d.slice(8))), d]] : [])];
+  const list = CV.list.get(cvRange().join("|"))?.filter(r => !CV.sp || (r.sales_person || "") === CV.sp);
+  box.innerHTML = `<div class="cv-head"><h2>Carlo view</h2>
+      <label class="sl-who cv-who"><span>Sales person</span><select id="cv-sp"><option value="">All sales people</option>${spAll.map(k => `<option value="${esc(k)}" ${CV.sp === k ? "selected" : ""}>${esc(spName(k))}</option>`).join("")}${CV.sp && !spAll.includes(CV.sp) ? `<option selected>${esc(CV.sp)}</option>` : ""}</select></label>
+      <span class="seg cv-lvl" role="group">${[["day", "Day"], ["month", "Month"], ["year", "Year"], ["all", "All years"]].map(([k, t]) => `<button type="button" data-cv-lvl="${k}" aria-pressed="${CV.lvl === k}">${t}</button>`).join("")}</span>
+      <span class="cv-nav">${CV.lvl !== "all" ? `<button class="btn quiet-btn" type="button" data-cv-step="-1" title="Back one ${CV.lvl}">‹</button><button class="btn quiet-btn" type="button" data-cv-step="1" title="Forward one ${CV.lvl}">›</button>` : ""}
+        <button class="btn quiet-btn" type="button" data-cv-today ${CV.lvl === "day" && d === today ? "disabled" : ""}>Today</button>
+        <input type="date" id="cv-date" value="${esc(d)}" aria-label="Go to a day"></span></div>
+    <nav class="cv-crumbs">${crumbs.map(([k, t, x], i) => i === crumbs.length - 1 ? `<b>${esc(t)}</b>` : `<button class="link" type="button" data-cv-go="${k}|${x}">${esc(t)}</button>`).join(" › ")}</nav>
+    ${CV.err ? `<div class="staff-msg err">${esc(CV.err)}</div>` : ""}
+    <div class="cv-sum"><div><span>${esc(label)}${CV.lvl === "day" && d === today ? " · today" : ""}</span><strong>${CV.days ? money(tot.amt) : "…"}</strong></div>
+      <div><span>Sales</span><strong>${CV.days ? tot.n : "…"}</strong></div>
+      <div><span>Average sale</span><strong>${CV.days && tot.n ? money(tot.amt / tot.n) : "—"}</strong></div></div>
+    ${CV.sp ? `<p class="cv-spnote">Showing <b>${esc(spName(CV.sp))}</b> only. <button class="link" type="button" data-cv-sp="">See all sales people</button></p>` : ""}
+    ${rows.length ? `<h3 class="cv-h3">${CV.lvl === "all" ? "By year" : CV.lvl === "year" ? "By month" : "By day"}</h3>` : ""}
+    ${rows.length ? `<div class="cv-rows">${rows.map(r => `<button type="button" class="cv-row ${r.now ? "now" : ""} ${r.future ? "future" : ""}" data-cv-go="${r.go}" ${r.future && !r.n ? "disabled" : ""}>
+        <span class="cv-t">${esc(r.t)}</span><span class="cv-bar"><i style="width:${(r.amt / max * 100).toFixed(1)}%"></i></span>
+        <span class="cv-n">${r.n} ${r.n === 1 ? "sale" : "sales"}</span><b class="cv-a">${money(r.amt)}</b></button>`).join("")}</div>`
+      : CV.lvl === "month" && CV.days ? `<p class="quiet">No sales this month.</p>` : ""}
+    ${spRows.length ? `<h3 class="cv-h3">By sales person</h3><div class="cv-rows">${spRows.map(r => `<button type="button" class="cv-row" data-cv-sp="${esc(r.k)}" title="See only ${esc(spName(r.k))}">
+        <span class="cv-t">${esc(spName(r.k))}</span><span class="cv-bar"><i style="width:${(r.amt / spMax * 100).toFixed(1)}%"></i></span>
+        <span class="cv-n">${r.n} ${r.n === 1 ? "sale" : "sales"}</span><b class="cv-a">${money(r.amt)}</b></button>`).join("")}</div>` : ""}
+    ${CV.lvl === "year" || CV.lvl === "all" ? `<p><button class="link" type="button" data-cv-all>${CV.all ? "Hide the sales" : `Show all ${tot.n} sales`}</button></p>` : ""}
+    ${cvWantList() ? (list ? (list.length ? `<div class="staff-wrap cv-listwrap"><table class="calls-table cv-t"><thead><tr><th>Sold</th><th>Customer</th><th>Sales person</th><th>For</th><th class="r">Sale</th><th></th></tr></thead><tbody>
+        ${list.map(r => `<tr><td>${esc(fmtDate(r.sold_on))}</td>
+          <td><button class="link" type="button" data-cv-cust="${r.customer_id}"><b>${esc(r.customer || "")}</b></button><div class="quiet">${esc(r.address || "")}</div></td>
+          <td>${esc(r.sales_person || "—")}</td><td>${esc(r.job_type || "")}<div class="quiet">Job ${esc(r.job_number || "")}</div></td>
+          <td class="r num"><b>${money(r.amount)}</b><div class="quiet">#${esc(r.est_number || "")}</div></td>
+          <td><button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button></td></tr>`).join("")}</tbody></table></div>`
+        : `<p class="quiet">No sales ${CV.lvl === "day" ? "on this day" : "here"}.</p>`) : `<p class="quiet">Loading the sales…</p>`) : ""}`;
+  const go = (lvl, dd) => { CV.lvl = lvl; if (dd) CV.d = dd; if (lvl === "day" || lvl === "month") CV.all = false; cvLoad(); };
+  box.querySelectorAll("[data-cv-lvl]").forEach(b => b.addEventListener("click", () => go(b.dataset.cvLvl)));
+  box.querySelectorAll("[data-cv-go]").forEach(b => b.addEventListener("click", () => { const [l, x] = b.dataset.cvGo.split("|"); go(l, x); }));
+  box.querySelectorAll("[data-cv-step]").forEach(b => b.addEventListener("click", () => { cvShift(Number(b.dataset.cvStep)); cvLoad(); }));
+  box.querySelector("[data-cv-today]")?.addEventListener("click", () => go("day", salesToday()));
+  box.querySelector("#cv-date")?.addEventListener("change", e => { if (e.target.value) go("day", e.target.value); });
+  box.querySelector("#cv-sp")?.addEventListener("change", e => { CV.sp = e.target.value; cvRender(); });
+  box.querySelectorAll("[data-cv-sp]").forEach(b => b.addEventListener("click", () => { CV.sp = b.dataset.cvSp; cvRender(); }));
+  box.querySelector("[data-cv-all]")?.addEventListener("click", () => { CV.all = !CV.all; cvLoad(); });
+  box.querySelectorAll("[data-cv-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.cvCust))));
+  window.atagRun?.();
 }
 function renderSales(msg) {
   spHome();
@@ -6729,6 +6844,7 @@ function renderSales(msg) {
       <div class="cl-hero-range"><span>Closed deals${SALES.from || SALES.to ? " · " + esc(SALES.range && SALES.range !== "custom" ? SALES_RANGES.find(x => x[0] === SALES.range)[1] : [SALES.from ? fmtDate(SALES.from) : "start", SALES.to ? fmtDate(SALES.to) : "today"].join(" – ")) : ""}</span><strong class="ow-hero-amt">${money(won)}</strong><em>${n("closed")} sold · ${n("open")} open</em>${SALES.comm ? `<div class="sl-comm-grid"><div class="sl-cg-h">Commission</div>
         <div><b>${money(cs.now)}</b><small>to pay now</small></div>${SALES.pay ? `<div><b>${money(cs.pay)}</b><small>on payroll</small></div>` : ""}
         <div><b>${money(cs.wait)}</b><small>waiting</small></div><div><b>${money(cs.paid)}</b><small>paid</small></div></div>` : ""}</div></header>
+    ${ME.role === "owner" ? `<section class="sl-cv" id="sl-cv" data-atag-fixed="Carlo view"></section>` : ""}
     ${msg ? `<div class="staff-msg ok" role="status">${esc(msg)}</div>` : ""}
     <div class="sl-bar"><span class="seg sl-tabs" role="group">${[["open", "Open"], ["booked", "Booked"], ["estimate", "Proposals"], ["closed", "Closed deals"], ["install", "Installs"], ["lost", "Not sold"], ["all", "All"]].map(([k, x]) =>
         `<button type="button" data-sl-tab="${k}" aria-pressed="${SALES.tab === k}">${x} <span class="sl-n">${n(k)}</span></button>`).join("")}</span>
@@ -6761,6 +6877,7 @@ function renderSales(msg) {
       : `<p class="quiet">${qq.length ? "Nothing matches your search." : SALES.tab === "open" ? "No open sales jobs. Press + New sales job to start one." : "Nothing here."}</p>`}
   </article>`;
   wireSalesViews(); salesFitList(); setTimeout(salesFitList, 200);   // again once the sideways bar is in
+  cvLoad();   // Carlo view
   document.querySelectorAll("[data-sl-tab]").forEach(b => b.addEventListener("click", () => { SALES.tab = b.dataset.slTab; salesSave(); renderSales(); }));
   // payroll: tick or pick a pay day (ticking with no day asks for one); clear the tick to take it off
   const paySet = async (id, day, msg) => { const c = SALES.comm?.get(id);
@@ -20346,7 +20463,7 @@ function viewBar() {
     document.querySelectorAll(AREAS.join(",")).forEach(el => cand.push(el));
     const order = [...new Set(cand)].filter(el => !el.closest(".file-wrap") && !el.matches(".back-bar, script, datalist, .staff-msg:empty") && (el.offsetParent || getComputedStyle(el).position === "fixed") && big(el))
       .sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
-    order.forEach(el => { seen.add(el); tag(el, `${c} ${++n}`); });
+    order.filter(el => !el.closest("[data-atag-fixed]")).forEach(el => { seen.add(el); tag(el, `${c} ${++n}`); });
     document.querySelectorAll("[data-atag-fixed]").forEach(el => { if (el.offsetParent) { seen.add(el); tag(el, el.dataset.atagFixed); } });   // a named spot inside an area (e.g. "RE 3b")
     document.querySelectorAll("[data-atag]").forEach(el => { if (!seen.has(el) && !el.matches(POPS.join(",")) && el.id !== "page-bar" && el.id !== "side") { delete el.dataset.atag; } });
     document.querySelectorAll(POPS.join(",")).forEach(el => tag(el, `${c} Pop-up ${++pn}`));
