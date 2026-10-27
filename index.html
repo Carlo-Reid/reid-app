@@ -3364,6 +3364,7 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .est-close-btn { background: var(--green) !important; border-color: var(--green) !important; color: var(--on-accent) !important; }
 .sl-find { margin: 0 0 16px; } .sl-find .sp-wrap { max-width: 760px; margin: 0; padding: 0; } .sl-find .sp-head h1 { font-size: 22px; }
 .book .lead button.link, .cl-hero p button.link, :root[data-theme] .cl-hero p button.link { color: inherit !important; text-decoration: underline; }
+.sl-cvnote > span { flex: 1 1 auto; }
 .sl-cv { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin: 0 0 18px; color: var(--ink); }
 .cv-head { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; } .cv-head h2 { margin: 0 8px 0 0; font-size: 20px; }
 .cv-nav { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; } .cv-nav input { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
@@ -6535,7 +6536,9 @@ function salesRangeDates(k) {
   return ["", ""];
 }
 try { Object.assign(SALES, JSON.parse(localStorage.getItem("reid.sales") || "{}")); } catch {}
-const salesSave = () => { try { localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller, sort: SALES.sort, dir: SALES.dir, range: SALES.range, from: SALES.from, to: SALES.to, dateBy: SALES.dateBy, commF: SALES.commF })); } catch {} };
+const salesSave = () => { try { const o = SALES.own || SALES; localStorage.setItem("reid.sales", JSON.stringify({ tab: SALES.tab, seller: SALES.seller, sort: SALES.sort, dir: SALES.dir, range: o.range, from: o.from, to: o.to, dateBy: o.dateBy, commF: SALES.commF, cvLink: SALES.cvLink })); } catch {} };
+// owners: the sales list below Carlo view follows it (its year / month / day and sales person) unless they pick "Use my own dates"
+const salesCvLinked = () => ME.role === "owner" && SALES.cvLink !== false;
 const salesBoss = () => ME.role === "owner" || can("calls.dispatch");
 async function openSales(msg) {
   setPage("sales", "sales", "Sales");
@@ -6715,6 +6718,11 @@ function cvShift(k) {
   else if (CV.lvl === "month") { const last = new Date(Date.UTC(Y, M + k, 0)).getUTCDate(); CV.d = cvIso(new Date(Date.UTC(Y, M - 1 + k, Math.min(D, last)))); }
   else if (CV.lvl === "year") { const last = new Date(Date.UTC(Y + k, M, 0)).getUTCDate(); CV.d = cvIso(new Date(Date.UTC(Y + k, M - 1, Math.min(D, last)))); }
 }
+function cvPeriodText() {   // "on Monday, October 26, 2026", "in October 2026", "in 2026", "any time"
+  const d = CV.d || salesToday(), M = Number(d.slice(5, 7));
+  return CV.lvl === "day" ? "on " + new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+    : CV.lvl === "month" ? `in ${CV_MONTHS[M - 1]} ${d.slice(0, 4)}` : CV.lvl === "year" ? "in " + d.slice(0, 4) : "any time";
+}
 const cvWantList = () => CV.lvl === "day" || CV.lvl === "month" || CV.all;
 async function cvLoad() {
   if (!$("#sl-cv")) return;
@@ -6787,20 +6795,25 @@ function cvRender() {
           <td class="r num"><b>${money(r.amount)}</b><div class="quiet">#${esc(r.est_number || "")}</div></td>
           <td><button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button></td></tr>`).join("")}</tbody></table></div>`
         : `<p class="quiet">No sales ${CV.lvl === "day" ? "on this day" : "here"}.</p>`) : `<p class="quiet">Loading the sales…</p>`) : ""}`;
-  const go = (lvl, dd) => { CV.lvl = lvl; if (dd) CV.d = dd; if (lvl === "day" || lvl === "month") CV.all = false; cvLoad(); };
+  const redo = load => { if (salesCvLinked() && document.body.dataset.page === "sales") { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; } else load ? cvLoad() : cvRender(); };
+  const go = (lvl, dd) => { CV.lvl = lvl; if (dd) CV.d = dd; if (lvl === "day" || lvl === "month") CV.all = false; redo(true); };
   box.querySelectorAll("[data-cv-lvl]").forEach(b => b.addEventListener("click", () => go(b.dataset.cvLvl)));
   box.querySelectorAll("[data-cv-go]").forEach(b => b.addEventListener("click", () => { const [l, x] = b.dataset.cvGo.split("|"); go(l, x); }));
-  box.querySelectorAll("[data-cv-step]").forEach(b => b.addEventListener("click", () => { cvShift(Number(b.dataset.cvStep)); cvLoad(); }));
+  box.querySelectorAll("[data-cv-step]").forEach(b => b.addEventListener("click", () => { cvShift(Number(b.dataset.cvStep)); redo(true); }));
   box.querySelector("[data-cv-today]")?.addEventListener("click", () => go("day", salesToday()));
   box.querySelector("#cv-date")?.addEventListener("change", e => { if (e.target.value) go("day", e.target.value); });
-  box.querySelector("#cv-sp")?.addEventListener("change", e => { CV.sp = e.target.value; cvRender(); });
-  box.querySelectorAll("[data-cv-sp]").forEach(b => b.addEventListener("click", () => { CV.sp = b.dataset.cvSp; cvRender(); }));
+  box.querySelector("#cv-sp")?.addEventListener("change", e => { CV.sp = e.target.value; redo(); });
+  box.querySelectorAll("[data-cv-sp]").forEach(b => b.addEventListener("click", () => { CV.sp = b.dataset.cvSp; redo(); }));
   box.querySelector("[data-cv-all]")?.addEventListener("click", () => { CV.all = !CV.all; cvLoad(); });
   box.querySelectorAll("[data-cv-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.cvCust))));
   window.atagRun?.();
 }
 function renderSales(msg) {
   spHome();
+  const cvOn = salesCvLinked();
+  if (cvOn) { CV.d ||= salesToday(); if (!SALES.own) SALES.own = { range: SALES.range, from: SALES.from, to: SALES.to, dateBy: SALES.dateBy };
+    const [f, t] = cvRange(); SALES.from = f || ""; SALES.to = t || ""; SALES.range = f ? "custom" : ""; SALES.dateBy = "sold"; }
+  else if (SALES.own) { Object.assign(SALES, SALES.own); SALES.own = null; }
   if (SALES.range && SALES.range !== "custom") [SALES.from, SALES.to] = salesRangeDates(SALES.range);   // "This month" etc. move with the calendar
   const inTab = (r, k) => k === "all" || (k === "open" ? ["booked", "estimate"].includes(r.stage) : k === "install" ? (r.stage === "install" || !!r.installs) : r.stage === k);
   // dates: a sale counts on the day it was sold; on the Installs tab it's the install's day
@@ -6809,12 +6822,13 @@ function renderSales(msg) {
   const inRange = (r, k) => { if (!SALES.from && !SALES.to) return true; const inst = by(k) === "installed";
     if (by(k) === "paid") { const d = salesPaidDay(r); return !!d && (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); }
     if (inst && !(r.installs?.length || r.stage === "install")) return false; const d = inst ? instDate(r) : salesDate(r); return (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); };
-  const R = (SALES.rows || []).filter(r => inRange(r, SALES.tab === "install" ? "install" : "")), n = k => (SALES.rows || []).filter(r => inTab(r, k) && inRange(r, k)).length;
-  const qq = (SALES.q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
   const spOf = r => salesSrc(r)?.sales_person || "";
+  const inSp = r => !cvOn || !CV.sp || (spOf(r) || "__none") === CV.sp;   // Carlo view's sales person
+  const R = (SALES.rows || []).filter(r => inSp(r) && inRange(r, SALES.tab === "install" ? "install" : "")), n = k => (SALES.rows || []).filter(r => inSp(r) && inTab(r, k) && inRange(r, k)).length;
+  const qq = (SALES.q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
   const hay = r => [r.customer, r.street, r.city, r.job_number, ...(r.installs || []).flatMap(i => [i.job_number, i.visit_date || "", i.visit_date ? fmtDate(i.visit_date) : ""]), salesDate(r), fmtDate(salesDate(r)), r.est_number, spOf(r), r.seller, r.type, r.partner || "Reid", r.summary].join(" ").toLowerCase();
   // searching looks at every date and stage, so a name or job number is always found
-  let rows = qq.length ? (SALES.rows || []).filter(r => { const h = hay(r); return qq.every(w => h.includes(w)); }) : (SALES.rows || []).filter(r => inTab(r, SALES.tab) && inRange(r, SALES.tab));
+  let rows = qq.length ? (SALES.rows || []).filter(r => { const h = hay(r); return qq.every(w => h.includes(w)); }) : (SALES.rows || []).filter(r => inSp(r) && inTab(r, SALES.tab) && inRange(r, SALES.tab));
   const seeCommF = !!(SALES.comm || SALES.paid), cf = seeCommF ? SALES.commF || "" : "";
   // counts and commission for each choice (in the tab and dates you're on)
   const cfBase = rows, cfCount = {}; if (seeCommF) for (const [k] of SALES_COMMF) { const L = cfBase.filter(r => salesCommMatch(r, k)), seen = new Set(); let amt = 0;
@@ -6849,12 +6863,15 @@ function renderSales(msg) {
     <div class="sl-bar"><span class="seg sl-tabs" role="group">${[["open", "Open"], ["booked", "Booked"], ["estimate", "Proposals"], ["closed", "Closed deals"], ["install", "Installs"], ["lost", "Not sold"], ["all", "All"]].map(([k, x]) =>
         `<button type="button" data-sl-tab="${k}" aria-pressed="${SALES.tab === k}">${x} <span class="sl-n">${n(k)}</span></button>`).join("")}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button></div>
-    <div class="sl-find sl-dates"><label>Dates by <select id="sl-dateby"><option value="sold" ${by(SALES.tab) === "sold" ? "selected" : ""}>Sold date</option><option value="installed" ${by(SALES.tab) === "installed" ? "selected" : ""}>Install date</option>${SALES.comm || SALES.paid ? `<option value="paid" ${by(SALES.tab) === "paid" ? "selected" : ""}>Commission paid date</option>` : ""}</select></label>
+    ${cvOn ? `<div class="sl-find sl-dates sl-cvnote"><span>This list follows <b>Carlo view</b>: sold ${esc(cvPeriodText())}${CV.sp ? ` · <b>${esc(CV.sp === "__none" ? "No sales person" : CV.sp)}</b>` : " · all sales people"}.</span>
+      ${seeCommF ? `<label>Commission <select id="sl-commf">${SALES_COMMF.map(([k, t]) => `<option value="${k}" ${cf === k ? "selected" : ""}>${t}${cfCount[k] ? ` (${cfCount[k].n}${k ? ", " + money(cfCount[k].amt) : ""})` : ""}</option>`).join("")}</select></label>` : ""}
+      <button class="link" type="button" id="sl-cvoff">Use my own dates</button></div>` : `
+    <div class="sl-find sl-dates">${ME.role === "owner" ? `<button class="link" type="button" id="sl-cvon">Follow Carlo view</button>` : ""}<label>Dates by <select id="sl-dateby"><option value="sold" ${by(SALES.tab) === "sold" ? "selected" : ""}>Sold date</option><option value="installed" ${by(SALES.tab) === "installed" ? "selected" : ""}>Install date</option>${SALES.comm || SALES.paid ? `<option value="paid" ${by(SALES.tab) === "paid" ? "selected" : ""}>Commission paid date</option>` : ""}</select></label>
       ${by(SALES.tab) === "paid" ? salesPaidDaysPick() : ""}
       ${seeCommF ? `<label>Commission <select id="sl-commf">${SALES_COMMF.map(([k, t]) => `<option value="${k}" ${cf === k ? "selected" : ""}>${t}${cfCount[k] ? ` (${cfCount[k].n}${k ? ", " + money(cfCount[k].amt) : ""})` : ""}</option>`).join("")}</select></label>` : ""}
       <label>Dates <select id="sl-range">${SALES_RANGES.map(([k, t]) => `<option value="${k}" ${(SALES.range || "") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <label>From <input type="date" id="sl-from" value="${esc(SALES.from || "")}"></label><label>To <input type="date" id="sl-to" value="${esc(SALES.to || "")}"></label>
-      ${SALES.from || SALES.to ? `<button class="link" type="button" id="sl-alldates">Show all dates</button>` : ""}</div>
+      ${SALES.from || SALES.to ? `<button class="link" type="button" id="sl-alldates">Show all dates</button>` : ""}</div>`}
     ${SALES.pay && cs.ready.length ? `<div class="sl-find sl-payall"><span>Put all <b>${cs.ready.length}</b> ready to pay (<b>${money(cs.now)}</b>${SALES.from || SALES.to ? " in these dates" : ""}) on payroll for</span>
       ${payDaySelect(`id="sl-payall-d" aria-label="Pay day"`, SALES.payDay && SALES.payDay >= salesToday() ? SALES.payDay : nextPayDay(), payDays(28, 100))}<button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
     <div class="sl-find"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
@@ -6897,6 +6914,8 @@ function renderSales(msg) {
     b.disabled = true; let ok = 0; for (const c of cs.ready) if (await paySet(c.job_id, day)) ok++;
     SALES.payDay = day; openSales(`${ok} commissions (${money(cs.now)}) on payroll for ${fmtDate(day)}.`); });
   // dates: a quick pick, or your own From / To (picking your own dates switches the list to "Pick dates…")
+  $("#sl-cvoff")?.addEventListener("click", () => { SALES.cvLink = false; salesSave(); renderSales(); });
+  $("#sl-cvon")?.addEventListener("click", () => { SALES.cvLink = true; salesSave(); renderSales(); });
   $("#sl-cf-clear")?.addEventListener("click", () => { SALES.commF = ""; salesSave(); renderSales(); });
   $("#sl-commf")?.addEventListener("change", e => { SALES.commF = e.target.value; salesSave(); renderSales(); });
   $("#sl-dateby")?.addEventListener("change", e => { SALES.dateBy = e.target.value; salesSave(); renderSales(); });
