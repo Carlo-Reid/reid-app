@@ -21,7 +21,7 @@ AS $function$
           JOIN equipment e ON e.location_id = j.location_id
           JOIN equipment_types t ON t.id = e.equipment_type_id
           CROSS JOIN LATERAL (SELECT public._eq_kind(t.name) AS kind) k
-          WHERE j.id = ANY (p_jobs) AND k.kind IS NOT NULL AND e.install_date IS NOT NULL
+          WHERE j.id = ANY (p_jobs) AND k.kind IS NOT NULL AND e.install_date >= DATE '1950-01-01'   -- (old records use Jan 1, 1900 for 'unknown')
             AND e.install_date < coalesce(j.created_at::date, current_date + 1)
             AND (e.status = 'active' OR e.removed_on IS NULL OR e.removed_on >= j.created_at::date)
           ORDER BY j.id, k.kind, e.install_date DESC) x), '[]'::jsonb) END
