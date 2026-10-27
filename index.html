@@ -6982,10 +6982,18 @@ async function cvLoad() {
     cvRender();
   }
 }
+// a key for each row that stays the same between redraws (job, proposal and stage; a number on the end if two rows would still match)
+function salesRowKey(r, i, A) { const k = `${r.job_id}:${r.est_id || ""}:${r.stage}`; let n = 0; for (let j = 0; j < i; j++) { const x = A[j]; if (`${x.job_id}:${x.est_id || ""}:${x.stage}` === k) n++; } return n ? k + "#" + n : k; }
 // when the Sales page redraws, the row you're looking at stays where it is on the screen (nothing jumps)
-function slAnchorGet() { const m = $("#main"); if (!m || !m.querySelector(".sl-t")) return null; const mt = m.getBoundingClientRect().top;
-  const a = [...m.querySelectorAll(".sl-t tbody tr[data-k]")].find(tr => tr.getBoundingClientRect().bottom > mt + 60); return a ? { k: a.dataset.k, y: a.getBoundingClientRect().top } : null; }
+// (the row you last worked in, if it's on screen; otherwise the first row showing)
+function slAnchorGet() { const m = $("#main"); if (!m || !m.querySelector(".sl-t")) return null; const mt = m.getBoundingClientRect().top, mb = m.getBoundingClientRect().bottom;
+  const all = [...m.querySelectorAll(".sl-t tbody tr[data-k]")], onScreen = tr => { const r = tr.getBoundingClientRect(); return r.bottom > mt + 60 && r.top < mb; };
+  const mine = SLA.k && all.find(tr => tr.dataset.k === SLA.k && onScreen(tr));
+  const a = mine || all.find(onScreen); return a ? { k: a.dataset.k, y: a.getBoundingClientRect().top } : null; }
 function slAnchorPut(a) { if (!a) return; const tr = $("#main")?.querySelector(`.sl-t tbody tr[data-k="${CSS.escape(a.k)}"]`); if (tr) $("#main").scrollTop += tr.getBoundingClientRect().top - a.y; }
+const SLA = { k: "" };   // the row last clicked or changed
+document.addEventListener("pointerdown", e => { const tr = e.target.closest?.(".sl-t tbody tr[data-k]"); if (tr) SLA.k = tr.dataset.k; }, true);
+document.addEventListener("focusin", e => { const tr = e.target.closest?.(".sl-t tbody tr[data-k]"); if (tr) SLA.k = tr.dataset.k; }, true);
 function cvRender() {
   const box = $("#sl-cv"); if (!box) return; const anc = slAnchorGet();
   box.style.minHeight = !CV.days && CV.minH ? CV.minH + "px" : ""; if (CV.days) CV.minH = 0;
@@ -7200,7 +7208,7 @@ function renderSales(msg) {
       <span class="quiet">${qq.length ? `${rows.length} found${SALES.from || SALES.to ? " (searching all dates)" : ""}` : `${rows.length} ${rows.length === 1 ? "sale" : "sales"}`}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button></div>
     ${rows.length ? `<div class="staff-wrap sl-tablewrap" id="sl-tw"><table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("sold", "Sold")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("cpaid", "Customer paid") + th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
-      ${rows.map(r => `<tr data-k="${esc(String(r.est_id || "j" + r.job_id) + ":" + r.stage)}"><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
+      ${rows.map((r, ri, A) => `<tr data-k="${esc(salesRowKey(r, ri, A))}"><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
         <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>${eqAgeSlot(r.job_id)}</td>
         <td>${r.visit_date ? `${esc(fmtDate(r.visit_date))}<div class="quiet">${r.visit_from ? esc(t(r.visit_from) + (r.visit_to ? "–" + t(r.visit_to) : "")) : "any time"}${r.seller ? " · " + esc(r.seller) : ""}</div>` : `<span class="quiet">${r.stage === "install" ? "Install not booked yet" : "Not booked yet"}</span>`}</td>
@@ -7238,7 +7246,7 @@ function renderSales(msg) {
     if (error) { alertMsg("Not saved: " + rpcErr(error)); return false; } return true; };
   // picking a pay day shows at once; it saves in the background (and goes back, with a message, if it can't)
   const payToast = t => { document.querySelectorAll(".sl-toast").forEach(x => x.remove()); const d = document.createElement("div"); d.className = "staff-msg ok sl-toast"; d.setAttribute("role", "status"); d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 4200); };
-  const payNow = async (id, day) => { const was = SALES.pay?.get(id) || "";
+  const payNow = async (id, day) => { const was = SALES.pay?.get(id) || ""; const tr = document.querySelector(`[data-sl-pay="${id}"]`)?.closest("tr[data-k]"); if (tr) SLA.k = tr.dataset.k;
     SALES.pay ||= new Map(); if (day) SALES.pay.set(id, day); else SALES.pay.delete(id); if (day) SALES.payDay = day;
     salesRerender(); payToast(day ? `On payroll for ${fmtDate(day)}${day <= salesToday() ? " (paid)" : ""}.` : "Taken off payroll.");
     if (await paySet(id, day || null)) { if (day && day <= salesToday()) openSales(); else salesLoadPaid(); return; }
