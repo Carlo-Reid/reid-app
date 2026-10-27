@@ -3235,7 +3235,14 @@ body[data-page="calls"] #page-bar-act .cl-showing { border-radius: 0 !important;
 .cob-one { display: flex; flex-direction: column; gap: 3px; }
 .pbx-r .pbx-col { display: flex; flex-direction: column; gap: 10px; }
 .pbx-r .pbx-col > .pbx-box { flex: 1 1 0; min-height: 90px; }
-.pbx-hgt.pbx-r .pbx-col { display: grid; }
+.pbx-hgt.pbx-r .pbx-col { display: grid; position: relative; }
+.pbx-hgt.pbx-r .pbx-col > .pbx-box { min-height: 0; position: relative; }
+.pbx-hd { position: absolute; left: 12%; right: 12%; bottom: -9px; height: 8px; z-index: 3; cursor: row-resize; border-radius: 6px; background: var(--line); opacity: .9; touch-action: none; }
+.pbx-hd::after { content: ""; position: absolute; left: 50%; top: 2px; width: 28px; height: 4px; margin-left: -14px; border-radius: 3px; background: var(--steel); }
+.pbx-hd:hover, .pbx-dragging .pbx-hd { background: var(--blue); }
+.pbx-wd { position: absolute; left: -12px; top: 10%; bottom: 10%; width: 8px; z-index: 3; cursor: col-resize; border-radius: 6px; background: var(--line); touch-action: none; }
+.pbx-wd::after { content: ""; position: absolute; top: 50%; left: 2px; height: 28px; width: 4px; margin-top: -14px; border-radius: 3px; background: var(--steel); }
+.pbx-wd:hover { background: var(--blue); } .pbx-dragging, .pbx-dragging * { user-select: none !important; }
 .pbx-n { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .pbx-del { border: 1px solid #e0b4ae; background: #fff; color: #b23a2e; border-radius: 4px; font: inherit; font-size: 11px; font-weight: 700; padding: 1px 7px; cursor: pointer; }
 .pbx-del:hover { background: #fdecea; }
@@ -17097,9 +17104,11 @@ function openPictureBoxes(id, opts) {
     ["Highlight", { color: "#111111", bg: "#fff3bf", italic: "1" }], ["Bold black", { color: "#ffffff", bg: "#212529", bold: "1", caps: "1" }],
     ["Fun purple", { color: "#7048e8", bg: "#f3f0ff", bold: "1", font: "Rounded", border: "#9775fa" }], ["Plain", {}]];
   const EMOJI = [];
-  const EDH = { "0": 0.35, S: 0.6, M: 1, L: 1.8, XL: 2.7 }, edRows = a => opts && a.length ? ` style="grid-template-rows:${a.map(i => `minmax(${B[i].style.h === "0" ? 34 : 60}px,${EDH[B[i].style.h] ?? 1}fr)`).join(" ")}"` : "";
+  const EDH = { "0": 0.35, S: 0.6, M: 1, L: 1.8, XL: 2.7 }, edH = i => EDH[B[i].style.h] ?? coNum(B[i].style.h, 0.3, 4) ?? 1;
+  const edRowsCss = () => B.map((_, i) => `minmax(${B[i].style.h === "0" ? 34 : 50}px,${edH(i)}fr)`).join(" ");
+  const edRows = a => a.length ? ` style="grid-template-rows:${edRowsCss()}"` : "";
   const box = i => edit ? `<label class="pbx-box ${i === cur ? "pbx-cur" : ""} ${B[i].style.h === "0" ? "pbx-hid" : ""}" data-pbx-box="${i}" style="${esc(coBoxCss(B[i].style))}"><span class="pbx-n">Box ${i + 1}${B[i].style.h === "0" ? " · hidden" : ""}<button type="button" class="pbx-del" data-pbx-del="${i}" title="Delete this box">Delete</button></span>
-      <textarea data-pbx="${i}" maxlength="400" rows="4" placeholder="Type here…" style="${esc(coTextCss(B[i].style) + (B[i].style.align ? ";text-align:" + B[i].style.align : ""))}">${esc(B[i].text)}</textarea></label>`
+      ${i < B.length - 1 && B[i].style.h !== "0" && B[i + 1].style.h !== "0" ? `<span class="pbx-hd" data-pbx-hd="${i}" title="Drag to make this box taller or shorter" aria-hidden="true"></span>` : ""}<textarea data-pbx="${i}" maxlength="400" rows="4" placeholder="Type here…" style="${esc(coTextCss(B[i].style) + (B[i].style.align ? ";text-align:" + B[i].style.align : ""))}">${esc(B[i].text)}</textarea></label>`
     : `<div class="pbx-box pbx-ro" style="${esc(coBoxCss(B[i].style))}">${B[i].text ? coHtml(B[i]) : `<span class="quiet">—</span>`}</div>`;
   const st = () => B[cur].style, on = k => st()[k] ? "true" : "false";
   const tools = () => edit ? `<div class="pbx-tools" id="pbx-tools">
@@ -17120,6 +17129,24 @@ function openPictureBoxes(id, opts) {
       <span class="pbx-row"><button class="link" type="button" id="pbx-all">Use this look on all the boxes</button><button class="link" type="button" id="pbx-clear">Clear this box's look</button></span>
     </div>` : "";
   const d = document.createElement("div"); d.className = "pbx-wrap"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", r.series);
+  // drag to resize: the line under a box (its height, against the box below) and the line between the picture and the boxes (their width)
+  d.addEventListener("pointerdown", e => {
+    const hd = e.target.closest("[data-pbx-hd]"), wd = e.target.closest(".pbx-wd"); if (!hd && !wd) return;
+    e.preventDefault(); d.querySelectorAll("[data-pbx]").forEach(t => { B[Number(t.dataset.pbx)].text = t.value; });
+    const r2 = n => String(Math.round(n * 100) / 100), y0 = e.clientY, x0 = e.clientX, el = e.target; el.setPointerCapture?.(e.pointerId); d.classList.add("pbx-dragging");
+    let move;
+    if (hd) { const i = Number(hd.dataset.pbxHd), col = d.querySelector(".pbx-col"), bx = col.querySelectorAll(".pbx-box");
+      const ha = bx[i].getBoundingClientRect().height, hb = bx[i + 1].getBoundingClientRect().height, F = edH(i) + edH(i + 1);
+      move = ev => { const dy = ev.clientY - y0, a = Math.max(50, Math.min(ha + hb - 50, ha + dy)), b = ha + hb - a;
+        const fa = Math.min(4, Math.max(0.3, F * a / (a + b))), fb = Math.min(4, Math.max(0.3, F - fa));
+        B[i].style.h = Math.abs(fa - 1) < 0.03 ? "" : r2(fa); B[i + 1].style.h = Math.abs(fb - 1) < 0.03 ? "" : r2(fb);
+        if (!B[i].style.h) delete B[i].style.h; if (!B[i + 1].style.h) delete B[i + 1].style.h; col.style.gridTemplateRows = edRowsCss(); }; }
+    else { const g = d.querySelector(".pbx-grid"), img = g.querySelector(".pbx-img").getBoundingClientRect().width, cw = g.querySelector(".pbx-col").getBoundingClientRect().width;
+      move = ev => { const dx = ev.clientX - x0, c = Math.max(160, cw - dx), m = Math.max(160, img + (cw - c)), w = Math.min(3, Math.max(0.4, 1.6 * c / m));
+        lay = Math.abs(w - 1) < 0.03 ? "M" : r2(w); g.style.gridTemplateColumns = `minmax(0,1.6fr) minmax(160px,${coW(lay)}fr)`; }; }
+    const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); d.classList.remove("pbx-dragging"); draw(); };
+    addEventListener("pointermove", move); addEventListener("pointerup", up);
+  });
   const draw = () => {
     const ta = d.querySelector("textarea:focus"), pos = ta ? [Number(ta.dataset.pbx), ta.selectionStart, ta.selectionEnd] : null;
     d.innerHTML = `<div class="pbx">
@@ -17128,10 +17155,10 @@ function openPictureBoxes(id, opts) {
     <div class="staff-msg" id="pbx-msg" role="status"></div>
     ${opts ? `<div class="pbx-own quiet">These boxes are for <b>${esc(r.series)}</b> only. The other models that share the picture keep theirs.</div>` : ""}
     ${dropped && edit ? `<div class="staff-msg err">This picture had ${filled.length} boxes. Only 4 are kept now; the other ${dropped} go away when you save.</div>` : ""}
-    <div class="pbx-grid pbx-r ${opts ? "pbx-hgt" : ""}" style="grid-template-columns:minmax(0,1.6fr) minmax(200px,${CO_BOXW[lay] || 1}fr)">
+    <div class="pbx-grid pbx-r pbx-hgt" style="grid-template-columns:minmax(0,1.6fr) minmax(160px,${coW(lay)}fr)">
       <div class="pbx-img"><img alt="${esc(r.series)}" src="${opts ? esc(opts.imgSrc || "") : `data:image/jpeg;base64,${r.image}`}">
         ${edit && toolsOn ? `<div class="pbx-float">${tools()}<button type="button" class="pbx-float-x" id="pbx-tools-x" title="Hide the writing tools">✕</button></div>` : ""}</div>
-      <div class="pbx-col"${edRows(B.map((_, i) => i))}>${B.map((_, i) => box(i)).join("")}
+      <div class="pbx-col"${edRows(B.map((_, i) => i))}>${edit && opts ? `<span class="pbx-wd" title="Drag to make the boxes wider or narrower" aria-hidden="true"></span>` : ""}${B.map((_, i) => box(i)).join("")}
         ${edit && B.length < 4 ? `<button type="button" class="pbx-add" id="pbx-add">+ Add a box <span class="quiet">(${4 - B.length} more allowed)</span></button>` : ""}</div></div>
 </div>`;
     wire();
@@ -17453,17 +17480,20 @@ async function loadCallouts(force) {
 // up to 4 boxes: the filled-in ones, in order (older pictures had 8 slots, left then right)
 const co4 = co8 => (co8 || []).filter(t => coT(t).trim() && coS(t).h !== "0").slice(0, 4);
 const withBoxes = (co8, imgHtml, size) => { if (!co8) return imgHtml;
-  const box = t => { const cl = CO_CLAMP[coS(t).h]; return `<div class="cob-box" title="${esc(coT(t))}" style="${esc(coBoxCss(coS(t)) + (cl ? `;-webkit-line-clamp:${cl}` : ""))}">${coHtml(t)}</div>`; };
+  const box = t => { const cl = coClamp(coS(t).h); return `<div class="cob-box" title="${esc(coT(t))}" style="${esc(coBoxCss(coS(t)) + (cl ? `;-webkit-line-clamp:${cl}` : ""))}">${coHtml(t)}</div>`; };
   const v = co4(co8); if (!v.length) return imgHtml;
   if (size === "stack") return `<div class="cob cob-r cob-side"><div class="cob-img">${imgHtml}</div><div class="cob-one">${v.map(box).join("")}</div></div>`;
   const odd = v.some(t => coH(t) !== 1);
   const col = `<div class="cob-col"${size !== "print" ? ` style="grid-template-rows:${v.map(t => `minmax(0,${odd ? coH(t) : 1}fr)`).join(" ")}"` : ""}>${v.map(box).join("")}</div>`;
-  const lw = (co8.layout && CO_BOXW[co8.layout.w]) || 1;
+  const lw = co8.layout ? coW(co8.layout.w) : 1;
   return `<div class="cob cob-r cob-${size || "md"}" style="grid-template-columns:minmax(0,1.3fr) minmax(0,${lw}fr)"><div class="cob-img">${imgHtml}</div>${col}</div>`; };
 const CO_BOXW = { S: 0.6, M: 1, L: 1.45, XL: 2 };   // how wide the boxes are next to the picture
 // how tall one box is (style.h): "0" = hidden (the others take its room), S short, M normal, L tall, XL extra tall
 const CO_BOXH = { "0": 0, S: 0.5, M: 1, L: 1.8, XL: 2.7 }, CO_CLAMP = { S: 1, L: 5, XL: 8 };
-const coH = x => CO_BOXH[coS(x).h] ?? 1;
+const coNum = (v, lo, hi) => { const n = Number(v); return v !== "" && v != null && isFinite(n) && n >= lo && n <= hi ? n : null; };
+const coH = x => CO_BOXH[coS(x).h] ?? coNum(coS(x).h, 0.3, 4) ?? 1;
+const coW = w => CO_BOXW[w] ?? coNum(w, 0.4, 3) ?? 1;   // the boxes' width next to the picture
+const coClamp = h => CO_CLAMP[h] ?? (coNum(h, 0.3, 4) != null ? Math.max(1, Math.round(coNum(h, 0.3, 4) * 3)) : undefined);
 const calloutsOf = id => { const c = PB.calloutMap?.get(id); return c && c.some(x => coT(x).trim()) ? c : null; };
 const calloutList = id => { const c = calloutsOf(id); return c ? `<ul class="pb-co">${c.filter(x => coT(x).trim()).map(x => `<li>${coHtml(x)}</li>`).join("")}</ul>` : ""; };
 function pbCard(r, edit) {
