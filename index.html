@@ -11227,7 +11227,21 @@ async function owFetch() {
   const bad = lists.find(l => l.error); if (bad) return rpcErr(bad.error);
   OW.all = {}; OW_SHOW.forEach(([k], n) => { OW.all[k] = lists[n].data || []; }); return null;
 }
+// notes kept on a sale (e.g. "Costco payment received Aug 4"), shown on the invoice made from that sale (the install's invoice)
+async function owLoadSaleNotes() {
+  const { data: sn, error } = await db.from("sale_notes").select("est_id, job_id, body, noted_at"); if (error || !sn?.length) { OW.saleNotes = new Map(); return; }
+  const ests = [...new Set(sn.map(x => x.est_id))], sjobs = [...new Set(sn.map(x => x.job_id).filter(Boolean))];
+  const [a, b] = await Promise.all([db.from("jobs").select("id, sold_estimate_id").in("sold_estimate_id", ests), db.from("jobs").select("id, from_estimate_id").in("from_estimate_id", ests)]);
+  const jobNotes = new Map(), add = (jid, n) => { if (!jobNotes.has(jid)) jobNotes.set(jid, []); if (!jobNotes.get(jid).some(x => x.body === n.body)) jobNotes.get(jid).push(n); };
+  (a.data || []).forEach(j => sn.filter(n => n.est_id === j.sold_estimate_id).forEach(n => add(j.id, n)));
+  (b.data || []).forEach(j => sn.filter(n => n.est_id === j.from_estimate_id).forEach(n => add(j.id, n)));
+  sjobs.forEach(jid => sn.filter(n => n.job_id === jid).forEach(n => add(jid, n)));
+  const { data: inv } = await db.from("invoices").select("id, job_id").in("job_id", [...jobNotes.keys()]);
+  OW.saleNotes = new Map((inv || []).map(i => [i.id, jobNotes.get(i.job_id)]));
+}
+const owNotesHtml = r => ((r.invoice_id && OW.saleNotes?.get(r.invoice_id)) || []).map(n => `<div class="sl-snote" title="From the pinned notes at this address${n.noted_at ? ", " + esc(fmtDate(n.noted_at.slice(0, 10))) : ""}">📌 ${esc(n.body)}</div>`).join("");
 async function loadOwing() {
+  if (!OW.saleNotes) owLoadSaleNotes().then(() => { if (document.querySelector(".owing") && OW.saleNotes?.size) { const top = $("#main").scrollTop; renderOwing(); $("#main").scrollTop = top; } }).catch(() => {});
   const err = await owFetch();
   if (!document.querySelector(".owing, .loading")) return;
   if (err) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the list</h2>${esc(err)}</div></div>`; return; }
@@ -11327,7 +11341,7 @@ function renderOwing(msg) {
         <td class="num">${fmtDate(r.invoice_date)}</td>
         <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button>`}
           ${r.over_total ? `<div><span class="ow-tag odd" title="ServiceTitan shows ${esc(money(r.paid))} paid on this invoice, so it shows more owing than the invoice total. Usually a refund or a reversed payment.">Owing more than total</span></div>` : ""}
-          ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}</td>
+          ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}${owNotesHtml(r)}</td>
         <td><button class="link" type="button" data-ow-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${esc(r.job_type || "")}</td>
         <td class="r num">${scope !== "owing" ? (owBalScope(scope) ? `<strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>` : `<strong>${money(r.total)}</strong>`) : `<strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>${r.over_total ? `<div class="ow-odd-note">paid ${money(r.paid)}</div>` : ""}`}</td>
