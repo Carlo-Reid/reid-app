@@ -3367,7 +3367,7 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .sl-cvnote > span { flex: 1 1 auto; }
 .sl-cv { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin: 0 0 18px; color: var(--ink); }
 .cv-head { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; } .cv-head h2 { margin: 0 8px 0 0; font-size: 20px; }
-.cv-nav { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; } .cv-nav input { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.cv-nav { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-left: auto; } .cv-ft { display: inline-flex; gap: 5px; align-items: center; font-size: 13px; color: var(--muted); } .cv-nav input { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
 .cv-crumbs { margin: 10px 0 12px; font-size: 14px; } .cv-crumbs .link { font-size: inherit; }
 .cv-sum { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 14px; } .cv-sum > div { flex: 1 1 160px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; }
 .cv-sum span { display: block; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; opacity: .7; } .cv-sum strong { font-size: 26px; }
@@ -6702,11 +6702,12 @@ function salesWhoPicker() {
 }
 /* ---------- Sales · Carlo view (owners): every sale made, by year → month → day. Starts on today. ----------
    A sale = a sold proposal (not cancelled, more than $0), on the day it was sold. All sales people, or pick one. */
-const CV = { lvl: "day", d: null, days: null, list: new Map(), err: "", all: false, sp: "" };
+const CV = { lvl: "day", f: "", t: "", d: null, days: null, list: new Map(), err: "", all: false, sp: "" };
 const CV_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const cvIso = dt => dt.toISOString().slice(0, 10);
 function cvRange(lvl = CV.lvl, d = CV.d) {
   const [Y, M] = d.split("-").map(Number);
+  if (lvl === "range") return [CV.f || d, CV.t || d];   // From – To: your own dates
   if (lvl === "day") return [d, d];
   if (lvl === "month") return [cvIso(new Date(Date.UTC(Y, M - 1, 1))), cvIso(new Date(Date.UTC(Y, M, 0)))];
   if (lvl === "year") return [`${Y}-01-01`, `${Y}-12-31`];
@@ -6714,16 +6715,21 @@ function cvRange(lvl = CV.lvl, d = CV.d) {
 }
 function cvShift(k) {
   const [Y, M, D] = CV.d.split("-").map(Number);
+  if (CV.lvl === "range") { const span = cvDays(CV.f, CV.t) + 1, mv = x => { const [a, b, c] = x.split("-").map(Number); return cvIso(new Date(Date.UTC(a, b - 1, c + k * span))); };
+    CV.f = mv(CV.f); CV.t = mv(CV.t); CV.d = CV.t; return; }   // the same number of days back or forward
   if (CV.lvl === "day") CV.d = cvIso(new Date(Date.UTC(Y, M - 1, D + k)));
   else if (CV.lvl === "month") { const last = new Date(Date.UTC(Y, M + k, 0)).getUTCDate(); CV.d = cvIso(new Date(Date.UTC(Y, M - 1 + k, Math.min(D, last)))); }
   else if (CV.lvl === "year") { const last = new Date(Date.UTC(Y + k, M, 0)).getUTCDate(); CV.d = cvIso(new Date(Date.UTC(Y + k, M - 1, Math.min(D, last)))); }
 }
+const cvDays = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 864e5);
+const cvShort = x => new Date(x + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
 function cvPeriodText() {   // "on Monday, October 26, 2026", "in October 2026", "in 2026", "any time"
   const d = CV.d || salesToday(), M = Number(d.slice(5, 7));
   return CV.lvl === "day" ? "on " + new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+    : CV.lvl === "range" ? `from ${cvShort(CV.f)} to ${cvShort(CV.t)}`
     : CV.lvl === "month" ? `in ${CV_MONTHS[M - 1]} ${d.slice(0, 4)}` : CV.lvl === "year" ? "in " + d.slice(0, 4) : "any time";
 }
-const cvWantList = () => CV.lvl === "day" || CV.lvl === "month" || CV.all;
+const cvWantList = () => CV.lvl === "day" || CV.lvl === "month" || (CV.lvl === "range" && cvDays(CV.f, CV.t) <= 92) || CV.all;
 async function cvLoad() {
   if (!$("#sl-cv")) return;
   if (!CV.d) CV.d = salesToday();
@@ -6755,39 +6761,42 @@ function cvRender() {
   const spRows = CV.sp ? [] : spAll.map(k => ({ k, ...add(allDays.filter(x => spK(x.sp) === k && inPeriod(x))) })).filter(r => r.n).sort((a, b) => b.amt - a.amt);
   const spMax = Math.max(1, ...spRows.map(r => r.amt));
   const nice = x => new Date(x + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
-  const label = CV.lvl === "day" ? nice(d) : CV.lvl === "month" ? `${CV_MONTHS[M - 1]} ${Y}` : CV.lvl === "year" ? Y : "Every year";
+  const label = CV.lvl === "range" ? `${cvShort(from)} to ${cvShort(to)}` : CV.lvl === "day" ? nice(d) : CV.lvl === "month" ? `${CV_MONTHS[M - 1]} ${Y}` : CV.lvl === "year" ? Y : "Every year";
   // the breakdown one level down: years → months → days
   let rows = [];
   if (CV.lvl === "all") { const ys = [...new Set(days.map(x => x.d.slice(0, 4)))].sort().reverse();
     rows = ys.map(y => ({ go: `year|${y}-${y === today.slice(0, 4) ? today.slice(5) : "01-01"}`, t: y, now: y === today.slice(0, 4), ...add(days.filter(x => x.d.startsWith(y))) })); }
   else if (CV.lvl === "year") rows = CV_MONTHS.map((m, i) => { const ym = `${Y}-${String(i + 1).padStart(2, "0")}`;
     return { go: `month|${ym}-${ym === today.slice(0, 7) ? today.slice(8) : "01"}`, t: m, now: ym === today.slice(0, 7), future: ym > today.slice(0, 7), ...add(days.filter(x => x.d.startsWith(ym))) }; });
-  else if (CV.lvl === "month") rows = days.filter(x => x.d >= from && x.d <= to).slice().reverse()
+  else if (CV.lvl === "range" && cvDays(from, to) > 62) { const ms = [...new Set(days.filter(x => x.d >= from && x.d <= to).map(x => x.d.slice(0, 7)))].sort().reverse();
+    rows = ms.map(ym => ({ go: `month|${ym}-01`, t: `${CV_MONTHS[Number(ym.slice(5)) - 1]} ${ym.slice(0, 4)}`, now: ym === today.slice(0, 7), ...add(days.filter(x => x.d.startsWith(ym) && x.d >= from && x.d <= to)) })); }
+  else if (CV.lvl === "month" || CV.lvl === "range") rows = days.filter(x => x.d >= from && x.d <= to).slice().reverse()
     .map(x => ({ go: `day|${x.d}`, t: new Date(x.d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }), now: x.d === today, n: Number(x.n), amt: Number(x.amt) }));
   const max = Math.max(1, ...rows.map(r => r.amt));
-  const crumbs = [["all", "Every year", d], ...(CV.lvl !== "all" ? [["year", Y, d]] : []), ...(CV.lvl === "month" || CV.lvl === "day" ? [["month", CV_MONTHS[M - 1], d]] : []), ...(CV.lvl === "day" ? [["day", String(Number(d.slice(8))), d]] : [])];
+  const crumbs = CV.lvl === "range" ? [["all", "Every year", d], ["range", label, d]] : [["all", "Every year", d], ...(CV.lvl !== "all" ? [["year", Y, d]] : []), ...(CV.lvl === "month" || CV.lvl === "day" ? [["month", CV_MONTHS[M - 1], d]] : []), ...(CV.lvl === "day" ? [["day", String(Number(d.slice(8))), d]] : [])];
   const list = CV.list.get(cvRange().join("|"))?.filter(r => !CV.sp || spK(r.sales_person) === CV.sp);
   box.innerHTML = `<div class="cv-head"><h2>Carlo view</h2>
       <label class="sl-who cv-who"><span>Sales person</span><select id="cv-sp"><option value="">All sales people</option>${spAll.map(k => `<option value="${esc(k)}" ${CV.sp === k ? "selected" : ""}>${esc(spName(k))}</option>`).join("")}${CV.sp && !spAll.includes(CV.sp) ? `<option selected>${esc(CV.sp)}</option>` : ""}</select></label>
-      <span class="seg cv-lvl" role="group">${[["day", "Day"], ["month", "Month"], ["year", "Year"], ["all", "All years"]].map(([k, t]) => `<button type="button" data-cv-lvl="${k}" aria-pressed="${CV.lvl === k}">${t}</button>`).join("")}</span>
-      <span class="cv-nav">${CV.lvl !== "all" ? `<button class="btn quiet-btn" type="button" data-cv-step="-1" title="Back one ${CV.lvl}">‹</button><button class="btn quiet-btn" type="button" data-cv-step="1" title="Forward one ${CV.lvl}">›</button>` : ""}
+      <span class="seg cv-lvl" role="group">${[["day", "Day"], ["month", "Month"], ["year", "Year"], ["all", "All years"], ["range", "From – To"]].map(([k, t]) => `<button type="button" data-cv-lvl="${k}" aria-pressed="${CV.lvl === k}">${t}</button>`).join("")}</span>
+      <span class="cv-nav">${CV.lvl !== "all" ? `<button class="btn quiet-btn" type="button" data-cv-step="-1" title="Back one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl}">‹</button><button class="btn quiet-btn" type="button" data-cv-step="1" title="Forward one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl}">›</button>` : ""}
         <button class="btn quiet-btn" type="button" data-cv-today ${CV.lvl === "day" && d === today ? "disabled" : ""}>Today</button>
-        <input type="date" id="cv-date" value="${esc(d)}" aria-label="Go to a day"></span></div>
+        ${CV.lvl === "range" ? `<label class="cv-ft">From <input type="date" id="cv-from" value="${esc(from)}" max="${esc(to)}"></label><label class="cv-ft">To <input type="date" id="cv-to" value="${esc(to)}" min="${esc(from)}"></label>`
+          : `<input type="date" id="cv-date" value="${esc(d)}" aria-label="Go to a day">`}</span></div>
     <nav class="cv-crumbs">${crumbs.map(([k, t, x], i) => i === crumbs.length - 1 ? `<b>${esc(t)}</b>` : `<button class="link" type="button" data-cv-go="${k}|${x}">${esc(t)}</button>`).join(" › ")}</nav>
     ${CV.err ? `<div class="staff-msg err">${esc(CV.err)}</div>` : ""}
     <div class="cv-sum"><div><span>${esc(label)}${CV.lvl === "day" && d === today ? " · today" : ""}</span><strong>${CV.days ? money(tot.amt) : "…"}</strong></div>
       <div><span>Sales</span><strong>${CV.days ? tot.n : "…"}</strong></div>
       <div><span>Average sale</span><strong>${CV.days && tot.n ? money(tot.amt / tot.n) : "—"}</strong></div></div>
     ${CV.sp ? `<p class="cv-spnote">Showing <b>${esc(spName(CV.sp))}</b> only. <button class="link" type="button" data-cv-sp="">See all sales people</button></p>` : ""}
-    ${rows.length ? `<h3 class="cv-h3">${CV.lvl === "all" ? "By year" : CV.lvl === "year" ? "By month" : "By day"}</h3>` : ""}
+    ${rows.length ? `<h3 class="cv-h3">${CV.lvl === "all" ? "By year" : CV.lvl === "year" || (CV.lvl === "range" && cvDays(from, to) > 62) ? "By month" : "By day"}</h3>` : ""}
     ${rows.length ? `<div class="cv-rows">${rows.map(r => `<button type="button" class="cv-row ${r.now ? "now" : ""} ${r.future ? "future" : ""}" data-cv-go="${r.go}" ${r.future && !r.n ? "disabled" : ""}>
         <span class="cv-t">${esc(r.t)}</span><span class="cv-bar"><i style="width:${(r.amt / max * 100).toFixed(1)}%"></i></span>
         <span class="cv-n">${r.n} ${r.n === 1 ? "sale" : "sales"}</span><b class="cv-a">${money(r.amt)}</b></button>`).join("")}</div>`
-      : CV.lvl === "month" && CV.days ? `<p class="quiet">No sales this month.</p>` : ""}
+      : CV.lvl === "month" && CV.days ? `<p class="quiet">No sales this month.</p>` : CV.lvl === "range" && CV.days ? `<p class="quiet">No sales in these dates.</p>` : ""}
     ${spRows.length ? `<h3 class="cv-h3">By sales person</h3><div class="cv-rows">${spRows.map(r => `<button type="button" class="cv-row" data-cv-sp="${esc(r.k)}" title="See only ${esc(spName(r.k))}">
         <span class="cv-t">${esc(spName(r.k))}</span><span class="cv-bar"><i style="width:${(r.amt / spMax * 100).toFixed(1)}%"></i></span>
         <span class="cv-n">${r.n} ${r.n === 1 ? "sale" : "sales"}</span><b class="cv-a">${money(r.amt)}</b></button>`).join("")}</div>` : ""}
-    ${CV.lvl === "year" || CV.lvl === "all" ? `<p><button class="link" type="button" data-cv-all>${CV.all ? "Hide the sales" : `Show all ${tot.n} sales`}</button></p>` : ""}
+    ${CV.lvl === "year" || CV.lvl === "all" || (CV.lvl === "range" && cvDays(from, to) > 92) ? `<p><button class="link" type="button" data-cv-all>${CV.all ? "Hide the sales" : `Show all ${tot.n} sales`}</button></p>` : ""}
     ${cvWantList() ? (list ? (list.length ? `<div class="staff-wrap cv-listwrap"><table class="calls-table cv-t"><thead><tr><th>Sold</th><th>Customer</th><th>Sales person</th><th>For</th><th class="r">Sale</th><th></th></tr></thead><tbody>
         ${list.map(r => `<tr><td>${esc(fmtDate(r.sold_on))}</td>
           <td><button class="link" type="button" data-cv-cust="${r.customer_id}"><b>${esc(r.customer || "")}</b></button><div class="quiet">${esc(r.address || "")}</div></td>
@@ -6796,12 +6805,15 @@ function cvRender() {
           <td><button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button></td></tr>`).join("")}</tbody></table></div>`
         : `<p class="quiet">No sales ${CV.lvl === "day" ? "on this day" : "here"}.</p>`) : `<p class="quiet">Loading the sales…</p>`) : ""}`;
   const redo = load => { if (salesCvLinked() && document.body.dataset.page === "sales") { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; } else load ? cvLoad() : cvRender(); };
-  const go = (lvl, dd) => { CV.lvl = lvl; if (dd) CV.d = dd; if (lvl === "day" || lvl === "month") CV.all = false; redo(true); };
+  const go = (lvl, dd) => { if (lvl === "range" && CV.lvl !== "range") { const [f0, t0] = cvRange(CV.lvl === "all" ? "year" : CV.lvl); CV.f = f0; CV.t = t0 > today ? today : t0; if (CV.f > CV.t) CV.f = CV.t; }   // starts on what you were looking at
+    CV.lvl = lvl; if (dd) CV.d = dd; if (lvl === "day" || lvl === "month") CV.all = false; redo(true); };
   box.querySelectorAll("[data-cv-lvl]").forEach(b => b.addEventListener("click", () => go(b.dataset.cvLvl)));
   box.querySelectorAll("[data-cv-go]").forEach(b => b.addEventListener("click", () => { const [l, x] = b.dataset.cvGo.split("|"); go(l, x); }));
   box.querySelectorAll("[data-cv-step]").forEach(b => b.addEventListener("click", () => { cvShift(Number(b.dataset.cvStep)); redo(true); }));
   box.querySelector("[data-cv-today]")?.addEventListener("click", () => go("day", salesToday()));
   box.querySelector("#cv-date")?.addEventListener("change", e => { if (e.target.value) go("day", e.target.value); });
+  ["from", "to"].forEach(k => box.querySelector("#cv-" + k)?.addEventListener("change", e => { const v = e.target.value; if (!v) return;
+    if (k === "from") { CV.f = v; if (CV.t < v) CV.t = v; } else { CV.t = v; if (CV.f > v) CV.f = v; } CV.d = CV.t; redo(true); }));
   box.querySelector("#cv-sp")?.addEventListener("change", e => { CV.sp = e.target.value; redo(); });
   box.querySelectorAll("[data-cv-sp]").forEach(b => b.addEventListener("click", () => { CV.sp = b.dataset.cvSp; redo(); }));
   box.querySelector("[data-cv-all]")?.addEventListener("click", () => { CV.all = !CV.all; cvLoad(); });
