@@ -6679,9 +6679,12 @@ async function salesLoadComm() {
   // the half-years the Sales page covers: 19 months back (it shows 18) to a year ahead
   const parts = [], now = new Date(); for (let d = new Date(now.getFullYear(), now.getMonth() - 19, 1); d <= new Date(now.getFullYear() + 1, now.getMonth(), 1); d = new Date(d.getFullYear(), d.getMonth() < 6 ? 6 : 12, 1)) {
     const yy = d.getFullYear(), h = d.getMonth() < 6 ? 1 : 2; if (!parts.some(p => p.p_from.startsWith(yy + (h === 1 ? "-01" : "-07")))) parts.push({ p_from: yy + (h === 1 ? "-01-01" : "-07-01"), p_to: yy + (h === 1 ? "-06-30" : "-12-31") }); }
+  const today = salesToday(); parts.sort((a, b) => (a.p_from <= today && a.p_to >= today ? -1 : 0) - (b.p_from <= today && b.p_to >= today ? -1 : 0) || (b.p_from <= today) - (a.p_from <= today) || (a.p_from <= today ? b.p_from.localeCompare(a.p_from) : a.p_from.localeCompare(b.p_from)));
+  let paintT = 0; const paint = () => { clearTimeout(paintT); paintT = setTimeout(() => { if (seq === SALES.commSeq) salesRerender(); }, 150); };
   const getAll = async () => { const out = [], q = parts.slice(); let bad = 0;
-    const one = async a => { let r = await db.rpc("install_list", a); if (r.error) r = await db.rpc("install_list", a); if (r.error) bad++; else out.push(...(r.data || [])); };
-    await Promise.all([0, 1].map(async () => { while (q.length) await one(q.shift()); }));
+    const one = async a => { let r = await db.rpc("install_list", a); if (r.error) r = await db.rpc("install_list", a); if (r.error) { bad++; return; } out.push(...(r.data || []));
+      if (seq === SALES.commSeq) { const m = new Map(SALES.comm || []); (r.data || []).forEach(x => m.set(x.job_id, x)); SALES.comm = m; paint(); } };   // show each piece as it comes
+    await Promise.all([0, 1, 2].map(async () => { while (q.length) await one(q.shift()); }));
     return bad === parts.length ? null : out; };
   let rows = await getAll(); if (seq !== SALES.commSeq) return;
   if (!rows) { SALES.comm = SALES.pay = null; return; }
@@ -6765,8 +6768,9 @@ function payDaysAll() {
   return out;
 }
 // a pick list of pay days, by month ("October 2026: Oct 8, Oct 22"); keeps an odd date that's already set, so nothing changes by itself
-function payDaySelect(attrs, value, list, first) {
-  const L = [...new Set([...payDaysAll(), ...(value ? [value] : [])])].sort(), nx = nextPayDay(), groups = new Map();
+function payDaySelect(attrs, value, list, first, fromYear) {
+  let L = [...new Set([...payDaysAll(), ...(value ? [value] : [])])].sort(); const nx = nextPayDay(), groups = new Map();
+  if (fromYear) { const y = String(fromYear); L = [...L.filter(d => d >= y), ...L.filter(d => d < y)]; }   // opens at the call's year; earlier years after
   L.forEach(d => { const k = d.slice(0, 7); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(d); });
   const mName = k => new Date(k + "-15T12:00:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" });
   const day = d => new Date(d + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric" });
@@ -6775,15 +6779,16 @@ function payDaySelect(attrs, value, list, first) {
 }
 const salesToday = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
 // payroll: pick the pay day a commission goes out on (on that day it's marked paid)
+const salesCallYear = r => String(r.visit_date || r.sold_on || salesDate(r) || "").slice(0, 4) || null;   // the year of the sales call
 function salesPayCell(r) {
   const id = salesInstOf(r); if (!id) return `<span class="quiet">—</span>`;
   const pd = salesPaidOf(id);
-  if (pd) return `<label class="sl-pay paid" title="The day it was paid: change it here">${pd.paid_at ? "Paid" : "Paid early"} ${payDaySelect(`data-sl-paid="${id}" aria-label="Pay day it was paid"`, insLocalDay(pd.paid_at || pd.prepaid_at), payDays(400, 0))}</label>`;
+  if (pd) return `<label class="sl-pay paid" title="The day it was paid: change it here">${pd.paid_at ? "Paid" : "Paid early"} ${payDaySelect(`data-sl-paid="${id}" aria-label="Pay day it was paid"`, insLocalDay(pd.paid_at || pd.prepaid_at), payDays(400, 0), "", salesCallYear(r))}</label>`;
   const on = SALES.pay?.get(id) || "", c = SALES.comm?.get(id);
   if (!on && !c) return SALES.comm ? `<span class="quiet">—</span>` : `<span class="quiet">…</span>`;
   if (!on && c.commission_amount == null) return `<span class="quiet">—</span>`;
   return `<label class="sl-pay ${on ? "on" : ""}" title="${on ? "On payroll: paid on this day" : "Pick the pay day to put it on payroll"}"><input type="checkbox" data-sl-paychk="${id}" ${on ? "checked" : ""} aria-label="For payroll">
-    ${payDaySelect(`data-sl-pay="${id}" aria-label="Pay day"`, on, payDays(28, 100), "Pay day…")}</label>`;
+    ${payDaySelect(`data-sl-pay="${id}" aria-label="Pay day"`, on, payDays(28, 100), "Pay day…", salesCallYear(r))}</label>`;
 }
 // the Installed column: the day it was installed, or when it's booked
 // the equipment put in on the install (from the Installs page): "A/C Install, York · YC2D18B21S"
@@ -6978,6 +6983,7 @@ function cvRender() {
   // sales people: everyone who ever sold, biggest first; and who sold what in this period
   const spTot = new Map(); allDays.forEach(x => { const k = spK(x.sp); const a = spTot.get(k) || { n: 0, amt: 0 }; a.n += Number(x.n) || 0; a.amt += Number(x.amt) || 0; spTot.set(k, a); });
   const spAll = [...spTot.entries()].sort((a, b) => b[1].amt - a[1].amt).map(([k]) => k);
+  for (const n of [...new Set((SALES.rows || []).map(r => r.sales_person).filter(Boolean))].sort()) if (!spAll.includes(n)) spAll.push(n);   // (before the totals are in)
   const spName = k => k === "__none" ? "No sales person" : k;
   const spRows = CV.sp ? [] : spAll.map(k => ({ k, ...add(allDays.filter(x => spK(x.sp) === k && inPeriod(x))) })).filter(r => r.n).sort((a, b) => b.amt - a.amt);
   const spMax = Math.max(1, ...spRows.map(r => r.amt));
