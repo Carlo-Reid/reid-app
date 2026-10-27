@@ -155,6 +155,9 @@ AS $function$
   ok AS (SELECT public.current_staff_role() IS NOT NULL
                 AND (me.boss OR who.seller = me.uid OR EXISTS (SELECT 1 FROM sales_viewers v WHERE v.viewer_user_id = me.uid AND v.seller_user_id = who.seller)) AS ok FROM me, who),
   tgt AS (SELECT u.id AS uid, u.employee_id AS emp FROM app_users u, who WHERE u.id = who.seller),
+  -- each partner by the first word of its name (once, not for every sale)
+  pw AS MATERIALIZED (SELECT DISTINCT ON (lower(split_part(btrim(name), ' ', 1))) lower(split_part(btrim(name), ' ', 1)) AS w, btrim(name) AS name
+                      FROM partners ORDER BY lower(split_part(btrim(name), ' ', 1)), id),
   s AS (
     SELECT e.id AS est_id, e.estimate_number AS est_number, j.id AS job_id, j.job_number, t.name AS job_type,
            (coalesce(e.accepted_at, j.created_at, e.created_at) AT TIME ZONE 'America/Toronto')::date AS sold_on,
@@ -163,10 +166,10 @@ AS $function$
            coalesce((SELECT coalesce(public._emp_name(u.employee_id), u.login_email::text) FROM app_users u WHERE u.id = j.sales_user_id),
                     public._emp_name(e.sold_by_employee_id)) AS sales_person,
            -- who it's for: the job's partner, or the partner the job type is named after ("Rona - Lead"), else Reid
-           coalesce((SELECT btrim(pa.name) FROM partners pa WHERE pa.id = j.partner_id),
-                    (SELECT btrim(pa.name) FROM partners pa WHERE length(split_part(btrim(t.name), ' ', 1)) > 2
-                       AND lower(split_part(btrim(pa.name), ' ', 1)) = lower(split_part(btrim(t.name), ' ', 1)) ORDER BY pa.id LIMIT 1), 'Reid') AS partner
+           coalesce(btrim(pj.name), pt.name, 'Reid') AS partner
     FROM estimates e JOIN jobs j ON j.id = e.job_id LEFT JOIN job_types t ON t.id = j.job_type_id
+    LEFT JOIN partners pj ON pj.id = j.partner_id
+    LEFT JOIN pw pt ON pt.w = lower(split_part(btrim(t.name), ' ', 1)) AND length(split_part(btrim(t.name), ' ', 1)) > 2
     LEFT JOIN customers c ON c.id = coalesce(e.customer_id, j.customer_id)
     LEFT JOIN locations l ON l.id = coalesce(e.location_id, j.location_id)
     WHERE e.status = 'accepted' AND e.cancelled_at IS NULL AND j.sales_cancelled_at IS NULL AND (SELECT ok FROM ok)
