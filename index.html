@@ -6752,12 +6752,14 @@ function cvPeriodText() {   // "on Monday, October 26, 2026", "in October 2026",
     : CV.lvl === "month" ? `in ${CV_MONTHS[M - 1]} ${d.slice(0, 4)}` : CV.lvl === "year" ? "in " + d.slice(0, 4) : "any time";
 }
 const cvWantList = () => CV.lvl === "day" || CV.lvl === "month" || (CV.lvl === "range" && cvDays(CV.f, CV.t) <= 92) || CV.all;
+// the database is sometimes busy while the page loads: a timed-out ask is tried again (up to twice)
+async function cvRpc(name, args) { let r; for (let i = 0; i < 3; i++) { r = await db.rpc(name, args); if (!r.error || !/statement timeout/i.test(r.error.message || "")) break; await new Promise(z => setTimeout(z, 1500)); } return r; }
 async function cvLoad() {
   if (!$("#sl-cv")) return;
   if (!CV.d) CV.d = salesToday();
   cvRender();
   if (!CV.days) {
-    const by = CV.by; let { data, error } = await db.rpc("sales_history_days_by", { p_seller: null, p_by: by });
+    const by = CV.by; let { data, error } = await cvRpc("sales_history_days_by", { p_seller: null, p_by: by });
     if (error && by === "sold" && /function|schema|PGRST202/i.test(error.message || "")) ({ data, error } = await db.rpc("sales_history_days", { p_seller: null }));   // (until setup 99zzzX)
     if (by !== CV.by) return;
     if (error) { CV.err = /function|schema|PGRST202/i.test(error.message || "") ? "Run RUN SETUP NOW.bat to switch this on." : rpcErr(error); cvRender(); return; }
@@ -6766,7 +6768,7 @@ async function cvLoad() {
   const lk = cvRange().join("|");
   if (cvWantList() && !CV.list.has(lk)) {
     const [f, t] = cvRange();
-    const by = CV.by; let { data, error } = await db.rpc("sales_history_by", { p_seller: null, p_from: f, p_to: t, p_by: by });
+    const by = CV.by; let { data, error } = await cvRpc("sales_history_by", { p_seller: null, p_from: f, p_to: t, p_by: by });
     if (error && by === "sold" && /function|schema|PGRST202/i.test(error.message || "")) ({ data, error } = await db.rpc("sales_history", { p_seller: null, p_from: f, p_to: t }));
     if (by !== CV.by) return;
     if (error) CV.err = rpcErr(error); else CV.list.set(lk, data || []);
