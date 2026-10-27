@@ -144,9 +144,10 @@ GRANT EXECUTE ON FUNCTION public.sales_list(bigint) TO authenticated;
 -- A sale = a proposal marked sold (accepted), not cancelled, worth more than $0.
 -- Sold day = the day it was sold (or, for old ServiceTitan ones with no sold time, the day the job was made), Ottawa time.
 -- Whose: everyone (owners / sales bosses), or one sales person (the "Sales page of" picker), with the same rules as the Sales page.
+DROP FUNCTION IF EXISTS public._sales_hist_rows(bigint) CASCADE;   -- (its columns grew: partner)
 CREATE OR REPLACE FUNCTION public._sales_hist_rows(p_seller bigint DEFAULT NULL)
  RETURNS TABLE(est_id bigint, est_number text, job_id bigint, job_number text, job_type text, sold_on date, amount numeric,
-               customer_id bigint, customer text, address text, sales_person text)
+               customer_id bigint, customer text, address text, sales_person text, partner text)
  LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
 AS $function$
   WITH me AS (SELECT public.current_app_user_id() AS uid, public._sales_boss() AS boss),
@@ -160,7 +161,11 @@ AS $function$
            coalesce((SELECT sum(el.line_total) FROM estimate_lines el WHERE el.estimate_option_id = e.accepted_option_id), 0) AS amount,
            c.id AS customer_id, c.display_name AS customer, concat_ws(', ', l.street, l.city) AS address,
            coalesce((SELECT coalesce(public._emp_name(u.employee_id), u.login_email::text) FROM app_users u WHERE u.id = j.sales_user_id),
-                    public._emp_name(e.sold_by_employee_id)) AS sales_person
+                    public._emp_name(e.sold_by_employee_id)) AS sales_person,
+           -- who it's for: the job's partner, or the partner the job type is named after ("Rona - Lead"), else Reid
+           coalesce((SELECT btrim(pa.name) FROM partners pa WHERE pa.id = j.partner_id),
+                    (SELECT btrim(pa.name) FROM partners pa WHERE length(split_part(btrim(t.name), ' ', 1)) > 2
+                       AND lower(split_part(btrim(pa.name), ' ', 1)) = lower(split_part(btrim(t.name), ' ', 1)) ORDER BY pa.id LIMIT 1), 'Reid') AS partner
     FROM estimates e JOIN jobs j ON j.id = e.job_id LEFT JOIN job_types t ON t.id = j.job_type_id
     LEFT JOIN customers c ON c.id = coalesce(e.customer_id, j.customer_id)
     LEFT JOIN locations l ON l.id = coalesce(e.location_id, j.location_id)
@@ -175,8 +180,8 @@ REVOKE EXECUTE ON FUNCTION public._sales_hist_rows(bigint) FROM PUBLIC, anon, au
 CREATE OR REPLACE FUNCTION public.sales_history_days(p_seller bigint DEFAULT NULL)
  RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
 AS $function$
-  SELECT coalesce(jsonb_agg(jsonb_build_object('d', d, 'sp', sp, 'n', n, 'amt', amt) ORDER BY d), '[]'::jsonb)
-  FROM (SELECT sold_on AS d, coalesce(sales_person, '') AS sp, count(*) AS n, sum(amount) AS amt FROM public._sales_hist_rows(p_seller) GROUP BY 1, 2) x
+  SELECT coalesce(jsonb_agg(jsonb_build_object('d', d, 'sp', sp, 'pt', pt, 'n', n, 'amt', amt) ORDER BY d), '[]'::jsonb)
+  FROM (SELECT sold_on AS d, coalesce(sales_person, '') AS sp, partner AS pt, count(*) AS n, sum(amount) AS amt FROM public._sales_hist_rows(p_seller) GROUP BY 1, 2, 3) x
 $function$;
 REVOKE EXECUTE ON FUNCTION public.sales_history_days(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.sales_history_days(bigint) TO authenticated;

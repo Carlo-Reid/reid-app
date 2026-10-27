@@ -1149,6 +1149,7 @@
   .seg { display: inline-flex; flex-wrap: wrap; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 2px; }
   .seg button { border: 0; background: none; color: var(--ink); font: inherit; font-weight: 650; font-size: calc(14px * var(--fs, 1)); padding: 7px 14px; border-radius: 8px; cursor: pointer; }
   .seg button:hover { background: var(--blue-wash); color: var(--blue); }
+  .cv-pt { align-items: center; } .cv-pt-l { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--steel); padding: 0 8px 0 6px; }
   .seg button[aria-pressed="true"] { background: var(--blue); color: var(--on-accent); box-shadow: 0 1px 4px color-mix(in srgb, var(--blue) 40%, transparent); }
   .cl-dates-in { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .cl-dates-in input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font: inherit; }
@@ -6821,8 +6822,8 @@ function wireSalesViews() { document.querySelectorAll("[data-sl-view]").forEach(
 const CV = { by: (() => { try { return localStorage.getItem("cvBy") || "sold"; } catch { return "sold"; } })(), lvl: "day", f: "", t: "", d: null, days: null, list: new Map(), err: "", all: false, sp: "", cache: {} };
 // Carlo view keeps where you were (Day / Month / Year / All years / Pay periods / From – To, the date, the sales person) until you change it
 try { const v = JSON.parse(localStorage.getItem("cvView") || "null"); if (v) { const today = new Date().toLocaleDateString("en-CA");
-  Object.assign(CV, { lvl: v.lvl || "day", f: v.f || "", t: v.t || "", sp: v.sp || "", ppBack: !!v.ppBack, d: v.on === today ? v.d : null }); } } catch {}
-const cvSaveView = () => { try { localStorage.setItem("cvView", JSON.stringify({ lvl: CV.lvl, d: CV.d, f: CV.f, t: CV.t, sp: CV.sp, ppBack: CV.ppBack, on: new Date().toLocaleDateString("en-CA") })); } catch {} };
+  Object.assign(CV, { lvl: v.lvl || "day", f: v.f || "", t: v.t || "", sp: v.sp || "", pt: v.pt || "", ppBack: !!v.ppBack, d: v.on === today ? v.d : null }); } } catch {}
+const cvSaveView = () => { try { localStorage.setItem("cvView", JSON.stringify({ lvl: CV.lvl, d: CV.d, f: CV.f, t: CV.t, sp: CV.sp, pt: CV.pt || "", ppBack: CV.ppBack, on: new Date().toLocaleDateString("en-CA") })); } catch {} };
 const CV_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const cvIso = dt => dt.toISOString().slice(0, 10);
 function cvRange(lvl = CV.lvl, d = CV.d) {
@@ -6903,7 +6904,7 @@ async function cvLoad() {
       CV.unpaidAll = data || []; CV.err = ""; }
     if (!SALES.comm) { CV.days = null; cvRender(); return; }   // (the commission is still loading: this runs again when it's in)
     const U = cvUnpaid(), m = new Map();
-    U.forEach(r => { const k = r.sold_on + "|" + (r.sales_person || ""); const x = m.get(k) || { d: r.sold_on, sp: r.sales_person || "", n: 0, amt: 0 }; x.n++; x.amt += r.owed; m.set(k, x); });
+    U.forEach(r => { const k = r.sold_on + "|" + (r.sales_person || "") + "|" + (r.partner || "Reid"); const x = m.get(k) || { d: r.sold_on, sp: r.sales_person || "", pt: r.partner || "Reid", n: 0, amt: 0 }; x.n++; x.amt += r.owed; m.set(k, x); });
     CV.days = [...m.values()].sort((a, b) => a.d.localeCompare(b.d));
     const [f, t] = cvRange(); CV.list = new Map([[cvRange().join("|"), U.filter(r => (!f || r.sold_on >= f) && (!t || r.sold_on <= t))]]);
     cvRender(); return;
@@ -6931,7 +6932,9 @@ function cvRender() {
   const box = $("#sl-cv"); if (!box) return;
   box.style.minHeight = !CV.days && CV.minH ? CV.minH + "px" : ""; if (CV.days) CV.minH = 0;
   const d = CV.d || salesToday(), Y = d.slice(0, 4), M = Number(d.slice(5, 7)), today = salesToday();
-  const allDays = CV.days || [], spK = v => v || "__none", days = allDays.filter(x => !CV.sp || spK(x.sp) === CV.sp), [from, to] = cvRange();
+  const rawDays = CV.days || [], ptOf = x => x.pt || "Reid", ptNames = [...new Set(rawDays.map(ptOf))].sort((a, b) => a === "Reid" ? -1 : b === "Reid" ? 1 : a.localeCompare(b));
+  const allDays = CV.pt ? rawDays.filter(x => ptOf(x) === CV.pt) : rawDays;   // Partners bar: Reid, or one partner
+  const spK = v => v || "__none", days = allDays.filter(x => !CV.sp || spK(x.sp) === CV.sp), [from, to] = cvRange();
   const inPeriod = x => CV.lvl === "all" || (x.d >= from && x.d <= to);
   const add = L => L.reduce((a, x) => (a.n += Number(x.n) || 0, a.amt += Number(x.amt) || 0, a), { n: 0, amt: 0 });
   const tot = add(days.filter(inPeriod));
@@ -6966,6 +6969,7 @@ function cvRender() {
       <span class="seg cv-by" role="group" aria-label="Count sales by">${[["sold", "Date sold"], ["installed", "Date installed"], ["paid", "Date paid"], ["unpaid", "Not paid yet"], ["all", "Show all"]].map(([k, t]) => `<button type="button" data-cv-by="${k}" aria-pressed="${CV.by === k}">${t}</button>`).join("")}</span>
       <label class="sl-who cv-who"><span>Sales person</span><select id="cv-sp"><option value="">All sales people</option>${spAll.map(k => `<option value="${esc(k)}" ${CV.sp === k ? "selected" : ""}>${esc(spName(k))}</option>`).join("")}${CV.sp && !spAll.includes(CV.sp) ? `<option selected>${esc(CV.sp)}</option>` : ""}</select></label>
       <span class="seg cv-lvl" role="group">${[["day", "Day"], ["month", "Month"], ["year", "Year"], ["all", "All years"], ["pp", "Pay periods"], ["range", "From – To"]].map(([k, t]) => `<button type="button" data-cv-lvl="${k}" aria-pressed="${CV.lvl === k}">${t}</button>`).join("")}</span>
+      <span class="seg cv-pt" role="group" aria-label="Partners"><span class="cv-pt-l">Partners</span>${[["", "Show all"], ...[...new Set([...ptNames, ...(CV.pt ? [CV.pt] : [])])].map(p => [p, p])].map(([k, t]) => `<button type="button" data-cv-pt="${esc(k)}" aria-pressed="${(CV.pt || "") === k}">${esc(t)}</button>`).join("")}</span>
       <span class="cv-nav">${CV.lvl !== "all" ? `<button class="btn quiet-btn" type="button" data-cv-step="-1" title="Back one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl === "pp" ? "year" : CV.lvl}">‹</button><button class="btn quiet-btn" type="button" data-cv-step="1" title="Forward one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl === "pp" ? "year" : CV.lvl}">›</button>` : ""}
         <button class="btn quiet-btn" type="button" data-cv-today ${CV.lvl === "day" && d === today ? "disabled" : ""}>Today</button>
         ${CV.lvl === "range" ? `<label class="cv-ft">From <input type="date" id="cv-from" value="${esc(from)}" max="${esc(to)}"></label><label class="cv-ft">To <input type="date" id="cv-to" value="${esc(to)}" min="${esc(from)}"></label>`
@@ -6999,6 +7003,7 @@ function cvRender() {
     if (lvl !== "range") CV.ppBack = false;
     CV.lvl = lvl; if (dd) CV.d = dd; if (lvl === "day" || lvl === "month") CV.all = false; cvSaveView(); redo(true); };
   box.querySelectorAll("[data-cv-lvl]").forEach(b => b.addEventListener("click", () => go(b.dataset.cvLvl)));
+  box.querySelectorAll("[data-cv-pt]").forEach(b => b.addEventListener("click", () => { if ((CV.pt || "") === b.dataset.cvPt) return; CV.pt = b.dataset.cvPt; redo(); }));   // only the partner changes
   box.querySelectorAll("[data-cv-by]").forEach(b => b.addEventListener("click", () => { if (CV.by === b.dataset.cvBy) return;
     CV.minH = box.offsetHeight;   // hold the box's height while the numbers load, so the page doesn't move
     CV.by = b.dataset.cvBy; try { localStorage.setItem("cvBy", CV.by); } catch {} CV.days = CV.by === "unpaid" ? null : CV.cache[CV.by] || null; CV.list = new Map(); CV.err = ""; redo(true); }));   // the period you're on stays as it is
@@ -7077,6 +7082,7 @@ function renderSales(msg) {
     if (inst && !(r.installs?.length || r.stage === "install")) return false; const d = inst ? instDate(r) : salesDate(r); return (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); };
   const spOf = r => salesSrc(r)?.sales_person || "";
   const inSp = r => !cvOn || !CV.sp || (spOf(r) || "__none") === CV.sp;   // Carlo view's sales person
+  if (cvOn) SALES.ptn = CV.pt || "";   // owners: the Partners bar in Carlo view decides
   const inPtn = r => !SALES.ptn || salesPartner(r) === SALES.ptn;   // Reid or one partner (the buttons above the list)
   const R = (SALES.rows || []).filter(r => inSp(r) && inPtn(r) && inRange(r, SALES.tab === "install" ? "install" : "")), n = k => (SALES.rows || []).filter(r => inSp(r) && inPtn(r) && inTab(r, k) && inRange(r, k)).length;
   const qq = (SALES.q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -7120,7 +7126,7 @@ function renderSales(msg) {
     ${msg ? `<div class="staff-msg ok" role="status">${esc(msg)}</div>` : ""}
     ${SALES.pay && cs.ready.length ? `<div class="sl-find sl-payall"><span>Put all <b>${cs.ready.length}</b> ready to pay (<b>${money(cs.now)}</b>${SALES.from || SALES.to ? " in these dates" : ""}) on payroll for</span>
       ${payDaySelect(`id="sl-payall-d" aria-label="Pay day"`, SALES.payDay && SALES.payDay >= salesToday() ? SALES.payDay : nextPayDay(), payDays(28, 100))}<button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
-    ${ptnCount.size > 1 || SALES.ptn ? `<div class="sl-ptns" role="group" aria-label="Reid or partner"><span class="quiet">Show:</span>
+    ${!cvOn && (ptnCount.size > 1 || SALES.ptn) ? `<div class="sl-ptns" role="group" aria-label="Reid or partner"><span class="quiet">Show:</span>
       <button type="button" class="sl-ptnb ${SALES.ptn ? "" : "on"}" data-sl-ptn="">All <b>${ptnBase.length}</b></button>
       ${[...ptnCount].sort((a, b) => (a[0] === "Reid" ? -1 : b[0] === "Reid" ? 1 : b[1] - a[1])).map(([p, c]) => `<button type="button" class="sl-ptnb ${SALES.ptn === p ? "on" : ""} ${p === "Reid" ? "" : "sl-ptnb-p"}" data-sl-ptn="${esc(p)}">${esc(p)} <b>${c}</b></button>`).join("")}</div>` : ""}
     <div class="sl-find sl-listhead"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">

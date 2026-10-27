@@ -7,7 +7,7 @@ DROP FUNCTION IF EXISTS public._sales_hist_inst(bigint);   -- (replaced by the o
 DROP FUNCTION IF EXISTS public._sales_hist_inst(bigint, date, date);
 CREATE OR REPLACE FUNCTION public._sales_hist_inst(p_seller bigint DEFAULT NULL, p_sold_from date DEFAULT NULL, p_sold_to date DEFAULT NULL)
  RETURNS TABLE(est_id bigint, est_number text, job_id bigint, job_number text, job_type text, sold_on date, amount numeric,
-               customer_id bigint, customer text, address text, sales_person text, installed_on date, inst_job_id bigint, inst_done boolean, paid_on date, paid_amount numeric)
+               customer_id bigint, customer text, address text, sales_person text, partner text, installed_on date, inst_job_id bigint, inst_done boolean, paid_on date, paid_amount numeric)
  LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
 AS $function$
   WITH s AS MATERIALIZED (SELECT * FROM public._sales_hist_rows(p_seller) r
@@ -32,7 +32,7 @@ AS $function$
                 THEN coalesce(j.completed_at::date, (SELECT max(v.completed_at) FROM visits v WHERE v.job_id = j.id)::date)
                 ELSE (SELECT min(v.scheduled_date) FROM visits v WHERE v.job_id = j.id AND v.status <> 'cancelled') END AS day
     FROM best b JOIN jobs j ON j.id = b.jid)
-  SELECT s.est_id, s.est_number, s.job_id, s.job_number, s.job_type, s.sold_on, s.amount, s.customer_id, s.customer, s.address, s.sales_person,
+  SELECT s.est_id, s.est_number, s.job_id, s.job_number, s.job_type, s.sold_on, s.amount, s.customer_id, s.customer, s.address, s.sales_person, s.partner,
          d.day, d.jid, d.done, (coalesce(it.paid_at, it.prepaid_at) AT TIME ZONE 'America/Toronto')::date,
          CASE WHEN it.paid_at IS NOT NULL THEN it.paid_amount ELSE it.prepaid_amount END
   FROM s LEFT JOIN d ON d.est_id = s.est_id LEFT JOIN install_tracking it ON it.job_id = d.jid
@@ -44,10 +44,10 @@ CREATE OR REPLACE FUNCTION public.sales_history_days_by(p_seller bigint DEFAULT 
  RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
 AS $function$
   SELECT CASE WHEN p_by IN ('installed', 'paid') THEN
-    (SELECT coalesce(jsonb_agg(jsonb_build_object('d', d, 'sp', sp, 'n', n, 'amt', amt) ORDER BY d), '[]'::jsonb)
-     FROM (SELECT CASE p_by WHEN 'installed' THEN installed_on ELSE paid_on END AS d, coalesce(sales_person, '') AS sp, count(*) AS n,
+    (SELECT coalesce(jsonb_agg(jsonb_build_object('d', d, 'sp', sp, 'pt', pt, 'n', n, 'amt', amt) ORDER BY d), '[]'::jsonb)
+     FROM (SELECT CASE p_by WHEN 'installed' THEN installed_on ELSE paid_on END AS d, coalesce(sales_person, '') AS sp, partner AS pt, count(*) AS n,
                   CASE WHEN p_by = 'paid' THEN coalesce(sum(paid_amount), 0) ELSE sum(amount) END AS amt
-           FROM public._sales_hist_inst(p_seller) GROUP BY 1, 2) x WHERE d IS NOT NULL)
+           FROM public._sales_hist_inst(p_seller) GROUP BY 1, 2, 3) x WHERE d IS NOT NULL)
   ELSE public.sales_history_days(p_seller) END   -- by the sold day: the quick way (no installs to match)
 $function$;
 REVOKE EXECUTE ON FUNCTION public.sales_history_days_by(bigint, text) FROM PUBLIC, anon;
