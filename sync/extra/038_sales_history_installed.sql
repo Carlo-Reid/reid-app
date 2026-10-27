@@ -20,7 +20,7 @@ AS $function$
   rest AS (SELECT s.est_id, s.customer_id, s.amount FROM s WHERE NOT EXISTS (SELECT 1 FROM l1 WHERE l1.est_id = s.est_id)),
   un AS MATERIALIZED (SELECT ij.id, ij.customer_id FROM ij WHERE ij.sold_estimate_id IS NULL AND ij.from_estimate_id IS NULL
                         AND ij.customer_id IN (SELECT rest.customer_id FROM rest)),
-  inv AS (SELECT i.job_id, sum(i.subtotal) AS sub FROM invoices i WHERE i.job_id IN (SELECT un.id FROM un) AND i.status NOT IN ('void', 'draft') GROUP BY i.job_id),
+  inv AS MATERIALIZED (SELECT i.job_id, sum(i.subtotal) AS sub FROM invoices i WHERE i.job_id IN (SELECT un.id FROM un) AND i.status NOT IN ('void', 'draft') GROUP BY i.job_id),
   l3 AS (SELECT rest.est_id, un.id AS jid, 3 AS pri FROM rest JOIN un ON un.customer_id = rest.customer_id
          LEFT JOIN install_tracking it ON it.job_id = un.id LEFT JOIN inv ON inv.job_id = un.id
          WHERE abs(coalesce(it.sale_amount, inv.sub) - rest.amount) < 1),
