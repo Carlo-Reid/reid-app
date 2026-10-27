@@ -1,13 +1,13 @@
 -- temporary: shows where Carlo view's installed / paid lookup spends its time (owners only). Removed again after the check.
-CREATE OR REPLACE FUNCTION public._diag_cv_plan()
+DROP FUNCTION IF EXISTS public._diag_cv_plan();
+CREATE OR REPLACE FUNCTION public._diag_cv_plan(p_which int DEFAULT 2)
  RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
 AS $function$
 DECLARE r record; out text := '';
 BEGIN
   IF public.current_staff_role() IS DISTINCT FROM 'owner' THEN RAISE EXCEPTION 'owners only'; END IF;
-  FOR r IN EXECUTE 'EXPLAIN (ANALYZE, BUFFERS OFF, TIMING ON, COSTS OFF) SELECT count(*) FROM public._sales_hist_inst(NULL) x' LOOP out := out || r."QUERY PLAN" || E'\n'; END LOOP;
   -- the same steps written out, so the plan shows each one
-  FOR r IN EXECUTE $q$EXPLAIN (ANALYZE, BUFFERS OFF, TIMING ON, COSTS OFF)
+  IF p_which = 2 THEN FOR r IN EXECUTE $q$EXPLAIN (ANALYZE, TIMING ON, COSTS OFF)
   WITH s AS MATERIALIZED (SELECT * FROM public._sales_hist_rows(NULL) r),
   ij AS MATERIALIZED (SELECT j.id, j.customer_id, j.sold_estimate_id, j.from_estimate_id FROM jobs j JOIN job_types t ON t.id = j.job_type_id
                       WHERE t.job_class = 'install' AND j.status <> 'cancelled'),
@@ -29,10 +29,12 @@ BEGIN
                 ELSE (SELECT min(v.scheduled_date) FROM visits v WHERE v.job_id = j.id AND v.status <> 'cancelled') END AS day
     FROM best b JOIN jobs j ON j.id = b.jid)
   SELECT count(*), count(d.day), count(it.paid_at) FROM s LEFT JOIN d ON d.est_id = s.est_id LEFT JOIN install_tracking it ON it.job_id = d.jid$q$ LOOP
-    out := out || r."QUERY PLAN" || E'\n'; END LOOP;
-  FOR r IN EXECUTE 'EXPLAIN (ANALYZE, TIMING ON, COSTS OFF) SELECT count(*) FROM public._sales_hist_rows(NULL)' LOOP out := out || r."QUERY PLAN" || E'\n'; END LOOP;
+    out := out || r."QUERY PLAN" || E'\n'; END LOOP; END IF;
+  IF p_which = 1 THEN FOR r IN EXECUTE 'EXPLAIN (ANALYZE, TIMING ON, COSTS OFF) SELECT count(*) FROM public._sales_hist_rows(NULL)' LOOP out := out || r."QUERY PLAN" || E'\n'; END LOOP; END IF;
+  -- the set-up for the slow-statement limit
+  out := out || 'statement_timeout=' || current_setting('statement_timeout');
   RETURN out;
 END $function$;
-REVOKE EXECUTE ON FUNCTION public._diag_cv_plan() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public._diag_cv_plan() TO authenticated;
+REVOKE EXECUTE ON FUNCTION public._diag_cv_plan(int) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._diag_cv_plan(int) TO authenticated;
 NOTIFY pgrst, 'reload schema';
