@@ -12127,9 +12127,12 @@ async function openSupInv(msg) {
   renderSupInv(msg);
 }
 // how an invoice stands against its PO
+const sinvBefore = r => r.subtotal != null ? Number(r.subtotal) : Math.round(Number(r.total) / 1.13 * 100) / 100;   // before tax (13% HST when it isn't printed)
+// a PO billed on more than one invoice: they're added up and compared together
 function sinvState(r) {
-  const before = r.subtotal != null ? Number(r.subtotal) : Math.round(Number(r.total) / 1.13 * 100) / 100;   // before tax (13% HST when it isn't printed)
-  const po = r.po_amount != null ? Number(r.po_amount) : null, diff = po != null ? Math.round((before - po) * 100) / 100 : null;
+  const before = sinvBefore(r), grp = r.po_id && Number(r.po_other_invoices) ? (SINV.data?.rows || []).filter(x => x.po_id === r.po_id && x.doc_type === "invoice") : null;
+  const billed = grp ? Math.round(grp.reduce((a, x) => a + sinvBefore(x), 0) * 100) / 100 : before;
+  const po = r.po_amount != null ? Number(r.po_amount) : null, diff = po != null ? Math.round((billed - po) * 100) / 100 : null;
   let k, label;
   if (r.match_state === "ok") [k, label] = ["ok", "Checked"];
   else if (r.doc_type === "charge") [k, label] = ["charge", "Service charge"];
@@ -12139,9 +12142,9 @@ function sinvState(r) {
   else if (!r.po_id) [k, label] = ["notfound", "PO not in the app"];
   else if (r.doc_type === "credit") [k, label] = ["credit", "Credit"];
   else if (po == null || !Number(r.po_lines)) [k, label] = ["differs", "PO has no amounts"];
-  else if (Math.abs(diff) <= 1) [k, label] = ["match", "Matches PO"];
-  else [k, label] = ["differs", `${diff > 0 ? "Over" : "Under"} the PO by ${money(Math.abs(diff))}`];
-  return { k, label, before, po, diff, look: ["nocopy", "nopo", "notfound", "differs"].includes(k) };
+  else if (Math.abs(diff) <= 1) [k, label] = ["match", grp ? `Matches PO (with ${grp.length - 1} other ${grp.length === 2 ? "invoice" : "invoices"})` : "Matches PO"];
+  else [k, label] = ["differs", `${grp ? `These ${grp.length} invoices are ` : ""}${diff > 0 ? "over" : "under"} the PO by ${money(Math.abs(diff))}`.replace(/^o/, "O").replace(/^u/, "U")];
+  return { k, label, before, billed, po, diff, look: ["nocopy", "nopo", "notfound", "differs"].includes(k) };
 }
 const SINV_F = [["look", "Needs a look"], ["match", "Matches PO"], ["credit", "Credits & returns"], ["ok", "Checked"], ["all", "All"]];
 function renderSupInv(msg) {
