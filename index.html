@@ -6875,7 +6875,7 @@ async function cvLoad() {
   }
   cvRender();
   if (!CV.days) {
-    const by = CV.by; let { data, error } = await cvRpc("sales_history_days_by", { p_seller: null, p_by: by });
+    const by = CV.by; let { data, error } = await cvRpc("sales_history_days_by", { p_seller: null, p_by: by === "all" ? "sold" : by });   // Show all: the totals are sales, by the day sold
     if (error && by === "sold" && /function|schema|PGRST202/i.test(error.message || "")) ({ data, error } = await db.rpc("sales_history_days", { p_seller: null }));   // (until setup 99zzzX)
     if (by !== CV.by) return;
     if (!error) CV.err = "";
@@ -6928,7 +6928,7 @@ function cvRender() {
   const crumbs = CV.lvl === "pp" ? [["all", "Every year", d], ["pp", `${Y} pay periods`, d]] : CV.lvl === "range" ? [["all", "Every year", d], ...(CV.ppBack ? [["pp", "Pay periods", d]] : []), ["range", label, d]] : [["all", "Every year", d], ...(CV.lvl !== "all" ? [["year", Y, d]] : []), ...(CV.lvl === "month" || CV.lvl === "day" ? [["month", CV_MONTHS[M - 1], d]] : []), ...(CV.lvl === "day" ? [["day", String(Number(d.slice(8))), d]] : [])];
   const list = CV.list.get(cvRange().join("|"))?.filter(r => !CV.sp || spK(r.sales_person) === CV.sp);
   box.innerHTML = `<div class="cv-head"><h2>Carlo view</h2>
-      <span class="seg cv-by" role="group" aria-label="Count sales by">${[["sold", "Date sold"], ["installed", "Date installed"], ["paid", "Date paid"], ["unpaid", "Not paid yet"]].map(([k, t]) => `<button type="button" data-cv-by="${k}" aria-pressed="${CV.by === k}">${t}</button>`).join("")}</span>
+      <span class="seg cv-by" role="group" aria-label="Count sales by">${[["sold", "Date sold"], ["installed", "Date installed"], ["paid", "Date paid"], ["unpaid", "Not paid yet"], ["all", "Show all"]].map(([k, t]) => `<button type="button" data-cv-by="${k}" aria-pressed="${CV.by === k}">${t}</button>`).join("")}</span>
       <label class="sl-who cv-who"><span>Sales person</span><select id="cv-sp"><option value="">All sales people</option>${spAll.map(k => `<option value="${esc(k)}" ${CV.sp === k ? "selected" : ""}>${esc(spName(k))}</option>`).join("")}${CV.sp && !spAll.includes(CV.sp) ? `<option selected>${esc(CV.sp)}</option>` : ""}</select></label>
       <span class="seg cv-lvl" role="group">${[["day", "Day"], ["month", "Month"], ["year", "Year"], ["all", "All years"], ["pp", "Pay periods"], ["range", "From – To"]].map(([k, t]) => `<button type="button" data-cv-lvl="${k}" aria-pressed="${CV.lvl === k}">${t}</button>`).join("")}</span>
       <span class="cv-nav">${CV.lvl !== "all" ? `<button class="btn quiet-btn" type="button" data-cv-step="-1" title="Back one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl === "pp" ? "year" : CV.lvl}">‹</button><button class="btn quiet-btn" type="button" data-cv-step="1" title="Forward one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl === "pp" ? "year" : CV.lvl}">›</button>` : ""}
@@ -7025,7 +7025,7 @@ function renderSales(msg) {
   SALES.tab = "all"; SALES.commF = ""; if (ME.role !== "owner") { SALES.range = SALES.from = SALES.to = SALES.dateBy = ""; }
   const cvOn = salesCvLinked();
   if (cvOn) { CV.d ||= salesToday(); if (!SALES.own) SALES.own = { range: SALES.range, from: SALES.from, to: SALES.to, dateBy: SALES.dateBy };
-    const [f, t] = cvRange(); SALES.from = f || ""; SALES.to = t || ""; SALES.range = f ? "custom" : ""; SALES.dateBy = ["installed", "paid"].includes(CV.by) ? CV.by : "sold"; }
+    const [f, t] = cvRange(); SALES.from = f || ""; SALES.to = t || ""; SALES.range = f ? "custom" : ""; SALES.dateBy = ["installed", "paid"].includes(CV.by) ? CV.by : CV.by === "all" ? "any" : "sold"; }
   else if (SALES.own) { Object.assign(SALES, SALES.own); SALES.own = null; }
   if (SALES.range && SALES.range !== "custom") [SALES.from, SALES.to] = salesRangeDates(SALES.range);   // "This month" etc. move with the calendar
   if (cvOn && CV.by === "unpaid") SALES.commF = "unpaid";   // Carlo view's "Not paid yet": the list shows the sales with commission not paid yet
@@ -7036,6 +7036,8 @@ function renderSales(msg) {
   const instDate = r => r.installs?.length ? (r.installs[0].visit_date || salesDate(r.installs[0])) : salesDate(r);
   const by = k => SALES.dateBy || (k === "install" ? "installed" : "sold");
   const inRange = (r, k) => { if (!SALES.from && !SALES.to) return true; const inst = by(k) === "installed";
+    if (by(k) === "any") { const ins = (r.installs || []).map(i => i.visit_date || salesDate(i)), ds = [salesDate(r), r.visit_date, r.sold_on, salesPaidDay(r), ...ins].filter(Boolean);
+      return ds.some(d => (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to)); }   // Show all: anything that happened in these dates
     if (by(k) === "paid") { const d = salesPaidDay(r); return !!d && (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); }
     if (inst && !(r.installs?.length || r.stage === "install")) return false; const d = inst ? instDate(r) : salesDate(r); return (!SALES.from || d >= SALES.from) && (!SALES.to || d <= SALES.to); };
   const spOf = r => salesSrc(r)?.sales_person || "";
