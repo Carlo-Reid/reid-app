@@ -1,4 +1,4 @@
--- Sales page: changing the sales person on a sale changes it everywhere that sale shows:
+-- Sales page: changing the sales person on a sale (or "No one yet") changes it everywhere that sale shows:
 --   the sales job (who it's for on the Sales page), the job's "sold by", its proposals' "sold by",
 --   the install job(s) it turned into ("sold by", which the invoice and the Installs / Commissions pages use),
 --   and the commission's sales person on those installs (not once the commission has been paid).
@@ -38,7 +38,8 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM jobs WHERE id = p_job) THEN RAISE EXCEPTION 'Job not found'; END IF;
   UPDATE jobs SET sales_user_id = p_user, updated_at = now() WHERE id = p_job;
   emp := (SELECT employee_id FROM app_users WHERE id = p_user);
-  IF emp IS NOT NULL THEN
+  -- "No one yet" (p_user NULL): taken off everywhere too, so it shows no one until someone is picked
+  IF emp IS NOT NULL OR p_user IS NULL THEN
     ests := ARRAY(SELECT id FROM estimates WHERE job_id = p_job);
     jobs_ := ARRAY(SELECT DISTINCT x FROM (
         SELECT p_job AS x

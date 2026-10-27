@@ -2428,6 +2428,11 @@
   .pb-photo.pb-photo-boxes { display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1fr); gap: 8px; align-items: stretch; height: auto !important; padding: 8px; }
   /* a picture with its 8 boxes: always fits its window; long text is cut with … (full text on hover) */
   .cob { position: relative; }
+  .pl-sec-h { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; } .pl-add-here { font-size: 12.5px; padding: 3px 10px; }
+  .pl-up h3 { margin: 0 0 8px; } .pl-up-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 10px; }
+  .pl-up-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin-bottom: 10px; }
+  .pl-up-it { border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: grid; gap: 6px; background: var(--panel); }
+  .pl-up-it img { width: 100%; height: 120px; object-fit: contain; background: #fff; }
   .cob-logo { position: absolute; height: auto; max-width: none; pointer-events: none; z-index: 2; }
   .cob.cob-lo { display: block; } .cob.cob-lo .cob-img { height: 100%; min-height: 120px; }
   .lgp { width: min(900px, 100%); } .lgp-stage { min-height: 300px; padding: 8px; margin: 8px 0 12px; display: block !important; }
@@ -6936,7 +6941,7 @@ function salesSpPick(r) {
   if (!src) return "";
   const P = SALES.people || [], hit = P.find(x => x.name === cur) || (cur ? P.find(x => x.name && (cur.startsWith(x.name) || x.name.startsWith(cur))) : null);
   return `<label class="sl-sp-pick" title="The sales person on this deal"><select aria-label="Sales person" data-sl-sp="${src.job_id}">
-    <option value="" ${!hit ? "selected" : ""}>${cur && !hit ? esc(cur) : "No one yet"}</option>${P.map(x => `<option value="${x.id}" ${hit && hit.id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>`;
+    ${cur && !hit ? `<option value="-" selected>${esc(cur)}</option>` : ""}<option value="" ${!cur ? "selected" : ""}>No one yet</option>${P.map(x => `<option value="${x.id}" ${hit && hit.id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>`;
 }
 // Sales and Commissions are one page: two views at the top
 const salesSeeComm = () => can("installs.manage") || ["owner", "accounting"].includes(ME.role);
@@ -7369,7 +7374,7 @@ function renderSales(msg) {
   $("#sl-q")?.addEventListener("input", e => { SALES.q = e.target.value; const pos = e.target.selectionStart; renderSales(); const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(pos, pos); } catch {} } });
   document.querySelectorAll("[data-sl-sort]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.slSort; if (SALES.sort === k) SALES.dir = -(SALES.dir || 1); else { SALES.sort = k; SALES.dir = k === "prop" || k === "comm" || k === "pay" ? -1 : 1; } salesSave(); renderSales(); }));
   $("#sl-new").addEventListener("click", () => { SALES_FIND = true; openSearchScreen(); });
-  document.querySelectorAll("[data-sl-sp]").forEach(sel => sel.addEventListener("change", async () => { sel.disabled = true;
+  document.querySelectorAll("[data-sl-sp]").forEach(sel => sel.addEventListener("change", async () => { if (sel.value === "-") return; sel.disabled = true;
     const job = Number(sel.dataset.slSp), who = sel.value ? Number(sel.value) : null, r = (SALES.rows || []).find(x => x.job_id === job);
     const inst = (r?.installs || []).map(x => Number(x.job_id)).filter(Boolean);
     let { data: res, error } = await db.rpc("sales_set_seller", { p_job: job, p_user: who, p_installs: inst.length ? inst : null });
@@ -7377,10 +7382,10 @@ function renderSales(msg) {
     if (error) { sel.disabled = false; alertMsg("Not changed: " + rpcErr(error)); return; }
     const name = who ? (SALES.people || []).find(x => x.id === who)?.name || "" : "";
     (r?.installs || []).forEach(x => { if (name) x.seller = name; });
-    const also = res && who ? ` Also changed on ${res.estimates} proposal${res.estimates === 1 ? "" : "s"} and ${res.jobs} job${res.jobs === 1 ? "" : "s"} (the sale, its install and invoice)${res.commissions ? `, and the commission` : ""}.${res.paid_kept ? ` ${res.paid_kept} commission already paid was left as it was.` : ""}` : "";
+    const also = res && !who ? ` Taken off its proposals, install and commission too, until someone is picked.` : res && who ? ` Also changed on ${res.estimates} proposal${res.estimates === 1 ? "" : "s"} and ${res.jobs} job${res.jobs === 1 ? "" : "s"} (the sale, its install and invoice)${res.commissions ? `, and the commission` : ""}.${res.paid_kept ? ` ${res.paid_kept} commission already paid was left as it was.` : ""}` : "";
     // show the change at once, where the page is (the list from the database comes in behind it)
     const a = slAnchorGet(), put = L => (L || []).forEach(x => { if (Number(x.job_id) === job && x.stage !== "install") x.sales_person = name; });
-    put(SALES.rows); put(CV.unpaidAll); if (CV.list) [...CV.list.values()].forEach(put);
+    put(SALES.rows); put(CV.unpaidAll); if (!who) (r?.installs || []).forEach(x => { x.seller = ""; }); if (CV.list) [...CV.list.values()].forEach(put);
     salesRerender(); slAnchorPut(a);
     slNote(`${r?.customer || "Job " + (r?.job_number || "")}: ${name ? "sales person is now " + name : "sales person taken off"}.${also}`);
     salesRefreshList(); CV.fresh = {}; SALES.histFresh = false; salesLoadHistInst(); if (who) salesLoadComm(); }));
@@ -15844,6 +15849,7 @@ async function pbLiveReload() {
 }
 async function openPricebook() {
   pbLiveStart(); PBLIVE.offStale = false;
+  PB.itemPage = null; PB.sel = null;   // always the main price book page (not a part's page)
   PB.review = false; PB.importOpen = false;
   loadCallouts().then(() => { if (document.querySelector(".pb") && PB.rows && PB.calloutMap.size) renderPricebook(); }).catch(() => {});
   setPage("pricebook", "pricebook");
@@ -17277,12 +17283,13 @@ function renderPictureLibrary(msg) {
       <label class="btn quiet-btn pb-file">${nw ? "Pick the picture" : "Change the picture"}<input type="file" name="file" accept="image/*"></label>
       <span class="ak-connrow"><button class="btn" type="submit">Save</button><button class="link" type="button" data-pl-cancel>Cancel</button></span></form>`;
   $("#main").innerHTML = `<article class="staff pl">
-    <div class="pos-head"><h1>Equipment pictures</h1><span>${edit ? `<button class="btn" type="button" id="pl-new">+ Add a picture</button>` : ""}</span></div>
+    <div class="pos-head"><h1>Equipment pictures</h1><span>${edit ? `<button class="btn" type="button" data-pl-up="">⬆ Load new pictures</button> <button class="btn quiet-btn" type="button" data-pl-up="" data-pl-newcat="1">+ New category</button> <button class="btn quiet-btn" type="button" id="pl-new">+ Add one picture</button>` : ""}</span></div>
     <p class="lead">One photo for each equipment series. It's put on every model in the series, so it shows in the price book, on the part's page and in the Print book.</p>
     ${msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"}" role="status">${esc(msg)}</div>` : ""}
     <datalist id="pl-cats">${secs.map(s => `<option value="${esc(s.name)}">`).join("")}</datalist>
     ${PL.edit === "new" ? `<section class="cl-tools">${form(null, true)}</section>` : ""}
-    ${secs.map(s => `<h2 class="pf-sec">${esc(s.name)}</h2><div class="pl-grid">${s.rows.map(r => { const co = Array.from({ length: 8 }, (_, i) => (r.callouts || [])[i] || ""), has = co.some(x => coT(x).trim());
+    ${PL.up && PL.up.cat == null ? plUpHtml(secs) : ""}
+    ${secs.map(s => `<h2 class="pf-sec pl-sec-h">${esc(s.name)}${edit ? ` <button class="btn quiet-btn pl-add-here" type="button" data-pl-up="${esc(s.name)}">⬆ Load pictures into ${esc(s.name)}</button>` : ""}</h2>${PL.up && PL.up.cat === s.name ? plUpHtml(secs) : ""}<div class="pl-grid">${s.rows.map(r => { const co = Array.from({ length: 8 }, (_, i) => (r.callouts || [])[i] || ""), has = co.some(x => coT(x).trim());
       const img = `<button class="pl-img pl-open" type="button" data-pl-open="${r.id}" title="Open the picture and its boxes"><img alt="${esc(r.series)}" src="data:image/jpeg;base64,${r.image}"></button>`;
       return `<section class="pl-card ${has ? "pl-card-co" : ""}">
       ${has ? withBoxes(co, img, "stack") : img}
@@ -17294,7 +17301,8 @@ function renderPictureLibrary(msg) {
   </article>`;
   $("#main").scrollTop = top;
   const say = m => openPictureLibrary(m);
-  $("#pl-new")?.addEventListener("click", () => { PL.edit = "new"; renderPictureLibrary(); });
+  $("#pl-new")?.addEventListener("click", () => { PL.edit = "new"; PL.up = null; renderPictureLibrary(); });
+  wirePlUp(say);
   document.querySelectorAll("[data-pl-edit]").forEach(b => b.addEventListener("click", () => { PL.edit = Number(b.dataset.plEdit); renderPictureLibrary(); }));
   document.querySelectorAll("[data-pl-open]").forEach(b => b.addEventListener("click", () => openPictureBoxes(Number(b.dataset.plOpen))));
   coFit(); setTimeout(coFit, 400);   // a box with a lot of words: its writing gets smaller until it all fits
@@ -17315,6 +17323,46 @@ function renderPictureLibrary(msg) {
 
 
 
+// Equipment pictures: load several new pictures at once, into a category that's there or a new one.
+// Each picture becomes its own series, named after its file (change the names before saving).
+function plUpHtml(secs) { const U = PL.up;
+  return `<section class="cl-tools pl-up" id="pl-up"><h3>${U.cat ? `Load pictures into ${esc(U.cat)}` : U.newCat ? "New category" : "Load new pictures"}</h3>
+    <div class="pl-up-row"><label>Category<input id="pl-up-cat" list="pl-cats" maxlength="60" value="${esc(U.cat || U.catIn || "")}" placeholder="${U.newCat ? "Name of the new category" : "Pick one or type a new one"}"></label>
+      <label class="btn pb-file">${U.files.length ? "+ Pick more pictures" : "Pick the pictures"}<input type="file" id="pl-up-files" accept="image/*" multiple></label>
+      <span class="quiet">You can pick several at once. Each becomes a series (named after its file).</span></div>
+    ${U.files.length ? `<div class="pl-up-list">${U.files.map((f, i) => `<div class="pl-up-it"><img alt="" src="data:image/jpeg;base64,${f.image}">
+      <label>Series<input data-pl-up-series="${i}" value="${esc(f.series)}" maxlength="40" required></label>
+      <label>Description<input data-pl-up-desc="${i}" value="${esc(f.description || "")}" maxlength="300"></label>
+      <button class="link danger" type="button" data-pl-up-rm="${i}">Remove</button>${f.err ? `<div class="staff-msg err">${esc(f.err)}</div>` : ""}</div>`).join("")}</div>` : ""}
+    <div class="staff-msg" id="pl-up-msg" role="status"></div>
+    <span class="ak-connrow"><button class="btn" type="button" id="pl-up-save" ${U.files.length ? "" : "disabled"}>Save ${U.files.length || ""} picture${U.files.length === 1 ? "" : "s"}</button><button class="link" type="button" id="pl-up-x">Cancel</button></span></section>`; }
+function wirePlUp(say) {
+  document.querySelectorAll("[data-pl-up]").forEach(b => b.addEventListener("click", () => { PL.edit = null;
+    PL.up = { cat: b.dataset.plUp || null, newCat: !!b.dataset.plNewcat, files: PL.up?.files || [] }; renderPictureLibrary();
+    const box = $("#pl-up"); box?.scrollIntoView({ block: "nearest" }); if (!PL.up.cat) $("#pl-up-cat")?.focus(); }));
+  const box = $("#pl-up"); if (!box) return; const U = PL.up;
+  const keep = () => { U.catIn = $("#pl-up-cat")?.value || ""; if (U.cat && U.catIn !== U.cat) { U.cat = null; } };
+  $("#pl-up-cat").addEventListener("input", () => { U.catIn = $("#pl-up-cat").value; });
+  box.querySelectorAll("[data-pl-up-series]").forEach(i => i.addEventListener("input", () => { U.files[Number(i.dataset.plUpSeries)].series = i.value; }));
+  box.querySelectorAll("[data-pl-up-desc]").forEach(i => i.addEventListener("input", () => { U.files[Number(i.dataset.plUpDesc)].description = i.value; }));
+  box.querySelectorAll("[data-pl-up-rm]").forEach(b => b.addEventListener("click", () => { keep(); U.files.splice(Number(b.dataset.plUpRm), 1); renderPictureLibrary(); }));
+  $("#pl-up-x").addEventListener("click", () => { PL.up = null; renderPictureLibrary(); });
+  $("#pl-up-files").addEventListener("change", async e => { keep(); const m = $("#pl-up-msg"); m.className = "staff-msg"; m.textContent = "Reading the pictures…";
+    for (const file of [...e.target.files]) { try { U.files.push({ series: file.name.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ").trim().slice(0, 40), description: "", image: pbShrink(await pbLoadImg(file), 900, 0.88) }); }
+      catch (err) { m.className = "staff-msg err"; m.textContent = `${file.name}: ${err.message}`; } }
+    renderPictureLibrary(); });
+  $("#pl-up-save").addEventListener("click", async () => { keep(); const cat = (U.cat || U.catIn || "").trim(), m = $("#pl-up-msg"), b = $("#pl-up-save");
+    if (!cat) { m.className = "staff-msg err"; m.textContent = "Pick a category or type the name of a new one."; $("#pl-up-cat").focus(); return; }
+    b.disabled = true; let ok = 0; const left = [];
+    for (const f of U.files) { m.className = "staff-msg"; m.textContent = `Saving ${ok + left.length + 1} of ${U.files.length}…`;
+      if (!f.series.trim()) { left.push({ ...f, err: "Give it a series name." }); continue; }
+      const { error } = await db.rpc("save_library_picture", { p_id: null, p: { category: cat, series: f.series.trim(), description: f.description || "", image: f.image } });
+      if (error) left.push({ ...f, err: /duplicate|unique/i.test(error.message || "") ? "There's already a picture for this series. Change the name, or use Edit on that one." : rpcErr(error) }); else ok++; }
+    PB.thumbs?.clear?.(); PB.photos?.clear?.();
+    if (left.length) { PL.up = { cat: null, catIn: cat, files: left }; } else PL.up = null;
+    const { data } = await db.rpc("picture_library_list"); if (data) PL.rows = data;
+    renderPictureLibrary(`${ok ? `Added ${ok} picture${ok === 1 ? "" : "s"} to ${cat}. Use “Put on all models” to put each on its series.` : ""}${left.length ? ` ${left.length} not saved: see below.` : ""}`.trim()); });
+}
 // pick a picture from the Equipment pictures page (a pop-up grid with search)
 async function pickLibraryPicture(onPick) {
   document.querySelector(".plp-wrap")?.remove();
@@ -21364,7 +21412,9 @@ function viewBar() {
   if (bar && bar.dataset.v === want && host.firstElementChild === bar) return;
   bar?.remove(); bar = document.createElement("div"); bar.className = "view-switch seg no-print"; bar.dataset.v = want; bar.setAttribute("role", "tablist");
   bar.innerHTML = vis.map(v => `<button type="button" role="tab" data-view="${v[2]}" aria-pressed="${v[0] === k}">${esc(v[1])}</button>`).join("");
-  bar.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => { if (b.getAttribute("aria-pressed") === "true") return; viewBtn(b.dataset.view)?.click(); }));
+  // a view's button always opens that view's main page, also from one of its sub pages (a part, Logos, Equipment pictures…)
+  bar.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => { const v = g.find(x => x[2] === b.dataset.view), main = v && (v[0] === "search" ? ["", "#"] : ["#" + v[0]]).includes(location.hash);
+    if (b.getAttribute("aria-pressed") === "true" && main && !(v[0] === "pricebook" && PB.itemPage)) return; viewBtn(b.dataset.view)?.click(); }));
   host.prepend(bar);
 }
 (function viewBars() {

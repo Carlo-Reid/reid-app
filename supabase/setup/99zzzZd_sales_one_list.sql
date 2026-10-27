@@ -1,6 +1,13 @@
 -- 99zzzZd: one sales list. Also runs every night from sync/extra/044_sales_one_list.sql. Safe to run more than once.
 -- One sales list: the Sales page's table now has every sold proposal (the same ones Carlo view counts), with the day it was sold.
 -- The sold proposal on a sales job wins over a newer unsold one. sales_list_since(…) reaches back to any date (for older periods in Carlo view).
+-- "No one yet" picked on the Sales page (sale_seller_fix with no one, made in 053): the person who booked it doesn't show as its sales person
+CREATE OR REPLACE FUNCTION public._sale_no_one(p_job bigint) RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $f$
+BEGIN
+  IF to_regclass('public.sale_seller_fix') IS NULL THEN RETURN false; END IF;
+  RETURN EXISTS (SELECT 1 FROM sale_seller_fix WHERE kind = 'job' AND row_id = p_job AND employee_id IS NULL);
+END $f$;
+REVOKE EXECUTE ON FUNCTION public._sale_no_one(bigint) FROM PUBLIC, anon, authenticated;
 CREATE OR REPLACE FUNCTION public._sales_list(p_seller bigint DEFAULT NULL, p_since date DEFAULT NULL)
  RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
 AS $function$
@@ -39,7 +46,7 @@ AS $function$
       'partner', (SELECT name FROM partners WHERE id = j.partner_id),
       'visit_date', v.scheduled_date, 'visit_from', v.arrival_start, 'visit_to', v.arrival_end,
       'seller', (SELECT public._emp_name(va.employee_id) FROM visit_assignments va WHERE va.visit_id = v.id ORDER BY va.role = 'lead' DESC LIMIT 1),
-      'sales_person', coalesce((SELECT coalesce(public._emp_name(u.employee_id), u.login_email::text) FROM app_users u WHERE u.id = coalesce(j.sales_user_id, CASE WHEN EXISTS (SELECT 1 FROM app_users b WHERE b.id = j.booked_by_user_id AND b.role = 'sales') THEN j.booked_by_user_id END)),
+      'sales_person', coalesce((SELECT coalesce(public._emp_name(u.employee_id), u.login_email::text) FROM app_users u WHERE u.id = coalesce(j.sales_user_id, CASE WHEN EXISTS (SELECT 1 FROM app_users b WHERE b.id = j.booked_by_user_id AND b.role = 'sales') AND NOT public._sale_no_one(j.id) THEN j.booked_by_user_id END)),
                                (SELECT public._emp_name(it.salesperson_id) FROM jobs ij JOIN install_tracking it ON it.job_id = ij.id
                                  WHERE (ij.sold_estimate_id = e.id OR ij.from_estimate_id = e.id) AND it.salesperson_id IS NOT NULL LIMIT 1),
                                public._emp_name(e.sold_by_employee_id)),
