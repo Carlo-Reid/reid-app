@@ -6714,6 +6714,14 @@ async function openSales(msg) {
   if (can("installs.manage") || ["owner", "accounting"].includes(ME.role)) { salesLoadHistInst(); if (!SALES.notes) salesLoadNotes(); }
   if (!SALES.pfix) salesLoadPtnFix();
 }
+// the list again from the database, quietly (after a change on the page), kept where the page is
+async function salesRefreshList() {
+  const seq = SALES.refSeq = (SALES.refSeq || 0) + 1, since = SALES.since || salesMonthsBack(18);
+  const { data, error } = await db.rpc("sales_list_since", { p_seller: null, p_since: since });
+  if (error || seq !== SALES.refSeq || document.body.dataset.page !== "sales") return;
+  salesTake(data); scSet("list", { rows: data, since, people: SALES.people });
+  const a = slAnchorGet(); salesRerender(); slAnchorPut(a);
+}
 // commission (the same numbers as the Installs page), in half-year pieces two at a time (all at once is too much for the database)
 // the database's install match for every sale (the list Carlo view uses); loaded once in the background
 async function salesLoadHistInst() {
@@ -6904,7 +6912,7 @@ function salesSpPick(r) {
   const src = salesSrc(r), cur = src?.sales_person || "";
   if (!salesBoss()) return cur ? `<div class="sl-sp">${esc(cur)}</div>` : "";
   if (!src) return "";
-  const P = SALES.people || [], hit = P.find(x => x.name === cur);
+  const P = SALES.people || [], hit = P.find(x => x.name === cur) || (cur ? P.find(x => x.name && (cur.startsWith(x.name) || x.name.startsWith(cur))) : null);
   return `<label class="sl-sp-pick" title="The sales person on this deal"><select aria-label="Sales person" data-sl-sp="${src.job_id}">
     <option value="" ${!hit ? "selected" : ""}>${cur && !hit ? esc(cur) : "No one yet"}</option>${P.map(x => `<option value="${x.id}" ${hit && hit.id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>`;
 }
@@ -7343,8 +7351,13 @@ function renderSales(msg) {
     const job = Number(sel.dataset.slSp), who = sel.value ? Number(sel.value) : null, r = (SALES.rows || []).find(x => x.job_id === job);
     const { error } = await db.rpc("set_job_seller", { p_job: job, p_user: who });
     if (error) { sel.disabled = false; alertMsg("Not changed: " + rpcErr(error)); return; }
-    const name = who ? (SALES.people || []).find(x => x.id === who)?.name : "";
-    SALES.rows = null; openSales(`${r?.customer || "Job " + (r?.job_number || "")}: ${name ? "sales person is now " + name : "sales person taken off"}.`); }));
+    const name = who ? (SALES.people || []).find(x => x.id === who)?.name || "" : "";
+    // show the change at once, where the page is (the list from the database comes in behind it)
+    const a = slAnchorGet(), put = L => (L || []).forEach(x => { if (Number(x.job_id) === job && x.stage !== "install") x.sales_person = name; });
+    put(SALES.rows); put(CV.unpaidAll); if (CV.list) [...CV.list.values()].forEach(put);
+    salesRerender(); slAnchorPut(a);
+    slNote(`${r?.customer || "Job " + (r?.job_number || "")}: ${name ? "sales person is now " + name : "sales person taken off"}.`);
+    salesRefreshList(); CV.fresh = {}; SALES.histFresh = false; salesLoadHistInst(); }));
   document.querySelectorAll("[data-sl-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.slCust))));
   document.querySelectorAll("[data-sl-est]").forEach(b => b.addEventListener("click", async () => { b.disabled = true;
     const { data, error } = await db.rpc("est_create", { p_job: Number(b.dataset.slEst) });
