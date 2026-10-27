@@ -6653,7 +6653,10 @@ function salesCommState(r) {
   if (c && insState(c)[0] === "ready") return "ready";
   return "waiting";   // the customer still owes, it isn't installed yet, or there's no rate / sales person yet
 }
-const salesCommMatch = (r, f) => !f || (f === "unpaid" ? ["ready", "payroll", "waiting"].includes(salesCommState(r)) : salesCommState(r) === f);
+// "Not paid yet" = commission owed (more than $0) and not paid, the same as Carlo view's Not paid yet
+const salesOwed = r => { if (!(r.stage === "closed" || r.stage === "install" || r.installs)) return false; const id = salesInstOf(r), c = id ? SALES.comm?.get(id) : null;
+  return !!c && Number(c.commission_amount) > 0 && !salesPaidOf(id); };
+const salesCommMatch = (r, f) => !f || (f === "unpaid" ? salesOwed(r) : salesCommState(r) === f);
 // the quick list of paid / payroll days (no amounts to work out, so it's back in a moment)
 async function salesLoadPaid() {
   if (!(can("installs.manage") || ["owner", "accounting"].includes(ME.role))) return;
@@ -6982,7 +6985,7 @@ function renderSales(msg) {
   else if (SALES.own) { Object.assign(SALES, SALES.own); SALES.own = null; }
   if (SALES.range && SALES.range !== "custom") [SALES.from, SALES.to] = salesRangeDates(SALES.range);   // "This month" etc. move with the calendar
   if (cvOn && CV.by === "unpaid") SALES.commF = "unpaid";   // Carlo view's "Not paid yet": the list shows the sales with commission not paid yet
-  const older = cvOn && SALES.rows && SALES.since && (SALES.from || "0000") < SALES.since && !SALES.olderErr;   // dates before what's loaded
+  const older = cvOn && SALES.rows && SALES.since && SALES.since > "2000-01-01" && (SALES.from || "0000") < SALES.since && !SALES.olderErr;   // (2000-01-01 = everything is loaded)   // dates before what's loaded
   if (older && !SALES.olderBusy) setTimeout(() => salesLoadSince(SALES.from), 0);
   const inTab = (r, k) => k === "all" || (k === "open" ? ["booked", "estimate"].includes(r.stage) : k === "install" ? (r.stage === "install" || !!r.installs) : r.stage === k);
   // dates: a sale counts on the day it was sold; on the Installs tab it's the install's day
@@ -7033,7 +7036,7 @@ function renderSales(msg) {
     ${SALES.pay && cs.ready.length ? `<div class="sl-find sl-payall"><span>Put all <b>${cs.ready.length}</b> ready to pay (<b>${money(cs.now)}</b>${SALES.from || SALES.to ? " in these dates" : ""}) on payroll for</span>
       ${payDaySelect(`id="sl-payall-d" aria-label="Pay day"`, SALES.payDay && SALES.payDay >= salesToday() ? SALES.payDay : nextPayDay(), payDays(28, 100))}<button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
     <div class="sl-find sl-listhead"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
-      ${cf && !qq.length ? `<span class="sl-cf-note">Showing <b>${esc(SALES_COMMF.find(x => x[0] === cf)[1].toLowerCase())}</b>: ${rows.length} ${rows.length === 1 ? "sale" : "sales"}, ${money(cfCount[cf]?.amt || 0)} commission <button class="link" type="button" id="sl-cf-clear">Show everything</button></span>` : ""}
+      ${cf && !qq.length ? `<span class="sl-cf-note">Showing <b>${esc(SALES_COMMF.find(x => x[0] === cf)[1].toLowerCase())}</b>: ${rows.length} ${rows.length === 1 ? "sale" : "sales"}, ${money(cfCount[cf]?.amt || 0)} commission${cvOn && CV.by === "unpaid" ? "" : ` <button class="link" type="button" id="sl-cf-clear">Show everything</button>`}</span>` : ""}
       ${older ? `<span class="sl-cf-note">Loading the older sales…</span>` : SALES.olderErr ? `<span class="sl-cf-note">Older sales didn't load: ${esc(SALES.olderErr)}</span>` : ""}
       <span class="quiet">${qq.length ? `${rows.length} found${SALES.from || SALES.to ? " (searching all dates)" : ""}` : `${rows.length} ${rows.length === 1 ? "sale" : "sales"}`}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button></div>
