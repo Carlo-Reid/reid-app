@@ -3711,7 +3711,7 @@ article.sales .cl-hero-range > em { font-size: calc(17px * var(--fs, 1)); opacit
 .sl-ptn { display: inline-block; font-size: 11px; font-weight: 800; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
 .sl-ptn-ed { border: 0; cursor: pointer; font-family: inherit; } .sl-ptn-ed:hover { outline: 2px solid currentColor; }
 .sl-ptn-pop { position: fixed; z-index: 9999; background: var(--panel, #fff); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; display: flex; flex-direction: column; min-width: 160px; max-height: 60vh; overflow: auto; font-size: 13px; }
-.sl-note-pop { position: fixed; z-index: 9999; left: 50%; bottom: 24px; transform: translateX(-50%); background: #222; color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; }
+.sl-note-pop { position: fixed; z-index: 9999; left: 50%; bottom: 24px; transform: translateX(-50%); background: #222; color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; max-width: min(560px, 92vw); }
 .sl-ptn-pop button { text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; font: inherit; color: var(--ink); }
 .sl-ptn-pop button:hover { background: var(--blue-wash, #e7f0fb); } .sl-ptn-pop button.on { font-weight: 800; color: var(--blue, #1f6fd1); }
 .sl-ptn-reid { background: var(--blue-wash, #e7f0fb); color: var(--blue, #1f6fd1); } .sl-ptn-p { background: #f3f0ff; color: #6741d9; }
@@ -6661,7 +6661,7 @@ const salesPtnBadge = r => { const p = salesPartner(r), ed = salesBoss() && r.jo
 async function salesLoadPtnFix() { const { data, error } = await db.from("sale_partner_fix").select("job_id, partner_id"); if (error) return;
   const nm = await salesPtnList(); SALES.pfix = new Map((data || []).map(f => [Number(f.job_id), f.partner_id ? (nm.find(x => x.id === f.partner_id)?.name || "") : "Reid"]).filter(x => x[1]));
   if (document.body.dataset.page === "sales" && SALES.rows && data?.length) salesRerender(); }
-function slNote(t) { const d = document.createElement("div"); d.className = "sl-note-pop"; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 3500); }
+function slNote(t) { const d = document.createElement("div"); d.className = "sl-note-pop"; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), t.length > 80 ? 7000 : 3500); }
 async function salesPtnList() { if (!SALES.ptnAll) { const { data } = await db.rpc("partner_sales"); SALES.ptnAll = (data || []).map(x => ({ id: Number(x.id), name: String(x.name || "").trim() })); } return SALES.ptnAll; }
 async function salesPtnPick(btn) {
   document.querySelector(".sl-ptn-pop")?.remove();
@@ -7371,15 +7371,19 @@ function renderSales(msg) {
   $("#sl-new").addEventListener("click", () => { SALES_FIND = true; openSearchScreen(); });
   document.querySelectorAll("[data-sl-sp]").forEach(sel => sel.addEventListener("change", async () => { sel.disabled = true;
     const job = Number(sel.dataset.slSp), who = sel.value ? Number(sel.value) : null, r = (SALES.rows || []).find(x => x.job_id === job);
-    const { error } = await db.rpc("set_job_seller", { p_job: job, p_user: who });
+    const inst = (r?.installs || []).map(x => Number(x.job_id)).filter(Boolean);
+    let { data: res, error } = await db.rpc("sales_set_seller", { p_job: job, p_user: who, p_installs: inst.length ? inst : null });
+    if (error && /PGRST202|could not find/i.test(error.message || "")) ({ error } = await db.rpc("set_job_seller", { p_job: job, p_user: who }));   // (until tonight's update)
     if (error) { sel.disabled = false; alertMsg("Not changed: " + rpcErr(error)); return; }
     const name = who ? (SALES.people || []).find(x => x.id === who)?.name || "" : "";
+    (r?.installs || []).forEach(x => { if (name) x.seller = name; });
+    const also = res && who ? ` Also changed on ${res.estimates} proposal${res.estimates === 1 ? "" : "s"} and ${res.jobs} job${res.jobs === 1 ? "" : "s"} (the sale, its install and invoice)${res.commissions ? `, and the commission` : ""}.${res.paid_kept ? ` ${res.paid_kept} commission already paid was left as it was.` : ""}` : "";
     // show the change at once, where the page is (the list from the database comes in behind it)
     const a = slAnchorGet(), put = L => (L || []).forEach(x => { if (Number(x.job_id) === job && x.stage !== "install") x.sales_person = name; });
     put(SALES.rows); put(CV.unpaidAll); if (CV.list) [...CV.list.values()].forEach(put);
     salesRerender(); slAnchorPut(a);
-    slNote(`${r?.customer || "Job " + (r?.job_number || "")}: ${name ? "sales person is now " + name : "sales person taken off"}.`);
-    salesRefreshList(); CV.fresh = {}; SALES.histFresh = false; salesLoadHistInst(); }));
+    slNote(`${r?.customer || "Job " + (r?.job_number || "")}: ${name ? "sales person is now " + name : "sales person taken off"}.${also}`);
+    salesRefreshList(); CV.fresh = {}; SALES.histFresh = false; salesLoadHistInst(); if (who) salesLoadComm(); }));
   document.querySelectorAll("[data-sl-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.slCust))));
   document.querySelectorAll("[data-sl-est]").forEach(b => b.addEventListener("click", async () => { b.disabled = true;
     const { data, error } = await db.rpc("est_create", { p_job: Number(b.dataset.slEst) });
@@ -18395,6 +18399,8 @@ function showPbItem(id) {
         ${r.has_picture ? `<button class="btn quiet-btn" type="button" id="pb-img-edit">Edit the image (just this item)</button>
           <button class="btn quiet-btn" type="button" id="pb-box-edit">Edit the 8 boxes (just this item)</button>
           <button class="btn quiet-btn" type="button" id="pb-box-shared" ${calloutsOf(id)?.own ? "" : "hidden"}>↩ Use the shared boxes again</button>` : ""}
+        <button class="btn quiet-btn" type="button" id="pb-pic-undo" hidden>↶ Undo the last picture change</button>
+        <button class="btn quiet-btn" type="button" id="pb-pic-reset" hidden>↺ Reset to the original picture</button>
         ${r.has_picture ? `<button class="btn quiet-btn danger" type="button" id="pb-pic-off">Take the picture off</button>` : ""}</div></details>
         <button class="btn quiet-btn" type="button" id="pb-logo-place" title="Put logos anywhere on this item's picture">🏷 Logos</button><span class="staff-msg" id="pb-pic-msg" role="status"></span></div>` : ""}
       <div class="quiet">${Number(r.used_12m) ? `Used ${Number(r.used_12m).toLocaleString()} times in the last year, last on ${fmtDate(r.last_used)}` : "Not used in the last year"}</div>` : ""}
@@ -18704,7 +18710,7 @@ function showPbItem(id) {
   }));
   // the Picture menu closes after a choice (not on the first click of "Take the picture off", which asks first), or a click elsewhere
   document.querySelectorAll(".pb-picmenu").forEach(m => {
-    m.addEventListener("click", e => { if (e.target.closest(".pb-picmenu-list button") && !e.target.closest("#pb-pic-off, #pb-box-shared")) setTimeout(() => m.open = false, 0); });
+    m.addEventListener("click", e => { if (e.target.closest(".pb-picmenu-list button") && !e.target.closest("#pb-pic-off, #pb-box-shared, #pb-pic-reset")) setTimeout(() => m.open = false, 0); });
     m.querySelector("#pb-file")?.addEventListener("change", () => { m.open = false; });
     m.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); m.open = false; } }); });
   if (!window.pbPicMenuOut) { window.pbPicMenuOut = true; document.addEventListener("click", e => document.querySelectorAll(".pb-picmenu[open]").forEach(m => { if (!m.contains(e.target)) m.open = false; })); }
@@ -18733,6 +18739,23 @@ function showPbItem(id) {
   $("#pb-pic-copy")?.addEventListener("click", () => { PB.picClip = { id, name: pbName(r.name).slice(0, 40) };
     const m = $("#pb-pic-msg"); if (m) { m.className = "staff-msg ok"; m.textContent = "Copied. Open another item and press Paste picture, or tick several items in the list and press Paste picture on them."; } });
   $("#pb-pic-paste")?.addEventListener("click", () => pbPastePicture([id]));
+  // put the picture back: undo the last change, or reset to the picture page's picture with the shared boxes
+  const picState = async () => { const u = $("#pb-pic-undo"), z = $("#pb-pic-reset"); if (!u) return;
+    const { data: st, error } = await db.rpc("pb_item_pic_state", { p_item: id }); if (error || !st) return;
+    u.hidden = !st.undo; u.title = st.last ? "Last changed " + fmtDate(String(st.last).slice(0, 10)) : "";
+    z.hidden = !(st.own || (st.lib && !st.on_lib));
+    z.dataset.lib = st.lib || ""; z.textContent = st.lib ? `↺ Reset to the original picture (${st.lib})` : "↺ Reset to the shared boxes"; };
+  picState();
+  const picBack = async (fn, msg) => { const m = $("#pb-pic-msg"); if (m) { m.className = "staff-msg"; m.textContent = "Putting it back…"; }
+    const { data, error } = await db.rpc(fn, { p_item: id }); if (error) { if (m) { m.className = "staff-msg err"; m.textContent = "Not changed: " + rpcErr(error); } return; }
+    PB.thumbs.delete(id); PB.photos.delete(id); PB.callouts?.delete(id);
+    const { data: ph } = await db.rpc("pb_photo", { p_id: id }); r.has_picture = !!ph;
+    if (ph) { const u = "data:image/jpeg;base64," + ph; PB.photos.set(id, u); PB.thumbs.set(id, u); }
+    afterBoxes(typeof msg === "function" ? msg(data) : msg); };
+  $("#pb-pic-undo")?.addEventListener("click", () => picBack("pb_item_pic_undo", k => k === "boxes" ? "Undone: the boxes / logos are back to how they were." : "Undone: the picture is back to how it was."));
+  $("#pb-pic-reset")?.addEventListener("click", e => { const b = e.target;
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Reset it (Undo can bring it back)"; return; }
+    picBack("pb_item_pic_reset", s => s ? `Reset to the original picture (${s}) with the shared boxes.` : "Reset to the shared boxes."); });
   $("#pb-logo-place")?.addEventListener("click", () => openLogoPlacer({ title: pbName(r.name), imgSrc: PB.photos.get(id) || PB.thumbs.get(id) || "", boxes: itemBoxes(),
     onSave: async logos => { const c = itemBoxes(), lay = { ...(c?.layout || {}), logos };
       const { error } = await db.rpc("save_pb_item_boxes", { p_item: id, p: c ? [...c] : [], p_layout: lay }); if (error) return rpcErr(error);
