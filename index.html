@@ -6722,6 +6722,7 @@ const cvDays = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a
 const cvShort = x => new Date(x + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
 // the install (commission) job for a sale: through its deal on the Sales list, or else the install for the same customer and amount
 function cvInstOf(r) {
+  if (r.inst_job_id) return r.inst_job_id;   // the install the database matched to this sale
   const deal = (SALES.rows || []).find(x => x.est_id === r.est_id && x.stage !== "install"), id = deal ? salesInstOf(deal) : salesInstOf({ est_id: r.est_id });
   if (id) return id;
   if (!SALES.comm) return null;
@@ -6801,7 +6802,7 @@ function cvRender() {
   const crumbs = CV.lvl === "range" ? [["all", "Every year", d], ["range", label, d]] : [["all", "Every year", d], ...(CV.lvl !== "all" ? [["year", Y, d]] : []), ...(CV.lvl === "month" || CV.lvl === "day" ? [["month", CV_MONTHS[M - 1], d]] : []), ...(CV.lvl === "day" ? [["day", String(Number(d.slice(8))), d]] : [])];
   const list = CV.list.get(cvRange().join("|"))?.filter(r => !CV.sp || spK(r.sales_person) === CV.sp);
   box.innerHTML = `<div class="cv-head"><h2>Carlo view</h2>
-      <span class="seg cv-by" role="group" aria-label="Count sales by">${[["sold", "Date sold"], ["installed", "Date installed"]].map(([k, t]) => `<button type="button" data-cv-by="${k}" aria-pressed="${CV.by === k}">${t}</button>`).join("")}</span>
+      <span class="seg cv-by" role="group" aria-label="Count sales by">${[["sold", "Date sold"], ["installed", "Date installed"], ["paid", "Date paid"]].map(([k, t]) => `<button type="button" data-cv-by="${k}" aria-pressed="${CV.by === k}">${t}</button>`).join("")}</span>
       <label class="sl-who cv-who"><span>Sales person</span><select id="cv-sp"><option value="">All sales people</option>${spAll.map(k => `<option value="${esc(k)}" ${CV.sp === k ? "selected" : ""}>${esc(spName(k))}</option>`).join("")}${CV.sp && !spAll.includes(CV.sp) ? `<option selected>${esc(CV.sp)}</option>` : ""}</select></label>
       <span class="seg cv-lvl" role="group">${[["day", "Day"], ["month", "Month"], ["year", "Year"], ["all", "All years"], ["range", "From – To"]].map(([k, t]) => `<button type="button" data-cv-lvl="${k}" aria-pressed="${CV.lvl === k}">${t}</button>`).join("")}</span>
       <span class="cv-nav">${CV.lvl !== "all" ? `<button class="btn quiet-btn" type="button" data-cv-step="-1" title="Back one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl}">‹</button><button class="btn quiet-btn" type="button" data-cv-step="1" title="Forward one ${CV.lvl === "range" ? "stretch of the same length" : CV.lvl}">›</button>` : ""}
@@ -6811,8 +6812,8 @@ function cvRender() {
     <nav class="cv-crumbs">${crumbs.map(([k, t, x], i) => i === crumbs.length - 1 ? `<b>${esc(t)}</b>` : `<button class="link" type="button" data-cv-go="${k}|${x}">${esc(t)}</button>`).join(" › ")}</nav>
     ${CV.err ? `<div class="staff-msg err">${esc(CV.err)}</div>` : ""}
     <div class="cv-sum"><div><span>${esc(label)}${CV.lvl === "day" && d === today ? " · today" : ""}</span><strong>${CV.days ? money(tot.amt) : "…"}</strong></div>
-      <div><span>${CV.by === "installed" ? "Sales installed" : "Sales"}</span><strong>${CV.days ? tot.n : "…"}</strong></div>
-      <div><span>Average sale</span><strong>${CV.days && tot.n ? money(tot.amt / tot.n) : "—"}</strong></div></div>
+      <div><span>${CV.by === "installed" ? "Sales installed" : CV.by === "paid" ? "Commissions paid" : "Sales"}</span><strong>${CV.days ? tot.n : "…"}</strong></div>
+      <div><span>${CV.by === "paid" ? "Average commission" : "Average sale"}</span><strong>${CV.days && tot.n ? money(tot.amt / tot.n) : "—"}</strong></div></div>
     ${CV.sp ? `<p class="cv-spnote">Showing <b>${esc(spName(CV.sp))}</b> only. <button class="link" type="button" data-cv-sp="">See all sales people</button></p>` : ""}
     ${rows.length ? `<h3 class="cv-h3">${CV.lvl === "all" ? "By year" : CV.lvl === "year" || (CV.lvl === "range" && cvDays(from, to) > 62) ? "By month" : "By day"}</h3>` : ""}
     ${rows.length ? `<div class="cv-rows">${rows.map(r => `<button type="button" class="cv-row ${r.now ? "now" : ""} ${r.future ? "future" : ""}" data-cv-go="${r.go}" ${r.future && !r.n ? "disabled" : ""}>
@@ -6858,7 +6859,7 @@ function renderSales(msg) {
   SALES.tab = "all"; SALES.commF = ""; if (ME.role !== "owner") { SALES.range = SALES.from = SALES.to = SALES.dateBy = ""; }
   const cvOn = salesCvLinked();
   if (cvOn) { CV.d ||= salesToday(); if (!SALES.own) SALES.own = { range: SALES.range, from: SALES.from, to: SALES.to, dateBy: SALES.dateBy };
-    const [f, t] = cvRange(); SALES.from = f || ""; SALES.to = t || ""; SALES.range = f ? "custom" : ""; SALES.dateBy = CV.by === "installed" ? "installed" : "sold"; }
+    const [f, t] = cvRange(); SALES.from = f || ""; SALES.to = t || ""; SALES.range = f ? "custom" : ""; SALES.dateBy = ["installed", "paid"].includes(CV.by) ? CV.by : "sold"; }
   else if (SALES.own) { Object.assign(SALES, SALES.own); SALES.own = null; }
   if (SALES.range && SALES.range !== "custom") [SALES.from, SALES.to] = salesRangeDates(SALES.range);   // "This month" etc. move with the calendar
   const inTab = (r, k) => k === "all" || (k === "open" ? ["booked", "estimate"].includes(r.stage) : k === "install" ? (r.stage === "install" || !!r.installs) : r.stage === k);

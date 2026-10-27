@@ -1,10 +1,11 @@
--- Carlo view: see sales by the day they were sold OR the day they were installed.
+-- Carlo view: see sales by the day they were sold, the day they were installed, or the day their commission was paid.
 -- Each sale's install = the install job made from its proposal; else the same call when it was sold and done on one call;
 -- else (old ServiceTitan installs with no link) an install for the same customer with the same sale amount.
 -- Installed day = the same day the Installs page uses: the day it was done, or (not done yet) its first booked day.
+DROP FUNCTION IF EXISTS public._sales_hist_inst(bigint);   -- (its columns grew: paid day)
 CREATE OR REPLACE FUNCTION public._sales_hist_inst(p_seller bigint DEFAULT NULL)
  RETURNS TABLE(est_id bigint, est_number text, job_id bigint, job_number text, job_type text, sold_on date, amount numeric,
-               customer_id bigint, customer text, address text, sales_person text, installed_on date, inst_job_id bigint, inst_done boolean)
+               customer_id bigint, customer text, address text, sales_person text, installed_on date, inst_job_id bigint, inst_done boolean, paid_on date, paid_amount numeric)
  LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
 AS $function$
   WITH s AS (SELECT * FROM public._sales_hist_rows(p_seller)),
@@ -26,17 +27,18 @@ AS $function$
                 ELSE (SELECT min(v.scheduled_date) FROM visits v WHERE v.job_id = j.id AND v.status <> 'cancelled') END AS day
     FROM best b JOIN jobs j ON j.id = b.jid)
   SELECT s.est_id, s.est_number, s.job_id, s.job_number, s.job_type, s.sold_on, s.amount, s.customer_id, s.customer, s.address, s.sales_person,
-         d.day, d.jid, d.done
-  FROM s LEFT JOIN d ON d.est_id = s.est_id
+         d.day, d.jid, d.done, (coalesce(it.paid_at, it.prepaid_at) AT TIME ZONE 'America/Toronto')::date,
+         CASE WHEN it.paid_at IS NOT NULL THEN it.paid_amount ELSE it.prepaid_amount END
+  FROM s LEFT JOIN d ON d.est_id = s.est_id LEFT JOIN install_tracking it ON it.job_id = d.jid
 $function$;
 REVOKE EXECUTE ON FUNCTION public._sales_hist_inst(bigint) FROM PUBLIC, anon, authenticated;
 
--- Totals for every day and sales person: by the sold day (p_by 'sold') or the installed day (p_by 'installed')
+-- Totals for every day and sales person: by the sold day (p_by 'sold'), the installed day ('installed') or the day its commission was paid ('paid')
 CREATE OR REPLACE FUNCTION public.sales_history_days_by(p_seller bigint DEFAULT NULL, p_by text DEFAULT 'sold')
  RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
 AS $function$
   SELECT coalesce(jsonb_agg(jsonb_build_object('d', d, 'sp', sp, 'n', n, 'amt', amt) ORDER BY d), '[]'::jsonb)
-  FROM (SELECT CASE WHEN p_by = 'installed' THEN installed_on ELSE sold_on END AS d, coalesce(sales_person, '') AS sp, count(*) AS n, sum(amount) AS amt
+  FROM (SELECT CASE p_by WHEN 'installed' THEN installed_on WHEN 'paid' THEN paid_on ELSE sold_on END AS d, coalesce(sales_person, '') AS sp, count(*) AS n, CASE WHEN p_by = 'paid' THEN coalesce(sum(paid_amount), 0) ELSE sum(amount) END AS amt
         FROM public._sales_hist_inst(p_seller) GROUP BY 1, 2) x
   WHERE d IS NOT NULL
 $function$;
@@ -47,11 +49,11 @@ GRANT EXECUTE ON FUNCTION public.sales_history_days_by(bigint, text) TO authenti
 CREATE OR REPLACE FUNCTION public.sales_history_by(p_seller bigint DEFAULT NULL, p_from date DEFAULT NULL, p_to date DEFAULT NULL, p_by text DEFAULT 'sold')
  RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' SET jit TO 'off'
 AS $function$
-  SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY CASE WHEN p_by = 'installed' THEN r.installed_on ELSE r.sold_on END DESC, r.amount DESC), '[]'::jsonb)
+  SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY CASE p_by WHEN 'installed' THEN r.installed_on WHEN 'paid' THEN r.paid_on ELSE r.sold_on END DESC, r.amount DESC), '[]'::jsonb)
   FROM public._sales_hist_inst(p_seller) r
-  WHERE (CASE WHEN p_by = 'installed' THEN r.installed_on ELSE r.sold_on END) IS NOT NULL
-    AND (p_from IS NULL OR (CASE WHEN p_by = 'installed' THEN r.installed_on ELSE r.sold_on END) >= p_from)
-    AND (p_to IS NULL OR (CASE WHEN p_by = 'installed' THEN r.installed_on ELSE r.sold_on END) <= p_to)
+  WHERE (CASE p_by WHEN 'installed' THEN r.installed_on WHEN 'paid' THEN r.paid_on ELSE r.sold_on END) IS NOT NULL
+    AND (p_from IS NULL OR (CASE p_by WHEN 'installed' THEN r.installed_on WHEN 'paid' THEN r.paid_on ELSE r.sold_on END) >= p_from)
+    AND (p_to IS NULL OR (CASE p_by WHEN 'installed' THEN r.installed_on WHEN 'paid' THEN r.paid_on ELSE r.sold_on END) <= p_to)
 $function$;
 REVOKE EXECUTE ON FUNCTION public.sales_history_by(bigint, date, date, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.sales_history_by(bigint, date, date, text) TO authenticated;
