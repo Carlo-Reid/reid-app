@@ -3404,7 +3404,12 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .cv-aw { font-size: 11px; font-weight: 500; color: var(--steel); margin-left: 3px; } .cv-row:hover:not(:disabled) { background: var(--blue-wash); } .cv-row.now .cv-t { font-weight: 800; color: var(--blue); } .cv-row:disabled { opacity: .45; cursor: default; }
 .cv-bar { height: 12px; border-radius: 6px; background: color-mix(in srgb, var(--line) 60%, transparent); overflow: hidden; } .cv-bar i { display: block; height: 100%; background: var(--blue); border-radius: 6px; }
 .cv-n { font-size: 13px; opacity: .75; text-align: right; } .cv-a { text-align: right; font-variant-numeric: tabular-nums; }
-.cv-listwrap { max-height: 520px; overflow: auto; } .cv-h3 { margin: 14px 0 6px; font-size: 15px; } .cv-h3:empty { display: none; } .cv-spnote { margin: 4px 0 10px; }
+.cv-listwrap { max-height: 520px; overflow: auto; } .cv-h3 { margin: 14px 0 6px; font-size: 15px; } .cv-h3:empty { display: none; }
+.cv-sec > summary.cv-h3 { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; user-select: none; }
+.cv-sec > summary.cv-h3::-webkit-details-marker { display: none; }
+.cv-sec > summary.cv-h3::before { content: "▸"; display: inline-block; width: 14px; color: var(--steel); transition: transform .15s; }
+.cv-sec[open] > summary.cv-h3::before { transform: rotate(90deg); }
+.cv-sec:not([open]) > summary.cv-h3::after { content: "show"; font-size: 12px; font-weight: 600; color: var(--blue); } .cv-spnote { margin: 4px 0 10px; }
 @media (max-width: 640px) { .cv-row { grid-template-columns: 1fr auto; } .cv-bar { grid-column: 1 / -1; } .cv-n { text-align: left; } .cv-nav { margin-left: 0; } }
 .sl-who { display: inline-flex; gap: 8px; align-items: center; font-weight: 700; } .cl-hero .sl-who { display: flex; width: max-content; margin: 0 0 18px; color: #fff; } .sl-who select { font: inherit; font-weight: 600; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
 .st-sl { display: flex; flex-direction: column; gap: 8px; } .st-sl-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); } .st-sl-chips { display: flex; flex-wrap: wrap; gap: 4px 14px; }
@@ -6833,6 +6838,8 @@ const CV = { by: (() => { try { return localStorage.getItem("cvBy") || "sold"; }
 // Carlo view keeps where you were (Day / Month / Year / All years / Pay periods / From – To, the date, the sales person) until you change it
 try { const v = JSON.parse(localStorage.getItem("cvView") || "null"); if (v) { const today = new Date().toLocaleDateString("en-CA");
   Object.assign(CV, { lvl: v.lvl || "day", f: v.f || "", t: v.t || "", sp: v.sp || "", pt: v.pt || "", ppBack: !!v.ppBack, d: v.on === today ? v.d : null }); } } catch {}
+// the By pay period / By month / By day / By year lists open and close (each remembers on its own)
+const CV_CLOSED = new Set((() => { try { return JSON.parse(localStorage.getItem("cvClosed") || "[]"); } catch { return []; } })());
 const cvSaveView = () => { try { localStorage.setItem("cvView", JSON.stringify({ lvl: CV.lvl, d: CV.d, f: CV.f, t: CV.t, sp: CV.sp, pt: CV.pt || "", ppBack: CV.ppBack, on: new Date().toLocaleDateString("en-CA") })); } catch {} };
 const CV_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const cvIso = dt => dt.toISOString().slice(0, 10);
@@ -6954,6 +6961,8 @@ function cvRender() {
   const spName = k => k === "__none" ? "No sales person" : k;
   const spRows = CV.sp ? [] : spAll.map(k => ({ k, ...add(allDays.filter(x => spK(x.sp) === k && inPeriod(x))) })).filter(r => r.n).sort((a, b) => b.amt - a.amt);
   const spMax = Math.max(1, ...spRows.map(r => r.amt));
+  const secK = CV.lvl === "pp" ? "pp" : CV.lvl === "all" ? "year" : CV.lvl === "year" || (CV.lvl === "range" && cvDays(from, to) > 62) ? "month" : "day";
+  const secT = { pp: "By pay period", year: "By year", month: "By month", day: "By day" }[secK];
   const nice = x => new Date(x + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   const label = CV.lvl === "range" ? `${cvShort(from)} to ${cvShort(to)}` : CV.lvl === "day" ? nice(d) : CV.lvl === "month" ? `${CV_MONTHS[M - 1]} ${Y}` : CV.lvl === "year" ? Y : CV.lvl === "pp" ? `Pay periods ${Y}` : "Every year";
   // the breakdown one level down: years → months → days
@@ -6990,10 +6999,10 @@ function cvRender() {
       <div><span>${CV.by === "installed" ? "Sales installed" : CV.by === "paid" ? "Commissions paid" : CV.by === "unpaid" ? "Commissions not paid" : "Sales"}</span><strong>${CV.days ? tot.n : "…"}</strong></div>
       <div><span>${CV.by === "paid" || CV.by === "unpaid" ? "Average commission" : "Average sale"}</span><strong>${CV.days && tot.n ? money(tot.amt / tot.n) : "—"}</strong></div></div>
     ${CV.sp ? `<p class="cv-spnote">Showing <b>${esc(spName(CV.sp))}</b> only. <button class="link" type="button" data-cv-sp="">See all sales people</button></p>` : ""}
-    ${rows.length ? `<h3 class="cv-h3">${CV.lvl === "pp" ? "By pay period" : CV.lvl === "all" ? "By year" : CV.lvl === "year" || (CV.lvl === "range" && cvDays(from, to) > 62) ? "By month" : "By day"}</h3>` : ""}
+    ${rows.length ? `<details class="cv-sec" data-cv-sec="${secK}" ${CV_CLOSED.has(secK) ? "" : "open"}><summary class="cv-h3">${secT}</summary>` : ""}
     ${rows.length ? `<div class="cv-rows">${rows.map(r => `<button type="button" class="cv-row ${r.now ? "now" : ""} ${r.future ? "future" : ""}" data-cv-go="${r.go}" ${r.future && !r.n ? "disabled" : ""}>
         <span class="cv-t">${esc(r.t)}</span><span class="cv-bar"><i style="width:${(r.amt / max * 100).toFixed(1)}%"></i></span>
-        <span class="cv-n">${cvCountText(r.n)}</span><b class="cv-a">${money(r.amt)}<small class="cv-aw">${cvAmtText()}</small></b></button>`).join("")}</div>`
+        <span class="cv-n">${cvCountText(r.n)}</span><b class="cv-a">${money(r.amt)}<small class="cv-aw">${cvAmtText()}</small></b></button>`).join("")}</div></details>`
       : CV.lvl === "month" && CV.days ? `<p class="quiet">No sales this month.</p>` : CV.lvl === "range" && CV.days ? `<p class="quiet">No sales in these dates.</p>` : ""}
     ${spRows.length ? `<h3 class="cv-h3">By sales person</h3><div class="cv-rows">${spRows.map(r => `<button type="button" class="cv-row" data-cv-sp="${esc(r.k)}" title="See only ${esc(spName(r.k))}">
         <span class="cv-t">${esc(spName(r.k))}</span><span class="cv-bar"><i style="width:${(r.amt / spMax * 100).toFixed(1)}%"></i></span>
@@ -7013,6 +7022,8 @@ function cvRender() {
     if (lvl !== "range") CV.ppBack = false;
     CV.lvl = lvl; if (dd) CV.d = dd; if (lvl === "day" || lvl === "month") CV.all = false; cvSaveView(); redo(true); };
   box.querySelectorAll("[data-cv-lvl]").forEach(b => b.addEventListener("click", () => go(b.dataset.cvLvl)));
+  box.querySelectorAll("details[data-cv-sec]").forEach(d => d.addEventListener("toggle", () => { const k = d.dataset.cvSec; d.open ? CV_CLOSED.delete(k) : CV_CLOSED.add(k);
+    try { localStorage.setItem("cvClosed", JSON.stringify([...CV_CLOSED])); } catch {} }));
   box.querySelectorAll("[data-cv-pt]").forEach(b => b.addEventListener("click", () => { if ((CV.pt || "") === b.dataset.cvPt) return; CV.pt = b.dataset.cvPt; redo(); }));   // only the partner changes
   box.querySelectorAll("[data-cv-by]").forEach(b => b.addEventListener("click", () => { if (CV.by === b.dataset.cvBy) return;
     CV.minH = box.offsetHeight;   // hold the box's height while the numbers load, so the page doesn't move
