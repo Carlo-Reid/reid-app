@@ -15322,7 +15322,45 @@ const pbCatChips = r => (r.category_ids || []).map(id => { const path = pbCatPat
   return `<span class="pb-catchip" title="${esc(path)}">${parts.length ? `<span class="pb-catpar">${esc(parts.join(" › "))} › </span>` : ""}${esc(last)}</span>`; }).join("");
 const pbHasMember = r => r.member_price != null && Number(r.member_price) !== Number(r.unit_price);
 
+// ===== Price book live: the database bumps pb_live on any item / category change (setup 99zzzZb); every open price book screen reloads itself.
+// So moving a part from Equipment to Parts (or any edit) shows right away, for you and everyone else, with no refresh.
+const PBLIVE = { n: null, on: false, t: 0, stale: false, offStale: false, started: false };
+function pbLiveStart() {
+  if (PBLIVE.started) return; PBLIVE.started = true;
+  try { db.channel("pb-live").on("postgres_changes", { event: "UPDATE", schema: "public", table: "pb_live" }, p => pbLiveHit(p.new?.n))
+          .subscribe(st => { const was = PBLIVE.on; PBLIVE.on = st === "SUBSCRIBED"; if (PBLIVE.on && !was) pbLiveCheck(); }); } catch {}
+  // back-up: when the live connection is down, check every 20 seconds; and whenever the window comes back into view
+  setInterval(() => { if (!PBLIVE.on && !document.hidden) pbLiveCheck(); }, 20000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) pbLiveCheck(); });
+  pbLiveCheck();
+}
+async function pbLiveCheck() { try { const { data } = await db.from("pb_live").select("n").eq("id", 1).maybeSingle(); if (data) pbLiveHit(data.n); } catch {} }
+function pbLiveHit(n) {
+  n = Number(n); if (!isFinite(n)) return;
+  if (PBLIVE.n == null) { PBLIVE.n = n; return; }   // first look: just remember where it's at
+  if (n === PBLIVE.n) return; PBLIVE.n = n; PBLIVE.stale = true;
+  clearTimeout(PBLIVE.t); PBLIVE.t = setTimeout(pbLiveReload, 400);   // a bulk change sends a burst: reload once at the end
+}
+async function pbLiveReload() {
+  if (!PBLIVE.stale) return;
+  const main = $("#main"), list = main?.querySelector(".pb-cats"), item = main?.querySelector(".pbi");
+  if (!list && !item) { PBLIVE.stale = false; PBLIVE.offStale = true; return; }   // not on screen: the next price book screen loads fresh
+  // someone is typing in a box on this screen: wait until they leave it, so nothing they typed is lost
+  const a = document.activeElement;
+  if (a && main.contains(a) && a.id !== "pb-q" && (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable)) {
+    a.addEventListener("blur", () => { clearTimeout(PBLIVE.t); PBLIVE.t = setTimeout(pbLiveReload, 600); }, { once: true }); return; }
+  PBLIVE.stale = false;
+  if (item && PB.itemPage) {
+    const id = PB.itemPage, { data, error } = await db.rpc("pb_item", { p_id: id });
+    if (error || PB.itemPage !== id || !$("#main .pbi")) return;
+    if (data?.length) PB.rows = (PB.rows || []).map(r => r.id === id ? { ...r, ...data[0] } : r);
+    loadPbCats().catch(() => {}); PBLOOK.delete(id); renderPbItemPage();
+    return;
+  }
+  await loadPbCats(); await loadPricebook();
+}
 async function openPricebook() {
+  pbLiveStart(); PBLIVE.offStale = false;
   PB.review = false; PB.importOpen = false;
   loadCallouts().then(() => { if (document.querySelector(".pb") && PB.rows && PB.calloutMap.size) renderPricebook(); }).catch(() => {});
   setPage("pricebook", "pricebook");
@@ -15769,6 +15807,7 @@ async function makePrintBook(forPick) {
 // ---------- A part's own page: everything about it, plus put it on an invoice or a home's yearly parts ----------
 async function openPbItemPage(id) {
   setPage("pb-item=" + id, "pricebook", "part");
+  pbLiveStart(); if (PBLIVE.offStale) { PBLIVE.offStale = false; PB.rows = (PB.rows || []).filter(r => r.id !== id); PB.cats = null; }   // changed while away: get it fresh
   PB.itemPage = id; PB.sel = id;
   if (!(PB.rows || []).some(r => r.id === id)) {
     $("#main").innerHTML = `<div class="loading">Opening the part…</div>`;
