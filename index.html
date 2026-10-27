@@ -6749,7 +6749,11 @@ function wireSalesViews() { document.querySelectorAll("[data-sl-view]").forEach(
 // the drop-down of sales people: owners/dispatchers always; a sales person only when an owner let them see someone else's page
 /* ---------- Sales · Carlo view (owners): every sale made, by year → month → day. Starts on today. ----------
    A sale = a sold proposal (not cancelled, more than $0), on the day it was sold. All sales people, or pick one. */
-const CV = { by: (() => { try { return localStorage.getItem("cvBy") || "sold"; } catch { return "sold"; } })(), lvl: "day", f: "", t: "", d: null, days: null, list: new Map(), err: "", all: false, sp: "" };
+const CV = { by: (() => { try { return localStorage.getItem("cvBy") || "sold"; } catch { return "sold"; } })(), lvl: "day", f: "", t: "", d: null, days: null, list: new Map(), err: "", all: false, sp: "", cache: {} };
+// Carlo view keeps where you were (Day / Month / Year / All years / Pay periods / From – To, the date, the sales person) until you change it
+try { const v = JSON.parse(localStorage.getItem("cvView") || "null"); if (v) { const today = new Date().toLocaleDateString("en-CA");
+  Object.assign(CV, { lvl: v.lvl || "day", f: v.f || "", t: v.t || "", sp: v.sp || "", ppBack: !!v.ppBack, d: v.on === today ? v.d : null }); } } catch {}
+const cvSaveView = () => { try { localStorage.setItem("cvView", JSON.stringify({ lvl: CV.lvl, d: CV.d, f: CV.f, t: CV.t, sp: CV.sp, ppBack: CV.ppBack, on: new Date().toLocaleDateString("en-CA") })); } catch {} };
 const CV_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const cvIso = dt => dt.toISOString().slice(0, 10);
 function cvRange(lvl = CV.lvl, d = CV.d) {
@@ -6838,7 +6842,7 @@ async function cvLoad() {
     if (by !== CV.by) return;
     if (!error) CV.err = "";
     if (error) { CV.err = /function|schema|PGRST202/i.test(error.message || "") ? "Run RUN SETUP NOW.bat to switch this on." : rpcErr(error); cvRender(); return; }
-    CV.days = data || []; cvRender();
+    CV.days = data || []; CV.cache[by] = CV.days; cvRender();
   }
   const lk = cvRange().join("|");
   if (cvWantList() && !CV.list.has(lk)) {
@@ -6852,6 +6856,7 @@ async function cvLoad() {
 }
 function cvRender() {
   const box = $("#sl-cv"); if (!box) return;
+  box.style.minHeight = !CV.days && CV.minH ? CV.minH + "px" : ""; if (CV.days) CV.minH = 0;
   const d = CV.d || salesToday(), Y = d.slice(0, 4), M = Number(d.slice(5, 7)), today = salesToday();
   const allDays = CV.days || [], spK = v => v || "__none", days = allDays.filter(x => !CV.sp || spK(x.sp) === CV.sp), [from, to] = cvRange();
   const inPeriod = x => CV.lvl === "all" || (x.d >= from && x.d <= to);
@@ -6916,13 +6921,14 @@ function cvRender() {
           <td class="cv-act"><button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>${ME.role === "owner" ? `<button class="btn quiet-btn" type="button" data-cv-split="${r.est_id}" title="This sale was split up into other sales (for example a combo later sold as two): take it off the sales">✂ Split up</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
         : `<p class="quiet">No sales ${CV.lvl === "day" ? "on this day" : "here"}.</p>`) : `<p class="quiet">Loading the sales…</p>`) : ""}`;
   eqAgeFill();
-  const redo = load => { if (salesCvLinked() && document.body.dataset.page === "sales") { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; } else load ? cvLoad() : cvRender(); };
+  const redo = load => { cvSaveView(); if (salesCvLinked() && document.body.dataset.page === "sales") { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; } else load ? cvLoad() : cvRender(); };
   const go = (lvl, dd) => { if (lvl === "range" && CV.lvl !== "range") { const [f0, t0] = cvRange(CV.lvl === "all" || CV.lvl === "pp" ? "year" : CV.lvl); CV.f = f0; CV.t = t0 > today ? today : t0; if (CV.f > CV.t) CV.f = CV.t; }   // starts on what you were looking at
     if (lvl !== "range") CV.ppBack = false;
-    CV.lvl = lvl; if (dd) CV.d = dd; if (lvl === "day" || lvl === "month") CV.all = false; redo(true); };
+    CV.lvl = lvl; if (dd) CV.d = dd; if (lvl === "day" || lvl === "month") CV.all = false; cvSaveView(); redo(true); };
   box.querySelectorAll("[data-cv-lvl]").forEach(b => b.addEventListener("click", () => go(b.dataset.cvLvl)));
   box.querySelectorAll("[data-cv-by]").forEach(b => b.addEventListener("click", () => { if (CV.by === b.dataset.cvBy) return;
-    CV.by = b.dataset.cvBy; try { localStorage.setItem("cvBy", CV.by); } catch {} CV.days = null; CV.list = new Map(); CV.unpaidAll = null; CV.err = ""; if (CV.by === "unpaid") { CV.lvl = "all"; CV.all = true; } else if (CV.by === "paid") { CV.lvl = "pp"; CV.ppBack = false; } redo(true); }));   // not paid yet: start on every year, with the list
+    CV.minH = box.offsetHeight;   // hold the box's height while the numbers load, so the page doesn't move
+    CV.by = b.dataset.cvBy; try { localStorage.setItem("cvBy", CV.by); } catch {} CV.days = CV.by === "unpaid" ? null : CV.cache[CV.by] || null; CV.list = new Map(); CV.err = ""; redo(true); }));   // the period you're on stays as it is
   box.querySelectorAll("[data-cv-go]").forEach(b => b.addEventListener("click", () => { const [l, x] = b.dataset.cvGo.split("|");
     if (l === "ppr") { const [f, t] = x.split("~"); CV.lvl = "range"; CV.f = f; CV.t = t; CV.ppBack = true; return go("range", t); }   // one pay period
     go(l, x); }));
