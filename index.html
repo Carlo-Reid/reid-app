@@ -6632,30 +6632,46 @@ async function salesLoadSince(from) {
   if (document.body.dataset.page !== "sales") return;
   const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top;
 }
+// ===== the Sales page remembers what it last loaded (in this browser, for this sign-in): it shows that at once, then refreshes in the background
+const SCACHE = { p: null };
+function scOpen() { return SCACHE.p ||= new Promise(res => { try { const r = indexedDB.open("reid-cache", 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => res(null); r.onblocked = () => res(null); } catch { res(null); } }); }
+const scKey = k => `sales:${ME.id || ""}:${k}`;
+async function scGet(k) { const d = await scOpen(); if (!d) return null; return new Promise(res => { try { const q = d.transaction("kv").objectStore("kv").get(scKey(k)); q.onsuccess = () => res(q.result ?? null); q.onerror = () => res(null); } catch { res(null); } }); }
+async function scSet(k, v) { const d = await scOpen(); if (!d) return; try { d.transaction("kv", "readwrite").objectStore("kv").put(v, scKey(k)); } catch {} }
+const salesRerender = () => { if (document.body.dataset.page !== "sales" || !SALES.rows) return; const typing = document.activeElement?.id === "sl-q" ? document.activeElement.selectionStart : null, top = $("#main").scrollTop;
+  renderSales(); $("#main").scrollTop = top; if (typing != null) { const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(typing, typing); } catch {} } } };
 async function openSales(msg) {
   setPage("sales", "sales", "Sales");
-  if (!SALES.rows) $("#main").innerHTML = `<div class="loading">Loading the sales jobs…</div>`;
-  // whose page: your own, or (if an owner allowed it) another sales person's; owners can pick anyone or Everyone
-  const ppl = await db.rpc("sales_people"); SALES.people = ppl.error ? [] : ppl.data || [];
   SALES.seller = "";   // no "Sales page of" pick any more: owners see everyone, a sales person sees their own
+  CV.fresh = {}; SALES.histFresh = false;   // this visit: every part is fetched fresh once (what's remembered shows in the meantime)
+  const seq = SALES.openSeq = (SALES.openSeq || 0) + 1;
+  const pplP = db.rpc("sales_people");
   const d18 = salesMonthsBack(18), since = SALES.since && SALES.since < d18 ? SALES.since : null;   // keep older sales already loaded
-  const { data, error } = since ? await db.rpc("sales_list_since", { p_seller: null, p_since: since }) : await db.rpc("sales_list", { p_seller: SALES.seller ? Number(SALES.seller) : null });
-  if (document.body.dataset.page !== "sales") return;
-  if (!error) SALES.since = since || d18;
-  if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load sales</h2>${/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</div></div>`; return; }
-  salesTake(data);
-  renderSales(msg);
-  salesLoadPaid(); salesLoadComm();   // paid days come fast; commission amounts a moment later
+  const listP = since ? db.rpc("sales_list_since", { p_seller: null, p_since: since }) : db.rpc("sales_list", { p_seller: null });
+  // show what we have straight away: from this visit, or remembered from the last one
+  if (!SALES.rows) { const c = await scGet("list"); if (c?.rows && !SALES.rows && seq === SALES.openSeq) { salesTake(c.rows); SALES.since = c.since; if (!SALES.people) SALES.people = c.people || []; } }
+  if (!SALES.comm) { const c = await scGet("comm"); if (c?.length && !SALES.comm) SALES.comm = new Map(c.map(r => [r.job_id, r])); }
+  if (!SALES.histInst) { const c = await scGet("hist"); if (c?.length && !SALES.histInst) { CV.unpaidAll ||= c; SALES.histInst = new Map(c.filter(x => x.inst_job_id).map(x => [x.est_id, x.inst_job_id])); } }
+  const shown = !!SALES.rows && document.body.dataset.page === "sales" && seq === SALES.openSeq;
+  if (shown) { renderSales(msg); salesLoadPaid(); salesLoadComm(); } else $("#main").innerHTML = `<div class="loading">Loading the sales jobs…</div>`;
+  const ppl = await pplP; if (!ppl.error) SALES.people = ppl.data || [];
+  const { data, error } = await listP;
+  if (document.body.dataset.page !== "sales" || seq !== SALES.openSeq) return;
+  if (error) { if (!shown) $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load sales</h2>${/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</div></div>`; return; }
+  SALES.since = since || d18;
+  salesTake(data); scSet("list", { rows: data, since: SALES.since, people: SALES.people });
+  if (shown) salesRerender(); else { renderSales(msg); salesLoadPaid(); salesLoadComm(); }
   if (can("installs.manage") || ["owner", "accounting"].includes(ME.role)) { salesLoadHistInst(); if (!SALES.notes) salesLoadNotes(); }
 }
 // commission (the same numbers as the Installs page), in half-year pieces two at a time (all at once is too much for the database)
 // the database's install match for every sale (the list Carlo view uses); loaded once in the background
 async function salesLoadHistInst() {
-  if (SALES.histInst || SALES.histInstBusy) return; SALES.histInstBusy = true;
-  let data = CV.unpaidAll; if (!data) { const r = await cvRpc("sales_history_by", { p_seller: null, p_from: null, p_to: null, p_by: "sold" }); if (!r.error) data = CV.unpaidAll = r.data || []; }
+  if (SALES.histFresh || SALES.histInstBusy) return; SALES.histInstBusy = true;
+  let data = null; { const r = await cvRpc("sales_history_by", { p_seller: null, p_from: null, p_to: null, p_by: "sold" }); if (!r.error) { data = CV.unpaidAll = r.data || []; SALES.histFresh = true; scSet("hist", data); } }
   SALES.histInstBusy = false; if (!data) return;
   SALES.histInst = new Map(data.filter(x => x.inst_job_id).map(x => [x.est_id, x.inst_job_id]));
-  if (document.body.dataset.page === "sales" && SALES.rows) { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; }
+  if (CV.by === "unpaid") CV.days = null;   // Not paid yet works from this list: redo it
+  salesRerender();
 }
 async function salesLoadComm() {
   if (!(can("installs.manage") || ["owner", "accounting"].includes(ME.role))) { SALES.comm = SALES.pay = null; return; }
@@ -6669,7 +6685,7 @@ async function salesLoadComm() {
     return bad === parts.length ? null : out; };
   let rows = await getAll(); if (seq !== SALES.commSeq) return;
   if (!rows) { SALES.comm = SALES.pay = null; return; }
-  SALES.comm = new Map(rows.map(r => [r.job_id, r]));
+  SALES.comm = new Map(rows.map(r => [r.job_id, r])); scSet("comm", rows);
   let pr = { data: [] };
   if (!SALES.paidList) { pr = await db.rpc("commission_payroll");   // (until setup 99zzzR: the older way)
     SALES.pay = pr.error || !pr.data ? null : new Map(pr.data.map(x => [x.job_id, x.payroll_on])); }
@@ -6926,14 +6942,18 @@ async function cvLoad() {
     const [f, t] = cvRange(); CV.list = new Map([[cvRange().join("|"), U.filter(r => (!f || r.sold_on >= f) && (!t || r.sold_on <= t))]]);
     cvRender(); return;
   }
+  if (!CV.days) { const c = CV.cache[CV.by] || await scGet("cv:" + CV.by); if (c && !CV.days) CV.days = c; }
   cvRender();
-  if (!CV.days) {
-    const by = CV.by; let { data, error } = await cvRpc("sales_history_days_by", { p_seller: null, p_by: by === "all" ? "sold" : by });   // Show all: the totals are sales, by the day sold
+  CV.fresh ||= {}; CV.busy ||= {};
+  if (!CV.days || (!CV.fresh[CV.by] && !CV.busy[CV.by])) {
+    const by = CV.by; CV.busy[by] = true; let { data, error } = await cvRpc("sales_history_days_by", { p_seller: null, p_by: by === "all" ? "sold" : by });   // Show all: the totals are sales, by the day sold
     if (error && by === "sold" && /function|schema|PGRST202/i.test(error.message || "")) ({ data, error } = await db.rpc("sales_history_days", { p_seller: null }));   // (until setup 99zzzX)
+    CV.busy[by] = false;
+    if (!error) { CV.fresh[by] = true; CV.cache[by] = data || []; scSet("cv:" + by, CV.cache[by]); }
     if (by !== CV.by) return;
     if (!error) CV.err = "";
-    if (error) { CV.err = /function|schema|PGRST202/i.test(error.message || "") ? "Run RUN SETUP NOW.bat to switch this on." : rpcErr(error); cvRender(); return; }
-    CV.days = data || []; CV.cache[by] = CV.days; cvRender();
+    if (error) { if (!CV.days) { CV.err = /function|schema|PGRST202/i.test(error.message || "") ? "Run RUN SETUP NOW.bat to switch this on." : rpcErr(error); cvRender(); } return; }
+    CV.days = CV.cache[by]; cvRender();
   }
   const lk = cvRange().join("|");
   if (cvWantList() && !CV.list.has(lk)) {
