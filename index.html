@@ -6548,7 +6548,7 @@ let BK = null;
 /* ---------------- Sales page: sales jobs → booked → estimate → closed deal ---------------- */
 const SALES = { tab: "open", seller: "", people: [], rows: null, q: "", sort: "", dir: 1, range: "", from: "", to: "", dateBy: "", commF: "" };
 // the date a deal counts on: its call date, or (no call) the last change to its proposal / when the job was made
-const salesDate = r => r.visit_date || String(r.sort || "").slice(0, 10);
+const salesDate = r => (r.stage !== "install" && r.sold_on) || r.visit_date || String(r.sort || "").slice(0, 10);   // a sold deal: the day it was sold (same as Carlo view)
 const SALES_RANGES = [["", "All dates"], ["month", "This month"], ["lastmonth", "Last month"], ["3m", "Last 3 months"], ["year", "This year"], ["lastyear", "Last year"], ["custom", "Pick dates…"]];
 function salesRangeDates(k) {
   const d = new Date(), y = d.getFullYear(), m = d.getMonth(), iso = x => new Date(x.getTime() - x.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -6564,18 +6564,34 @@ const salesSave = () => { try { const o = SALES.own || SALES; localStorage.setIt
 // owners: the sales list below Carlo view follows it (its year / month / day and sales person) unless they pick "Use my own dates"
 const salesCvLinked = () => ME.role === "owner";
 const salesBoss = () => ME.role === "owner" || can("calls.dispatch");
+const salesMonthsBack = n => { const d = new Date(); d.setMonth(d.getMonth() - n); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+// the list from the database: installs go under the deal they came from
+function salesTake(data) {
+  const all = data || [], byEst = new Map(all.filter(r => r.stage !== "install" && r.est_id).map(r => [r.est_id, r]));
+  all.forEach(r => { delete r.installs; });
+  SALES.rows = all.filter(r => { if (r.stage !== "install") return true; const d = byEst.get(r.est_id); if (!d) return true; (d.installs ||= []).push(r); return false; });
+}
+// the list starts 18 months back; looking at an older period in Carlo view loads the sales back to its start (once)
+async function salesLoadSince(from) {
+  if (SALES.olderBusy) return; const want = from || "2000-01-01"; SALES.olderBusy = want;
+  const { data, error } = await db.rpc("sales_list_since", { p_seller: null, p_since: want });
+  SALES.olderBusy = null;
+  if (error) { SALES.olderErr = rpcErr(error); } else { salesTake(data); SALES.since = want; SALES.olderErr = ""; }
+  if (document.body.dataset.page !== "sales") return;
+  const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top;
+}
 async function openSales(msg) {
   setPage("sales", "sales", "Sales");
   if (!SALES.rows) $("#main").innerHTML = `<div class="loading">Loading the sales jobs…</div>`;
   // whose page: your own, or (if an owner allowed it) another sales person's; owners can pick anyone or Everyone
   const ppl = await db.rpc("sales_people"); SALES.people = ppl.error ? [] : ppl.data || [];
   SALES.seller = "";   // no "Sales page of" pick any more: owners see everyone, a sales person sees their own
-  const { data, error } = await db.rpc("sales_list", { p_seller: SALES.seller ? Number(SALES.seller) : null });
+  const d18 = salesMonthsBack(18), since = SALES.since && SALES.since < d18 ? SALES.since : null;   // keep older sales already loaded
+  const { data, error } = since ? await db.rpc("sales_list_since", { p_seller: null, p_since: since }) : await db.rpc("sales_list", { p_seller: SALES.seller ? Number(SALES.seller) : null });
   if (document.body.dataset.page !== "sales") return;
+  if (!error) SALES.since = since || d18;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load sales</h2>${/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</div></div>`; return; }
-  const all = data || [], byEst = new Map(all.filter(r => r.stage !== "install" && r.est_id).map(r => [r.est_id, r]));
-  all.forEach(r => { delete r.installs; });
-  SALES.rows = all.filter(r => { if (r.stage !== "install") return true; const d = byEst.get(r.est_id); if (!d) return true; (d.installs ||= []).push(r); return false; });
+  salesTake(data);
   renderSales(msg);
   salesLoadPaid(); salesLoadComm();   // paid days come fast; commission amounts a moment later
 }
@@ -6785,7 +6801,7 @@ function cvPeriodText() {   // "on Monday, October 26, 2026", "in October 2026",
     : CV.lvl === "range" ? `from ${cvShort(CV.f)} to ${cvShort(CV.t)}`
     : CV.lvl === "month" ? `in ${CV_MONTHS[M - 1]} ${d.slice(0, 4)}` : CV.lvl === "year" ? "in " + d.slice(0, 4) : "any time";
 }
-const cvWantList = () => CV.lvl === "day" || CV.lvl === "month" || (CV.lvl === "range" && cvDays(CV.f, CV.t) <= 92) || CV.all;
+const cvWantList = () => false;   // Carlo view has no list of its own: the Sales table below follows it and is the one list
 // the database is sometimes busy while the page loads: a timed-out ask is tried again (up to twice)
 async function cvRpc(name, args) { let r; for (let i = 0; i < 3; i++) { r = await db.rpc(name, args); if (!r.error || !/statement timeout/i.test(r.error.message || "")) break; await new Promise(z => setTimeout(z, 1500)); } return r; }
 // "Not paid yet": every sale whose commission is owed (more than $0) and not paid, on the day it was sold; the amounts are the commission
@@ -6887,7 +6903,7 @@ function cvRender() {
     ${spRows.length ? `<h3 class="cv-h3">By sales person</h3><div class="cv-rows">${spRows.map(r => `<button type="button" class="cv-row" data-cv-sp="${esc(r.k)}" title="See only ${esc(spName(r.k))}">
         <span class="cv-t">${esc(spName(r.k))}</span><span class="cv-bar"><i style="width:${(r.amt / spMax * 100).toFixed(1)}%"></i></span>
         <span class="cv-n">${r.n} ${r.n === 1 ? "sale" : "sales"}</span><b class="cv-a">${money(r.amt)}</b></button>`).join("")}</div>` : ""}
-    ${CV.lvl === "year" || CV.lvl === "all" || CV.lvl === "pp" || (CV.lvl === "range" && cvDays(from, to) > 92) ? `<p><button class="link" type="button" data-cv-all>${CV.all ? "Hide the sales" : `Show all ${tot.n} sales`}</button></p>` : ""}
+
     ${cvWantList() ? (list ? (list.length ? `<div class="staff-wrap cv-listwrap"><table class="calls-table cv-t"><thead><tr><th>Sold</th><th>Installed</th><th>Customer</th><th>Sales person</th><th>For</th><th class="r">Sale</th>${SALES.comm ? `<th class="r">Commission due</th><th>Commission paid</th>` : ""}<th></th></tr></thead><tbody>
         ${list.map(r => `<tr><td>${esc(fmtDate(r.sold_on))}</td><td>${cvInstCell(r)}</td>
           <td><button class="link" type="button" data-cv-cust="${r.customer_id}"><b>${esc(r.customer || "")}</b></button><div class="quiet">${esc(r.address || "")}</div>${eqAgeSlot(r.job_id)}</td>
@@ -6965,6 +6981,9 @@ function renderSales(msg) {
     const [f, t] = cvRange(); SALES.from = f || ""; SALES.to = t || ""; SALES.range = f ? "custom" : ""; SALES.dateBy = ["installed", "paid"].includes(CV.by) ? CV.by : "sold"; }
   else if (SALES.own) { Object.assign(SALES, SALES.own); SALES.own = null; }
   if (SALES.range && SALES.range !== "custom") [SALES.from, SALES.to] = salesRangeDates(SALES.range);   // "This month" etc. move with the calendar
+  if (cvOn && CV.by === "unpaid") SALES.commF = "unpaid";   // Carlo view's "Not paid yet": the list shows the sales with commission not paid yet
+  const older = cvOn && SALES.rows && SALES.since && (SALES.from || "0000") < SALES.since && !SALES.olderErr;   // dates before what's loaded
+  if (older && !SALES.olderBusy) setTimeout(() => salesLoadSince(SALES.from), 0);
   const inTab = (r, k) => k === "all" || (k === "open" ? ["booked", "estimate"].includes(r.stage) : k === "install" ? (r.stage === "install" || !!r.installs) : r.stage === k);
   // dates: a sale counts on the day it was sold; on the Installs tab it's the install's day
   const instDate = r => r.installs?.length ? (r.installs[0].visit_date || salesDate(r.installs[0])) : salesDate(r);
@@ -6987,6 +7006,7 @@ function renderSales(msg) {
   if (cf) rows = rows.filter(r => salesCommMatch(r, cf));
   const SORDER = { booked: 1, estimate: 2, closed: 3, install: 4, lost: 5 };
   const SKEY = { stage: r => SORDER[r.stage] || 9, sp: r => spOf(r).toLowerCase() || "~", cust: r => (r.customer || "").toLowerCase(), call: r => r.visit_date ? r.visit_date + (r.visit_from || "") : "~",
+    sold: r => r.sold_on || "~",
     inst: r => { const i = r.installs?.[0] || (r.stage === "install" ? r : null); return i?.visit_date || "~"; },
     for: r => ((r.partner || "Reid") + " " + (r.type || "")).toLowerCase(), prop: r => Number(r.stage === "closed" || r.stage === "install" ? r.sold_total : r.est_total) || 0,
     comm: r => Number(SALES.comm?.get(salesInstOf(r))?.commission_amount ?? -1),
@@ -7014,13 +7034,15 @@ function renderSales(msg) {
       ${payDaySelect(`id="sl-payall-d" aria-label="Pay day"`, SALES.payDay && SALES.payDay >= salesToday() ? SALES.payDay : nextPayDay(), payDays(28, 100))}<button class="btn" type="button" id="sl-payall">Put on payroll</button></div>` : ""}
     <div class="sl-find sl-listhead"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
       ${cf && !qq.length ? `<span class="sl-cf-note">Showing <b>${esc(SALES_COMMF.find(x => x[0] === cf)[1].toLowerCase())}</b>: ${rows.length} ${rows.length === 1 ? "sale" : "sales"}, ${money(cfCount[cf]?.amt || 0)} commission <button class="link" type="button" id="sl-cf-clear">Show everything</button></span>` : ""}
+      ${older ? `<span class="sl-cf-note">Loading the older sales…</span>` : SALES.olderErr ? `<span class="sl-cf-note">Older sales didn't load: ${esc(SALES.olderErr)}</span>` : ""}
       <span class="quiet">${qq.length ? `${rows.length} found${SALES.from || SALES.to ? " (searching all dates)" : ""}` : `${rows.length} ${rows.length === 1 ? "sale" : "sales"}`}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button></div>
-    ${rows.length ? `<div class="staff-wrap sl-tablewrap" id="sl-tw"><table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
+    ${rows.length ? `<div class="staff-wrap sl-tablewrap" id="sl-tw"><table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("sold", "Sold")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
       ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
         <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>${eqAgeSlot(r.job_id)}</td>
         <td>${r.visit_date ? `${esc(fmtDate(r.visit_date))}<div class="quiet">${r.visit_from ? esc(t(r.visit_from) + (r.visit_to ? "–" + t(r.visit_to) : "")) : "any time"}${r.seller ? " · " + esc(r.seller) : ""}</div>` : `<span class="quiet">${r.stage === "install" ? "Install not booked yet" : "Not booked yet"}</span>`}</td>
+        <td>${r.sold_on ? esc(fmtDate(r.sold_on)) : `<span class="quiet">—</span>`}</td>
         <td>${salesInstCell(r)}</td>
         <td>${esc(r.partner || "Reid")}<div class="quiet">${esc(r.type || "")}</div></td>
         <td class="r num">${r.est_id ? `${esc(r.est_number)}<div class="quiet">${r.stage === "closed" || r.stage === "install" ? "sold " + money(r.sold_total) : r.est_total != null ? "up to " + money(r.est_total) : "empty"}</div>` : `<span class="quiet">none yet</span>`}</td>
@@ -7029,10 +7051,19 @@ function renderSales(msg) {
           : r.stage === "booked" ? `<button class="btn" type="button" data-sl-est="${r.job_id}">Make the proposal</button>`
           : r.stage === "estimate" ? `<button class="btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>`
           : r.stage === "install" ? `<button class="btn quiet-btn" type="button" data-sl-cust="${r.customer_id}">Open the file</button>`
-          : r.est_id ? `<button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>` : ""}${(r.stage === "closed" || r.stage === "install") && r.est_id ? `<button class="btn quiet-btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>${estSoldBtns(r.est_id, !!r.st_id)}` : ""}${["booked", "estimate"].includes(r.stage) ? `<button class="btn quiet-btn sl-cancel" type="button" data-sl-cancel="${r.job_id}" title="Cancel this sales job and its proposal">Cancel</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
+          : r.est_id ? `<button class="btn quiet-btn" type="button" data-estimate="${r.est_id}">View</button>` : ""}${(r.stage === "closed" || r.stage === "install") && r.est_id ? `<button class="btn quiet-btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>${estSoldBtns(r.est_id, !!r.st_id)}` : ""}${r.stage === "closed" && r.est_id && ME.role === "owner" ? `<button class="btn quiet-btn" type="button" data-sl-split="${r.est_id}" title="This sale was split up into other sales (for example a combo later sold as two): take it off the sales">✂ Split up</button>` : ""}${["booked", "estimate"].includes(r.stage) ? `<button class="btn quiet-btn sl-cancel" type="button" data-sl-cancel="${r.job_id}" title="Cancel this sales job and its proposal">Cancel</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="quiet">${qq.length ? "Nothing matches your search." : SALES.tab === "open" ? "No open sales jobs. Press + New sales job to start one." : "Nothing here."}</p>`}
   </article>`;
   eqAgeFill();   // equipment ages under each customer
+  // a combo that was later sold as separate proposals: take it off the sales (owners; it can be put back)
+  document.querySelectorAll("[data-sl-split]").forEach(b => b.addEventListener("click", async () => {
+    const id = Number(b.dataset.slSplit), r = (SALES.rows || []).find(x => x.est_id === id && x.stage === "closed");
+    const k = await askChoice("Take this sale off?", `${esc(r?.customer || "")}, proposal ${esc(r?.est_number || "")} for ${money(r?.sold_total || 0)}. Use this when it was split up into other sales, so it isn't counted twice. It comes off the sales totals and the commission lists. The proposal itself stays, and it can be put back.`, [["yes", "Take it off", true], ["", "Keep it"]]);
+    if (k !== "yes") return;
+    const { error } = await db.rpc("est_split_remove", { p_id: id, p_note: "Split up into other sales" });
+    if (error) { alertMsg("Not changed: " + rpcErr(error)); return; }
+    CV.days = null; CV.list = new Map(); CV.unpaidAll = null;
+    const top = $("#main").scrollTop; await openSales(`Proposal ${r?.est_number || ""} taken off the sales (split up).`); $("#main").scrollTop = top; }));
   viewBar();   // put the Deals · Commissions · Installs bar back now, not a moment later (that made the page creep up a little on every click)
   wireSalesViews(); salesFitList(); setTimeout(salesFitList, 200);   // again once the sideways bar is in
   cvLoad();   // Carlo view
