@@ -3633,6 +3633,15 @@ article.sales .cl-hero-range > em { font-size: calc(17px * var(--fs, 1)); opacit
 .sl-listhead + .sl-tablewrap { border-radius: 0 0 10px 10px; } .sl-listhead + p { padding: 12px; margin: 0; border: 1px solid var(--line); border-radius: 0 0 10px 10px; }
 .sl-dates label { display: flex; gap: 6px; align-items: center; font-weight: 650; font-size: 13px; } .sl-dates select, .sl-dates input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--panel); color: var(--ink); } .sl-find input { flex: 1; max-width: 520px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: var(--panel); color: var(--ink); }
 .sl-t th .sl-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; font-weight: 700; } .sl-t th .sl-sort:hover, .sl-t th .sl-sort.on { color: var(--blue, #1f6fd1); } .sl-sp-pick select { max-width: 170px; font-size: 13px; padding: 3px 6px; }
+/* the Sales table: smaller text so more fits, and every button the same small size */
+.sl-t { font-size: calc(13px * var(--fs, 1)); } .sl-t th, .sl-t td { padding: 6px 8px; } .sl-t .quiet { font-size: calc(11.5px * var(--fs, 1)); }
+.sl-t th { font-size: calc(11.5px * var(--fs, 1)); } .sl-t .sl-stage { font-size: 11px; padding: 1px 7px; } .sl-t .sl-kind { font-size: 10.5px; }
+.sl-t .status { font-size: 11px; padding: 1px 7px; } .sl-cpaid { white-space: nowrap; }
+.sl-t td.sl-act { white-space: normal; width: 240px; min-width: 240px; font-size: 0; }   /* two buttons a row */
+.sl-t td.sl-act .est-sold-acts { display: inline; }
+.sl-t td.sl-act .btn, .sl-t td.sl-act .btn.small { display: inline-block; vertical-align: top; width: 112px; height: 26px; min-height: 0; margin: 0 4px 4px 0 !important; padding: 0 6px; font-size: 11.5px; font-weight: 600; line-height: 24px; border-radius: 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; box-sizing: border-box; }
+.sl-t .sl-pay select, .sl-t .sl-pay input[type=date] { font-size: 11.5px; padding: 2px 3px; }
 .sl-kind { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 700; color: var(--steel); }
 .sl-act .btn.sc-here { background: var(--green) !important; border-color: var(--green) !important; color: var(--on-accent) !important; }
 .scall .sc-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin: 0 0 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 6px 16px rgba(0,0,0,.05); max-width: 760px; }
@@ -6736,6 +6745,15 @@ const salesInstOf = r => { if (r.stage === "install") return r.job_id; const h =
   if (r.installs?.length) return r.installs[0].job_id; if (!r.est_id) return null;
   if (SALES.instByEstFor !== SALES.rows) { SALES.instByEstFor = SALES.rows; SALES.instByEst = new Map((SALES.rows || []).filter(x => x.stage === "install" && x.est_id).map(x => [x.est_id, x.job_id])); }
   return SALES.instByEst.get(r.est_id) || null; };
+// has the customer paid the install's invoice? (from the same numbers as the Installs page)
+function salesCustPaidCell(r) {
+  const sold = r.stage === "closed" || r.stage === "install" || !!r.installs; if (!sold) return `<span class="quiet">—</span>`;
+  const id = salesInstOf(r), c = id ? SALES.comm?.get(id) : null, inv = Number(c?.invoiced) || 0, ow = Number(c?.owing) || 0;
+  if (!c || !inv) return `<span class="quiet">Not invoiced yet</span>`;
+  if (c.customer_paid || ow <= 0.005) return `<span class="status s-done">Paid</span><div class="quiet">${money(inv)}</div>`;
+  return `<span class="status s-warn">Owes ${money(ow)}</span><div class="quiet">of ${money(inv)}${c.financing_company ? " · " + esc(c.financing_company) : ""}</div>`;
+}
+const salesCustOwing = r => { const id = salesInstOf(r), c = id ? SALES.comm?.get(id) : null; return !c || !Number(c.invoiced) ? -1 : Number(c.owing) || 0; };
 function salesCommCell(r) {
   const c = SALES.comm?.get(salesInstOf(r));
   if (!c) return r.stage === "closed" ? `<span class="quiet">after the install</span>` : `<span class="quiet">—</span>`;
@@ -7026,7 +7044,7 @@ function renderSales(msg) {
   if (cf) rows = rows.filter(r => salesCommMatch(r, cf));
   const SORDER = { booked: 1, estimate: 2, closed: 3, install: 4, lost: 5 };
   const SKEY = { stage: r => SORDER[r.stage] || 9, sp: r => spOf(r).toLowerCase() || "~", cust: r => (r.customer || "").toLowerCase(), call: r => r.visit_date ? r.visit_date + (r.visit_from || "") : "~",
-    sold: r => r.sold_on || "~",
+    sold: r => r.sold_on || "~", cpaid: r => salesCustOwing(r),
     inst: r => { const i = r.installs?.[0] || (r.stage === "install" ? r : null); return i?.visit_date || "~"; },
     for: r => ((r.partner || "Reid") + " " + (r.type || "")).toLowerCase(), prop: r => Number(r.stage === "closed" || r.stage === "install" ? r.sold_total : r.est_total) || 0,
     comm: r => Number(SALES.comm?.get(salesInstOf(r))?.commission_amount ?? -1),
@@ -7057,7 +7075,7 @@ function renderSales(msg) {
       ${older ? `<span class="sl-cf-note">Loading the older sales…</span>` : SALES.olderErr ? `<span class="sl-cf-note">Older sales didn't load: ${esc(SALES.olderErr)}</span>` : ""}
       <span class="quiet">${qq.length ? `${rows.length} found${SALES.from || SALES.to ? " (searching all dates)" : ""}` : `${rows.length} ${rows.length === 1 ? "sale" : "sales"}`}</span>
       <button class="btn" type="button" id="sl-new">+ New sales job</button></div>
-    ${rows.length ? `<div class="staff-wrap sl-tablewrap" id="sl-tw"><table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("sold", "Sold")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
+    ${rows.length ? `<div class="staff-wrap sl-tablewrap" id="sl-tw"><table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("sold", "Sold")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("cpaid", "Customer paid") + th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
       ${rows.map(r => `<tr><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
         <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>${eqAgeSlot(r.job_id)}</td>
@@ -7066,7 +7084,7 @@ function renderSales(msg) {
         <td>${salesInstCell(r)}</td>
         <td>${esc(r.partner || "Reid")}<div class="quiet">${esc(r.type || "")}</div></td>
         <td class="r num">${r.est_id ? `${esc(r.est_number)}<div class="quiet">${r.stage === "closed" || r.stage === "install" ? "sold " + money(r.sold_total) : r.est_total != null ? "up to " + money(r.est_total) : "empty"}</div>` : `<span class="quiet">none yet</span>`}</td>
-        ${SALES.comm ? `<td class="r num sl-comm">${salesCommCell(r)}</td>` : ""}${SALES.pay ? `<td>${salesPayCell(r)}</td>` : ""}
+        ${SALES.comm ? `<td class="sl-cpaid">${salesCustPaidCell(r)}</td><td class="r num sl-comm">${salesCommCell(r)}</td>` : ""}${SALES.pay ? `<td>${salesPayCell(r)}</td>` : ""}
         <td class="sl-act">${r.stage === "booked" && r.kind === "site" ? `<button class="btn ${r.on_site ? "sc-here" : ""}" type="button" data-sl-call="${r.job_id}">Open the call</button>`
           : r.stage === "booked" ? `<button class="btn" type="button" data-sl-est="${r.job_id}">Make the proposal</button>`
           : r.stage === "estimate" ? `<button class="btn" type="button" data-sl-open="${r.est_id}">Open the proposal</button>`
