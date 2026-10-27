@@ -192,6 +192,12 @@ AS $function$
     LEFT JOIN locations l ON l.id = sj.location_id
     LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = sj.id ORDER BY v.visit_number DESC LIMIT 1) v ON true),
   deals AS (SELECT x, est, jid FROM rows UNION ALL SELECT x, est, jid FROM orows),
+  -- every proposal on each deal's sales call (the sold one, or another one on the same call)
+  dl AS (SELECT r.est, r.jid, es.id AS e2 FROM deals r JOIN estimates es ON es.job_id = r.jid WHERE r.est IS NOT NULL
+         UNION SELECT r.est, r.jid, r.est FROM deals r WHERE r.est IS NOT NULL),
+  -- install jobs linked to any of them
+  lk AS (SELECT dl.est, dl.jid, ij.id AS ij FROM dl JOIN jobs ij ON ij.sold_estimate_id = dl.e2 WHERE ij.id <> dl.jid
+         UNION SELECT dl.est, dl.jid, ij.id FROM dl JOIN jobs ij ON ij.from_estimate_id = dl.e2 WHERE ij.id <> dl.jid),
   -- the Install jobs those deals turned into (made in the app, or linked in ServiceTitan)
   inst AS (
     SELECT DISTINCT ON (ij.id) jsonb_build_object(
@@ -202,12 +208,8 @@ AS $function$
       'seller', public._emp_name(coalesce(ij.sold_by_employee_id, e.sold_by_employee_id)),
       'est_id', e.id, 'est_number', e.estimate_number, 'est_status', e.status,
       'sold_total', (SELECT sum(el.line_total) FROM estimate_lines el WHERE el.estimate_option_id = e.accepted_option_id),
-      'stage', 'install', 'sort', ij.created_at) AS x
-    FROM deals r JOIN jobs ij ON ij.id <> r.jid
-         AND (ij.from_estimate_id = r.est OR ij.sold_estimate_id = r.est
-              OR ij.sold_estimate_id IN (SELECT es.id FROM estimates es WHERE es.job_id = r.jid)    -- another proposal on the same sales call
-              OR ij.from_estimate_id IN (SELECT es.id FROM estimates es WHERE es.job_id = r.jid))
-         JOIN estimates e ON e.id = r.est
+      'stage', 'install', 'sort', ij.created_at) AS x, r.est
+    FROM lk JOIN deals r ON r.est = lk.est AND r.jid = lk.jid JOIN jobs ij ON ij.id = lk.ij JOIN estimates e ON e.id = r.est
     JOIN job_types t ON t.id = ij.job_type_id JOIN customers c ON c.id = ij.customer_id LEFT JOIN locations l ON l.id = ij.location_id
     LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = ij.id ORDER BY v.visit_number DESC LIMIT 1) v ON true
     WHERE r.est IS NOT NULL AND t.job_class = 'install'   -- only real install jobs (not a follow-up service call)
@@ -231,7 +233,7 @@ AS $function$
     JOIN customers c ON c.id = ij.customer_id LEFT JOIN locations l ON l.id = ij.location_id
     LEFT JOIN LATERAL (SELECT * FROM visits v WHERE v.job_id = ij.id ORDER BY v.visit_number DESC LIMIT 1) v ON true
     WHERE r.est IS NOT NULL AND (r.x->>'stage') = 'closed'
-      AND NOT EXISTS (SELECT 1 FROM inst WHERE (inst.x->>'est_id')::bigint = r.est)
+      AND r.est NOT IN (SELECT inst.est FROM inst)
       AND NOT EXISTS (SELECT 1 FROM csj WHERE csj.sale_job_id = r.jid AND csj.est_id = r.est)
     ORDER BY r.est, ij.created_at),
   here AS (
