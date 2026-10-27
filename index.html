@@ -6594,8 +6594,17 @@ async function openSales(msg) {
   salesTake(data);
   renderSales(msg);
   salesLoadPaid(); salesLoadComm();   // paid days come fast; commission amounts a moment later
+  if (can("installs.manage") || ["owner", "accounting"].includes(ME.role)) salesLoadHistInst();
 }
 // commission (the same numbers as the Installs page), in half-year pieces two at a time (all at once is too much for the database)
+// the database's install match for every sale (the list Carlo view uses); loaded once in the background
+async function salesLoadHistInst() {
+  if (SALES.histInst || SALES.histInstBusy) return; SALES.histInstBusy = true;
+  let data = CV.unpaidAll; if (!data) { const r = await cvRpc("sales_history_by", { p_seller: null, p_from: null, p_to: null, p_by: "sold" }); if (!r.error) data = CV.unpaidAll = r.data || []; }
+  SALES.histInstBusy = false; if (!data) return;
+  SALES.histInst = new Map(data.filter(x => x.inst_job_id).map(x => [x.est_id, x.inst_job_id]));
+  if (document.body.dataset.page === "sales" && SALES.rows) { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; }
+}
 async function salesLoadComm() {
   if (!(can("installs.manage") || ["owner", "accounting"].includes(ME.role))) { SALES.comm = SALES.pay = null; return; }
   const y = new Date().getFullYear(), seq = (SALES.commSeq = (SALES.commSeq || 0) + 1);
@@ -6722,7 +6731,9 @@ function salesInstTag(i) {
   return `<span class="sl-stage sl-inst sl-inst-tag" title="Install job ${esc(i.job_number)}">${done ? "Installed" : when ? "Install booked" : "Install not booked"}${when ? " " + esc(when) : ""}</span>`;
 }
 // the install a deal turned into (its commission lives there)
-const salesInstOf = r => { if (r.stage === "install") return r.job_id; if (r.installs?.length) return r.installs[0].job_id; if (!r.est_id) return null;
+// the install a sale's commission belongs to: the database's match for that exact proposal (same as Carlo view) when we have it
+const salesInstOf = r => { if (r.stage === "install") return r.job_id; const h = r.est_id && SALES.histInst?.get(r.est_id); if (h) return h;
+  if (r.installs?.length) return r.installs[0].job_id; if (!r.est_id) return null;
   if (SALES.instByEstFor !== SALES.rows) { SALES.instByEstFor = SALES.rows; SALES.instByEst = new Map((SALES.rows || []).filter(x => x.stage === "install" && x.est_id).map(x => [x.est_id, x.job_id])); }
   return SALES.instByEst.get(r.est_id) || null; };
 function salesCommCell(r) {
