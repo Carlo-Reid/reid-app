@@ -11236,8 +11236,12 @@ async function owLoadSaleNotes() {
   (a.data || []).forEach(j => sn.filter(n => n.est_id === j.sold_estimate_id).forEach(n => add(j.id, n)));
   (b.data || []).forEach(j => sn.filter(n => n.est_id === j.from_estimate_id).forEach(n => add(j.id, n)));
   sjobs.forEach(jid => sn.filter(n => n.job_id === jid).forEach(n => add(jid, n)));
-  const { data: inv } = await db.from("invoices").select("id, job_id").in("job_id", [...jobNotes.keys()]);
-  OW.saleNotes = new Map((inv || []).map(i => [i.id, jobNotes.get(i.job_id)]));
+  const [{ data: inv }, { data: es }] = await Promise.all([db.from("invoices").select("id, job_id, customer_id, customers(display_name)").in("job_id", [...jobNotes.keys()]),
+    db.from("estimates").select("id, customer_id").in("id", ests)]);
+  const custOf = new Map((es || []).map(e => [e.id, e.customer_id]));
+  // only the customer's own invoices (or Costco's, when Costco is billed), not e.g. a maker's warranty invoice on the same job
+  OW.saleNotes = new Map((inv || []).filter(i => jobNotes.get(i.job_id).some(n => custOf.get(n.est_id) === i.customer_id) || /costco/i.test(i.customers?.display_name || ""))
+    .map(i => [i.id, jobNotes.get(i.job_id)]));
 }
 const owNotesHtml = r => ((r.invoice_id && OW.saleNotes?.get(r.invoice_id)) || []).map(n => `<div class="sl-snote" title="From the pinned notes at this address${n.noted_at ? ", " + esc(fmtDate(n.noted_at.slice(0, 10))) : ""}">📌 ${esc(n.body)}</div>`).join("");
 async function loadOwing() {
