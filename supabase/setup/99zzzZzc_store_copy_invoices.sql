@@ -103,7 +103,7 @@ AS $function$
            coalesce((SELECT sum(rl.amount) FROM partner_remittance_lines rl WHERE rl.invoice_id = i.id), 0)
              + CASE WHEN p.bill_to_ok AND NOT p.customer_pays_partner THEN coalesce(i.amount_paid, 0)
                     ELSE coalesce((SELECT sum(pa.amount) FROM payment_applications pa JOIN payments pm ON pm.id = pa.payment_id
-                                   WHERE pa.invoice_id = i.id AND pm.method = 'partner_remittance'), 0) END AS got,
+                                   WHERE (pa.invoice_id = i.id OR pa.invoice_id = i.store_copy_of) AND pm.method = 'partner_remittance'), 0) END AS got,   -- store payments recorded on the customer's copy count on the store's
            pt.reference, pt.sent_on, pt.notes, pt.settled_at IS NOT NULL OR (p.bill_to_ok AND i.not_owed_reason IS NOT NULL) AS settled, pt.invoice_id IS NOT NULL AS own,
            i.partner_account, i.authorization_number, (i.signature_png IS NOT NULL OR i.signed_at IS NOT NULL) AS signed,
            CASE WHEN p.bill_to_ok AND i.bill_to_partner_id = p.id THEN public._inv_partner_missing(i.id) ELSE '{}'::text[] END AS missing,
@@ -159,7 +159,9 @@ CREATE OR REPLACE FUNCTION public._store_copy_paid(p_copy bigint) RETURNS void L
 DECLARE v numeric;
 BEGIN
   v := coalesce((SELECT sum(amount) FROM partner_remittance_lines WHERE invoice_id = p_copy), 0)
-     + coalesce((SELECT sum(pa.amount) FROM payment_applications pa JOIN payments pm ON pm.id = pa.payment_id AND pm.status = 'succeeded' WHERE pa.invoice_id = p_copy), 0);
+     + coalesce((SELECT sum(pa.amount) FROM payment_applications pa JOIN payments pm ON pm.id = pa.payment_id AND pm.status = 'succeeded' WHERE pa.invoice_id = p_copy), 0)
+     + coalesce((SELECT sum(pa.amount) FROM invoices c JOIN payment_applications pa ON pa.invoice_id = c.store_copy_of JOIN payments pm ON pm.id = pa.payment_id AND pm.status = 'succeeded' AND pm.method = 'partner_remittance'
+                 WHERE c.id = p_copy), 0);
   UPDATE invoices SET amount_paid = v,
          status = CASE WHEN status IN ('void', 'draft') THEN status WHEN total > 0 AND v >= total - 0.004 THEN 'paid' WHEN v > 0 THEN 'partially_paid' ELSE 'posted' END
    WHERE id = p_copy AND store_copy_of IS NOT NULL;
