@@ -170,6 +170,16 @@ BEGIN
   v := greatest(v, coalesce((SELECT sum(l.net) FROM invoices c JOIN partner_statement_matches m ON m.invoice_id = c.store_copy_of
                               JOIN partner_statement_lines l ON l.partner_id = m.partner_id AND l.doc_no = m.doc_no
                              WHERE c.id = p_copy AND l.partner_id = c.bill_to_partner_id), 0));   -- connected in the store's payment history = paid
+  -- the store's numbers on its copy: its invoice # (the partner page's store # box) and its PO #
+  WITH x AS (SELECT string_agg(DISTINCT m.doc_no, ', ') AS docs, max(l.po_no) AS po FROM invoices c
+               JOIN partner_statement_matches m ON m.invoice_id = c.store_copy_of AND m.partner_id = c.bill_to_partner_id
+               JOIN partner_statement_lines l ON l.partner_id = m.partner_id AND l.doc_no = m.doc_no WHERE c.id = p_copy)
+  INSERT INTO partner_invoice_terms (invoice_id, reference) SELECT p_copy, x.docs FROM x WHERE x.docs IS NOT NULL
+  ON CONFLICT (invoice_id) DO UPDATE SET reference = EXCLUDED.reference WHERE partner_invoice_terms.reference IS NULL;
+  UPDATE invoices c SET po_number = x.po FROM (SELECT max(l.po_no) AS po FROM invoices c2
+      JOIN partner_statement_matches m ON m.invoice_id = c2.store_copy_of AND m.partner_id = c2.bill_to_partner_id
+      JOIN partner_statement_lines l ON l.partner_id = m.partner_id AND l.doc_no = m.doc_no WHERE c2.id = p_copy) x
+   WHERE c.id = p_copy AND x.po IS NOT NULL AND c.po_number IS DISTINCT FROM x.po;
   UPDATE invoices SET amount_paid = v,
          status = CASE WHEN status IN ('void', 'draft') THEN status WHEN total > 0 AND v >= total - 0.004 THEN 'paid' WHEN v > 0 THEN 'partially_paid' ELSE 'posted' END
    WHERE id = p_copy AND store_copy_of IS NOT NULL;
@@ -248,6 +258,20 @@ BEGIN
   PERFORM public._store_copy_paid(v_c);
   RETURN v_c;
 END $function$;
+
+-- the store's payments on a store sale (either copy), from its payment history: date, amount, payment #, its invoice # and PO #
+CREATE OR REPLACE FUNCTION public.store_payments(p_invoice bigint) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE v_src bigint;
+BEGIN
+  IF public.current_staff_role() IS NULL THEN RETURN '[]'::jsonb; END IF;
+  SELECT coalesce(store_copy_of, id) INTO v_src FROM invoices WHERE id = p_invoice;
+  RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('store', p.name, 'date', x.d, 'amount', x.net, 'payment_no', x.payment_no, 'doc_no', x.doc_no, 'po', x.po) ORDER BY x.d, x.payment_no)
+    FROM (SELECT l.partner_id, l.payment_no, max(l.payment_date) d, sum(l.net) net, string_agg(DISTINCT l.doc_no, ', ') doc_no, max(l.po_no) po
+          FROM partner_statement_matches m JOIN partner_statement_lines l ON l.partner_id = m.partner_id AND l.doc_no = m.doc_no
+          WHERE m.invoice_id = v_src GROUP BY l.partner_id, l.payment_no) x JOIN partners p ON p.id = x.partner_id), '[]'::jsonb);
+END $function$;
+REVOKE EXECUTE ON FUNCTION public.store_payments(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.store_payments(bigint) TO authenticated;
 
 -- every invoice the store pays us for (the same ones its partner page lists)
 CREATE OR REPLACE FUNCTION public._store_copies_sync(p_partner bigint) RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
