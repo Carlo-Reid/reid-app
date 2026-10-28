@@ -14585,6 +14585,14 @@ async function loadPartners() {
   PP.picked = new Set([...PP.picked].filter(id => PP.rows.some(r => r.invoice_id === id)));
   renderPartners();
 }
+// the Costco way: X% off our price, HST on what's left, less Y% of our price (+ $ per invoice)
+function ppEx(st, sale = 5490, hst = 13) { const r2 = v => Math.round(v * 100) / 100, disc = r2(sale * Number(st.discount_pct ?? 11) / 100), after = r2(sale - disc), tax = r2(after * hst / 100),
+  fee = r2(r2(sale * Number(st.fee_pct ?? 10) / 100) + Number(st.fee_flat || 0)); return { disc, after, tax, fee, pays: r2(after + tax - fee) }; }
+function ppWayHtml(r, st, edit) { const P = r.pay || {};
+  return `<div class="num" title="Our price ${money(P.sale)}">${edit ? `<input class="pp-in num" data-pp-disc value="${Number(P.discount_pct)}" inputmode="decimal" style="width:3.2em" aria-label="% off">` : Number(P.discount_pct)}% off −${money(P.discount)}</div>
+    <div class="quiet num">+ HST ${money(P.tax)}</div>
+    <div class="num">fee ${edit ? `<input class="pp-in num" data-pp-fee value="${Number(P.fee).toFixed(2)}" inputmode="decimal" style="width:5.5em" aria-label="${esc(st.name)} fee">` : "−" + money(P.fee)}</div>
+    <div class="quiet num">${esc(st.name)} keeps ${money(r.cut_amount)}${P.own ? ` · <button class="link" type="button" data-pp-way="">reset</button>` : ""}${edit ? ` · <button class="link" type="button" data-pp-way="cut">old way</button>` : ""}</div>`; }
 function renderPartners(msg) {
   const st = PP.stores.find(x => x.id === PP.store), edit = canPartnerPay(), top = $("#main").scrollTop, vis = !!st.pays_us;
   const oldPp = $("#main").querySelector("article.pp"), keepH = oldPp && PP._drawn === PP.store ? Math.max(oldPp.offsetHeight, parseFloat(oldPp.style.minHeight) || 0) : 0;   // same partner: don't let the page shrink under you
@@ -14630,9 +14638,13 @@ function renderPartners(msg) {
       </form>` : ""}
       ${PP.view === "jobs" || vis ? "" : `<form class="cl-row cl-row-2 pp-defaults" id="pp-defaults">
         <div class="cl-group"><span class="cl-label">${esc(st.name)}'s usual terms</span>
-          <div class="pp-def-in"><label>Cut <input name="cut" inputmode="decimal" value="${Number(st.default_cut_pct ?? 15)}" ${edit ? "" : "disabled"}> %</label>
+          <div class="pp-def-in"><label>How they pay <select name="method" ${edit ? "" : "disabled"}><option value="discount_fee" ${st.pay_method === "discount_fee" ? "selected" : ""}>% off our price + HST, less a fee (Costco way)</option><option value="cut" ${st.pay_method !== "discount_fee" ? "selected" : ""}>They keep a % of the total (old way)</option></select></label>
+            ${st.pay_method === "discount_fee" ? `<label><input name="disc" inputmode="decimal" value="${Number(st.discount_pct ?? 11)}" ${edit ? "" : "disabled"} style="width:4em"> % off our price, HST on the rest, less a fee of</label>
+              <label><input name="feep" inputmode="decimal" value="${Number(st.fee_pct ?? 10)}" ${edit ? "" : "disabled"} style="width:4em"> % of our price + $<input name="feef" inputmode="decimal" value="${Number(st.fee_flat ?? 0).toFixed(2)}" ${edit ? "" : "disabled"} style="width:5em"></label>`
+            : `<label>Cut <input name="cut" inputmode="decimal" value="${Number(st.default_cut_pct ?? 15)}" ${edit ? "" : "disabled"}> %</label>`}
             <label>Gift card fee $ <input name="card" inputmode="decimal" value="${Number(st.default_card_fee ?? 0).toFixed(2)}" ${edit ? "" : "disabled"}></label>
-            ${edit ? `<button class="btn quiet-btn" type="submit">Save</button>` : ""}<span class="quiet">Used on every invoice unless you change that invoice (for example when there's a 20% sale on).</span></div></div>
+            ${edit ? `<button class="btn quiet-btn" type="submit">Save</button>` : ""}<span class="quiet">${st.pay_method === "discount_fee" ? `Example: ${money(5490)} → ${Number(st.discount_pct)}% off = ${money(ppEx(st).after)} + HST ${money(ppEx(st).tax)} = ${money(ppEx(st).after + ppEx(st).tax)}, less ${Number(st.fee_pct)}% of ${money(5490)}${Number(st.fee_flat) ? ` + ${money(st.fee_flat)}` : ""} (${money(ppEx(st).fee)}) = <b>${money(ppEx(st).pays)}</b> paid to us. When ${esc(st.name)}'s payment history is connected to an invoice, what they really paid is used.` : "Used on every invoice unless you change that invoice (for example when there's a 20% sale on)."}</span></div>
+          ${edit && Number(st.old_way) ? `<div class="pp-def-in"><span class="warn">${Number(st.old_way)} invoice${Number(st.old_way) === 1 ? " is" : "s are"} still on the old % cut.</span> <button class="btn" type="button" id="pp-convert">Convert ${Number(st.old_way) === 1 ? "it" : "them all"} to the ${esc(st.name)} way</button></div>` : ""}</div>
       </form>`}
     </section>
     ${PP.view === "jobs" ? partnerJobsHtml(st) : `<div class="cl-stats">
@@ -14649,7 +14661,7 @@ function renderPartners(msg) {
     ${edit && PP.picked.size ? (() => { const pk = rows.filter(r => PP.picked.has(r.invoice_id)), due = pk.reduce((s, r) => s + Number(r.still_due), 0);
       return `<div class="pb-bulk pp-bulk"><strong>${PP.picked.size} picked · ${money(due)} still owed</strong>
         <button class="btn" type="button" id="pp-pay">Record a payment from ${esc(st.name)}</button>
-        ${vis ? "" : `<span>Cut <button class="chip small" type="button" data-pp-bcut="15">15%</button><button class="chip small" type="button" data-pp-bcut="20">20%</button></span>
+        ${vis ? "" : `${st.pay_method === "discount_fee" ? `<button class="btn quiet-btn" type="button" data-pp-bway="">Use ${esc(st.name)} way</button>` : ""}<span>Cut <button class="chip small" type="button" data-pp-bcut="15">15%</button><button class="chip small" type="button" data-pp-bcut="20">20%</button></span>
         <span>Card fee $<input id="pp-bcard" inputmode="decimal" placeholder="0.00"><button class="btn quiet-btn" type="button" id="pp-bcard-go">Set</button></span>`}
         <button class="btn quiet-btn" type="button" id="pp-settle">${PP.show === "paid" ? "Undo settled" : "Mark settled"}</button>
         <button class="link" type="button" id="pp-unpick">Clear</button></div>`; })() : ""}
@@ -14664,10 +14676,11 @@ function renderPartners(msg) {
         ${vis ? `<td class="r num">${r.supplier_name ? `${money(r.supplier_amount)}<div class="quiet">${esc(r.supplier_name)}</div><div class="quiet">${esc((SP_STEPS.find(x => x[0] === r.supplier_status) || ["", ""])[1].replace("the partner", st.name).replace("Partner", st.name))}</div>` : `<span class="quiet">–</span>`}</td>
         <td>${edit ? `<input class="pp-in pp-ref" data-pp-acct value="${esc(r.account || "")}" placeholder="add" aria-label="${esc(st.name)} account or contract #">` : esc(r.account || "")}</td>
         <td>${edit ? `<input class="pp-in pp-ref" data-pp-appr value="${esc(r.approval || "")}" placeholder="add" aria-label="${esc(st.name)} approval #">` : esc(r.approval || "")}</td>
-        <td>${(r.missing || []).length ? `<span class="pp-badge pp-wait">Needs ${esc(r.missing.join(", "))}</span>` : `<span class="pp-badge pp-paid">✓ Ready</span>`}</td>` : `<td class="pp-cut">${edit ? [15, 20].map(p => `<button class="chip small" type="button" data-pp-cut="${p}" aria-pressed="${Number(r.cut_pct) === p}">${p}%</button>`).join("") : Number(r.cut_pct) + "%"}
-          ${![15, 20].includes(Number(r.cut_pct)) ? `<span class="quiet">${Number(r.cut_pct)}%</span>` : ""}<div class="quiet num">${money(r.cut_amount)}</div></td>
+        <td>${(r.missing || []).length ? `<span class="pp-badge pp-wait">Needs ${esc(r.missing.join(", "))}</span>` : `<span class="pp-badge pp-paid">✓ Ready</span>`}</td>` : `${r.pay?.method === "discount_fee" ? `<td class="pp-cut pp-way">${ppWayHtml(r, st, edit)}</td>` : `<td class="pp-cut">${edit ? [15, 20].map(p => `<button class="chip small" type="button" data-pp-cut="${p}" aria-pressed="${Number(r.cut_pct) === p}">${p}%</button>`).join("") : Number(r.cut_pct) + "%"}
+          ${![15, 20].includes(Number(r.cut_pct)) ? `<span class="quiet">${Number(r.cut_pct)}%</span>` : ""}<div class="quiet num">${money(r.cut_amount)}</div>
+          ${edit && st.pay_method === "discount_fee" ? `<button class="link" type="button" data-pp-way="" title="Use ${esc(st.name)}'s way on this invoice">Use ${esc(st.name)} way</button>` : `<div class="quiet">old way</div>`}</td>`}
         <td class="r">${edit ? `<input class="pp-in num" data-pp-card value="${Number(r.card_fee).toFixed(2)}" inputmode="decimal" aria-label="Card fee">` : money(r.card_fee)}</td>
-        <td class="r num">${money(r.expected)}</td>`}
+        <td class="r num">${money(r.expected)}${r.pay?.from_statement ? `<div class="quiet" title="What ${esc(st.name)} really paid, from their payment history${Number(r.pay.statement_diff) ? `. The ${esc(st.name)} way works out to ${money(r.pay.calc)}` : ""}">paid per ${esc(st.name)}${Math.abs(Number(r.pay.statement_diff)) > 0.01 ? ` <span class="warn">(${Number(r.pay.statement_diff) > 0 ? "+" : ""}${money(r.pay.statement_diff)})</span>` : " ✓"}</div>` : ""}</td>`}
         <td class="r num">${Number(r.received) ? money(r.received) : `<span class="quiet">–</span>`}</td>
         <td class="r num"><strong class="${Number(r.still_due) > 0 ? "pp-due" : ""}">${money(r.still_due)}</strong></td>
         ${vis ? "" : `<td>${edit ? `<input class="pp-in pp-ref" data-pp-ref value="${esc(r.reference || "")}" placeholder="add" aria-label="${esc(st.name)} number">` : esc(r.reference || "")}</td>`}
@@ -14770,8 +14783,28 @@ function wirePartners(st, rows) {
   let qt; $("#pp-q").addEventListener("input", e => { clearTimeout(qt); qt = setTimeout(() => { PP.q = e.target.value; renderPartners(); const i = $("#pp-q"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); });
   document.querySelectorAll("[data-pp-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.ppCust))));
   document.querySelectorAll(".pp [data-invoice]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.invoice))));
+  $("#pp-defaults [name=method]")?.addEventListener("change", async e => {
+    const { error } = await db.rpc("partner_pay_method_set", { p_partner: st.id, p_method: e.target.value, p_discount: Number(st.discount_pct ?? 11), p_fee_pct: Number(st.fee_pct ?? 10), p_fee_flat: Number(st.fee_flat ?? 0) });
+    if (error) return say("Not saved: " + rpcErr(error));
+    await loadPartners(); renderPartners(e.target.value === "cut" ? `${st.name} invoices now use the old % cut.` : `${st.name} invoices now use the ${st.name} way.`); });
+  $("#pp-convert")?.addEventListener("click", async e => { const b = e.currentTarget;
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = `Sure? Convert ${Number(st.old_way)} to the ${st.name} way`; return; }
+    const all = await db.rpc("partner_ledger", { p_partner: st.id, p_show: "all", p_from: null, p_to: null });
+    if (all.error) return say("Couldn't: " + rpcErr(all.error));
+    const ids = (all.data || []).filter(r => r.pay?.method === "cut").map(r => r.invoice_id);
+    const { error } = await db.rpc("partner_invoice_method_set", { p_invoice_ids: ids, p: { method: "" } });
+    if (error) return say("Not converted: " + rpcErr(error));
+    await loadPartners(); renderPartners(`Converted ${ids.length} invoice${ids.length === 1 ? "" : "s"} to the ${st.name} way.`); });
   $("#pp-defaults")?.addEventListener("submit", async e => {
-    e.preventDefault(); const f = e.target, cut = Number(f.cut.value), card = Number(String(f.card.value).replace(/[$,]/g, ""));
+    e.preventDefault(); const f = e.target;
+    if (f.disc) { const d = Number(f.disc.value), fp = Number(f.feep.value), ff = Number(String(f.feef.value).replace(/[$,]/g, "")), card = Number(String(f.card.value).replace(/[$,]/g, ""));
+      if (![d, fp, ff, card].every(isFinite)) return say("Type numbers only.");
+      const a = await db.rpc("partner_pay_method_set", { p_partner: st.id, p_method: "discount_fee", p_discount: d, p_fee_pct: fp, p_fee_flat: ff });
+      if (a.error) return say("Not saved: " + rpcErr(a.error));
+      const b = await db.rpc("save_partner_defaults", { p_partner: st.id, p_cut: Number(st.default_cut_pct ?? 15), p_card: card });
+      if (b.error) return say("Not saved: " + rpcErr(b.error));
+      await loadPartners(); return renderPartners(`Saved: ${st.name} takes ${d}% off, then a ${fp}% fee${ff ? ` + $${ff.toFixed(2)}` : ""}.`); }
+    const cut = Number(f.cut.value), card = Number(String(f.card.value).replace(/[$,]/g, ""));
     if (!isFinite(cut) || !isFinite(card)) return say("Type numbers only.");
     const { error } = await db.rpc("save_partner_defaults", { p_partner: st.id, p_cut: cut, p_card: card });
     if (error) return say("Not saved: " + rpcErr(error));
@@ -14836,7 +14869,14 @@ function wirePartners(st, rows) {
     if (error) return say("Not saved: " + rpcErr(error));
     await loadPartners(); if (m) renderPartners(m);
   };
-  document.querySelectorAll("[data-pp-cut]").forEach(b => b.addEventListener("click", () => terms([Number(b.closest("tr").dataset.pp)], { cut_pct: b.dataset.ppCut })));
+  document.querySelectorAll("[data-pp-cut]").forEach(b => b.addEventListener("click", () => ppWay([Number(b.closest("tr").dataset.pp)], { method: "cut" }).then(ok => ok && terms([Number(b.closest("tr").dataset.pp)], { cut_pct: b.dataset.ppCut }))));
+  const ppWay = async (ids, p, m) => { const { error } = await db.rpc("partner_invoice_method_set", { p_invoice_ids: ids, p }); if (error) { say("Not saved: " + rpcErr(error)); return false; }
+    if (m) { await loadPartners(); renderPartners(m); } return true; };
+  document.querySelectorAll("[data-pp-way]").forEach(b => b.addEventListener("click", () => ppWay([Number(b.closest("tr").dataset.pp)], { method: b.dataset.ppWay }, b.dataset.ppWay === "cut" ? "Set to the old % cut." : `Set to the ${st.name} way.`)));
+  $("[data-pp-bway]")?.addEventListener("click", () => { const ids = [...PP.picked]; PP.picked = new Set(); ppWay(ids, { method: "" }, `${ids.length} invoice${ids.length === 1 ? "" : "s"} set to the ${st.name} way.`); });
+  document.querySelectorAll("[data-pp-disc], [data-pp-fee]").forEach(i => i.addEventListener("change", () => { const v = String(i.value).replace(/[$,%\s]/g, "");
+    if (v !== "" && !isFinite(Number(v))) { i.value = ""; return; }
+    ppWay([Number(i.closest("tr").dataset.pp)], i.dataset.ppDisc != null ? { discount_pct: v } : { fee_amount: v }, "Saved."); }));
   document.querySelectorAll("[data-pp-card]").forEach(i => i.addEventListener("change", () => {
     const v = String(i.value).replace(/[$,\s]/g, ""); if (v !== "" && !isFinite(Number(v))) { i.value = ""; return; }
     terms([Number(i.closest("tr").dataset.pp)], { card_fee: v });
@@ -14852,7 +14892,7 @@ function wirePartners(st, rows) {
   document.querySelectorAll("[data-pp-pick]").forEach(cb => cb.addEventListener("change", () => { const id = Number(cb.dataset.ppPick); cb.checked ? PP.picked.add(id) : PP.picked.delete(id); PP.pay = null; renderPartners(); }));
   $("#pp-all")?.addEventListener("change", e => { PP.picked = e.target.checked ? new Set(rows.map(r => r.invoice_id)) : new Set(); PP.pay = null; renderPartners(); });
   $("#pp-unpick")?.addEventListener("click", () => { PP.picked = new Set(); PP.pay = null; renderPartners(); });
-  document.querySelectorAll("[data-pp-bcut]").forEach(b => b.addEventListener("click", () => terms([...PP.picked], { cut_pct: b.dataset.ppBcut }, `Set ${PP.picked.size} invoices to a ${b.dataset.ppBcut}% cut.`)));
+  document.querySelectorAll("[data-pp-bcut]").forEach(b => b.addEventListener("click", async () => { const ids = [...PP.picked]; if (await ppWay(ids, { method: "cut" })) terms(ids, { cut_pct: b.dataset.ppBcut }, `Set ${ids.length} invoices to a ${b.dataset.ppBcut}% cut (old way).`); }));
   $("#pp-bcard-go")?.addEventListener("click", () => { const v = String($("#pp-bcard").value).replace(/[$,\s]/g, ""); if (v === "" || !isFinite(Number(v))) return say("Type the card fee, e.g. 50.");
     terms([...PP.picked], { card_fee: v }, `Set the card fee on ${PP.picked.size} invoices.`); });
   $("#pp-settle")?.addEventListener("click", e => {
@@ -15707,11 +15747,11 @@ async function costPlan(lines) {
 // Job costing: what the job cost, what the store keeps, and the profit
 function costingCalc(I) {
   const C = I.cost, n = v => Number(v) || 0, sale = n(I.subtotal), total = n(I.total);
-  const st = C.store, cut = st ? Math.round(total * n(st.cut_pct)) / 100 : 0, card = st ? n(st.card_fee) : 0;
+  const st = C.store, cut = st ? (st.pay ? n(st.pay.keeps) : Math.round(total * n(st.cut_pct)) / 100) : 0, card = st ? (st.pay ? n(st.pay.card) : n(st.card_fee)) : 0;
   // a partner (Vista) pays our supplier for the tank: neither the tank's cost nor that money is ours
   const tk = C.partner_tank, tank = tk ? Math.round(n(tk.amount) / (1 + n(C.hst ?? 13) / 100) * 100) / 100 : 0;
   const tankCost = tk ? C.lines.filter(l => l.equip).reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) : 0;
-  const revenue = sale - cut - card - tank;
+  const revenue = st?.pay?.method === "discount_fee" ? (st.pay.from_statement ? n(st.pay.pays) / (1 + n(C.hst ?? 13) / 100) : n(st.pay.after) - n(st.pay.fee) - card) - tank : sale - cut - card - tank;   // Costco way: our price less the % off and the fee, before HST
   const parts = C.lines.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) - tankCost + n(C.actual?.stock_cost);
   const noCost = C.lines.filter(l => n(l.unit_price) > 0 && (l.unit_cost == null || n(l.unit_cost) === 0)).length;
   // labour: hours on the job × techs × cost per hour. Hours are the real time on site (each visit's arrived to done) once there
@@ -15771,7 +15811,7 @@ function costingHtml(I) {
     ${costingVsHtml(I, k)}
     <table>
       <tr><td>Sale (before HST)</td><td class="r">${money(k.sale)}</td></tr>
-      ${k.st ? `<tr class="store"><td><strong>${esc(k.st.name)} keeps</strong><br><span class="quiet">${C.can_set_store ? `<input data-cost="cut" inputmode="decimal" value="${Number(k.st.cut_pct)}" aria-label="${esc(k.st.name)} cut %">` : Number(k.st.cut_pct)}% of ${money(k.total)} + card
+      ${k.st ? `<tr class="store"><td><strong>${esc(k.st.name)} keeps</strong><br><span class="quiet">${k.st.pay?.method === "discount_fee" ? `${Number(k.st.pay.discount_pct)}% off our price (${money(k.st.pay.discount)}) and the HST on it, plus a ${money(k.st.pay.fee)} fee${k.st.pay.from_statement ? `, from what ${esc(k.st.name)} really paid` : ""}` : `${C.can_set_store ? `<input data-cost="cut" inputmode="decimal" value="${Number(k.st.cut_pct)}" aria-label="${esc(k.st.name)} cut %">` : Number(k.st.cut_pct)}% of ${money(k.total)}`} + card
           ${C.can_set_store ? `<input data-cost="card" inputmode="decimal" value="${Number(k.st.card_fee).toFixed(2)}" aria-label="Card fee">` : money(k.st.card_fee)}</span></td><td class="r"><strong>−${money(k.cut + k.card)}</strong></td></tr>
         <tr class="sub"><td colspan="2">${esc(k.st.name)} pays Reid ${money(k.total - k.cut - k.card)} (with HST)</td></tr>
         <tr><td>Reid's share (before HST)</td><td class="r">${money(k.revenue)}</td></tr>` : ""}
