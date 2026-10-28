@@ -58,10 +58,12 @@ END $function$;
 -- connect each partner invoice to ours: Costco pays 89% or 90% of our price before tax (sometimes 100%),
 -- and its invoice comes a few days to a few weeks after ours. Hand matches are never touched.
 CREATE OR REPLACE FUNCTION public.partner_statement_match(p_partner bigint) RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
-DECLARE g record; v_id bigint; v_n int := 0; v_cnt int;
+DECLARE g record; v_id bigint; v_gap int; v_n int := 0; v_cnt int; v_pname text; v_pcust bigint;
 BEGIN
   IF NOT public._can_partner_pay() THEN RAISE EXCEPTION 'You don''t have permission to change partner payments'; END IF;
-  DELETE FROM partner_statement_matches WHERE partner_id = p_partner AND how IN ('auto','guess') AND invoice_id IS NULL;
+  DELETE FROM partner_statement_matches WHERE partner_id = p_partner AND how IN ('auto','guess');   -- worked out fresh each time; hand matches stay
+  SELECT name INTO v_pname FROM partners WHERE id = p_partner;
+  SELECT customer_account_id INTO v_pcust FROM partners WHERE id = p_partner;
   FOR g IN
     SELECT l.doc_no, min(l.doc_date) doc_date, sum(l.amount) FILTER (WHERE l.amount > 0) sale, sum(l.hst + l.gst + l.qst) FILTER (WHERE l.amount > 0) tax
     FROM partner_statement_lines l
@@ -71,13 +73,15 @@ BEGIN
     WITH cand AS (
       SELECT i.id, i.invoice_date, abs(g.doc_date - i.invoice_date) + CASE WHEN i.invoice_date > g.doc_date THEN 30 ELSE 0 END AS dist
       FROM invoices i LEFT JOIN jobs j ON j.id = i.job_id
-      WHERE (j.partner_id = p_partner OR i.bill_to_partner_id = p_partner) AND i.subtotal > 0
+      WHERE (j.partner_id = p_partner OR i.bill_to_partner_id = p_partner OR coalesce(j.customer_id, i.customer_id) = v_pcust
+             OR EXISTS (SELECT 1 FROM customers pc WHERE pc.id = coalesce(j.customer_id, i.customer_id) AND pc.display_name ILIKE v_pname || '%'))   -- jobs filed under "Costco Inc."
+        AND i.subtotal > 0
         AND i.invoice_date BETWEEN g.doc_date - 75 AND g.doc_date + 7
         AND (abs((g.sale - g.tax) - round(i.subtotal * 0.89, 2)) <= 0.02 OR abs((g.sale - g.tax) - round(i.subtotal * 0.90, 2)) <= 0.02 OR abs((g.sale - g.tax) - i.subtotal) <= 0.02)
         AND NOT EXISTS (SELECT 1 FROM partner_statement_matches m WHERE m.partner_id = p_partner AND m.invoice_id = i.id))
-    SELECT count(*) OVER (), id INTO v_cnt, v_id FROM cand ORDER BY dist, id LIMIT 1;
+    SELECT count(*) OVER (), id, dist INTO v_cnt, v_id, v_gap FROM cand ORDER BY dist, id LIMIT 1;
     IF v_id IS NOT NULL THEN
-      INSERT INTO partner_statement_matches (partner_id, doc_no, invoice_id, how, matched_by) VALUES (p_partner, g.doc_no, v_id, CASE WHEN v_cnt = 1 THEN 'auto' ELSE 'guess' END, NULL)
+      INSERT INTO partner_statement_matches (partner_id, doc_no, invoice_id, how, matched_by) VALUES (p_partner, g.doc_no, v_id, CASE WHEN v_cnt = 1 AND v_gap <= 30 THEN 'auto' ELSE 'guess' END, NULL)
       ON CONFLICT (partner_id, doc_no) DO NOTHING;
       v_n := v_n + 1;
     END IF;
@@ -106,7 +110,8 @@ BEGIN
   IF NOT public._can_partner_pay() THEN RAISE EXCEPTION 'You don''t have permission to see partner payments'; END IF;
   RETURN coalesce((SELECT jsonb_agg(row_to_json(t) ORDER BY t.doc_date DESC, t.doc_no DESC) FROM (
     SELECT g.doc_no, g.doc_date, g.po_no, g.sale, g.tax, g.fee, g.net, g.paid_on, g.payments,
-           m.how, i.id invoice_id, i.invoice_number, i.invoice_date, i.subtotal, i.total, i.job_id, i.customer_id, cu.display_name customer_name,
+           m.how, i.id invoice_id, i.invoice_number, i.invoice_date, i.subtotal, i.total, i.job_id,
+           coalesce(lo.customer_id, j.customer_id, i.customer_id) customer_id, coalesce(lc.display_name, lo.name, cu.display_name) customer_name, lo.street, lo.city,
            CASE WHEN i.subtotal > 0 THEN round((g.sale - g.tax) / i.subtotal * 100, 1) END pct
     FROM (SELECT l.doc_no, min(l.doc_date) doc_date, max(l.po_no) po_no,
                  coalesce(sum(l.amount) FILTER (WHERE l.amount > 0), 0) sale, coalesce(sum(l.hst + l.gst + l.qst) FILTER (WHERE l.amount > 0), 0) tax,
@@ -115,6 +120,9 @@ BEGIN
           FROM partner_statement_lines l WHERE l.partner_id = p_partner GROUP BY l.doc_no) g
     LEFT JOIN partner_statement_matches m ON m.partner_id = p_partner AND m.doc_no = g.doc_no
     LEFT JOIN invoices i ON i.id = m.invoice_id
+    LEFT JOIN jobs j ON j.id = i.job_id
+    LEFT JOIN locations lo ON lo.id = j.location_id
+    LEFT JOIN customers lc ON lc.id = lo.customer_id
     LEFT JOIN customers cu ON cu.id = i.customer_id) t), '[]'::jsonb);
 END $function$;
 
