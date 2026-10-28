@@ -242,6 +242,15 @@
   .gd-day:hover { border-color: var(--blue, #1864ab); background: var(--blue-wash, #eef4fb); }
   .gd-day.gd-booked { background: #fff4e6; border-color: #f0a35e; } .gd-day.gd-booked b { color: #b4530a; } .gd-day.gd-booked span { color: #8a4b12; }
   .gd-say { font-size: calc(18px * var(--fs, 1)); margin: 2px 0 10px; }
+  .task-cal-btn { margin-left: auto; }
+  .mycal-day { cursor: pointer; } .mycal-day.mc-busy { background: #f1f3f5; border-color: #868e96; } .mc-block { color: #495057 !important; font-weight: 650; }
+  .mycal-day.mc-open { grid-column: span 2; cursor: default; border-color: var(--blue, #1864ab); }
+  .mc-form { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; } .mc-form input[name=t] { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+  .mc-form input[type=time] { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; } .mc-ad { font-weight: 650; }
+  .tl-block { position: absolute; height: calc(var(--lane-h, 56px) - 8px); background: repeating-linear-gradient(45deg, #e9ecef, #e9ecef 8px, #f8f9fa 8px, #f8f9fa 16px); border: 1px dashed #868e96;
+    border-radius: 8px; color: #495057; font-size: 12px; font-weight: 700; padding: 4px 8px; overflow: hidden; white-space: nowrap; z-index: 0; pointer-events: auto; }
+  .tl-block span { font-weight: 500; margin-left: 4px; }
+  .dr-block { background: #f1f3f5; border-left: 3px solid #868e96; border-radius: 6px; padding: 2px 6px; margin-bottom: 4px; color: #495057; font-weight: 650; }
   .gd-mine { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: #fff4e6; border: 1px solid #f0a35e; } .gd-mine div { margin-top: 3px; } .gd-day span { font-size: 13px; color: var(--steel); } .gd-freeday { color: var(--green, #2b8a3e) !important; font-weight: 700; }
   /* the training view's Section 1: only + Book a sales call and the email address work */
   body.ui-guided .file .sec1a .zone-chip, body.ui-guided .file .sec1a .zone-bar, body.ui-guided .file .sec1a [data-edit-cust], body.ui-guided .file .sec1a [data-add-task],
@@ -4573,7 +4582,7 @@ async function showApp() {
   $("#sdsp-link").classList.toggle("hidden", !(ME.role === "sales" || ME.role === "owner"));
   document.body.classList.toggle("sales-only", ME.role === "sales");
   document.body.classList.toggle("sales-inv", ME.role === "sales" && ME.perms.has("invoices.view"));
-  if (ME.role === "sales") document.querySelectorAll("[data-page]").forEach(b => { if (b.id && !["search-link", "sales-link", "sdsp-link"].includes(b.id)) b.classList.add("hidden"); });
+  if (ME.role === "sales") document.querySelectorAll("[data-page]").forEach(b => { if (b.id && !["search-link", "sales-link", "sdsp-link", "fu-link"].includes(b.id)) b.classList.add("hidden"); });
   loadFollowKeys();
   await Promise.all([loadPinSlots(), loadTheme(), loadMyIcons().catch(() => {})]);
   checkForUpdate();
@@ -8825,7 +8834,8 @@ function gdBookRender(msg) {
   } else if (F.gstep === "notes") body = card("Step 2", "Do you want to add any notes to the booking?", `<form class="gd-form" id="gbk-form"><label class="gd-in" style="flex-basis:100%"><span>Notes (optional)</span><textarea name="n" rows="3" placeholder="e.g. Please use the side door">${esc(F.note || "")}</textarea></label>
       <button class="btn" type="submit">${F.sk === "phone" ? "Book it" : "Next"}</button></form>${back("reason")}`);
   else if (F.gstep === "day") {
-    if (!F.g30) db.rpc("calls_next_days", { p_days: 31 }).then(({ data }) => { F.g30 = data || []; if (BK === F && F.gstep === "day") gdBookRender(); });
+    if (!F.g30) Promise.all([db.rpc("calls_next_days", { p_days: 31 }), db.rpc("staff_blocks_list", { p_from: ymd(new Date()), p_to: ymd(addDays(new Date(), 31)), p_employee: ME.emp || -1 })])
+      .then(([c, b]) => { F.gblk = b.error ? [] : b.data || []; F.g30 = c.data || []; if (BK === F && F.gstep === "day") gdBookRender(); });
     if (!F.sellers?.length) { if (!F.gsel) { F.gsel = 1; db.rpc("sales_people").then(({ data }) => { F.sellers = data || []; if (BK === F) gdBookRender(); }); } }
     const name = (BOOK.techs || []).find(t => t.id === ME.emp)?.name || bkSellerName(F), first = n => String(n || "").trim().split(/\s+/)[0].toLowerCase();
     const mine = v => !!name && (v.techs ? v.techs.split(/,\s*/) : []).some(n => n === name || (first(n) && first(n) === first(name) && !name.includes(" ")));
@@ -8833,8 +8843,9 @@ function gdBookRender(msg) {
     const days = []; for (let i = 0; i < 31; i++) { const dt = new Date(); dt.setDate(dt.getDate() + i); if (dt.getDay() === 0) continue; days.push(ymd(dt)); }
     const me1 = String((BOOK.techs || []).find(t => t.id === ME.emp)?.name || name || "").trim().split(/\s+/)[0];
     body = card("Step 3", "", !F.g30 ? `<p class="quiet">Loading your schedule…</p>` : `<p class="gd-say"><b>${esc(me1 || "Here")}, this is a snapshot of your calendar for the next 30 days. Pick a day you are free to visit this customer.</b></p><div class="gd-days">${days.map(d => { const cs = F.g30.filter(v => v.d === d && mine(v)).sort((a, b) => String(a.from).localeCompare(String(b.from)));
-      return `<button type="button" class="gd-day ${cs.length ? "gd-booked" : "free"}" data-gbk-day="${d}"><b>${esc(new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }))}</b>
-        ${cs.length ? cs.map(v => `<span>${esc(v.from ? tm(v.from) : "Any time")} · ${esc(v.city || v.street || "")}</span>`).join("") : `<span class="gd-freeday">Free</span>`}</button>`; }).join("")}</div>${back("notes")}`);
+      const bs = (F.gblk || []).filter(b => b.day === d);
+      return `<button type="button" class="gd-day ${cs.length || bs.length ? "gd-booked" : "free"}" data-gbk-day="${d}">${bs.map(b => `<span>⛔ ${b.start ? esc(winText(b.start, b.end)) : "All day"} · ${esc(b.title)}</span>`).join("")}<b>${esc(new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }))}</b>
+        ${cs.length ? cs.map(v => `<span>${esc(v.from ? tm(v.from) : "Any time")} · ${esc(v.city || v.street || "")}</span>`).join("") : bs.length ? "" : `<span class="gd-freeday">Free</span>`}</button>`; }).join("")}</div>${back("notes")}`);
   } else if (F.gstep === "time") {
     const name = (BOOK.techs || []).find(t => t.id === ME.emp)?.name || bkSellerName(F), first = n => String(n || "").trim().split(/\s+/)[0].toLowerCase();
     const mine = v => !!name && (v.techs ? v.techs.split(/,\s*/) : []).some(n => n === name || (first(n) && first(n) === first(name) && !name.includes(" ")));
@@ -10412,6 +10423,46 @@ async function openDispatch(date, sales) {
   startCallsLive();
   await loadDispatch();
 }
+/* ---------- My calendar: personal appointments (busy times) for the next 30 days; they show on the dispatch board ---------- */
+const MYCAL = { open: null, msg: "", err: false };
+async function openMyCalendar(msg) {
+  setPage("mycal", "followups", "My calendar");
+  if (!document.querySelector(".mycal")) $("#main").innerHTML = `<div class="loading">Opening your calendar…</div>`;
+  if (!BOOK) await bookLists().catch(() => {});
+  const from = ymd(new Date()), to = ymd(addDays(new Date(), 30));
+  const [bl, calls] = await Promise.all([db.rpc("staff_blocks_list", { p_from: from, p_to: to, p_employee: ME.emp || -1 }), db.rpc("calls_next_days", { p_days: 31 })]);
+  const blocks = bl.error ? [] : bl.data || [], myName = String((BOOK?.techs || []).find(t => t.id === ME.emp)?.name || "").trim();
+  const mine = (calls.data || []).filter(v => myName && (v.techs || "").split(/,\s*/).some(n => n.trim() === myName));
+  const tm = x => x ? new Date(x).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }) : "Any time", hm = s => s ? clock(s) : "";
+  const days = []; for (let i = 0; i <= 30; i++) days.push(ymd(addDays(new Date(), i)));
+  const say = msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"}" role="status">${esc(msg)}</div>` : bl.error ? `<div class="staff-msg err">${esc(/PGRST202|could not find/i.test(bl.error.message || "") ? "Almost ready: the database part is being set up. Try again in a few minutes." : rpcErr(bl.error))}</div>` : "";
+  $("#main").innerHTML = `<article class="staff mycal"><h1>My calendar</h1>
+    <p class="lead">Your next 30 days. Click a day to add a personal appointment (a doctor's visit, a day off…). It shows on the dispatch board on your line, like a call, so no one books you then.</p>
+    ${!ME.emp ? `<div class="staff-msg err">Your log-in isn't linked to a name on the schedule yet. Ask the office to set "On the schedule as" for you on the Staff page.</div>` : ""}
+    ${say}<p><button class="link" type="button" data-back-tasks>← Back to Tasks</button></p>
+    <div class="gd-days mycal-days">${days.map(d => { const bs = blocks.filter(b => b.day === d), cs = mine.filter(v => v.d === d), open = MYCAL.open === d;
+      return `<div class="gd-day mycal-day ${bs.length ? "mc-busy" : cs.length ? "gd-booked" : ""} ${open ? "mc-open" : ""}" data-mc-day="${d}" role="button" tabindex="0">
+        <b>${esc(new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }))}</b>
+        ${bs.map(b => `<span class="mc-block">⛔ ${b.start ? esc(hm(b.start) + (b.end ? "–" + hm(b.end) : "")) : "All day"} · ${esc(b.title)} ${b.can_delete ? `<button class="link" type="button" data-mc-del="${b.id}" title="Take it off">✕</button>` : ""}</span>`).join("")}
+        ${cs.map(v => `<span>📋 ${esc(tm(v.from))} · ${esc(v.city || v.type || "")}</span>`).join("")}
+        ${!bs.length && !cs.length ? `<span class="gd-freeday">Free</span>` : ""}
+        ${open ? `<form class="mc-form" data-mc-form="${d}"><label class="mc-ad"><input type="checkbox" name="allday"> All day</label>
+            <span class="mc-times"><input type="time" name="a" value="09:00" aria-label="From"> to <input type="time" name="b" value="10:00" aria-label="To"></span>
+            <input name="t" maxlength="200" placeholder="What is it? e.g. Dentist, Day off" aria-label="What is it">
+            <span><button class="btn" type="submit">Add</button> <button class="link" type="button" data-mc-x>Cancel</button></span></form>` : ""}</div>`; }).join("")}</div></article>`;
+  const m = $("#main");
+  m.querySelector("[data-back-tasks]")?.addEventListener("click", () => openFollowUps());
+  m.querySelectorAll("[data-mc-day]").forEach(el => el.addEventListener("click", e => { if (e.target.closest("form, button, input")) return; MYCAL.open = MYCAL.open === el.dataset.mcDay ? null : el.dataset.mcDay; openMyCalendar(); }));
+  m.querySelectorAll("[data-mc-x]").forEach(b => b.addEventListener("click", () => { MYCAL.open = null; openMyCalendar(); }));
+  m.querySelectorAll("[data-mc-form]").forEach(f => { const ad = f.allday, t = f.querySelector(".mc-times"); ad.addEventListener("change", () => t.hidden = ad.checked); f.t.focus();
+    f.addEventListener("submit", async e => { e.preventDefault();
+      const { error } = await db.rpc("staff_block_add", { p_day: f.dataset.mcForm, p_start: f.allday.checked ? null : f.a.value || null, p_end: f.allday.checked ? null : f.b.value || null, p_title: f.t.value });
+      if (error) return openMyCalendar("Not saved: " + rpcErr(error)); MYCAL.open = null; openMyCalendar(`Added to ${dayText(f.dataset.mcForm)}. It's on the dispatch board.`); }); });
+  m.querySelectorAll("[data-mc-del]").forEach(b => b.addEventListener("click", async e => { e.stopPropagation();
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Take it off"; return; }
+    const { error } = await db.rpc("staff_block_del", { p_id: Number(b.dataset.mcDel) }); openMyCalendar(error ? "Not taken off: " + rpcErr(error) : "Taken off."); }));
+}
+
 /* ---------- the board by Day, Week or Month: every tech's calls, a row per tech and a column per day ---------- */
 const dspRangeSeg = () => `<span class="seg dsp-range" role="group" aria-label="Show the board by">${[["day", "Day"], ["week", "Week"], ["month", "Month"]].map(([k, t]) =>
   `<button type="button" data-dsp-range="${k}" aria-pressed="${(DSP.range || "day") === k}">${t}</button>`).join("")}</span>`;
@@ -10426,7 +10477,8 @@ function dspRangeDates() {
 async function loadDspRange() {
   const [a, b] = dspRangeDates(), from = ymd(a), to = ymd(b), key = DSP.range + from;
   if (!document.querySelector(".dsp")) $("#main").innerHTML = `<div class="loading">Loading the board…</div>`;
-  const { data, error } = await db.rpc("dispatch_range", { p_from: from, p_to: to });
+  const [{ data, error }, bl] = await Promise.all([db.rpc("dispatch_range", { p_from: from, p_to: to }), db.rpc("staff_blocks_list", { p_from: from, p_to: to })]);
+  DSP.rangeBlocks = bl.error ? [] : bl.data || [];
   if (DSP.range === "day" || ymd(dspRangeDates()[0]) !== from) return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the board</h2>${esc(/PGRST202|could not find/i.test(error.message || "") ? "Almost ready: the database part is being set up. Try again in a few minutes." : rpcErr(error))}</div></div>`; return; }
   DSP.rangeRows = data || []; DSP.rangeKey = key;
@@ -10436,7 +10488,8 @@ function renderDspRange() {
   document.body.classList.remove("dsp-mapmode");
   const [a, b] = dspRangeDates(), days = []; for (let d = new Date(a); d <= b; d = addDays(d, 1)) days.push(ymd(d));
   const rows = DSP.rangeRows || [], today = ymd(new Date()), month = DSP.range === "month";
-  const onRange = new Set(rows.flatMap(r => (r.techs || []).map(t => t.id)));
+  const onRange = new Set(rows.flatMap(r => (r.techs || []).map(t => t.id)).concat((DSP.rangeBlocks || []).map(b => b.employee_id)));
+  const blk = (id, d) => (DSP.rangeBlocks || []).filter(b => b.employee_id === id && b.day === d);
   const techs = (BOOK.techs || []).filter(t => DSP.all || t.recent || onRange.has(t.id));
   rows.flatMap(r => r.techs || []).forEach(t => { if (!techs.some(x => x.id === t.id)) techs.push({ id: t.id, name: t.name }); });
   const of = (id, d) => rows.filter(r => r.d === d && (id == null ? !(r.techs || []).length : (r.techs || []).some(t => t.id === id)));
@@ -10444,8 +10497,10 @@ function renderDspRange() {
   techs.sort((x, y) => (busy(y.id) > 0) - (busy(x.id) > 0) || x.name.localeCompare(y.name));
   const tm = x => { if (!x) return ""; const d = new Date(x); return d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\s?([ap])\.?m\.?/i, "$1").replace(":00", ""); };
   const hrs = list => list.reduce((s, r) => s + (Number(r.duration) || 60), 0) / 60;
-  const cell = (id, d) => { const cs = of(id, d); if (!cs.length) return `<td class="dr-cell ${d === today ? "dr-today" : ""}" data-dr-day="${d}"></td>`;
-    return `<td class="dr-cell ${d === today ? "dr-today" : ""}" data-dr-day="${d}" title="Open ${esc(dayText(d))}">${month
+  const cell = (id, d) => { const cs = of(id, d), bs = id == null ? [] : blk(id, d);
+    const bh = bs.map(b => `<div class="dr-block">⛔ ${month ? "" : `${b.start ? esc(winText(b.start, b.end)) : "All day"} · `}${esc(b.title)}</div>`).join("");
+    if (!cs.length) return `<td class="dr-cell ${d === today ? "dr-today" : ""}" data-dr-day="${d}">${bh}</td>`;
+    return `<td class="dr-cell ${d === today ? "dr-today" : ""}" data-dr-day="${d}" title="Open ${esc(dayText(d))}">${bh}${month
       ? `<div class="dr-n"><b>${cs.length}</b> call${cs.length === 1 ? "" : "s"}</div><div class="quiet">${+hrs(cs).toFixed(1)} h</div>`
       : cs.map(r => `<div class="dr-call dr-${esc(r.status)}"><b>${esc(r.arrival_start ? tm(r.arrival_start) + (r.arrival_end ? "–" + tm(r.arrival_end) : "") : "Any time")}</b>
           <span>${esc(String(r.customer_name || "").slice(0, 24))}</span><span class="quiet">${esc([r.job_type, r.city].filter(Boolean).join(" · "))}</span></div>`).join("")}</td>`; };
@@ -10482,6 +10537,7 @@ async function loadDispatch() {
   if (day.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the board</h2>${esc(rpcErr(day.error))}</div></div>`; return; }
   DSP.rows = day.data; DSP.waiting = wait.error ? [] : wait.data;
   { const n = await db.rpc("board_notes_for", { p_date: d }); DSP.notes = n.error ? [] : n.data || []; if (DSP.date !== d) return; }
+  { const b = await db.rpc("staff_blocks_list", { p_from: d, p_to: d }); DSP.blocks = b.error ? [] : b.data || []; if (DSP.date !== d) return; }
   DSP.sig = JSON.stringify([DSP.rows, DSP.waiting]);
   renderDispatch();
 }
@@ -10557,6 +10613,12 @@ function dspCard(r, from) {
 }
 // The timeline: hours across the top; each call sits under its arrival time and spans its arrival window.
 const hourOf = iso => { const d = new Date(iso); return d.getHours() + d.getMinutes() / 60; };
+// a person's own busy times (My calendar) on their line, under the calls
+function dspBlocksHtml(id, pos) {
+  if (!id) return ""; const hr = s => { const [a, b] = String(s).split(":").map(Number); return a + (b || 0) / 60; };
+  return (DSP.blocks || []).filter(b => b.employee_id === id).map(b => { const a = b.start ? hr(b.start) : 7, z = b.start ? (b.end ? hr(b.end) : a + 1) : 19;
+    return `<div class="tl-block" style="${pos(a, z)}top:4px" title="${esc(b.name)}: ${esc(b.title)} (${b.start ? esc(winText(b.start, b.end)) : "all day"})">⛔ ${esc(b.title)} <span>${b.start ? esc(winText(b.start, b.end)) : "All day"}</span></div>`; }).join("");
+}
 function dspTimeline(rows, techs, none, colOf, mins, isToday) {
   // the whole day is on the board; the screen shows a few hours of it (dspHrs) and you scroll for the rest
   const h0 = 0, h1 = 24;
@@ -10597,7 +10659,7 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
       return `<section class="dcol tl-row ${extra} ${id && DSP.techSel === id ? "tech-sel" : ""} ${DSP.techSel != null && DSP.techSel !== id ? "tech-dim" : ""}" data-col="${id}" style="--lanes:${Math.max(1, lanes.length)}">
         <header ${id ? `class="tl-tech" data-tech="${id}" role="button" tabindex="0" title="Show ${esc(name)}'s day on the map with the driving route"` : ""}><strong>${esc(name)}</strong><span class="quiet tl-sub">${sub}${warn && overN ? ` <span class="tl-warn" title="Calls with times that overlap">${overN} overlap</span>` : ""}</span></header>
         <div class="tl-any">${anyTime.map(r => dspTlCard(r, id)).join("") || (timed.length ? "" : `<span class="quiet tl-empty">${id ? "Free" : "Drop here to unassign"}</span>`)}</div>
-        <div class="tl-track" style="--hours:${span}">${nowLine}${html}</div>
+        <div class="tl-track" style="--hours:${span}">${nowLine}${dspBlocksHtml(id, pos)}${html}</div>
       </section>`;
     }
     clusters.forEach(c => {
@@ -10635,7 +10697,7 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
     return `<section class="dcol tl-row ${extra} ${id && DSP.techSel === id ? "tech-sel" : ""} ${DSP.techSel != null && DSP.techSel !== id ? "tech-dim" : ""}" data-col="${id}" style="--lanes:1">
       <header ${id ? `class="tl-tech" data-tech="${id}" role="button" tabindex="0" title="Show ${esc(name)}'s day on the map with the driving route"` : ""}><strong>${esc(name)}</strong><span class="quiet tl-sub">${sub}${warn && overN ? ` <span class="tl-warn" title="Calls with times that overlap">${overN} overlap</span>` : ""}</span></header>
       <div class="tl-any ${anyTime.length > 1 ? "tl-any-" + am : ""}">${anyHtml}</div>
-      <div class="tl-track" style="--hours:${span}">${nowLine}${html}</div>
+      <div class="tl-track" style="--hours:${span}">${nowLine}${dspBlocksHtml(id, pos)}${html}</div>
     </section>`;
   };
   return `<div class="tl-head"><div class="tl-corner">Tech</div><div class="tl-any-head">Any time</div>
@@ -10893,7 +10955,7 @@ function dspTlCard(r, from, style = "", cls = "") {
 function renderDispatch() {
   if (DSP.page === "map") { document.body.classList.remove("dsp-mapmode"); return renderDispatchMapPage(); }
   const rows = DSP.rows.filter(r => r.status !== "cancelled"), cancelled = DSP.rows.length - rows.length;
-  const onDay = new Set(rows.flatMap(r => r.techs.map(t => t.id)));
+  const onDay = new Set(rows.flatMap(r => r.techs.map(t => t.id)).concat((DSP.blocks || []).map(b => b.employee_id)));
   const techs = (BOOK.techs || []).filter(t => DSP.all || t.recent || onDay.has(t.id));
   rows.flatMap(r => r.techs).forEach(t => { if (!techs.some(x => x.id === t.id)) techs.push({ id: t.id, name: t.name }); });
   const colOf = id => rows.filter(r => r.techs.some(t => t.id === id));
@@ -19985,8 +20047,10 @@ let FU_PEOPLE = null;
 let TASK_TAB = "open";
 const taskTabs = (openN) => `<div class="task-tabs" role="tablist" aria-label="Show">
     <button class="task-tab" role="tab" type="button" data-task-tab="open" aria-selected="${TASK_TAB === "open"}">Open tasks${openN != null ? ` <span class="count">${openN}</span>` : ""}</button>
-    <button class="task-tab" role="tab" type="button" data-task-tab="closed" aria-selected="${TASK_TAB === "closed"}">Closed tasks</button></div>`;
+    <button class="task-tab" role="tab" type="button" data-task-tab="closed" aria-selected="${TASK_TAB === "closed"}">Closed tasks</button>
+    <button class="btn quiet-btn task-cal-btn" type="button" data-my-cal title="Book personal appointments: they show on the dispatch board on your line">📅 My calendar</button></div>`;
 function wireTaskTabs() {
+  document.querySelector("[data-my-cal]")?.addEventListener("click", () => openMyCalendar());
   document.querySelectorAll("[data-task-tab]").forEach(b => b.addEventListener("click", () => {
     if (TASK_TAB === b.dataset.taskTab) return;
     TASK_TAB = b.dataset.taskTab; openFollowUps(null, true);
