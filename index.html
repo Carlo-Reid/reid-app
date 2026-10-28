@@ -226,6 +226,14 @@
   .gd-none { margin-top: 6px; } .gd-miss { margin: 16px 0 8px; font-weight: 650; } .gd-over { display: block; margin-top: 16px; }
   .gd-help h2 { color: var(--red, #c92a2a); } .gd-sheet { border-collapse: collapse; margin: 14px 0; min-width: 320px; } .gd-sheet th, .gd-sheet td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; font-size: 17px; } .gd-sheet th { background: var(--blue-wash, #eef4fb); }
   .gd-btns { display: flex; gap: 16px; align-items: center; }
+  .gd-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 16px; } .gd-chip { font-size: 16px; padding: 9px 14px; } .gd-clash { opacity: .6; }
+  .gd-days { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 10px 0; }
+  .gd-day { font: inherit; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper, #fff); color: var(--ink); cursor: pointer; min-height: 70px; }
+  .gd-day:hover { border-color: var(--blue, #1864ab); background: var(--blue-wash, #eef4fb); } .gd-day span { font-size: 13px; color: var(--steel); } .gd-freeday { color: var(--green, #2b8a3e) !important; font-weight: 700; }
+  /* the training view's Section 1: only + Book a sales call and the email address work */
+  body.ui-guided .file .sec1a .zone-chip, body.ui-guided .file .sec1a .zone-bar, body.ui-guided .file .sec1a [data-edit-cust], body.ui-guided .file .sec1a [data-add-task],
+  body.ui-guided .file .sec1a [data-book-board], body.ui-guided .file .sec1a #inv-start, body.ui-guided .file .sec1a .fu-tasklist { display: none !important; }
+  body.ui-guided .file .sec1a a:not([data-compose]):not([href^="mailto:"]), body.ui-guided .file .sec1a button:not([data-book-call]):not(.loc-tab) { pointer-events: none; cursor: default; color: inherit; text-decoration: none; }
   @media print { body.gd-printing * { visibility: hidden; } body.gd-printing #gd-help, body.gd-printing #gd-help * { visibility: visible; } body.gd-printing #gd-help { position: absolute; left: 0; top: 0; width: 100%; border: 0; } }
   body[data-page="search"] #search-page { display: block; }
   body[data-page="search"] #main { display: none; }
@@ -8775,6 +8783,70 @@ function salesForList(F) {
   if (ok.length && !ok.some(x => x.id === Number(F.salesFor || 0))) F.salesFor = ok[0].id;   // keep the pick to one they're allowed
   return ok;
 }
+/* ---------- the training view's booking: Site visit or Phone booking, the reason, notes, then a day (30 days) and a time ---------- */
+let GBK_CATS = null;
+function gdBookRender(msg) {
+  const F = BK; F.gstep = F.gstep || "kind";
+  const back = to => `<button class="link gd-over" type="button" data-gbk-to="${to}">← Back</button>`;
+  const card = (no, q, body) => `<div class="gd-card"><div class="gd-stepno">${no}</div><h2>${q}</h2>${body}</div>`;
+  const say = msg ? `<div class="staff-msg ${msg.err ? "err" : "ok"}">${esc(msg.text || msg)}</div>` : "";
+  let body = "";
+  if (F.gstep === "kind") body = `<h1>Book a sales call</h1><p class="lead">${esc(F.cust.display_name)}</p><div class="gd-two">
+      <button class="gd-big" type="button" data-gbk-kind="site"><span class="gd-ico">🏠</span>Site visit</button>
+      <button class="gd-big" type="button" data-gbk-kind="phone"><span class="gd-ico">📞</span>Phone booking</button></div>
+      <button class="link gd-over" type="button" data-open-cust="${F.cust.id}">← Back to the customer</button>`;
+  else if (F.gstep === "reason") {
+    if (!GBK_CATS) db.rpc("pb_categories").then(({ data }) => { GBK_CATS = (data || []).filter(c => c.active !== false && !c.parent_id); if (BK === F && F.gstep === "reason") gdBookRender(); });
+    body = card("Step 1", "What is the reason for the call?", `<div class="gd-chips">${(GBK_CATS || []).map(c => `<button type="button" class="chip gd-chip" data-gbk-reason="${esc(c.name)}" aria-pressed="${F.summary === c.name}">${esc(c.name)}</button>`).join("") || `<span class="quiet">Loading…</span>`}</div>
+      <form class="gd-form" id="gbk-form"><label class="gd-in"><span>Or type the reason</span><input name="r" value="${esc((GBK_CATS || []).some(c => c.name === F.summary) ? "" : F.summary || "")}" placeholder="e.g. Furnace and air conditioner quote"></label><button class="btn" type="submit">Next</button></form>${back("kind")}`);
+  } else if (F.gstep === "notes") body = card("Step 2", "Do you want to add any notes to the booking?", `<form class="gd-form" id="gbk-form"><label class="gd-in" style="flex-basis:100%"><span>Notes (optional)</span><textarea name="n" rows="3" placeholder="e.g. Please use the side door">${esc(F.note || "")}</textarea></label>
+      <button class="btn" type="submit">${F.sk === "phone" ? "Book it" : "Next"}</button></form>${back("reason")}`);
+  else if (F.gstep === "day") {
+    if (!F.g30) db.rpc("calls_next_days", { p_days: 31 }).then(({ data }) => { F.g30 = data || []; if (BK === F && F.gstep === "day") gdBookRender(); });
+    if (!F.sellers?.length) { if (!F.gsel) { F.gsel = 1; db.rpc("sales_people").then(({ data }) => { F.sellers = data || []; if (BK === F) gdBookRender(); }); } }
+    const name = bkSellerName(F), first = n => String(n || "").trim().split(/\s+/)[0].toLowerCase();
+    const mine = v => (v.techs ? v.techs.split(/,\s*/) : []).some(n => n === name || (first(n) && first(n) === first(name) && !name.includes(" ")));
+    const tm = x => { const d = new Date(x); return isNaN(d) ? "" : d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }); };
+    const days = []; for (let i = 0; i < 31; i++) { const dt = new Date(); dt.setDate(dt.getDate() + i); if (dt.getDay() === 0) continue; days.push(ymd(dt)); }
+    body = card("Step 3", "Pick a day", !F.g30 || !name ? `<p class="quiet">Loading your schedule…</p>` : `<p class="quiet">Your next 30 days. Each day shows the calls you already have.</p><div class="gd-days">${days.map(d => { const cs = F.g30.filter(v => v.d === d && mine(v)).sort((a, b) => String(a.from).localeCompare(String(b.from)));
+      return `<button type="button" class="gd-day ${cs.length ? "" : "free"}" data-gbk-day="${d}"><b>${esc(new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }))}</b>
+        ${cs.length ? cs.map(v => `<span>${esc(v.from ? tm(v.from) : "Any time")} · ${esc(v.city || v.street || "")}</span>`).join("") : `<span class="gd-freeday">Free</span>`}</button>`; }).join("")}</div>${back("notes")}`);
+  } else if (F.gstep === "time") {
+    const name = bkSellerName(F), first = n => String(n || "").trim().split(/\s+/)[0].toLowerCase();
+    const mine = v => (v.techs ? v.techs.split(/,\s*/) : []).some(n => n === name || (first(n) && first(n) === first(name) && !name.includes(" ")));
+    const HH = x => { const d = new Date(x); return d.getHours() + d.getMinutes() / 60; }, hr = t => { const [a, b] = String(t).split(":").map(Number); return a + (b || 0) / 60; };
+    const busy = (F.g30 || []).filter(v => v.d === F.date && mine(v) && v.from).map(v => [HH(v.from), v.to ? HH(v.to) : HH(v.from) + 1]);
+    body = card("Step 4", `Pick a time on ${esc(dayText(F.date))}`, `<div class="gd-chips">${(BOOK.windows || []).map(([a, b]) => { const clash = busy.some(([x, y]) => x < hr(b) && y > hr(a));
+        return `<button type="button" class="chip gd-chip ${clash ? "gd-clash" : ""}" data-gbk-win="${a}-${b}">${esc(winText(a, b))}${clash ? " · you have a call" : ""}</button>`; }).join("")}</div>
+      <form class="gd-form" id="gbk-form"><label class="gd-in"><span>Or a different time: from</span><input type="time" name="a" value="${esc(F.start || "")}"></label><label class="gd-in"><span>to</span><input type="time" name="b" value="${esc(F.end || "")}"></label><button class="btn" type="submit">Book it</button></form>${back("day")}`);
+  }
+  $("#main").innerHTML = `<article class="staff book gd-book"><div class="gd-wrap">${say}${body}</div></article>`;
+  const go = st => { F.gstep = st; gdBookRender(); };
+  document.querySelectorAll("#main [data-open-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.openCust))));
+  document.querySelectorAll("[data-gbk-to]").forEach(b => b.addEventListener("click", () => go(b.dataset.gbkTo)));
+  document.querySelectorAll("[data-gbk-kind]").forEach(b => b.addEventListener("click", () => { F.sk = b.dataset.gbkKind; F.later = F.sk === "phone"; go("reason"); }));
+  document.querySelectorAll("[data-gbk-reason]").forEach(b => b.addEventListener("click", () => { F.summary = b.dataset.gbkReason; go("notes"); }));
+  document.querySelectorAll("[data-gbk-day]").forEach(b => b.addEventListener("click", () => { F.date = b.dataset.gbkDay; F.later = false; go("time"); }));
+  document.querySelectorAll("[data-gbk-win]").forEach(b => b.addEventListener("click", () => { const [a, c] = b.dataset.gbkWin.split("-"); F.win = [a, c]; gdBook(); }));
+  $("#gbk-form")?.addEventListener("submit", e => { e.preventDefault(); const f = e.target;
+    if (F.gstep === "reason") { const r = f.r.value.trim(); if (r) F.summary = r; if (!F.summary) return gdBookRender({ text: "Pick a reason or type one.", err: true }); return go("notes"); }
+    if (F.gstep === "notes") { F.note = f.n.value.trim(); return F.sk === "phone" ? gdBook() : go("day"); }
+    if (F.gstep === "time") { if (!f.a.value) return gdBookRender({ text: "Pick a time, or type one.", err: true }); F.win = "other"; F.start = f.a.value; F.end = f.b.value || ""; return gdBook(); }
+  });
+}
+async function gdBook() {   // book it the same way the booking page does
+  const F = BK; let start = null, end = null;
+  if (!F.later) { if (Array.isArray(F.win)) [start, end] = F.win; else if (F.win === "other") { start = F.start || null; end = F.end || null; } }
+  if (!F.loc) return gdBookRender({ text: "This customer has no address yet. Ask the office to add one.", err: true });
+  const p = { customer_id: F.cust.id, location_id: F.loc, job_type_id: Number(F.type) || null, business_unit_id: Number(F.unit) || null, summary: (F.summary || "").trim(), note: (F.note || "").trim(),
+    priority: "normal", date: F.later ? null : F.date, start, end, duration: Number(F.dur) || null, techs: F.later || !ME.emp ? [] : [ME.emp] };
+  $("#main").querySelectorAll("button").forEach(b => b.disabled = true);
+  const { data, error } = await db.rpc("book_call", { p });
+  if (error) return gdBookRender({ text: "Not booked: " + rpcErr(error), err: true });
+  if (data?.job_id) await db.rpc("set_sales_kind", { p_job: data.job_id, p_kind: F.sk });
+  if (F.sk === "phone" && data?.job_id) { const { data: est, error: e3 } = await db.rpc("est_create", { p_job: data.job_id }); if (!e3 && est) return openEstEdit(est); }
+  SALES.rows = null; openSales(F.sk === "site" ? `Site visit booked: ${dayText(F.date)}, ${winText(start, end)}.` : "Phone booking saved.");
+}
 function renderBooking(msg) {
   if (bkSales()) {   // from the Sales page (or a sales person): Walk site or Create estimate, Reid or a partner, always HVAC Sales
     if (BK.mode !== "sales") { BK.mode = "sales"; BK.jobId = null; BK.salesFor = BK.salesFor ?? 0; }
@@ -8787,6 +8859,7 @@ function renderBooking(msg) {
     if (BK.sk === "est" || BK.sk === "phone") BK.later = true;
     if (!BK.sellers) { BK.sellers = []; db.rpc("sales_people").then(({ data }) => { BK.sellers = data || []; if (document.body.dataset.page === "book") renderBooking(); }); }
   }
+  if (ME.guided && bkSales() && !BK.walk) return gdBookRender(msg);   // the training view: one question at a time
   const F = BK, L = BOOK, visit = F.mode === "visit";
   const job = F.jobs.find(j => j.job_id === F.jobId);
   const types = L.job_types.slice().sort((a, b) => a.name.localeCompare(b.name));
