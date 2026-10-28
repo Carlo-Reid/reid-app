@@ -7103,7 +7103,11 @@ function cvPeriodText() {   // "on Monday, October 26, 2026", "in October 2026",
 }
 const cvWantList = () => false;   // Carlo view has no list of its own: the Sales table below follows it and is the one list
 // the database is sometimes busy while the page loads: a timed-out ask is tried again (up to twice)
-async function cvRpc(name, args) { let r; for (let i = 0; i < 3; i++) { r = await db.rpc(name, args); if (!r.error || !/statement timeout/i.test(r.error.message || "")) break; await new Promise(z => setTimeout(z, 1500)); } return r; }
+// the same ask while one is already on its way: share the answer instead of asking the database again
+const CV_INFLIGHT = new Map();
+function cvRpc(name, args) { const k = name + JSON.stringify(args); if (CV_INFLIGHT.has(k)) return CV_INFLIGHT.get(k);
+  const p = cvRpc0(name, args).finally(() => CV_INFLIGHT.delete(k)); CV_INFLIGHT.set(k, p); return p; }
+async function cvRpc0(name, args) { let r; for (let i = 0; i < 3; i++) { r = await db.rpc(name, args); if (!r.error || !/statement timeout/i.test(r.error.message || "")) break; await new Promise(z => setTimeout(z, 1500)); } return r; }
 // "Not paid yet": every sale whose commission is owed (more than $0) and not paid, on the day it was sold; the amounts are the commission
 function cvUnpaid() {
   const out = [], seen = new Set();   // two sales that went into one install: the commission counts once (on the first sale)
