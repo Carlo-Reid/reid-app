@@ -100,10 +100,12 @@ AS $function$
     SELECT i.id, i.invoice_number, i.invoice_date, coalesce(lc.id, c.id) AS cid, coalesce(lc.display_name, c.display_name) AS display_name, l.street, l.city, t.name AS jt, i.total,   -- the homeowner, even when billed to "Costco Inc."
            CASE WHEN p.bill_to_ok AND NOT p.customer_pays_partner THEN jsonb_build_object('method', 'cut', 'cut_pct', 0, 'card', 0, 'pays', i.total, 'keeps', 0)
                 ELSE public._partner_pay(i.id, p.id) END AS pay,
-           coalesce((SELECT sum(rl.amount) FROM partner_remittance_lines rl WHERE rl.invoice_id = i.id), 0)
+           greatest(coalesce((SELECT sum(rl.amount) FROM partner_remittance_lines rl WHERE rl.invoice_id = i.id), 0)
              + CASE WHEN p.bill_to_ok AND NOT p.customer_pays_partner THEN coalesce(i.amount_paid, 0)
                     ELSE coalesce((SELECT sum(pa.amount) FROM payment_applications pa JOIN payments pm ON pm.id = pa.payment_id
-                                   WHERE (pa.invoice_id = i.id OR pa.invoice_id = i.store_copy_of) AND pm.method = 'partner_remittance'), 0) END AS got,   -- store payments recorded on the customer's copy count on the store's
+                                   WHERE (pa.invoice_id = i.id OR pa.invoice_id = i.store_copy_of) AND pm.method = 'partner_remittance'), 0) END,
+             CASE WHEN i.store_copy_of IS NOT NULL THEN coalesce((SELECT sum(sl.net) FROM partner_statement_matches sm JOIN partner_statement_lines sl ON sl.partner_id = sm.partner_id AND sl.doc_no = sm.doc_no
+                                                                 WHERE sm.invoice_id = i.store_copy_of AND sl.partner_id = p.id), 0) ELSE 0 END) AS got,   -- or what its payment history says   -- store payments recorded on the customer's copy count on the store's
            pt.reference, pt.sent_on, pt.notes, pt.settled_at IS NOT NULL OR (p.bill_to_ok AND i.not_owed_reason IS NOT NULL) AS settled, pt.invoice_id IS NOT NULL AS own,
            i.partner_account, i.authorization_number, (i.signature_png IS NOT NULL OR i.signed_at IS NOT NULL) AS signed,
            CASE WHEN p.bill_to_ok AND i.bill_to_partner_id = p.id THEN public._inv_partner_missing(i.id) ELSE '{}'::text[] END AS missing,
@@ -151,7 +153,10 @@ BEGIN
     DELETE FROM invoice_lines WHERE invoice_id = p_copy;
     DELETE FROM invoices WHERE id = p_copy;
   END IF;
-  UPDATE invoices SET paid_at_store = false WHERE id = v_src AND NOT EXISTS (SELECT 1 FROM invoices x WHERE x.store_copy_of = v_src AND x.status <> 'void');
+  UPDATE invoices SET paid_at_store = false,
+         not_owed_reason = CASE WHEN not_owed_reason LIKE 'Paid at %' THEN NULL ELSE not_owed_reason END,
+         not_owed_at = CASE WHEN not_owed_reason LIKE 'Paid at %' THEN NULL ELSE not_owed_at END
+   WHERE id = v_src AND NOT EXISTS (SELECT 1 FROM invoices x WHERE x.store_copy_of = v_src AND x.status <> 'void');
 END $function$;
 
 -- what's been paid on a store copy (store payments recorded on the partner page + any payments)
@@ -162,6 +167,9 @@ BEGIN
      + coalesce((SELECT sum(pa.amount) FROM payment_applications pa JOIN payments pm ON pm.id = pa.payment_id AND pm.status = 'succeeded' WHERE pa.invoice_id = p_copy), 0)
      + coalesce((SELECT sum(pa.amount) FROM invoices c JOIN payment_applications pa ON pa.invoice_id = c.store_copy_of JOIN payments pm ON pm.id = pa.payment_id AND pm.status = 'succeeded' AND pm.method = 'partner_remittance'
                  WHERE c.id = p_copy), 0);
+  v := greatest(v, coalesce((SELECT sum(l.net) FROM invoices c JOIN partner_statement_matches m ON m.invoice_id = c.store_copy_of
+                              JOIN partner_statement_lines l ON l.partner_id = m.partner_id AND l.doc_no = m.doc_no
+                             WHERE c.id = p_copy AND l.partner_id = c.bill_to_partner_id), 0));   -- connected in the store's payment history = paid
   UPDATE invoices SET amount_paid = v,
          status = CASE WHEN status IN ('void', 'draft') THEN status WHEN total > 0 AND v >= total - 0.004 THEN 'paid' WHEN v > 0 THEN 'partially_paid' ELSE 'posted' END
    WHERE id = p_copy AND store_copy_of IS NOT NULL;
@@ -208,7 +216,8 @@ BEGIN
            partner_account = coalesce(s.partner_account, partner_account), invoice_number = s.invoice_number || '-C'
      WHERE id = v_c AND (job_id, location_id, invoice_date, business_unit_id, invoice_number) IS DISTINCT FROM (s.job_id, s.location_id, s.invoice_date, s.business_unit_id, s.invoice_number || '-C');
   END IF;
-  UPDATE invoices SET paid_at_store = true WHERE id = p_src AND NOT paid_at_store;
+  UPDATE invoices SET paid_at_store = true, not_owed_reason = coalesce(not_owed_reason, 'Paid at ' || p.name), not_owed_at = coalesce(not_owed_at, now())
+   WHERE id = p_src AND (NOT paid_at_store OR not_owed_reason IS NULL);
   IF v_old IS DISTINCT FROM v_sig THEN
     DELETE FROM invoice_lines WHERE invoice_id = v_c;
     FOR l IN SELECT * FROM invoice_lines WHERE invoice_id = p_src ORDER BY (kit_parent_line_id IS NOT NULL), sequence, id LOOP
@@ -331,6 +340,16 @@ SELECT public._patch_fn('est_sold_invoice', $o$SELECT id INTO v_id FROM invoices
                                             $n$SELECT id INTO v_id FROM invoices WHERE job_id = ij.id AND status <> 'void' AND store_copy_of IS NULL ORDER BY id DESC LIMIT 1;$n$);
 SELECT public._patch_fn('partner_statement_match', $o$        AND i.subtotal > 0$o$, $n$        AND i.subtotal > 0 AND i.store_copy_of IS NULL$n$);
 SELECT public._patch_fn('partner_statement_set', $o$WHERE invoice_number = v_num AND subtotal > 0$o$, $n$WHERE invoice_number = v_num AND subtotal > 0 AND store_copy_of IS NULL$n$);
+
+-- (loading the payment history runs the matching, which updates the store's copies)
+SELECT public._patch_fn('partner_statement_match', $o$  RETURN v_n;
+END$o$, $n$  PERFORM public._store_copies_sync(p_partner);
+  RETURN v_n;
+END$n$);
+SELECT public._patch_fn('partner_statement_set', $o$  RETURN jsonb_build_object('invoice_id', v_inv);$o$, $n$  PERFORM public._store_copies_sync(p_partner);
+  RETURN jsonb_build_object('invoice_id', v_inv);$n$);
+SELECT public._patch_fn('partner_statement_set', $o$IF v_num = '' THEN DELETE FROM partner_statement_matches WHERE partner_id = p_partner AND doc_no = p_doc; RETURN NULL; END IF;$o$,
+  $n$IF v_num = '' THEN DELETE FROM partner_statement_matches WHERE partner_id = p_partner AND doc_no = p_doc; PERFORM public._store_copies_sync(p_partner); RETURN NULL; END IF;$n$);
 
 -- keep every store copy up to date (this file runs with each sync)
 DO $$ DECLARE r record; BEGIN
