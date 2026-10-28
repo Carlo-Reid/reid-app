@@ -7029,7 +7029,7 @@ function salesCustPaidCell0(r) {
   const id = salesInstOf(r), c = id ? SALES.comm?.get(id) : null, inv = Number(c?.invoiced) || 0, ow = Number(c?.owing) || 0;
   if (!c || !inv) return `<span class="quiet">Not invoiced yet</span>`;
   const sp = SALES.storePaid?.get(id);
-  if (c.customer_paid || ow <= 0.005) return `<span class="status s-done">Paid in full</span><div class="quiet">invoice ${money(inv)} before tax</div>${sp ? `<div class="quiet">${esc(sp.store)} paid ${money(sp.amount)} on ${fmtDate(sp.date)} · payment ${esc(sp.payment_no || "")} · ${esc(sp.store)} invoice ${esc(sp.doc_no || "")}</div>` : ""}`;
+  if (c.customer_paid || ow <= 0.005) return `<span class="status s-done">Paid in full</span><div class="quiet">invoice ${money(inv)} before tax</div>${sp?.store ? `<div class="quiet">${esc(sp.store)} paid ${money(sp.amount)} on ${fmtDate(sp.date)} · payment ${esc(sp.payment_no || "")} · ${esc(sp.store)} invoice ${esc(sp.doc_no || "")}</div>` : ""}${sp?.credit ? `<div class="quiet">${esc(sp.credit_from)} credit ${money(sp.credit)} · memo ${esc(sp.credit_memo || "")}</div>` : ""}`;
   return `<span class="status s-warn">Owes ${money(ow)}</span><div class="quiet">invoice ${money(inv)} before tax${c.financing_company ? " · " + esc(c.financing_company) : ""}</div>`;
 }
 const salesCustOwing = r => { const id = salesInstOf(r), c = id ? SALES.comm?.get(id) : null; return !c || !Number(c.invoiced) ? -1 : Number(c.owing) || 0; };
@@ -13831,7 +13831,8 @@ function pstParse(text) {   // CSV with quotes; Costco puts a ' in front of its 
     ra_no: c.ra < 0 ? null : t(r[c.ra]) || null, gst: c.gst < 0 ? 0 : pstNum(r[c.gst]), hst: c.hst < 0 ? 0 : pstNum(r[c.hst]), qst: c.qst < 0 ? 0 : pstNum(r[c.qst]) }));
 }
 async function pstLoad() {
-  const { data, error } = await db.rpc("partner_statement_list", { p_partner: PST.partner });
+  const [{ data, error }, cr] = await Promise.all([db.rpc("partner_statement_list", { p_partner: PST.partner }), db.rpc("partner_credits_list", { p_partner: PST.partner })]);
+  PST.credits = cr.error ? [] : cr.data || [];
   if (error) { PST.rows = []; PST.msg = /PGRST202|could not find/i.test(error.message || "") ? "Almost ready: the database part is being set up. Try again in a few minutes." : rpcErr(error); PST.err = true; }
   else PST.rows = data || [];
   const t = document.querySelector('[data-pp-ptab="stmt"]'); if (t) t.innerHTML = `Payment history <span class="pp-n">${PST.rows.length}</span>`;
@@ -13877,7 +13878,18 @@ function pstRender() {
           <span class="pst-ed" hidden><input data-pst-num placeholder="Our invoice or job #" inputmode="numeric" style="width:11em"> <button class="link" type="button" data-pst-save>Save</button>${r.invoice_id ? ` · <button class="link" type="button" data-pst-clear>Take off</button>` : ""} · <button class="link" type="button" data-pst-x>Cancel</button></span></td>
       </tr>`).join("")}</tbody>
       <tfoot><tr><th colspan="2">${rows.length} invoice${rows.length === 1 ? "" : "s"}</th><th class="num">${money(sum("sale"))}</th><th class="num">${money(sum("fee"))}</th><th class="num">${money(sum("net"))}</th><th colspan="2"></th></tr></tfoot>
-    </table></div>`}`;
+    </table></div>`}
+    ${(PST.credits || []).length ? (() => { const CR = PST.credits, on = CR.filter(c => c.invoice_id).length, tot = CR.reduce((s, c) => s + Number(c.amount), 0);
+      return `<h2 style="margin:22px 0 6px">Supplier credits for ${esc(st.name)} sales <span class="count">${CR.length}</span></h2>
+      <p class="muted" style="margin:0 0 8px">${money(tot)} in credit memos from ${esc([...new Set(CR.map(c => c.supplier_name))].join(", "))}. ${on} of ${CR.length} connected to the customer's sale (by the name on the memo). They show on both invoice copies, the Sales page and lower the job's cost in job costing.</p>
+      <div class="table-wrap"><table class="cl-table pst-table"><thead><tr><th>Memo</th><th>Customer on the memo</th><th class="num">Credit</th><th>Our customer / invoice</th></tr></thead><tbody>
+      ${CR.map(c => `<tr data-pcr="${c.id}"><td><b>${esc(c.memo_no)}</b><br><small class="muted">${fmtDate(c.memo_date)} · ${esc(c.kind || "")}</small></td>
+        <td>${esc([c.first_name, c.last_name].filter(Boolean).join(" "))}<br><small class="muted">ref ${esc(c.ref || "")}</small></td>
+        <td class="num"><b>${money(c.amount)}</b></td>
+        <td>${c.invoice_id ? `<a href="#customer=${c.customer_id}"><b>${esc(c.customer_name || "Customer")}</b></a>${c.street ? ` <small class="muted">${esc(c.street)}${c.city ? ", " + esc(c.city) : ""}</small>` : ""}<br><small class="muted">Invoice ${esc(c.invoice_number || "")} · ${fmtDate(c.invoice_date)} · ${c.how === "hand" ? "set by hand" : c.how === "guess" ? `<b style="color:#b45309">best guess, check it</b>` : "matched"}</small> <button class="link" type="button" data-pcr-edit>change</button>`
+          : `<span class="muted">Not connected</span> <button class="link" type="button" data-pcr-edit>connect</button>`}
+          <span class="pst-ed" hidden><input data-pcr-num placeholder="Our invoice or job #" style="width:11em"> <button class="link" type="button" data-pcr-save>Save</button>${c.invoice_id ? ` · <button class="link" type="button" data-pcr-clear>Take off</button>` : ""} · <button class="link" type="button" data-pcr-x>Cancel</button></span></td></tr>`).join("")}
+      </tbody></table></div>`; })() : ""}`;
   const say = (m, err) => { PST.msg = m; PST.err = !!err; const el = $("#pst-msg"); if (el) { el.className = err ? "staff-msg err" : "staff-msg ok"; el.textContent = m; } };
   $("#pst-file")?.addEventListener("change", async e => { const f = e.target.files?.[0]; if (!f) return;
     let rows; try { rows = pstParse(await f.text()); } catch (er) { return say(er.message, true); }
@@ -13899,6 +13911,13 @@ function pstRender() {
   document.querySelectorAll("[data-pst-save]").forEach(b => b.addEventListener("click", () => { const v = b.closest("td").querySelector("[data-pst-num]").value.trim(); if (!v) return say("Type our invoice or job #.", true); setTo(b, v); }));
   document.querySelectorAll("[data-pst-num]").forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); i.closest("td").querySelector("[data-pst-save]").click(); } }));
   document.querySelectorAll("[data-pst-clear]").forEach(b => b.addEventListener("click", () => setTo(b, "")));
+  document.querySelectorAll("[data-pcr-edit]").forEach(b => b.addEventListener("click", () => { const ed = b.closest("td").querySelector(".pst-ed"); ed.hidden = false; b.hidden = true; ed.querySelector("input").focus(); }));
+  document.querySelectorAll("[data-pcr-x]").forEach(b => b.addEventListener("click", () => pstRender()));
+  const crSet = async (b, num) => { const { error } = await db.rpc("partner_credit_set", { p_id: Number(b.closest("tr").dataset.pcr), p_number: num });
+    if (error) return say("Not saved: " + rpcErr(error), true); await pstLoad(); PST.msg = num ? "Credit connected." : "Credit taken off."; PST.err = false; pstRender(); };
+  document.querySelectorAll("[data-pcr-save]").forEach(b => b.addEventListener("click", () => { const v = b.closest("td").querySelector("[data-pcr-num]").value.trim(); if (!v) return say("Type our invoice or job #.", true); crSet(b, v); }));
+  document.querySelectorAll("[data-pcr-num]").forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); i.closest("td").querySelector("[data-pcr-save]").click(); } }));
+  document.querySelectorAll("[data-pcr-clear]").forEach(b => b.addEventListener("click", () => crSet(b, "")));
 }
 
 // ----- the booking list on a partner's page
@@ -15759,7 +15778,7 @@ function costingCalc(I) {
   const tk = C.partner_tank, tank = tk ? Math.round(n(tk.amount) / (1 + n(C.hst ?? 13) / 100) * 100) / 100 : 0;
   const tankCost = tk ? C.lines.filter(l => l.equip).reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) : 0;
   const revenue = st?.pay?.method === "discount_fee" ? (st.pay.from_statement ? n(st.pay.pays) / (1 + n(C.hst ?? 13) / 100) : n(st.pay.after) - n(st.pay.fee) - card) - tank : sale - cut - card - tank;   // Costco way: our price less the % off and the fee, before HST
-  const parts = C.lines.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) - tankCost + n(C.actual?.stock_cost);
+  const parts = C.lines.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) - tankCost + n(C.actual?.stock_cost) - n(C.supplier_credit);   // less the supplier's credit (Lennox on Costco sales)
   const noCost = C.lines.filter(l => n(l.unit_price) > 0 && (l.unit_cost == null || n(l.unit_cost) === 0)).length;
   // labour: hours on the job × techs × cost per hour. Hours are the real time on site (each visit's arrived to done) once there
   // is some, or what you typed, or the price book's hours. A tech with no pay rate set counts at the company rate, or the price book's rate.
@@ -15824,7 +15843,7 @@ function costingHtml(I) {
         <tr><td>Reid's share (before HST)</td><td class="r">${money(k.revenue)}</td></tr>` : ""}
       ${k.tk ? `<tr class="store"><td><strong>Tank: ${esc(k.tk.partner)} pays ${esc(k.tk.supplier)}</strong><br><span class="quiet">${money(k.tk.amount)} with HST, not Reid's money</span></td><td class="r"><strong>−${money(k.tank)}</strong></td></tr>
         <tr><td>Reid's share (before HST)</td><td class="r">${money(k.revenue)}</td></tr>` : ""}
-      <tr><td>Parts and equipment${k.tk && k.tankCost ? `<br><span class="quiet">not counting the tank (${money(k.tankCost)}): ${esc(k.tk.supplier)} is paid by ${esc(k.tk.partner)}</span>` : ""}${k.noCost ? `<br><span class="warn">${k.noCost} line${k.noCost > 1 ? "s" : ""} with no cost</span>` : ""}</td><td class="r">−${money(k.parts)}</td></tr>
+      <tr><td>Parts and equipment${k.tk && k.tankCost ? `<br><span class="quiet">not counting the tank (${money(k.tankCost)}): ${esc(k.tk.supplier)} is paid by ${esc(k.tk.partner)}</span>` : ""}${k.noCost ? `<br><span class="warn">${k.noCost} line${k.noCost > 1 ? "s" : ""} with no cost</span>` : ""}${Number(I.cost.supplier_credit) ? `<br><span class="quiet">less ${esc(I.cost.supplier_credit_from || "supplier")} credit ${money(I.cost.supplier_credit)}</span>` : ""}</td><td class="r">−${money(k.parts)}</td></tr>
       <tr><td>Labour <input data-cost="hours" inputmode="decimal" value="${+k.hours.toFixed(2)}" aria-label="Hours on the job"> hrs × ${k.techsN} tech${k.techsN === 1 ? "" : "s"} × ${money(k.rate)}/hr
           <br><span class="quiet">${k.labSrc === "actual" ? `real time on site, from the arrived and done times (${+Number(k.A.tech_hours).toFixed(2)} tech-hours, each at their own rate)` : k.labSrc === "typed" ? `hours you typed${Number(k.A.tech_hours) > 0 ? ` · <button class="link" type="button" data-cost-hreset>use the real time on site</button>` : ""}` : "the price book's hours for these items (Labour cost box on each item's page)"}${C.techs.length ? " · " + esc(C.techs.map(t => t.name).join(", ")) : ""}</span>
           ${k.planLab ? `<br><span class="quiet">No tech pay rate or company labour rate yet, so it uses the price book's ${money(k.rate)}/hr.</span>` : ""}
@@ -21262,8 +21281,11 @@ async function openInvoice(id, keep) {
   { const sg = $("#inv-copyseg"); if (sg) { sg.classList.add("hidden"); sg.querySelectorAll("button").forEach(b => { b.onclick = null; b.setAttribute("aria-pressed", "false"); }); } }
   if (i.paid_at_store || i.store_copy_of) db.rpc("store_payments", { p_invoice: i.id }).then(({ data }) => {   // the store's payments, with its numbers
     const el = $("#inv-storepays"); if (!el || !(data || []).length) return;
-    el.innerHTML = `<div class="inv-label">${esc(data[0].store)} payments${i.paid_at_store ? " to us" : ""}</div>${data.map(x => `<div>${fmtDate(x.date)}: ${esc(x.store)} payment ${esc(x.payment_no || "")} <span class="num">${money(x.amount)}</span>
-      <div class="inv-small">${esc(x.store)} invoice ${esc(x.doc_no || "")}${x.po ? ` · PO ${esc(x.po)}` : ""}</div></div>`).join("")}`; });
+    const P = data.filter(x => x.kind !== "credit"), C = data.filter(x => x.kind === "credit");
+    el.innerHTML = (P.length ? `<div class="inv-label">${esc(P[0].store)} payments${i.paid_at_store ? " to us" : ""}</div>${P.map(x => `<div>${fmtDate(x.date)}: ${esc(x.store)} payment ${esc(x.payment_no || "")} <span class="num">${money(x.amount)}</span>
+      <div class="inv-small">${esc(x.store)} invoice ${esc(x.doc_no || "")}${x.po ? ` · PO ${esc(x.po)}` : ""}</div></div>`).join("")}` : "")
+      + (C.length ? `<div class="inv-label" style="margin-top:8px">${esc(C[0].store)} credits</div>${C.map(x => `<div>${fmtDate(x.date)}: ${esc(x.store)} credit memo ${esc(x.payment_no || "")} <span class="num">${money(x.amount)}</span>
+      <div class="inv-small">${esc(x.what || "")}${x.doc_no ? ` · ref ${esc(x.doc_no)}` : ""}</div></div>`).join("")}` : ""); });
   if ($("#inv-copyother")) {   // the other copy of a store sale
     (i.store_copy_of ? db.from("invoices").select("id, invoice_number, customers(display_name)").eq("id", i.store_copy_of) : db.from("invoices").select("id, invoice_number").eq("store_copy_of", i.id).neq("status", "void")).limit(1)
       .then(({ data }) => { const o = data?.[0], el = $("#inv-copyother"); if (o?.customers?.display_name && $("#inv-billcust")) $("#inv-billcust").textContent = o.customers.display_name;   // the homeowner, not "Costco Inc."

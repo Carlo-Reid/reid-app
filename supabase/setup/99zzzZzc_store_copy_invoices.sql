@@ -259,31 +259,7 @@ BEGIN
   RETURN v_c;
 END $function$;
 
--- the store's payments on a store sale (either copy), from its payment history: date, amount, payment #, its invoice # and PO #
-CREATE OR REPLACE FUNCTION public.store_payments(p_invoice bigint) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public' AS $function$
-DECLARE v_src bigint;
-BEGIN
-  IF public.current_staff_role() IS NULL THEN RETURN '[]'::jsonb; END IF;
-  SELECT coalesce(store_copy_of, id) INTO v_src FROM invoices WHERE id = p_invoice;
-  RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('store', p.name, 'date', x.d, 'amount', x.net, 'payment_no', x.payment_no, 'doc_no', x.doc_no, 'po', x.po) ORDER BY x.d, x.payment_no)
-    FROM (SELECT l.partner_id, l.payment_no, max(l.payment_date) d, sum(l.net) net, string_agg(DISTINCT l.doc_no, ', ') doc_no, max(l.po_no) po
-          FROM partner_statement_matches m JOIN partner_statement_lines l ON l.partner_id = m.partner_id AND l.doc_no = m.doc_no
-          WHERE m.invoice_id = v_src GROUP BY l.partner_id, l.payment_no) x JOIN partners p ON p.id = x.partner_id), '[]'::jsonb);
-END $function$;
-REVOKE EXECUTE ON FUNCTION public.store_payments(bigint) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.store_payments(bigint) TO authenticated;
-
--- the Sales page: each job the store has paid us for, with its payment # and date
-CREATE OR REPLACE FUNCTION public.store_paid_jobs() RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public' AS $function$
-BEGIN
-  IF public.current_staff_role() IS NULL THEN RETURN '[]'::jsonb; END IF;
-  RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('job_id', x.job_id, 'store', p.name, 'date', x.d, 'payment_no', x.pn, 'doc_no', x.docs, 'amount', x.net))
-    FROM (SELECT i.job_id, l.partner_id, max(l.payment_date) d, string_agg(DISTINCT l.payment_no, ', ') pn, string_agg(DISTINCT l.doc_no, ', ') docs, sum(l.net) net
-          FROM partner_statement_matches m JOIN partner_statement_lines l ON l.partner_id = m.partner_id AND l.doc_no = m.doc_no
-          JOIN invoices i ON i.id = m.invoice_id WHERE i.job_id IS NOT NULL GROUP BY i.job_id, l.partner_id) x JOIN partners p ON p.id = x.partner_id), '[]'::jsonb);
-END $function$;
-REVOKE EXECUTE ON FUNCTION public.store_paid_jobs() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.store_paid_jobs() TO authenticated;
+-- (store_payments and store_paid_jobs: see file 071)
 
 -- every invoice the store pays us for (the same ones its partner page lists)
 CREATE OR REPLACE FUNCTION public._store_copies_sync(p_partner bigint) RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
