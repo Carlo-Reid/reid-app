@@ -3726,6 +3726,12 @@ article.sales .cl-hero-range > em { font-size: calc(17px * var(--fs, 1)); opacit
 .sinv-t { font-size: 13px; } .sinv-t td { vertical-align: top; } .sinv-row { cursor: pointer; } .sinv-row:hover td { background: var(--blue-wash, #eef4fc); } .sinv-row.open td { background: var(--blue-wash, #eef4fc); }
 .sinv-hw { font-size: 11.5px; color: #5c3c00; background: #fff9db; border-radius: 6px; padding: 1px 6px; margin-top: 3px; display: inline-block; max-width: 240px; }
 .sinv-det > td { background: var(--paper); } .sinv-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; } .sinv-cols h3, .sinv-scans h3 { margin: 4px 0 6px; font-size: 15px; }
+.sinv-cmp { margin-bottom: 14px; } .sinv-cmp h3 { margin: 4px 0 6px; font-size: 15px; } .sinv-cmp-w { overflow-x: auto; }
+.sinv-ct td, .sinv-ct th { vertical-align: top; } .sinv-ct .sinv-split { border-left: 2px solid var(--steel, #8a9aa8); }
+.sinv-bad { color: #c92a2a; font-weight: 700; } .sinv-ok { color: #2b8a3e; font-weight: 700; } .sinv-row-bad { background: #fff5f5; } .sinv-miss { color: #c92a2a; text-align: center; }
+.sinv-why { min-width: 140px; font-size: 12px; } .sinv-sm { font-size: 11px; }
+.sinv-issues { background: #fff5f5; border: 1px solid #ffc9c9; border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; color: #c92a2a; } .sinv-issues ul { margin: 4px 0 0 18px; padding: 0; }
+.sinv-allok { background: #ebfbee; border: 1px solid #b2f2bb; border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; color: #2b8a3e; font-weight: 700; }
 .sinv-lt { width: 100%; font-size: 12.5px; border-collapse: collapse; } .sinv-lt th, .sinv-lt td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; } .sinv-lt .r { text-align: right; }
 .sinv-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; } .sinv-acts input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; width: 150px; margin-left: 4px; }
 .sinv-scans { margin-top: 14px; } .sinv-scan { margin: 0 0 10px; border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: 80vh; background: #fff; cursor: zoom-in; }
@@ -12294,17 +12300,73 @@ function sinvAddUp(S, slTot, all) {
   if (prev) return ` · ⚠ last month's ${money(prev.total)} + this month's lines (${money(slTot)}) = ${money(Number(prev.total) + slTot)}, not ${money(T)}. A statement page may be missing from the scan.`;
   return ` · lines add up to ${money(slTot)}`;
 }
+// the invoice's lines and the PO's lines side by side, each invoice line next to the PO line for the same part
+// (same code; else the closest description; else the same price). Whatever doesn't agree is in red.
+const sinvNorm = t => String(t || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const sinvWords = t => new Set(String(t || "").toUpperCase().replace(/(\d)\s*\/\s*(\d)/g, "$1/$2").split(/[^A-Z0-9/.]+/).filter(w => w.length > 1 || /\d/.test(w)));
+function sinvSim(a, b) { const A = sinvWords(a), B = sinvWords(b); if (!A.size || !B.size) return 0; let n = 0; A.forEach(w => { if (B.has(w)) n++; }); return n / Math.min(A.size, B.size); }
+function sinvPair(L, P) {
+  const inv = L.map((x, i) => { const q = Number(x.shipped ?? x.ordered), up = x.unit_price != null ? Number(x.unit_price) : null, dsc = Number(x.discount) || 0;
+    const each = up != null ? Math.round(up * (1 - dsc / 100) * 10000) / 10000 : null;
+    const amt = x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : each != null && !isNaN(q) ? Math.round(each * q * 100) / 100 : null;
+    return { i, x, q: isNaN(q) ? null : q, each, amt, code: sinvNorm(x.code), comp: up == null && x.net_amount == null }; });
+  const po = P.map((y, j) => ({ j, y, q: Number(y.quantity), each: Number(y.unit_cost), amt: Number(y.line_total), code: sinvNorm(y.sku) }));
+  const used = new Set(), pair = new Map();
+  const take = (a, b) => { pair.set(a.i, b.j); used.add(b.j); };
+  inv.forEach(a => { if (!a.code) return; const b = po.find(b => !used.has(b.j) && b.code && (b.code === a.code || (a.code.length > 4 && (b.code.endsWith(a.code) || a.code.endsWith(b.code))))); if (b) take(a, b); });
+  const cand = [];
+  inv.forEach(a => { if (pair.has(a.i) || a.comp) return; po.forEach(b => { if (used.has(b.j)) return;
+    const sim = sinvSim(a.x.description + " " + (a.x.code || ""), b.y.description + " " + (b.y.sku || "")), price = a.each != null && b.each > 0 && Math.abs(a.each - b.each) / b.each < 0.02;
+    const score = sim + (price ? 0.6 : 0) + (a.q != null && a.q === b.q ? 0.15 : 0); if (sim >= 0.34 || price) cand.push({ a, b, score }); }); });
+  cand.sort((u, v) => v.score - u.score).forEach(c => { if (!pair.has(c.a.i) && !used.has(c.b.j)) take(c.a, c.b); });
+  const rows = []; inv.forEach(a => rows.push({ a, b: pair.has(a.i) ? po[pair.get(a.i)] : null }));
+  po.forEach(b => { if (used.has(b.j)) return; let k = rows.length; for (let t = rows.length - 1; t >= 0; t--) if (rows[t].b && rows[t].b.j < b.j) { k = t + 1; break; } else if (rows[t].b) k = t; rows.splice(Math.min(k, rows.length), 0, { a: null, b }); });
+  return rows;
+}
+function sinvCompare(r, L, P, what) {
+  const rows = sinvPair(L, P), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol;
+  const issues = []; let ia = 0, pa = 0;
+  const bad = (ok, h) => ok ? h : `<span class="sinv-bad">${h}</span>`;
+  const body = rows.map(({ a, b }) => {
+    if (a?.amt != null) ia += a.amt; if (b) pa += b.amt || 0;
+    let why = "";
+    if (a && !b && !a.comp) { why = `Not on the PO`; issues.push(`${a.x.code || a.x.description}: on the ${what} but not on the PO${a.amt != null ? ` (${money(a.amt)})` : ""}`); }
+    else if (b && !a) { why = `Not on this ${what}`; issues.push(`${b.y.sku || b.y.description}: on the PO but not billed on this ${what}${b.amt ? ` (${money(b.amt)})` : ""}`); }
+    const qOk = !a || !b || a.q == null || Math.abs(a.q) === b.q, eOk = !a || !b || near(a.each, b.each, Math.max(0.011, b.each * 0.005)), mOk = !a || !b || near(a.amt, b.amt, 0.02);
+    if (a && b) { const w = [];
+      if (!qOk) w.push(`qty ${Math.abs(a.q)} vs ${b.q}`);
+      if (!eOk) w.push(`${money(a.each)} each vs ${money(b.each)} (${a.each > b.each ? "+" : "−"}${money(Math.abs(a.each - b.each))})`);
+      if (!mOk && (qOk && eOk)) w.push(`amount ${money(a.amt)} vs ${money(b.amt)}`);
+      if (w.length) { why = w.join(" · "); issues.push(`${a.x.code || b.y.sku}: ${why}`); } }
+    const ac = a ? `<td>${esc(a.x.code || "")}</td><td>${esc(a.x.description || "")}${a.x.backorder ? ` <span class="quiet">(${a.x.backorder} back-ordered)</span>` : ""}</td><td class="r">${a.q == null ? "" : bad(qOk, a.q)}</td>
+        <td class="r">${a.each == null ? (a.comp ? `<span class="quiet">in kit</span>` : "") : bad(eOk, money(a.each))}${a.x.discount && a.x.unit_price != null ? `<div class="quiet sinv-sm">${money(a.x.unit_price)} −${esc(a.x.discount)}%</div>` : ""}</td>
+        <td class="r">${a.amt == null ? "" : bad(mOk, money(a.amt))}</td>` : `<td colspan="5" class="sinv-miss">—</td>`;
+    const pc = b ? `<td class="sinv-split">${esc(b.y.sku || "")}</td><td>${esc(b.y.description || "")}</td><td class="r">${bad(qOk, b.q)}</td><td class="r">${bad(eOk, money(b.each))}</td><td class="r">${bad(mOk, money(b.amt))}</td>`
+      : `<td colspan="5" class="sinv-miss sinv-split">—</td>`;
+    return `<tr class="${why ? "sinv-row-bad" : a && b ? "sinv-row-ok" : ""}">${ac}${pc}<td class="sinv-why">${why ? `<span class="sinv-bad">${esc(why)}</span>` : a && b ? `<span class="sinv-ok">✓</span>` : ""}</td></tr>`; }).join("");
+  const sub = r.subtotal != null ? Number(r.subtotal) : Math.round(ia * 100) / 100, poT = Number(r.po_amount || pa);
+  if (Math.abs(Math.abs(sub) - poT) > 0.02) issues.unshift(`Before tax: ${what} ${money(sub)} vs PO ${money(poT)} (${Math.abs(sub) > poT ? "over" : "under"} by ${money(Math.abs(Math.abs(sub) - poT))})`);
+  return `<section class="sinv-cmp"><h3>${what[0].toUpperCase() + what.slice(1)} ${esc(r.number)} next to PO ${esc(r.po_number || "")}</h3>
+    ${issues.length ? `<div class="sinv-issues"><b>What doesn't match:</b><ul>${issues.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : `<div class="sinv-allok">✓ Every line matches the PO.</div>`}
+    <div class="sinv-cmp-w"><table class="sinv-lt sinv-ct"><thead><tr><th colspan="5">On the ${what}</th><th colspan="5" class="sinv-split">On the PO</th><th></th></tr>
+      <tr><th>Code</th><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th><th class="sinv-split">Code</th><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th><th>Difference</th></tr></thead>
+      <tbody>${body}</tbody>
+      <tfoot><tr><td colspan="4" class="r"><b>Before tax</b></td><td class="r"><b>${bad(Math.abs(Math.abs(sub) - poT) <= 0.02, money(sub))}</b></td><td colspan="4" class="r sinv-split"></td><td class="r"><b>${bad(Math.abs(Math.abs(sub) - poT) <= 0.02, money(poT))}</b></td><td></td></tr></tfoot></table></div>
+    <p class="quiet">"Each" on the ${what} is the price after Boone's discount. Lines are paired by part code, else by the closest description or the same price.</p></section>`;
+}
 function sinvDetail(r, edit) {
   const d = SINV.det.get(r.id); if (!d) { sinvLoadDet(r.id); return `<p class="quiet">Loading…</p>`; }
   const L = d.lines || [], P = d.po_lines || [];
   const lt = (rows, inv) => rows.length ? `<table class="sinv-lt"><thead><tr><th>${inv ? "Code" : "Code"}</th><th>What</th><th class="r">Qty</th><th class="r">Each</th>${inv ? `<th class="r">Disc.</th>` : ""}<th class="r">Amount</th></tr></thead><tbody>
     ${rows.map(x => inv ? `<tr><td>${esc(x.code || "")}</td><td>${esc(x.description || "")}</td><td class="r">${x.shipped ?? x.ordered ?? ""}${x.backorder ? ` <span class="quiet">(${x.backorder} back-ordered)</span>` : ""}</td><td class="r">${x.unit_price != null ? money(x.unit_price) : ""}</td><td class="r">${esc(x.discount ?? "")}${x.discount ? "%" : ""}</td><td class="r">${x.net_amount != null && !isNaN(Number(x.net_amount)) ? money(x.net_amount) : `<span class="quiet">${x.unit_price != null && x.shipped != null ? money(Math.round(Number(x.unit_price) * (1 - (Number(x.discount) || 0) / 100) * Number(x.shipped) * 100) / 100) : ""}</span>`}</td></tr>`
       : `<tr><td>${esc(x.sku || "")}</td><td>${esc(x.description || "")}</td><td class="r">${x.quantity}</td><td class="r">${money(x.unit_cost)}</td><td class="r">${money(x.line_total)}</td></tr>`).join("")}</tbody></table>` : `<p class="quiet">${inv ? "No lines read from the copy." : "No PO lines."}</p>`;
+  const what = esc({ credit: "credit", charge: "charge", return: "return ticket" }[r.doc_type] || "invoice");
   return `<div class="sinv-d">
-    <div class="sinv-cols"><section><h3>On the ${esc({ credit: "credit", charge: "charge", return: "return ticket" }[r.doc_type] || "invoice")} ${esc(r.number)}</h3>${lt(L, true)}
+    ${r.po_id && (L.length || P.length) ? sinvCompare(r, L, P, what) : ""}
+    <div class="sinv-cols"><section><h3>On the ${what} ${esc(r.number)}</h3>${r.po_id && (L.length || P.length) ? `<p class="quiet">Its lines are lined up with the PO's above.</p>` : lt(L, true)}
       <p class="quiet">${L.some(x => x.net_amount == null) ? "Packing slips show no dollar amounts: grey amounts are worked out from the price and discount. " : ""}${r.subtotal != null ? `Subtotal ${money(r.subtotal)}${r.hst != null ? ` · HST ${money(r.hst)}` : ""} · ` : ""}Total on the statement ${money(r.total)}</p>
       ${r.handwriting ? `<p><b>Handwritten:</b> ${esc(r.handwriting)}</p>` : ""}${r.read_notes ? `<p class="quiet"><b>Reading the scan:</b> ${esc(r.read_notes)}</p>` : ""}</section>
-    <section><h3>${r.po_number ? `On PO ${esc(r.po_number)}` : "PO"}</h3>${r.po_id ? lt(P, false) + `<p class="quiet">PO total before tax ${money(r.po_amount || 0)}${r.po_status ? ` · ${esc(r.po_status)}` : ""}</p>` : `<p class="quiet">${r.po_text ? `No PO ${esc(r.po_text)} in the app.` : "No PO number on it."}</p>`}
+    <section><h3>${r.po_number ? `On PO ${esc(r.po_number)}` : "PO"}</h3>${r.po_id ? (L.length || P.length ? "" : lt(P, false)) + `<p class="quiet">PO total before tax ${money(r.po_amount || 0)}${r.po_status ? ` · ${esc(r.po_status)}` : ""}</p>` : `<p class="quiet">${r.po_text ? `No PO ${esc(r.po_text)} in the app.` : "No PO number on it."}</p>`}
       ${edit ? `<div class="sinv-acts"><label>Match to PO <input id="sinv-po-${r.id}" placeholder="PO number" value="${esc(r.po_by_hand ? r.po_number : "")}"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button>${r.po_by_hand ? `<button class="link" type="button" data-sinv-unpo="${r.id}">Use the printed PO</button>` : ""}
         <label>Note <input id="sinv-note-${r.id}" value="${esc(r.match_note || "")}" placeholder="e.g. split over 2 invoices"></label><button class="btn quiet-btn" type="button" data-sinv-note="${r.id}">Save note</button>
         ${r.match_state === "ok" ? `<button class="btn quiet-btn" type="button" data-sinv-ok="${r.id}" data-v="">Undo checked</button>` : `<button class="btn" type="button" data-sinv-ok="${r.id}" data-v="ok">✓ Mark checked</button>`}</div>` : ""}</section></div>
