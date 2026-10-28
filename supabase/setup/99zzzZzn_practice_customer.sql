@@ -25,7 +25,7 @@ BEGIN
   IF public.current_staff_role() IS NULL OR v_me IS NULL THEN RAISE EXCEPTION 'Please sign in again'; END IF;
   SELECT id INTO v_id FROM customers WHERE practice_user_id = v_me;
   IF v_id IS NOT NULL THEN RETURN v_id; END IF;
-  v_name := coalesce(nullif(split_part(btrim(public._emp_name(public._my_employee())), ' ', 1), ''), split_part((SELECT email FROM app_users WHERE id = v_me), '@', 1), 'My');
+  v_name := coalesce(nullif(split_part(btrim(public._emp_name(public._my_employee())), ' ', 1), ''), split_part((SELECT login_email FROM app_users WHERE id = v_me), '@', 1), 'My');
   INSERT INTO customers (customer_number, customer_type, display_name, status, became_customer_at, lead_source, do_not_contact, marketing_opt_in, practice_user_id, notes)
   VALUES ('practice', 'residential', 'Practice Customer (' || v_name || ')', 'active', now(), 'Practice', true, false, v_me, 'Practice customer: only you can see it. Nothing done here is real.')
   RETURNING * INTO c;
