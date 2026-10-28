@@ -5817,7 +5817,7 @@ function renderFile() {
   if (current.c && NAV.stack.length && NAV.stack[NAV.stack.length - 1].hash === "#customer=" + current.c.id) nameCurrentPage(current.c.display_name);
   if (current.pendingNotes) { current.notes = current.pendingNotes; current.pendingNotes = null; }
   const { c, notes, plans, jobs, invoices, estimates, equipment, loc } = current;
-  const owed = invoices.reduce((s, i) => s + (i.status !== "void" && !i.not_owed_reason && i.balance_due > 0 ? Number(i.balance_due) : 0), 0);
+  const owed = invoices.reduce((s, i) => s + (i.status !== "void" && !i.not_owed_reason && !i.paid_at_store && i.balance_due > 0 ? Number(i.balance_due) : 0), 0);
   const flags = [];
   (c.customer_flags || []).filter(f => !f.resolved_at).forEach(f =>
     flags.push(`<span class="flag ${f.flag_type === "do_not_service" || f.flag_type === "declined_payment" ? "red" : "amber"}">${esc(f.message)}</span>`));
@@ -14576,6 +14576,7 @@ async function loadPartners() {
   if (PP.editData && PP.editData.id !== PP.store) { PP.editing = false; PP.editData = null; }   // Vista: payments only
   if (!PP.store) { $("#main").innerHTML = `<div class="empty"><div><h2>No stores set up</h2>No partner where the customer pays the store.</div></div>`; return; }
   const vis = !!PP.stores.find(x => x.id === PP.store)?.pays_us;
+  if (PP.stores.find(x => x.id === PP.store)?.pay_method === "discount_fee") await db.rpc("store_copies_sync", { p_partner: PP.store });   // the store's copies (-C) follow every change
   const [l, pays, sps] = await Promise.all([db.rpc("partner_ledger", { p_partner: PP.store, p_show: PP.show, p_from: null, p_to: null }), db.rpc("partner_payments", { p_partner: PP.store }),
     vis ? db.rpc("partner_supplier_pays", { p_partner: PP.store, p_show: PP.spAll ? "all" : "open" }) : null,
     PP.view === "jobs" ? loadPartnerJobs() : null]);
@@ -15749,7 +15750,7 @@ async function costPlan(lines) {
 // Job costing: what the job cost, what the store keeps, and the profit
 function costingCalc(I) {
   const C = I.cost, n = v => Number(v) || 0, sale = n(I.subtotal), total = n(I.total);
-  const st = C.store, cut = st ? (st.pay ? n(st.pay.keeps) : Math.round(total * n(st.cut_pct)) / 100) : 0, card = st ? (st.pay ? n(st.pay.card) : n(st.card_fee)) : 0;
+  const st = C.store && !C.store.pay?.copy ? C.store : null, cut = st ? (st.pay ? n(st.pay.keeps) : Math.round(total * n(st.cut_pct)) / 100) : 0, card = st ? (st.pay ? n(st.pay.card) : n(st.card_fee)) : 0;
   // a partner (Vista) pays our supplier for the tank: neither the tank's cost nor that money is ours
   const tk = C.partner_tank, tank = tk ? Math.round(n(tk.amount) / (1 + n(C.hst ?? 13) / 100) * 100) / 100 : 0;
   const tankCost = tk ? C.lines.filter(l => l.equip).reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) : 0;
@@ -21148,7 +21149,8 @@ async function openInvoice(id, keep) {
   const jp = i.jobs?.partners?.branding_logo_url || i.jobs?.partners?.branding_name ? i.jobs.partners : null;
   const brand = i.look === "reid" ? null : i.look === "store" && i.look_partner ? i.look_partner : jp;
   const coName = c.company_name || "Reid Heating & Cooling";
-  const bp = i.bill_partner?.bill_to_ok ? i.bill_partner : null;   // billed to a partner who pays us (Vista)
+  const bp = i.bill_partner?.bill_to_ok || (i.store_copy_of && i.bill_partner) ? i.bill_partner : null;   // billed to a partner who pays us (Vista), or the store's copy (-C) of a Costco sale
+  const storeName = brand?.branding_name || brand?.name || i.bill_partner?.name || "the store";
   const bpAddr = bp ? [bp.street, [bp.city, bp.province, bp.postal_code].filter(Boolean).join(", ")].filter(Boolean) : [];
   $("#inv-paper").innerHTML = `
     <div class="inv-top">
@@ -21186,9 +21188,10 @@ async function openInvoice(id, keep) {
         <tr><td>Subtotal</td><td class="r num">${money(subtotal)}</td></tr>
         <tr><td>HST</td><td class="r num">${money(tax)}</td></tr>
         <tr class="inv-total"><td>Total</td><td class="r num">${money(total)}</td></tr>
+        ${i.paid_at_store ? `<tr><td>Paid at ${esc(storeName)}</td><td class="r num">−${money(total)}</td></tr>` : ""}
         ${paid ? `<tr><td>Paid</td><td class="r num">−${money(paid)}</td></tr>` : ""}
         ${bp && billR.data?.supplier_pay ? `<tr><td>Tank paid by ${esc(bp.name)} to ${esc(billR.data.supplier_pay.supplier)}</td><td class="r num">−${money(billR.data.supplier_pay.amount)}</td></tr>` : ""}
-        <tr class="inv-balance"><td>${bp ? "Balance owing by " + esc(bp.name) : "Balance owing"}</td><td class="r num">${i.not_owed_reason && balance > 0.004 ? `<s>${money(balance)}</s> ${money(0)}` : money(bp && billR.data?.supplier_pay ? Math.max(balance - Number(billR.data.supplier_pay.amount), 0) : balance)}</td></tr>
+        <tr class="inv-balance"><td>${bp ? "Balance owing by " + esc(bp.name) : "Balance owing"}</td><td class="r num">${i.paid_at_store ? money(0) : i.not_owed_reason && balance > 0.004 ? `<s>${money(balance)}</s> ${money(0)}` : money(bp && billR.data?.supplier_pay ? Math.max(balance - Number(billR.data.supplier_pay.amount), 0) : balance)}</td></tr>
       </table>
     </div>
     ${balance > 0.004 && i.status !== "void" && !brand?.customer_pays_partner && !bp ? `<div class="inv-owed no-print">${i.not_owed_reason
@@ -21196,7 +21199,8 @@ async function openInvoice(id, keep) {
       : can("invoices.adjust") ? `<span>Shouldn't this be owing?</span> ${["Paid monthly", "Paid elsewhere", "Written off"].map(r => `<button class="chip small" type="button" data-not-owed="${r}">${r}</button>`).join("")}
           <button class="chip small" type="button" data-not-owed="">Other…</button>` : ""}
       <span class="staff-msg" id="owed-msg" role="status"></span></div>` : ""}
-    ${brand && brand.customer_pays_partner && i.status !== "void" && Number(balance) > 0.004 ? `<div class="inv-paystore"><strong>Please pay ${esc(money(total))} at ${esc(brand.branding_name || brand.name)}.</strong> Bring this invoice with you. The installation is booked once ${esc(brand.branding_name || brand.name)} lets us know it's paid.</div>` : ""}
+    ${i.paid_at_store || i.store_copy_of ? `<div class="inv-note no-print" id="inv-copylink">${i.store_copy_of ? `<strong>${esc(storeName)}'s copy:</strong> what ${esc(storeName)} pays us for this sale. Our price, less ${esc(storeName)}'s % off and fee. This is the one used for accounting, HST, commissions and payroll.` : `<strong>Customer's copy:</strong> the customer paid ${esc(storeName)} in full. What ${esc(storeName)} pays us is on ${esc(storeName)}'s copy.`} <span id="inv-copyother"></span></div>` : ""}
+    ${brand && brand.customer_pays_partner && i.status !== "void" && Number(balance) > 0.004 && !i.paid_at_store && !i.store_copy_of ? `<div class="inv-paystore"><strong>Please pay ${esc(money(total))} at ${esc(brand.branding_name || brand.name)}.</strong> Bring this invoice with you. The installation is booked once ${esc(brand.branding_name || brand.name)} lets us know it's paid.</div>` : ""}
     ${i.notes ? `<div class="inv-note">${esc(i.notes)}</div>` : ""}
     ${i.signature_png ? `<div class="inv-sig"><div class="inv-label">Customer signature</div><img alt="Signature" src="data:image/png;base64,${i.signature_png}"><div class="inv-small">${esc(i.signer_name || "")} · ${fmtDate((i.signed_at || "").slice(0, 10))}</div></div>` : ""}
     ${officeInv() && i.status !== "void" && (looksR.data || []).length ? `<div class="no-print inv-from">
@@ -21251,6 +21255,10 @@ async function openInvoice(id, keep) {
   cb.onclick = () => { INV_COST_OPEN = !INV_COST_OPEN; try { sessionStorage.setItem("invCostOpen", INV_COST_OPEN ? "1" : "0"); } catch (e) {} showInvoiceCosting(i); };
   showInvoiceCosting(i);
   if (INV_EMAIL_CUR !== i.id) { INV_EMAIL_OPEN = false; INV_EMAIL_DRAFT = {}; } INV_EMAIL_CUR = i.id;
+  if ($("#inv-copyother")) {   // the other copy of a store sale
+    (i.store_copy_of ? db.from("invoices").select("id, invoice_number").eq("id", i.store_copy_of) : db.from("invoices").select("id, invoice_number").eq("store_copy_of", i.id).neq("status", "void")).limit(1)
+      .then(({ data }) => { const o = data?.[0], el = $("#inv-copyother"); if (o && el) { el.innerHTML = `<button class="link" type="button">Open ${i.store_copy_of ? "the customer's copy" : "the store's copy"} (${esc(o.invoice_number)}) ›</button>`; el.firstChild.addEventListener("click", () => openInvoice(o.id)); } });
+  }
   { const b = $("#inv-aplbtn"); if (b) { b.classList.toggle("hidden", !officeInv()); b.onclick = () => addToPartnerList({ customer: i.customer_id, custName: cust.display_name || "", job: i.job_id, jobNumber: i.jobs?.job_number || "", invoice: i.id, invNumber: i.invoice_number, partner: i.bill_to_partner_id || null }); } }
   invEmailSetup({ id: i.id, void: i.status === "void", number: i.invoice_number, date: i.invoice_date, jobNumber: i.jobs?.job_number, custName: cust.display_name || "",
     partner: bp ? bp.name : null, address: addr.join(", "), account: i.partner_account, approval: i.authorization_number,
@@ -21643,7 +21651,7 @@ function toggleJob(row) {
 function invoicesHtml(list) {
   return `<div class="scroll-box" tabindex="0" aria-label="Invoices"><table><thead><tr><th>Date</th><th>Invoice</th><th class="r">Total</th><th class="r">Owing</th><th>Status</th></tr></thead><tbody>
     ${list.map((i, n) => `<tr class="inv-row" tabindex="0" data-invoice="${i.id}" title="Open invoice"><td class="num">${fmtDate(i.invoice_date)}</td><td class="num"><span class="inv-link">${esc(i.invoice_number)}</span></td>
-      <td class="r num">${money(i.total)}</td><td class="r num">${i.balance_due > 0.004 ? (i.not_owed_reason ? `<span class="not-owed" title="${esc(i.not_owed_reason)}">Not owed</span>` : money(i.balance_due)) : ""}</td><td>${badge(i.status)}</td></tr>`).join("")}
+      <td class="r num">${money(i.total)}</td><td class="r num">${i.paid_at_store ? `<span class="quiet">Paid at the store</span>` : i.balance_due > 0.004 ? (i.not_owed_reason ? `<span class="not-owed" title="${esc(i.not_owed_reason)}">Not owed</span>` : money(i.balance_due)) : ""}</td><td>${badge(i.status)}</td></tr>`).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} invoices.</div>` : ""}`;
 }
 
