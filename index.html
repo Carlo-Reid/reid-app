@@ -223,6 +223,19 @@
   .gd-none { margin-top: 6px; } .gd-miss { margin: 16px 0 8px; font-weight: 650; } .gd-over { display: block; margin-top: 16px; }
   .gd-help h2 { color: var(--red, #c92a2a); } .gd-sheet { border-collapse: collapse; margin: 14px 0; min-width: 320px; } .gd-sheet th, .gd-sheet td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; font-size: 17px; } .gd-sheet th { background: var(--blue-wash, #eef4fb); }
   .gd-btns { display: flex; gap: 16px; align-items: center; }
+  .dsp-range { margin-right: 6px; }
+  .dr-wrap { overflow: auto; max-height: calc(100vh - 210px); border: 1px solid var(--line); border-radius: 10px; }
+  .dr-grid { border-collapse: separate; border-spacing: 0; font-size: calc(13px * var(--fs, 1)); min-width: 100%; }
+  .dr-grid th, .dr-grid td { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 4px 5px; vertical-align: top; background: var(--paper, #fff); }
+  .dr-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--blue-wash, #eef4fb); text-align: center; white-space: nowrap; font-weight: 700; }
+  .dr-grid .dr-tech { position: sticky; left: 0; z-index: 1; text-align: left; min-width: 130px; max-width: 170px; background: var(--paper-2, #f7f9fb); }
+  .dr-grid thead .dr-tech { z-index: 3; }
+  .dr-week .dr-cell { min-width: 150px; } .dr-month .dr-cell { min-width: 52px; text-align: center; }
+  .dr-cell { cursor: pointer; } .dr-cell:hover { background: var(--blue-wash, #eef4fb); }
+  .dr-grid .dr-today { box-shadow: inset 0 0 0 2px var(--blue, #1864ab); } .dr-grid th.dr-wkend { color: var(--steel); }
+  .dr-call { display: flex; flex-direction: column; border-left: 3px solid var(--blue, #1864ab); background: var(--blue-wash, #eef4fb); border-radius: 6px; padding: 3px 6px; margin-bottom: 4px; line-height: 1.25; }
+  .dr-call.dr-completed { border-left-color: var(--green, #2b8a3e); background: #ebfbee; } .dr-call.dr-on_site, .dr-call.dr-en_route { border-left-color: #e8590c; background: #fff4e6; }
+  .dr-n b { font-size: 15px; } .dr-none th { color: var(--red, #c92a2a); }
   .gd-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 16px; } .gd-chip { font-size: 16px; padding: 9px 14px; } .gd-clash { opacity: .6; }
   .gd-days { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 10px 0; }
   .gd-day { font: inherit; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper, #fff); color: var(--ink); cursor: pointer; min-height: 70px; }
@@ -9151,7 +9164,7 @@ async function openNewCustomer(prefill = {}) {
 let DSP = (() => { try { return JSON.parse(localStorage.getItem("reid.dispatch") || "null"); } catch { return null; } })() || { all: false, waitOpen: true };
 DSP.date = ymd(new Date()); DSP.sel = null; DSP.rows = []; DSP.waiting = [];
 try { DSP.mapTechNames = localStorage.getItem("reid.dmapTechNames") !== "0"; } catch {}
-const saveDsp = () => { try { localStorage.setItem("reid.dispatch", JSON.stringify({ all: DSP.all, waitOpen: DSP.waitOpen })); } catch {} };
+const saveDsp = () => { try { localStorage.setItem("reid.dispatch", JSON.stringify({ all: DSP.all, waitOpen: DSP.waitOpen, range: DSP.range || "day" })); } catch {} };
 /* ---------------- dispatch map ---------------- */
 // A map on the dispatch board (open / close), each call coloured by its postal code area (set on the Map colours page) or by tech.
 const MAPZ = { zones: null, areas: null, can: false };
@@ -10387,7 +10400,70 @@ async function openDispatch(date, sales) {
   startCallsLive();
   await loadDispatch();
 }
+/* ---------- the board by Day, Week or Month: every tech's calls, a row per tech and a column per day ---------- */
+const dspRangeSeg = () => `<span class="seg dsp-range" role="group" aria-label="Show the board by">${[["day", "Day"], ["week", "Week"], ["month", "Month"]].map(([k, t]) =>
+  `<button type="button" data-dsp-range="${k}" aria-pressed="${(DSP.range || "day") === k}">${t}</button>`).join("")}</span>`;
+function dspRangeWire() {
+  document.querySelectorAll("[data-dsp-range]").forEach(b => b.addEventListener("click", () => { DSP.range = b.dataset.dspRange; DSP.sel = null; saveDsp(); loadDispatch(); }));
+}
+function dspRangeDates() {
+  const d0 = new Date(DSP.date + "T12:00:00");
+  if (DSP.range === "month") { const a = new Date(d0.getFullYear(), d0.getMonth(), 1, 12), b = new Date(d0.getFullYear(), d0.getMonth() + 1, 0, 12); return [a, b]; }
+  const wd = (d0.getDay() + 6) % 7, a = addDays(d0, -wd); return [a, addDays(a, 6)];   // Monday to Sunday
+}
+async function loadDspRange() {
+  const [a, b] = dspRangeDates(), from = ymd(a), to = ymd(b), key = DSP.range + from;
+  if (!document.querySelector(".dsp")) $("#main").innerHTML = `<div class="loading">Loading the board…</div>`;
+  const { data, error } = await db.rpc("dispatch_range", { p_from: from, p_to: to });
+  if (DSP.range === "day" || ymd(dspRangeDates()[0]) !== from) return;
+  if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the board</h2>${esc(/PGRST202|could not find/i.test(error.message || "") ? "Almost ready: the database part is being set up. Try again in a few minutes." : rpcErr(error))}</div></div>`; return; }
+  DSP.rangeRows = data || []; DSP.rangeKey = key;
+  renderDspRange();
+}
+function renderDspRange() {
+  document.body.classList.remove("dsp-mapmode");
+  const [a, b] = dspRangeDates(), days = []; for (let d = new Date(a); d <= b; d = addDays(d, 1)) days.push(ymd(d));
+  const rows = DSP.rangeRows || [], today = ymd(new Date()), month = DSP.range === "month";
+  const onRange = new Set(rows.flatMap(r => (r.techs || []).map(t => t.id)));
+  const techs = (BOOK.techs || []).filter(t => DSP.all || t.recent || onRange.has(t.id));
+  rows.flatMap(r => r.techs || []).forEach(t => { if (!techs.some(x => x.id === t.id)) techs.push({ id: t.id, name: t.name }); });
+  const of = (id, d) => rows.filter(r => r.d === d && (id == null ? !(r.techs || []).length : (r.techs || []).some(t => t.id === id)));
+  const busy = id => rows.filter(r => (r.techs || []).some(t => t.id === id)).length;
+  techs.sort((x, y) => (busy(y.id) > 0) - (busy(x.id) > 0) || x.name.localeCompare(y.name));
+  const tm = x => { if (!x) return ""; const d = new Date(x); return d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\s?([ap])\.?m\.?/i, "$1").replace(":00", ""); };
+  const hrs = list => list.reduce((s, r) => s + (Number(r.duration) || 60), 0) / 60;
+  const cell = (id, d) => { const cs = of(id, d); if (!cs.length) return `<td class="dr-cell ${d === today ? "dr-today" : ""}" data-dr-day="${d}"></td>`;
+    return `<td class="dr-cell ${d === today ? "dr-today" : ""}" data-dr-day="${d}" title="Open ${esc(dayText(d))}">${month
+      ? `<div class="dr-n"><b>${cs.length}</b> call${cs.length === 1 ? "" : "s"}</div><div class="quiet">${+hrs(cs).toFixed(1)} h</div>`
+      : cs.map(r => `<div class="dr-call dr-${esc(r.status)}"><b>${esc(r.arrival_start ? tm(r.arrival_start) + (r.arrival_end ? "–" + tm(r.arrival_end) : "") : "Any time")}</b>
+          <span>${esc(String(r.customer_name || "").slice(0, 24))}</span><span class="quiet">${esc([r.job_type, r.city].filter(Boolean).join(" · "))}</span></div>`).join("")}</td>`; };
+  const head = d => { const dt = new Date(d + "T12:00:00"); return `<th class="${d === today ? "dr-today" : ""} ${dt.getDay() % 6 === 0 ? "dr-wkend" : ""}">${month ? `${dt.toLocaleDateString("en-CA", { weekday: "narrow" })}<br>${dt.getDate()}` : esc(dt.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }))}</th>`; };
+  const title = month ? a.toLocaleDateString("en-CA", { month: "long", year: "numeric" }) : `Week of ${a.toLocaleDateString("en-CA", { month: "long", day: "numeric" })}`;
+  const none = days.some(d => of(null, d).length);
+  dspTopBar?.();
+  $("#main").innerHTML = `<article class="dsp dsp-range-v">
+    <div class="dsp-bar">${dspRangeSeg()}
+      <button class="dsp-today ${days.includes(today) ? "is-today" : "not-today"}" type="button" data-dr-today>Today</button>
+      <div class="dsp-day"><button class="btn quiet-btn" type="button" data-dr-move="-1" aria-label="Back">‹</button>
+        <input type="date" id="dr-date" value="${DSP.date}" aria-label="Day"><button class="btn quiet-btn" type="button" data-dr-move="1" aria-label="Forward">›</button>
+        <strong class="dsp-title">${esc(title)}</strong></div>
+      <div class="dsp-sum quiet">${callsWord(rows.length)} · <label class="dsp-all"><input type="checkbox" id="dr-all" ${DSP.all ? "checked" : ""}> Show every tech</label></div>
+    </div>
+    <p class="quiet" style="margin:4px 0 8px">Click a day to open it on the board.</p>
+    <div class="dr-wrap"><table class="dr-grid ${month ? "dr-month" : "dr-week"}"><thead><tr><th class="dr-tech">Tech</th>${days.map(head).join("")}</tr></thead><tbody>
+      ${techs.map(t => `<tr><th class="dr-tech">${esc(t.name)}<div class="quiet">${callsWord(rows.filter(r => (r.techs || []).some(x => x.id === t.id)).length)}</div></th>${days.map(d => cell(t.id, d)).join("")}</tr>`).join("")}
+      ${none ? `<tr class="dr-none"><th class="dr-tech">No tech yet</th>${days.map(d => cell(null, d)).join("")}</tr>` : ""}
+    </tbody></table></div></article>`;
+  dspRangeWire();
+  const move = n => { const d = new Date(DSP.date + "T12:00:00"); if (month) { d.setDate(1); d.setMonth(d.getMonth() + n); } else d.setDate(d.getDate() + 7 * n); DSP.date = ymd(d); loadDspRange(); };
+  document.querySelectorAll("[data-dr-move]").forEach(x => x.addEventListener("click", () => move(Number(x.dataset.drMove))));
+  $("[data-dr-today]")?.addEventListener("click", () => { DSP.date = today; loadDspRange(); });
+  $("#dr-date")?.addEventListener("change", e => { if (e.target.value) { DSP.date = e.target.value; loadDspRange(); } });
+  $("#dr-all")?.addEventListener("change", e => { DSP.all = e.target.checked; saveDsp(); renderDspRange(); });
+  document.querySelectorAll("[data-dr-day]").forEach(c => c.addEventListener("click", () => { DSP.date = c.dataset.drDay; DSP.range = "day"; DSP.sel = null; saveDsp(); loadDispatch(); }));
+}
 async function loadDispatch() {
+  if (DSP.range === "week" || DSP.range === "month") return loadDspRange();   // the board by week or month
   const d = DSP.date;
   const [day, wait] = await Promise.all([db.rpc("dispatch_day", { p_date: d }), db.rpc("dispatch_day", { p_date: null }), loadMapZones().catch(() => {}), loadHoods(false, true).catch(() => {}), loadTowns().catch(() => {}), loadComms().catch(() => {})]);
   if (!document.querySelector(".dsp, .loading") || DSP.date !== d) return;
@@ -10818,6 +10894,7 @@ function renderDispatch() {
   dspTopBar();
   $("#main").innerHTML = `<article class="dsp ${DSP.map ? "dsp-split" : ""}">${DSP.map ? `<div class="dsp-right">` : ""}
     <div class="dsp-bar">
+      ${dspRangeSeg()}
       <button class="dsp-today ${isToday ? "is-today" : "not-today"}" type="button" data-dtoday title="${isToday ? "You're on today" : "Go back to today"}" aria-pressed="${isToday}">Today</button>
       <div class="dsp-day">
         <button class="btn quiet-btn" type="button" data-dday="-1" aria-label="Day before">‹</button>
@@ -10857,6 +10934,7 @@ function renderDispatch() {
   if (DSP.sel && dspCall(DSP.sel)) renderDspPanel(); else DSP.sel = null;
   document.querySelectorAll("[data-dday]").forEach(b => b.addEventListener("click", () => { DSP.date = ymd(addDays(new Date(DSP.date + "T12:00:00"), Number(b.dataset.dday))); DSP.sel = null; loadDispatch(); }));
   $("[data-dtoday]")?.addEventListener("click", () => { if (DSP.date === ymd(new Date())) return; DSP.date = ymd(new Date()); DSP.sel = null; loadDispatch(); });
+  dspRangeWire();
   $("#dsp-date").addEventListener("change", e => { if (e.target.value) { DSP.date = e.target.value; DSP.sel = null; loadDispatch(); } });
   $("#dsp-all").addEventListener("change", e => { DSP.all = e.target.checked; saveDsp(); renderDispatch(); });
   $(".dsp-legend-d")?.addEventListener("toggle", e => { DSP.legendOpen = e.currentTarget.open; try { localStorage.setItem("reid.dspLegend", DSP.legendOpen ? "1" : ""); } catch {} });
