@@ -15793,17 +15793,20 @@ function costingCalc(I) {
   const st = C.store && !C.store.pay?.copy ? C.store : null, cut = st ? (st.pay ? n(st.pay.keeps) : Math.round(total * n(st.cut_pct)) / 100) : 0, card = st ? (st.pay ? n(st.pay.card) : n(st.card_fee)) : 0;
   // a partner (Vista) pays our supplier for the tank: neither the tank's cost nor that money is ours
   const tk = C.partner_tank, tank = tk ? Math.round(n(tk.amount) / (1 + n(C.hst ?? 13) / 100) * 100) / 100 : 0;
-  const tankCost = tk ? C.lines.filter(l => l.equip).reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) : 0;
+  const L = C.lines.filter(l => !l.skip);   // lines taken out of the costing (the X) don't count
+  const tankCost = tk ? L.filter(l => l.equip).reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) : 0;
   const revenue = st?.pay?.method === "discount_fee" ? (st.pay.from_statement ? n(st.pay.pays) / (1 + n(C.hst ?? 13) / 100) : n(st.pay.after) - n(st.pay.fee) - card) - tank : sale - cut - card - tank;   // Costco way: our price less the % off and the fee, before HST
-  const parts = C.lines.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) - tankCost + n(C.actual?.stock_cost) - n(C.supplier_credit);   // less the supplier's credit (Lennox on Costco sales)
-  const noCost = C.lines.filter(l => n(l.unit_price) > 0 && (l.unit_cost == null || n(l.unit_cost) === 0)).length;
+  const parts = L.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) - tankCost + n(C.actual?.stock_cost) - n(C.supplier_credit);   // less the supplier's credit (Lennox on Costco sales)
+  const noCost = L.filter(l => n(l.unit_price) > 0 && (l.unit_cost == null || n(l.unit_cost) === 0)).length;
   // labour: hours on the job × techs × cost per hour. Hours are the real time on site (each visit's arrived to done) once there
   // is some, or what you typed, or the price book's hours. A tech with no pay rate set counts at the company rate, or the price book's rate.
   const A = C.actual || {}, P = C.plan, actual = Number(A.tech_hours) > 0 && C.hours == null;
   const rates = C.techs.map(t => n(t.rate)).filter(r => r > 0);
   const rate0 = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : n(C.labour_rate);
   const planRate = P && P.hrs > 0 ? P.labour / P.hrs : 0, rate = rate0 > 0 ? rate0 : planRate, planLab = !(rate0 > 0) && planRate > 0;
-  const techsN = C.techs.length || n(C.est_techs) || 1;
+  const onSite = actual ? new Set((A.visits || []).flatMap(v => v.techs.map(t => t.name))).size : 0;
+  const estN = n(C.est_techs) || 1;   // the price book sets the estimate: its hours and its number of techs
+  const techsN = onSite || (C.hours != null ? C.techs.length || estN : estN);
   const hours = C.hours != null ? n(C.hours) : actual ? n(A.crew_hours) : n(C.est_hours);
   const labour = actual ? (A.visits || []).reduce((a, v) => a + (v.techs.length ? v.techs : [{}]).reduce((b, t) => b + n(v.hours) * (n(t.rate) || n(C.labour_rate) || planRate), 0), 0)
     : hours * techsN * rate;
@@ -15812,8 +15815,8 @@ function costingCalc(I) {
   const comm = S ? (S.amount != null ? n(S.amount) : (S.sale_amount != null ? n(S.sale_amount) : sale) * n(S.pct) / 100) : 0;
   const vehicle = n(C.vehicle), other = n(C.other), profit = revenue - parts - labour - office - vehicle - comm - other;
   // what the price book expected for this job (same costing as the item page and proposals)
-  const expParts = P ? P.parts : parts, expLab = P && P.labour > 0 ? P.labour : n(C.est_hours) * techsN * rate, expVeh = C.vehicle_default != null ? n(C.vehicle_default) : vehicle;
-  const exp = { parts: expParts, labour: expLab, office, vehicle: expVeh, other: 0, comm, hours: P && P.hrs ? P.hrs : n(C.est_hours) * techsN };
+  const expParts = P ? P.parts : parts, expLab = P && P.labour > 0 ? P.labour : n(C.est_hours) * estN * rate, expVeh = C.vehicle_default != null ? n(C.vehicle_default) : vehicle;
+  const exp = { parts: expParts, labour: expLab, office, vehicle: expVeh, other: 0, comm, hours: P && P.hrs ? P.hrs : n(C.est_hours) * estN };
   exp.profit = revenue - exp.parts - exp.labour - exp.office - exp.vehicle - exp.comm;
   return { sale, total, st, cut, card, tk, tank, tankCost, revenue, parts, noCost, hours, rate, techsN, labSrc, actual, A, exp, rateFromTechs: rates.length > 0, labour, planLab, office, vehicle, comm, other, profit,
            margin: revenue > 0 ? profit / revenue * 100 : 0 };
@@ -15878,9 +15881,13 @@ function costingHtml(I) {
           <input class="wide" data-cost="other_note" value="${esc(C.other_note || "")}" placeholder="What for (permit, rental, sub-trade...)" aria-label="What the other costs are for"></td><td class="r">−${money(k.other)}</td></tr>
       <tr class="tot"><td>Profit</td><td class="r">${money(k.profit)}</td></tr>
     </table>
-    ${C.lines.length ? `<details ${k.noCost ? "open" : ""}><summary>Cost of each line</summary><table class="ie-cost-lines">
+    ${C.lines.length ? `<details data-cost-lines ${k.noCost || window.COST_LINES_OPEN ? "open" : ""}><summary>Cost of each line${C.lines.some(l => l.skip) ? ` <span class="quiet">(${C.lines.filter(l => l.skip).length} not counted)</span>` : ""}</summary><table class="ie-cost-lines">
       ${C.lines.map(l => { const c = l.unit_cost == null ? null : Number(l.unit_cost), p = Number(l.unit_price), m = p > 0 && c != null ? (p - c) / p * 100 : null;
-        return `<tr><td>${esc(l.description)}${Number(l.quantity) !== 1 ? ` <span class="quiet">× ${Number(l.quantity)}</span>` : ""}<br><span class="quiet">sells ${money(p)}${m != null ? " · margin " + pct(m) : ""}</span></td>
+        if (l.skip) return `<tr style="opacity:.5"><td><s>${esc(l.description)}</s>${Number(l.quantity) !== 1 ? ` <span class="quiet">× ${Number(l.quantity)}</span>` : ""}
+            <br><span class="quiet">not counted · taken out by ${esc(l.skip.by || "someone")} ${l.skip.at ? "on " + esc(fmtDate(String(l.skip.at).slice(0, 10))) : ""}</span>
+            ${C.can_set_store || C.can_edit_costs || can("jobs.costing") ? ` <button class="link" type="button" data-cost-skip="${l.id}" data-skip-to="0">Count it again</button>` : ""}</td>
+          <td class="r"><s>${c != null ? money(c) : "—"}</s></td></tr>`;
+        return `<tr><td>${can("jobs.costing") ? `<button type="button" class="link" data-cost-skip="${l.id}" data-skip-to="1" title="Take this line out of the costing (it stays on the invoice)" aria-label="Take this line out of the costing" style="float:right;margin-left:6px;font-weight:700;color:var(--red)">✕</button>` : ""}${esc(l.description)}${Number(l.quantity) !== 1 ? ` <span class="quiet">× ${Number(l.quantity)}</span>` : ""}<br><span class="quiet">sells ${money(p)}${m != null ? " · margin " + pct(m) : ""}</span></td>
           <td class="r">${e ? `<input data-cost-line="${l.id}" inputmode="decimal" value="${c != null ? c.toFixed(2) : ""}" placeholder="cost" aria-label="Cost each">` : c != null ? money(c) : "—"}</td></tr>`; }).join("")}
     </table></details>` : ""}
     <p class="quiet" style="margin:0">Only people allowed to see job costing see this box. The customer never sees it.</p>`;
@@ -15900,6 +15907,11 @@ function wireCosting(root, I, call, reload) {
   }));
   root.querySelector("[data-cost-vreset]")?.addEventListener("click", () => call("inv_set_vehicle", { p_invoice: I.id, p_amount: null }, "Back to the usual vehicle cost."));
   root.querySelector("[data-cost-hreset]")?.addEventListener("click", () => call("inv_set_costs", { p_invoice: I.id, p: { hours: "" } }, "Back to the real time on site."));
+  root.querySelector("[data-cost-lines]")?.addEventListener("toggle", e => { window.COST_LINES_OPEN = e.target.open; });
+  root.querySelectorAll("[data-cost-skip]").forEach(b => b.addEventListener("click", () => {   // take a line out of the costing / count it again
+    const skip = b.dataset.skipTo === "1"; window.COST_LINES_OPEN = true;
+    call("inv_line_cost_skip", { p_line: Number(b.dataset.costSkip), p_skip: skip }, skip ? "Line taken out of the costing (still on the invoice)." : "Line counted again.");
+  }));
   root.querySelectorAll("[data-cost-line]").forEach(el => el.addEventListener("change", () => {
     const v = num(el.value); if (v != null && !isFinite(v)) return reload("Not saved: type a number.");
     call("inv_set_line_cost", { p_line: Number(el.dataset.costLine), p_cost: v }, "Saved.");
@@ -21154,7 +21166,8 @@ async function showInvoiceCosting(inv, msg) {
     db.from("invoices").select("subtotal, total").eq("id", inv.id).single()]);
   if (box.dataset.inv !== String(inv.id)) return;
   if (error || !data) { box.innerHTML = `<div class="staff-msg err">Couldn't work out the costs${error ? ": " + esc(rpcErr(error)) : ""}</div>`; return; }
-  { const ed = await db.rpc("inv_editor", { p_invoice: inv.id }); data.plan = ed.error ? null : await costPlan(ed.data?.lines).catch(() => null); if (box.dataset.inv !== String(inv.id)) return; }
+  { const ed = await db.rpc("inv_editor", { p_invoice: inv.id }); const skipped = new Set((data.lines || []).filter(l => l.skip).map(l => l.id));
+    data.plan = ed.error ? null : await costPlan((ed.data?.lines || []).filter(l => !skipped.has(l.id))).catch(() => null); if (box.dataset.inv !== String(inv.id)) return; }
   const I = { id: inv.id, subtotal: t.data?.subtotal ?? inv.subtotal, total: t.data?.total ?? inv.total, cost: data };
   const top = box.scrollTop;
   box.innerHTML = `<div class="inv-cost-head"><button class="link" type="button" data-invcost-close>Close</button></div>
