@@ -40,7 +40,7 @@ END $function$;
 SELECT public._patch_fn('book_call', '
   INSERT INTO visits (job_id, visit_number, visit_purpose', '
   IF public._is_practice(j.customer_id) THEN   -- practice-booking
-    INSERT INTO practice_bookings (user_id, job_id, day, start_at, end_at, summary, note) VALUES (v_me, j.id, v_date, v_start, v_end, nullif(btrim(p ->> ''summary''), ''), v_note);
+    INSERT INTO practice_bookings (user_id, job_id, day, start_at, end_at, summary, note) VALUES (v_me, j.id, v_date, v_start, v_end, nullif(btrim(p ->> ''summary''), ''''), v_note);
     RETURN jsonb_build_object(''job_id'', j.id, ''visit_id'', NULL, ''job_number'', j.job_number, ''practice'', true);
   END IF;
   INSERT INTO visits (job_id, visit_number, visit_purpose');
