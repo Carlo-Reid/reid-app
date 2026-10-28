@@ -1823,6 +1823,21 @@
   body.inv-open { overflow: hidden; }
   .inv-cost { position: fixed !important; top: 24px; right: 16px; bottom: 24px; width: 340px; overflow-y: auto; z-index: 51; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
   .inv-cost-head { display: flex; justify-content: flex-end; margin-bottom: -8px; }
+  .cost-sheet { width: 100%; border-collapse: collapse; font-size: calc(13px * var(--fs, 1)); }
+  .cost-sheet th, .cost-sheet td { border: 1px solid var(--line); padding: 4px 7px; text-align: left; vertical-align: top; }
+  .cost-sheet thead th { background: var(--blue-wash, #eef4fb); font-weight: 700; white-space: nowrap; }
+  .cost-sheet tfoot th { background: var(--paper-2, #f4f6f8); }
+  .cost-sheet .r { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .cost-sheet .vs-bad { color: var(--red); font-weight: 700; } .cost-sheet .vs-good { color: var(--green); font-weight: 700; }
+  .cost-ts summary { cursor: pointer; font-weight: 650; color: var(--blue); }
+  .cmp-view { position: fixed; inset: 0; z-index: 1300; background: rgba(15, 20, 25, .6); overflow-y: auto; padding: 24px 16px 48px; }
+  .cmp-view.hidden { display: none; }
+  .cmp-paper { max-width: 1100px; margin: 0 auto; background: var(--paper, #fff); color: var(--ink); border-radius: 14px; padding: 22px 26px; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
+  .cmp-paper h1 { margin: 0 0 4px; font-size: calc(24px * var(--fs, 1)); } .cmp-paper h2 { margin: 22px 0 8px; font-size: calc(17px * var(--fs, 1)); } .cmp-paper h3 { margin: 0 0 6px; font-size: calc(14px * var(--fs, 1)); }
+  .cmp-bar { display: flex; gap: 10px; justify-content: flex-end; }
+  .cmp-two { display: grid; grid-template-columns: 1fr 1.6fr; gap: 18px; } @media (max-width: 900px) { .cmp-two { grid-template-columns: 1fr; } }
+  body.cmp-open { overflow: hidden; }
+  @media print { body.cmp-open > *:not(#cmp-view) { display: none !important; } body.cmp-open .cmp-view { position: static; background: none; padding: 0; } body.cmp-open .cmp-paper { box-shadow: none; } }
   .inv-view.with-cost { padding-right: 380px; }
   @media (max-width: 1100px) { .inv-view.with-cost { padding-right: 16px; } .inv-cost { position: static !important; width: auto; max-width: 860px; margin: 16px auto 0; box-shadow: none; } }
   /* job costing beside the invoice: half the screen (up to 820px); the invoice gets narrower to make room.
@@ -15782,10 +15797,11 @@ async function costPlan(lines) {
   const top = (lines || []).filter(l => l.item_id && !l.kit_parent && Number(l.quantity) > 0); if (!top.length || !estCanCost()) return null;
   if (!COMPANY) { const c = await db.from("company_settings").select("*").limit(1).maybeSingle(); if (c.data) COMPANY = c.data; }
   await estCosting(top.map(l => Number(l.item_id))).catch(() => {});
-  let labour = 0, office = 0, hrs = 0, parts = 0;
-  top.forEach(l => { const c = estLineCost({ item_id: Number(l.item_id), qty: Number(l.quantity), price: Number(l.unit_price) || 0 }); labour += c.lab || 0; office += c.off || 0; hrs += c.hrs || 0; parts += (c.mat || 0) + (c.war || 0); });
+  let labour = 0, office = 0, hrs = 0, parts = 0; const per = [];
+  top.forEach(l => { const c = estLineCost({ item_id: Number(l.item_id), qty: Number(l.quantity), price: Number(l.unit_price) || 0 }); labour += c.lab || 0; office += c.off || 0; hrs += c.hrs || 0; parts += (c.mat || 0) + (c.war || 0);
+    per.push({ id: l.id, parts: (c.mat || 0) + (c.war || 0), labour: c.lab || 0, hrs: c.hrs || 0, office: c.off || 0 }); });
   const r2 = v => Math.round(v * 100) / 100;
-  return { labour: r2(labour), office: r2(office), hrs, parts: r2(parts) };
+  return { labour: r2(labour), office: r2(office), hrs, parts: r2(parts), lines: per };
 }
 // Job costing: what the job cost, what the store keeps, and the profit
 function costingCalc(I) {
@@ -15828,7 +15844,7 @@ function costingVsHtml(I, k) {
     return `<tr><td>${lab}${note ? `<br><span class="quiet">${note}</span>` : ""}</td><td class="r">${money(e)}</td><td class="r">${money(a)}</td><td class="r ${bad ? "vs-bad" : good ? "vs-good" : ""}">${Math.abs(d) < 0.005 ? "—" : (d > 0 ? "+" : "−") + money(Math.abs(d))}</td></tr>`; };
   const em = k.revenue > 0 ? E.profit / k.revenue * 100 : 0;
   return `<div class="ie-vs"><h3>Expected vs actual ${done ? "" : `<span class="quiet">(actual fills in as the techs mark arrived and done)</span>`}</h3>
-    <table><thead><tr><th></th><th class="r">Expected</th><th class="r">Actual</th><th class="r">Difference</th></tr></thead><tbody>
+    <table><thead><tr><th></th><th class="r"><button class="link" type="button" data-cmp-open title="Open the line-by-line comparison">Expected ›</button></th><th class="r">Actual</th><th class="r">Difference</th></tr></thead><tbody>
       ${row("Parts and equipment", E.parts, k.parts, true, n0(A.stock_cost) ? `includes ${money(A.stock_cost)} taken out of stock that isn't on the invoice` : "")}
       ${row("Labour", E.labour, k.labour, true, `expected ${+Number(E.hours).toFixed(1)} tech-hours · actual ${k.labSrc === "actual" ? +Number(A.tech_hours).toFixed(1) + " tech-hours on site" : k.labSrc === "typed" ? +(k.hours * k.techsN).toFixed(1) + " tech-hours typed" : "not done yet"}`)}
       ${E.office || k.office ? row("Office", E.office, k.office) : ""}
@@ -15837,11 +15853,88 @@ function costingVsHtml(I, k) {
       ${row("<b>Profit</b>", E.profit, k.profit, false)}
       <tr><td>Margin</td><td class="r">${pct(em)}</td><td class="r">${pct(k.margin)}</td><td class="r ${k.margin < em - 0.05 ? "vs-bad" : k.margin > em + 0.05 ? "vs-good" : ""}">${Math.abs(k.margin - em) < 0.05 ? "—" : (k.margin > em ? "+" : "−") + pct(Math.abs(k.margin - em))}</td></tr>
     </tbody></table>
-    ${(A.visits || []).length ? `<details><summary>${A.from_timesheets ? `Timesheets (${A.visits.length})` : `Time on site (${A.visits.length} visit${A.visits.length === 1 ? "" : "s"})`}</summary><ul class="ie-vs-v">${A.visits.map(v => `<li>${esc(fmtDate(v.arrived))} ${esc(new Date(v.arrived).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }))} to ${esc(new Date(v.done).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }))}: <b>${+Number(v.hours).toFixed(2)} hrs</b>${v.techs.length ? " · " + esc(v.techs.map(t => t.name).join(", ")) : " · no tech on the visit"}</li>`).join("")}</ul></details>` : ""}
+    <p style="margin:6px 0"><button class="link" type="button" data-cmp-open>See it line by line: every item, every tech ›</button></p>
+    ${costTimesheetsHtml(I, k)}
     ${(A.stock || []).length ? `<details><summary>Taken out of stock for this job, not on the invoice</summary><ul class="ie-vs-v">${A.stock.map(x => `<li>${esc(pbName(x.name))} × ${+Number(x.qty)}: ${money(x.cost)}</li>`).join("")}</ul></details>` : ""}
     <p class="quiet">Expected is what the price book planned for these items (same as the item page). Red means it cost more or made less than planned.</p></div>`;
 }
 const n0 = v => Number(v) || 0;
+// the job's timesheets as a spreadsheet: each tech, on the way / arrived / done, drive, hours on the job, rate, labour cost
+function costTimesheetsHtml(I, k, open) {
+  const C = I.cost, A = k.A || {}, T = C.timesheets || [];
+  const rateOf = nm => Number((C.techs || []).find(t => (t.name || "").trim() === (nm || "").trim())?.rate) || Number(C.labour_rate) || k.rate || 0;
+  const tm = d => d ? new Date(d).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }) : "—";
+  const dy = d => d ? new Date(d).toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }) : "—";
+  const hm = x => { if (x == null) return ""; const m = Math.round(Number(x) * 60); return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`; };
+  const rows = T.length ? T.map(x => ({ tech: (x.tech || "").trim(), day: x.arrived || x.dispatched, way: x.dispatched, arr: x.arrived, done: x.canceled ? null : x.done, canceled: x.canceled, drive: x.drive, hrs: x.hours }))
+    : (A.visits || []).flatMap(v => (v.techs.length ? v.techs : [{ name: "" }]).map(t => ({ tech: (t.name || "").trim(), day: v.arrived, way: null, arr: v.arrived, done: v.done, drive: null, hrs: v.hours })));
+  if (!rows.length) return "";
+  const tot = rows.reduce((s, r) => s + Number(r.hrs || 0), 0), drv = rows.reduce((s, r) => s + Number(r.drive || 0), 0), cost = rows.reduce((s, r) => s + Number(r.hrs || 0) * rateOf(r.tech), 0);
+  return `<details class="cost-ts" ${open ? "open" : ""}><summary>Timesheets (${rows.length}) · ${hm(tot)} on the job</summary>
+    <div class="table-wrap"><table class="cost-sheet"><thead><tr><th>Tech</th><th>Day</th><th>On the way</th><th>Arrived</th><th>Done</th><th class="r">Drive</th><th class="r">On the job</th><th class="r">Rate</th><th class="r">Labour</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td>${esc(r.tech || "—")}</td><td>${dy(r.day)}</td><td>${tm(r.way)}</td><td>${tm(r.arr)}</td><td>${r.canceled ? `<span class="quiet">cancelled</span>` : tm(r.done)}</td>
+      <td class="r">${hm(r.drive)}</td><td class="r"><b>${hm(r.hrs)}</b></td><td class="r">${money(rateOf(r.tech))}</td><td class="r">${money(Number(r.hrs || 0) * rateOf(r.tech))}</td></tr>`).join("")}
+    </tbody><tfoot><tr><th colspan="5">Total · ${new Set(rows.map(r => r.tech)).size} tech${new Set(rows.map(r => r.tech)).size === 1 ? "" : "s"}</th><th class="r">${hm(drv)}</th><th class="r">${hm(tot)}</th><th></th><th class="r">${money(cost)}</th></tr></tfoot></table></div>
+    <p class="quiet" style="margin:4px 0 0">${T.length ? "From the techs' timesheets." : "From the call's arrived and done times."} Drive time isn't counted in the labour.</p></details>`;
+}
+// the line-by-line comparison: what the price book planned against what really happened, item by item and tech by tech
+function openCostCompare(I) {
+  const C = I.cost, k = costingCalc(I), E = k.exp, P = C.plan || {}, ed = C.edLines || [], n = v => Number(v) || 0;
+  const byId = new Map((C.lines || []).map(l => [Number(l.id), l])), planBy = new Map((P.lines || []).map(x => [Number(x.id), x]));
+  const dif = (e, a, cost = true) => { const d = a - e; if (Math.abs(d) < 0.005) return `<td class="r">—</td>`; const bad = cost ? d > 0 : d < 0;
+    return `<td class="r ${bad ? "vs-bad" : "vs-good"}">${d > 0 ? "+" : "−"}${money(Math.abs(d))}</td>`; };
+  // each item with the kit parts that came with it
+  const tops = ed.filter(l => !l.kit_parent), kids = id => ed.filter(l => Number(l.kit_parent) === Number(id));
+  let eP = 0, aP = 0;
+  const partRows = tops.map(l => { const cl = byId.get(Number(l.id)) || {}, skip = !!cl.skip, pl = planBy.get(Number(l.id));
+    const ks = kids(l.id), a = skip ? 0 : n(l.quantity) * n(l.unit_cost) + ks.reduce((s, c) => s + n(c.quantity) * n(c.unit_cost), 0), e = skip ? 0 : n(pl?.parts);
+    eP += e; aP += a;
+    return `<tr ${skip ? `style="opacity:.5"` : ""}><td>${skip ? "<s>" : ""}${esc(String(l.description || "").split("\n")[0].slice(0, 110))}${skip ? "</s>" : ""}${ks.length ? `<br><span class="quiet">+ ${ks.length} kit part${ks.length === 1 ? "" : "s"}: ${esc(ks.map(c => String(c.description || "").split("\n")[0].slice(0, 40)).join(", "))}</span>` : ""}${skip ? `<br><span class="quiet">not counted (taken out by ${esc(cl.skip.by || "")})</span>` : ""}</td>
+      <td class="r">${+n(l.quantity)}</td><td class="r">${money(n(l.line_total))}</td><td class="r">${pl ? money(e) : `<span class="quiet">—</span>`}</td><td class="r">${money(a)}</td>${skip ? `<td class="r">—</td>` : dif(e, a)}</tr>`; }).join("");
+  const extra = [];
+  if (n(C.actual?.stock_cost)) extra.push(["Taken out of stock for this job (not on the invoice)", 0, n(C.actual.stock_cost)]);
+  if (k.tankCost) extra.push([`Tank paid by ${C.partner_tank?.partner || "the partner"} (not ours)`, 0, -k.tankCost]);
+  if (n(C.supplier_credit)) extra.push([`${C.supplier_credit_from || "Supplier"} credit`, 0, -n(C.supplier_credit)]);
+  extra.forEach(x => { aP += x[2]; });
+  // labour: planned hours per item | each tech's real time
+  const labPlan = tops.filter(l => planBy.get(Number(l.id))?.hrs > 0 && !byId.get(Number(l.id))?.skip).map(l => { const pl = planBy.get(Number(l.id));
+    return `<tr><td>${esc(String(l.description || "").split("\n")[0].slice(0, 80))}</td><td class="r">${+n(pl.hrs).toFixed(2)} h</td><td class="r">${money(pl.labour)}</td></tr>`; }).join("");
+  let box = document.getElementById("cmp-view"); if (!box) { box = document.createElement("div"); box.id = "cmp-view"; box.className = "cmp-view"; document.body.appendChild(box); }
+  box.innerHTML = `<div class="cmp-paper" role="dialog" aria-modal="true" aria-label="Expected vs actual">
+    <div class="cmp-bar no-print"><button class="btn" type="button" onclick="window.print()">Print</button><button class="btn quiet-btn" type="button" data-cmp-close>Close</button></div>
+    <h1>Expected vs actual</h1>
+    <p class="quiet">Invoice ${esc(I.number || "")}${I.customer ? " · " + esc(I.customer) : ""}${I.date ? " · " + esc(fmtDate(I.date)) : ""}. Expected is what the price book planned for these items; actual is what was used and the techs' real time. Red cost more (or made less) than planned, green less.</p>
+    <h2>Summary</h2>
+    <table class="cost-sheet"><thead><tr><th></th><th class="r">Expected</th><th class="r">Actual</th><th class="r">Difference</th></tr></thead><tbody>
+      <tr><td>What we get for the job (before HST)</td><td class="r">${money(k.revenue)}</td><td class="r">${money(k.revenue)}</td><td class="r">—</td></tr>
+      <tr><td>Parts and equipment</td><td class="r">${money(E.parts)}</td><td class="r">${money(k.parts)}</td>${dif(E.parts, k.parts)}</tr>
+      <tr><td>Labour</td><td class="r">${money(E.labour)}</td><td class="r">${money(k.labour)}</td>${dif(E.labour, k.labour)}</tr>
+      ${E.office || k.office ? `<tr><td>Office</td><td class="r">${money(E.office)}</td><td class="r">${money(k.office)}</td>${dif(E.office, k.office)}</tr>` : ""}
+      <tr><td>Vehicle</td><td class="r">${money(E.vehicle)}</td><td class="r">${money(k.vehicle)}</td>${dif(E.vehicle, k.vehicle)}</tr>
+      ${k.comm ? `<tr><td>Commission</td><td class="r">${money(E.comm)}</td><td class="r">${money(k.comm)}</td>${dif(E.comm, k.comm)}</tr>` : ""}
+      ${k.other ? `<tr><td>Other costs${C.other_note ? ` <span class="quiet">(${esc(C.other_note)})</span>` : ""}</td><td class="r">${money(0)}</td><td class="r">${money(k.other)}</td>${dif(0, k.other)}</tr>` : ""}
+      <tr class="tot"><td><b>Profit</b></td><td class="r"><b>${money(E.profit)}</b></td><td class="r"><b>${money(k.profit)}</b></td>${dif(E.profit, k.profit, false)}</tr>
+      <tr><td>Margin</td><td class="r">${k.revenue > 0 ? (Math.round(E.profit / k.revenue * 1000) / 10) + "%" : "—"}</td><td class="r">${Math.round(k.margin * 10) / 10}%</td><td></td></tr>
+    </tbody></table>
+    <h2>Parts and equipment, item by item</h2>
+    <table class="cost-sheet"><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Sold for</th><th class="r">Expected cost</th><th class="r">Actual cost</th><th class="r">Difference</th></tr></thead><tbody>
+      ${partRows}
+      ${extra.map(x => `<tr><td>${esc(x[0])}</td><td></td><td></td><td class="r">—</td><td class="r">${x[2] < 0 ? "−" : ""}${money(Math.abs(x[2]))}</td>${dif(0, x[2])}</tr>`).join("")}
+    </tbody><tfoot><tr><th colspan="3">Total</th><th class="r">${money(eP)}</th><th class="r">${money(aP)}</th>${dif(eP, aP)}</tr></tfoot></table>
+    <h2>Labour</h2>
+    <div class="cmp-two">
+      <div><h3>Expected (price book)</h3><table class="cost-sheet"><thead><tr><th>Item</th><th class="r">Hours</th><th class="r">Cost</th></tr></thead><tbody>${labPlan || `<tr><td colspan="3" class="quiet">No labour hours in the price book for these items.</td></tr>`}</tbody>
+        <tfoot><tr><th>Total</th><th class="r">${+n(E.hours).toFixed(2)} h</th><th class="r">${money(E.labour)}</th></tr></tfoot></table></div>
+      <div><h3>Actual (${k.labSrc === "actual" ? "timesheets" : k.labSrc === "typed" ? "hours typed in" : "not done yet: the estimate"})</h3>
+        ${k.labSrc === "actual" ? costTimesheetsHtml(I, k, true) : `<p>${+n(k.hours).toFixed(2)} hrs each × ${k.techsN} tech${k.techsN === 1 ? "" : "s"} × ${money(k.rate)}/hr = <b>${money(k.labour)}</b></p>`}</div>
+    </div>
+    <p class="quiet">Labour difference: ${dif(E.labour, k.labour).replace(/<\/?td[^>]*>/g, "")} (${+n(E.hours).toFixed(2)} hrs planned, ${k.labSrc === "actual" ? +n(k.A.tech_hours).toFixed(2) + " hrs worked" : k.labSrc === "typed" ? +(k.hours * k.techsN).toFixed(2) + " hrs typed" : "not done yet"}).</p>
+  </div>`;
+  box.classList.remove("hidden"); document.body.classList.add("cmp-open");
+  const close = () => { box.classList.add("hidden"); document.body.classList.remove("cmp-open"); };
+  box.querySelector("[data-cmp-close]").addEventListener("click", close);
+  box.addEventListener("click", e => { if (e.target === box) close(); });
+}
 function costingHtml(I) {
   const C = I.cost, k = costingCalc(I), e = C.can_edit_costs, pct = v => (Math.round(v * 10) / 10) + "%";
   const lvl = k.margin >= 40 ? "good" : k.margin >= 25 ? "ok" : "low";
@@ -15907,6 +16000,7 @@ function wireCosting(root, I, call, reload) {
   }));
   root.querySelector("[data-cost-vreset]")?.addEventListener("click", () => call("inv_set_vehicle", { p_invoice: I.id, p_amount: null }, "Back to the usual vehicle cost."));
   root.querySelector("[data-cost-hreset]")?.addEventListener("click", () => call("inv_set_costs", { p_invoice: I.id, p: { hours: "" } }, "Back to the real time on site."));
+  root.querySelectorAll("[data-cmp-open]").forEach(b => b.addEventListener("click", () => openCostCompare(I)));
   root.querySelector("[data-cost-lines]")?.addEventListener("toggle", e => { window.COST_LINES_OPEN = e.target.open; });
   root.querySelectorAll("[data-cost-skip]").forEach(b => b.addEventListener("click", () => {   // take a line out of the costing / count it again
     const skip = b.dataset.skipTo === "1"; window.COST_LINES_OPEN = true;
@@ -21167,8 +21261,10 @@ async function showInvoiceCosting(inv, msg) {
   if (box.dataset.inv !== String(inv.id)) return;
   if (error || !data) { box.innerHTML = `<div class="staff-msg err">Couldn't work out the costs${error ? ": " + esc(rpcErr(error)) : ""}</div>`; return; }
   { const ed = await db.rpc("inv_editor", { p_invoice: inv.id }); const skipped = new Set((data.lines || []).filter(l => l.skip).map(l => l.id));
-    data.plan = ed.error ? null : await costPlan((ed.data?.lines || []).filter(l => !skipped.has(l.id))).catch(() => null); if (box.dataset.inv !== String(inv.id)) return; }
-  const I = { id: inv.id, subtotal: t.data?.subtotal ?? inv.subtotal, total: t.data?.total ?? inv.total, cost: data };
+    data.plan = ed.error ? null : await costPlan((ed.data?.lines || []).filter(l => !skipped.has(l.id))).catch(() => null);
+    data.edLines = ed.data?.lines || [];
+    if (inv.job_id) { const ts = await db.rpc("job_timesheets_list", { p_job: inv.job_id }); data.timesheets = ts.error ? [] : ts.data || []; } if (box.dataset.inv !== String(inv.id)) return; }
+  const I = { id: inv.id, number: inv.invoice_number, date: inv.invoice_date, job_id: inv.job_id, customer: inv.customers?.display_name || "", subtotal: t.data?.subtotal ?? inv.subtotal, total: t.data?.total ?? inv.total, cost: data };
   const top = box.scrollTop;
   box.innerHTML = `<div class="inv-cost-head"><button class="link" type="button" data-invcost-close>Close</button></div>
     ${msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"}" role="status">${esc(msg)}</div>` : ""}${costingHtml(I)}`;
