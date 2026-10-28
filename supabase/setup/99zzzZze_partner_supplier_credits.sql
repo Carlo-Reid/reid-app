@@ -44,8 +44,9 @@ BEGIN
              OR EXISTS (SELECT 1 FROM customers pc WHERE pc.id IN (j.customer_id, i.customer_id) AND pc.display_name ILIKE v_pname || '%'))
         AND EXISTS (SELECT 1 FROM unnest(ARRAY[c1.display_name, c2.display_name, lo.name]) nm(x)
                     WHERE nm.x ILIKE '%' || r.last_name || '%' AND (coalesce(r.first_name, '') = '' OR nm.x ILIKE '%' || split_part(r.first_name, ' ', 1) || '%')))
-    SELECT count(DISTINCT coalesce(job_id, id)) OVER (), id INTO v_n, v_id FROM cand
-     ORDER BY (invoice_date <= coalesce(r.memo_date, current_date)) DESC, abs(coalesce(r.memo_date, current_date) - invoice_date), id DESC LIMIT 1;
+    SELECT (SELECT count(DISTINCT coalesce(job_id, id)) FROM cand),
+           (SELECT id FROM cand ORDER BY (invoice_date <= coalesce(r.memo_date, current_date)) DESC, abs(coalesce(r.memo_date, current_date) - invoice_date), id DESC LIMIT 1)
+      INTO v_n, v_id;
     IF v_id IS NOT NULL THEN
       UPDATE partner_supplier_credits SET invoice_id = v_id, how = CASE WHEN v_n = 1 THEN 'auto' ELSE 'guess' END WHERE id = r.id;
       v_done := v_done + 1;
