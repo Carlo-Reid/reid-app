@@ -262,7 +262,10 @@ BEGIN
         AND NOT EXISTS (SELECT 1 FROM partners b WHERE b.id = i.bill_to_partner_id AND b.id <> p_partner AND b.bill_to_ok)
       UNION
       SELECT i.id FROM invoices i WHERE i.bill_to_partner_id = p_partner AND i.store_copy_of IS NULL AND i.status NOT IN ('void', 'draft') AND i.total > 0
-        AND coalesce(i.look, '') <> 'reid')
+        AND coalesce(i.look, '') <> 'reid'
+      UNION   -- connected to a payment in the store's payment history (e.g. billed to "Costco Inc." on a job not marked as the store's)
+      SELECT i.id FROM partner_statement_matches m JOIN invoices i ON i.id = m.invoice_id
+      WHERE m.partner_id = p_partner AND i.store_copy_of IS NULL AND i.status NOT IN ('void', 'draft') AND i.total > 0)
     SELECT src.id, true AS keep FROM src WHERE coalesce(v_on, false)
     UNION ALL
     SELECT x.store_copy_of, false FROM invoices x WHERE x.store_copy_of IS NOT NULL AND x.bill_to_partner_id = p_partner AND x.status <> 'void'
