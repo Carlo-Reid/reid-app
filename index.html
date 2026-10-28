@@ -4479,8 +4479,9 @@ function showSignin() { $("#app").classList.add("hidden"); $("#signin").classLis
 async function showApp() {
   $("#signin").classList.add("hidden"); $("#app").classList.remove("hidden");
   // ask for everything at once rather than one after another
-  const [roleR, perms, emp0, sess] = await Promise.all([db.rpc("current_staff_role"), db.rpc("my_permissions"), db.rpc("my_employee_id"),
-    CONFIG.testToken ? Promise.resolve(null) : db.auth.getSession()]);
+  const [roleR, perms, emp0, sess, modeR] = await Promise.all([db.rpc("current_staff_role"), db.rpc("my_permissions"), db.rpc("my_employee_id"),
+    CONFIG.testToken ? Promise.resolve(null) : db.auth.getSession(), db.rpc("my_ui_mode")]);
+  ME.guided = !modeR?.error && modeR?.data === "guided"; document.body.classList.toggle("ui-guided", ME.guided);   // set by owners; never named on screen
   const { data, error } = roleR;
   ME.role = data || null; document.body.dataset.role = ME.role || ""; window.sideApply?.();
   try {
@@ -20402,6 +20403,7 @@ async function openStaff() {
   const pbc = await db.rpc("all_user_pb_categories"); STAFF_PBCATS = new Map();
   for (const r of pbc.error ? [] : pbc.data || []) { if (!STAFF_PBCATS.has(r.app_user_id)) STAFF_PBCATS.set(r.app_user_id, []); STAFF_PBCATS.get(r.app_user_id).push(r.category_id); }
   if (!PB.cats) await loadPbCats().catch(() => {});
+  if (ME.role === "owner") { const tr = await db.rpc("staff_training_list"); STAFF_TRAIN = new Map((tr.data || []).map(x => [x.user, x])); }
   await loadPbBooks().catch(() => {}); STAFF_BOOK = new Map(); for (const b of PB.books || []) for (const u of b.people) STAFF_BOOK.set(u.id, b.id);
   STAFF_RESETS = resets.error ? [] : resets.data || [];
   STAFF_LOGINS = logins.error || !logins.data?.logins ? null : Object.fromEntries(logins.data.logins.map(l => [l.email, l]));
@@ -20409,6 +20411,7 @@ async function openStaff() {
   renderStaff(users.data, perms.data);
 }
 
+let STAFF_TRAIN = new Map();   // owners only: sales people on "Training Sales" (they never see this name)
 let STAFF_PENDING = [], STAFF_RESETS = [], STAFF_LOGINS = null, STAFF_PBCATS = new Map(), STAFF_BOOK = new Map(), STAFF_POS = null, STAFF_POSCOL = true;
 const STAFF_OPEN = new Set(); let STAFF_POS_EDIT = null;
 // Staff page: limit a person's price book to the categories ticked (none ticked = all)
@@ -20555,6 +20558,8 @@ function renderStaff(users, perms, note) {
                 ${BOOK.techs.map(t => `<option value="${t.id}" ${t.id === u.employee_id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>` : ""}
               ${u.role === "sales" ? `<div class="st-sf-wrap"><span class="cl-label">Sales call for</span><div class="st-sf" data-sf-user="${u.id}">Loading…</div></div>` : ""}
               <label class="gl-act"><input type="checkbox" data-field="active" ${u.active ? "checked" : ""} ${highLocked ? "disabled" : ""}> Active</label>
+              ${ME.role === "owner" && u.role !== "owner" ? `<label class="gl-act" title="Only owners see this. The person isn't told; their app just shows the training view.">
+                <input type="checkbox" data-staff-train ${STAFF_TRAIN.has(u.id) ? "checked" : ""}> Training Sales <span class="quiet">(owners only${STAFF_TRAIN.get(u.id)?.by ? ` · on by ${esc(STAFF_TRAIN.get(u.id).by)}` : ""})</span></label>` : ""}
               ${(PB.books || []).length ? `<label>Price book<select data-staff-book><option value="">Normal</option>${PB.books.map(b => `<option value="${b.id}" ${STAFF_BOOK.get(u.id) === b.id ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>` : ""}
               <div><span class="cl-label">Price book categories</span><div>${u.role === "owner" ? `<span class="quiet">All</span>` : `<button class="link" type="button" data-pbcats="${u.id}">${(STAFF_PBCATS.get(u.id) || []).length ? `${STAFF_PBCATS.get(u.id).length} picked` : "All"}</button>`}</div></div>
               <div class="st-remove">${(() => { const r = STAFF_PENDING.find(x => x.app_user_id === u.id);
@@ -20640,6 +20645,13 @@ function renderStaff(users, perms, note) {
       if (error) e.target.value = e.target.dataset.was || ""; else e.target.dataset.was = v;
     });
     tr.querySelector("[data-pbcats]")?.addEventListener("click", () => openPbCatPicker(users.find(x => x.id === id)));
+    tr.querySelector("[data-staff-train]")?.addEventListener("change", async e => {   // owners only
+      const on = e.target.checked, { error } = await db.rpc("set_staff_training", { p_user: id, p_on: on });
+      const m = $("#staff-msg"); m.className = "staff-msg " + (error ? "err" : "ok");
+      if (error) { e.target.checked = !on; m.textContent = "Not saved: " + rpcErr(error); return; }
+      if (on) STAFF_TRAIN.set(id, { user: id, by: ME.email }); else STAFF_TRAIN.delete(id);
+      m.textContent = on ? `Training Sales is on for ${tr.dataset.first || tr.dataset.email}. They'll get the training view next time their app loads (they aren't told).` : `Training Sales is off for ${tr.dataset.first || tr.dataset.email}.`;
+    });
     tr.querySelector("[data-staff-book]")?.addEventListener("change", async e => {
       const v = e.target.value, { error } = await db.rpc("set_user_price_book", { p_user: id, p_book: v ? Number(v) : null });
       const m = $("#staff-msg"); m.className = "staff-msg " + (error ? "err" : "ok");
