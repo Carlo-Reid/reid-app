@@ -75,7 +75,7 @@ AS $function$
     WHERE i.bill_to_partner_id = p_partner AND i.status NOT IN ('void', 'draft') AND i.total > 0
       AND (coalesce(i.look, '') <> 'reid' OR (SELECT bill_to_ok FROM p))),
   calc AS (
-    SELECT i.id, i.invoice_number, i.invoice_date, c.id AS cid, c.display_name, l.street, l.city, t.name AS jt, i.total,
+    SELECT i.id, i.invoice_number, i.invoice_date, coalesce(lc.id, c.id) AS cid, coalesce(lc.display_name, c.display_name) AS display_name, l.street, l.city, t.name AS jt, i.total,   -- the homeowner, even when billed to "Costco Inc."
            CASE WHEN p.bill_to_ok AND NOT p.customer_pays_partner THEN jsonb_build_object('method', 'cut', 'cut_pct', 0, 'card', 0, 'pays', i.total, 'keeps', 0)
                 ELSE public._partner_pay(i.id, p.id) END AS pay,
            coalesce((SELECT sum(rl.amount) FROM partner_remittance_lines rl WHERE rl.invoice_id = i.id), 0)
@@ -89,6 +89,7 @@ AS $function$
     FROM inv i CROSS JOIN p
     JOIN customers c ON c.id = i.customer_id
     LEFT JOIN locations l ON l.id = i.location_id
+    LEFT JOIN customers lc ON lc.id = l.customer_id
     LEFT JOIN job_types t ON t.id = i.job_type_id
     LEFT JOIN partner_invoice_terms pt ON pt.invoice_id = i.id
     LEFT JOIN LATERAL (SELECT x.amount, s.name AS sname, x.status FROM third_party_supplier_payments x JOIN suppliers s ON s.id = x.supplier_id
