@@ -12303,7 +12303,11 @@ function sinvAddUp(S, slTot, all) {
 // the invoice's lines and the PO's lines side by side, each invoice line next to the PO line for the same part
 // (same code; else the closest description; else the same price). Whatever doesn't agree is in red.
 const sinvNorm = t => String(t || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-const sinvWords = t => new Set(String(t || "").toUpperCase().replace(/(\d)\s*\/\s*(\d)/g, "$1/$2").split(/[^A-Z0-9/.]+/).filter(w => w.length > 1 || /\d/.test(w)));
+const SINV_AB = { COP: "COPPER", CU: "COPPER", CPLG: "COUPLING", CPL: "COUPLING", RED: "REDUCING", PRES: "PRESSURE", BLK: "BLACK", GALV: "GALVANIZED", ELL: "ELBOW", EL: "ELBOW",
+  NIPP: "NIPPLE", ADAPT: "ADAPTER", ADPT: "ADAPTER", FPT: "FEMALE", MPT: "MALE", CC: "C X C", CXC: "C X C", CXCXC: "C X C X C", CXM: "C X MALE", CXF: "C X FEMALE", WHT: "WHITE",
+  LF: "LEAD FREE", THRD: "THREADED", BRS: "BRASS", VLV: "VALVE", TSTAT: "THERMOSTAT", DEG: "DEGREE", "90DEG": "90" };
+const sinvWords = t => new Set(String(t || "").toUpperCase().replace(/&DEG;|°/g, " ").replace(/(\d)\s*\/\s*(\d)/g, "$1/$2").replace(/(\d)"?\s*X\s*(\d)/g, "$1 $2").replace(/"/g, " ")
+  .split(/[^A-Z0-9/.]+/).flatMap(w => (SINV_AB[w] || w).split(" ")).filter(w => (w.length > 1 && !["OF", "FOR", "OR", "THE", "AND", "WITH", "X", "C"].includes(w)) || /\d/.test(w)));
 function sinvSim(a, b) { const A = sinvWords(a), B = sinvWords(b); if (!A.size || !B.size) return 0; let n = 0; A.forEach(w => { if (B.has(w)) n++; }); return n / Math.min(A.size, B.size); }
 function sinvPair(L, P) {
   const inv = L.map((x, i) => { const q = Number(x.shipped ?? x.ordered), up = x.unit_price != null ? Number(x.unit_price) : null, dsc = Number(x.discount) || 0;
@@ -12324,15 +12328,18 @@ function sinvPair(L, P) {
   return rows;
 }
 function sinvCompare(r, L, P, what) {
-  const rows = sinvPair(L, P), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol, split = Number(r.po_other_invoices) > 0;
+  const rows = sinvPair(L, P), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol, split = Number(r.po_other_invoices) > 0,
+    partial = r.subtotal == null && /continued/i.test(r.read_notes || "") && !/end of order/i.test(r.read_notes || "");
   const issues = []; let ia = 0, pa = 0;
   const bad = (ok, h) => ok ? h : `<span class="sinv-bad">${h}</span>`;
   const body = rows.map(({ a, b }) => {
     if (a?.amt != null) ia += a.amt; if (b) pa += b.amt || 0;
     let why = "";
     if (a && !b && !a.comp) { why = `Not on the PO`; issues.push(`${a.x.code || a.x.description}: on the ${what} but not on the PO${a.amt != null ? ` (${money(a.amt)})` : ""}`); }
-    else if (b && !a) { why = split ? `Not on this ${what} (maybe on the other one)` : `Not on this ${what}`; if (!split) issues.push(`${b.y.sku || b.y.description}: on the PO but not billed on this ${what}${b.amt ? ` (${money(b.amt)})` : ""}`); }
-    const qOk = !a || !b || a.q == null || Math.abs(a.q) === b.q, eOk = !a || !b || near(a.each, b.each, Math.max(0.011, b.each * 0.005)), mOk = !a || !b || near(a.amt, b.amt, 0.02);
+    else if (b && !a) { why = split || partial ? `Not on this ${what} (maybe on ${split ? "the other one" : "the missing page"})` : `Not on this ${what}`; if (!split && !partial) issues.push(`${b.y.sku || b.y.description}: on the PO but not billed on this ${what}${b.amt ? ` (${money(b.amt)})` : ""}`); }
+    // the PO keeps prices to the cent, Boone to a tenth of a cent: a few cents apart over a line isn't a mistake
+    const qOk = !a || !b || a.q == null || Math.abs(a.q) === b.q, eOk = !a || !b || near(a.each, b.each, Math.max(0.0101, b.each * 0.006)),
+      mOk = !a || !b || near(Math.abs(a.amt ?? 0) || null, b.amt, Math.max(0.03, Math.abs(b.q || 1) * 0.0101, (b.amt || 0) * 0.006));
     if (a && b) { const w = [];
       if (!qOk) w.push(`qty ${Math.abs(a.q)} vs ${b.q}`);
       if (!eOk) w.push(`${money(a.each)} each vs ${money(b.each)} (${a.each > b.each ? "+" : "−"}${money(Math.abs(a.each - b.each))})`);
@@ -12343,11 +12350,12 @@ function sinvCompare(r, L, P, what) {
         <td class="r">${a.amt == null ? "" : bad(mOk, money(a.amt))}</td>` : `<td colspan="5" class="sinv-miss">—</td>`;
     const pc = b ? `<td class="sinv-split">${esc(b.y.sku || "")}</td><td>${esc(b.y.description || "")}</td><td class="r">${bad(qOk, b.q)}</td><td class="r">${bad(eOk, money(b.each))}</td><td class="r">${bad(mOk, money(b.amt))}</td>`
       : `<td colspan="5" class="sinv-miss sinv-split">—</td>`;
-    const soft = b && !a && split;
+    const soft = b && !a && (split || partial);
     return `<tr class="${why ? (soft ? "sinv-row-soft" : "sinv-row-bad") : a && b ? "sinv-row-ok" : ""}">${ac}${pc}<td class="sinv-why">${why ? `<span class="${soft ? "sinv-soft" : "sinv-bad"}">${esc(why)}</span>` : a && b ? `<span class="sinv-ok">✓</span>` : ""}</td></tr>`; }).join("");
-  const sub = r.subtotal != null ? Number(r.subtotal) : Math.round(ia * 100) / 100, poT = Number(r.po_amount || pa);
-  const tip = split ? `The PO is billed over ${Number(r.po_other_invoices) + 1} invoices, so lines on the PO that aren't on this one may be on the other${Number(r.po_other_invoices) > 1 ? "s" : ""} (in yellow).` : "";
-  if (Math.abs(Math.abs(sub) - poT) > 0.02 && !split) issues.unshift(`Before tax: ${what} ${money(sub)} vs PO ${money(poT)} (${Math.abs(sub) > poT ? "over" : "under"} by ${money(Math.abs(Math.abs(sub) - poT))})`);
+  // before tax: as printed, else from the statement's total (13% HST), else the lines added up
+  const sub = r.subtotal != null ? Number(r.subtotal) : r.total ? Math.round(Number(r.total) / 1.13 * 100) / 100 : Math.round(ia * 100) / 100, poT = Number(r.po_amount || pa);
+  const tip = (partial ? `A page of this ${what} looks to be missing from the scan (it says CONTINUED), so some of the PO's lines may be on that page. ` : "") + (split ? `The PO is billed over ${Number(r.po_other_invoices) + 1} invoices, so lines on the PO that aren't on this one may be on the other${Number(r.po_other_invoices) > 1 ? "s" : ""} (in yellow).` : "");
+  if (Math.abs(Math.abs(sub) - poT) > Math.max(0.05, poT * 0.003) && !split) issues.unshift(`Before tax: ${what} ${money(sub)} vs PO ${money(poT)} (${Math.abs(sub) > poT ? "over" : "under"} by ${money(Math.abs(Math.abs(sub) - poT))})`);
   return `<section class="sinv-cmp"><h3>${what[0].toUpperCase() + what.slice(1)} ${esc(r.number)} next to PO ${esc(r.po_number || "")}</h3>
     ${issues.length ? `<div class="sinv-issues"><b>What doesn't match:</b><ul>${issues.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : `<div class="sinv-allok">✓ Every line ${split ? "on this " + what + " " : ""}matches the PO.</div>`}${tip ? `<p class="sinv-soft">${esc(tip)}</p>` : ""}
     <div class="sinv-cmp-w"><table class="sinv-lt sinv-ct"><thead><tr><th colspan="5">On the ${what}</th><th colspan="5" class="sinv-split">On the PO</th><th></th></tr>
