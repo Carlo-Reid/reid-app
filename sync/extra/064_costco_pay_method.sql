@@ -118,7 +118,7 @@ CREATE OR REPLACE FUNCTION public.partner_pay_method_set(p_partner bigint, p_met
 BEGIN
   IF NOT public._can_partner_pay() THEN RAISE EXCEPTION 'You don''t have permission to change partner payments'; END IF;
   IF p_method NOT IN ('cut', 'discount_fee') THEN RAISE EXCEPTION 'Pick how they pay'; END IF;
-  IF p_discount NOT BETWEEN 0 AND 60 OR p_fee_pct NOT BETWEEN 0 AND 60 OR p_fee_flat < 0 THEN RAISE EXCEPTION 'Check the % off, the fee % and the $ fee'; END IF;
+  IF p_discount NOT BETWEEN 0 AND 60 OR p_fee_pct NOT BETWEEN 0 AND 60 OR p_fee_flat < 0 THEN RAISE EXCEPTION 'Check the %% off, the fee %% and the $ fee'; END IF;
   UPDATE partners SET pay_method = p_method, discount_pct = p_discount, fee_pct = p_fee_pct, fee_flat = p_fee_flat WHERE id = p_partner;
   INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
   VALUES ('partners', p_partner, 'update', public.current_app_user_id(), jsonb_build_object('pay_method', p_method, 'discount_pct', p_discount, 'fee_pct', p_fee_pct, 'fee_flat', p_fee_flat));
@@ -130,7 +130,7 @@ DECLARE v_n int;
 BEGIN
   IF NOT public._can_partner_pay() THEN RAISE EXCEPTION 'You don''t have permission to change partner payments'; END IF;
   IF p ? 'method' AND nullif(p->>'method', '') IS NOT NULL AND p->>'method' NOT IN ('cut', 'discount_fee') THEN RAISE EXCEPTION 'Pick how they pay'; END IF;
-  IF nullif(p->>'discount_pct', '') IS NOT NULL AND (p->>'discount_pct')::numeric NOT BETWEEN 0 AND 60 THEN RAISE EXCEPTION 'The % off must be between 0 and 60'; END IF;
+  IF nullif(p->>'discount_pct', '') IS NOT NULL AND (p->>'discount_pct')::numeric NOT BETWEEN 0 AND 60 THEN RAISE EXCEPTION 'The %% off must be between 0 and 60'; END IF;
   IF nullif(p->>'fee_amount', '') IS NOT NULL AND (p->>'fee_amount')::numeric < 0 THEN RAISE EXCEPTION 'The fee can''t be below zero'; END IF;
   INSERT INTO partner_invoice_terms (invoice_id) SELECT unnest(p_invoice_ids) ON CONFLICT DO NOTHING;
   UPDATE partner_invoice_terms SET
