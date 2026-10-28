@@ -176,5 +176,9 @@ DO $$ DECLARE s text; BEGIN
     s := replace(s, $r$'own_terms', EXISTS (SELECT 1 FROM terms))$r$, $r$'own_terms', EXISTS (SELECT 1 FROM terms), 'pay', public._partner_pay((SELECT i.id FROM i), st.id))$r$);
     EXECUTE s;
   END IF;
+  s := pg_get_functiondef('public.inv_costing(bigint)'::regprocedure);
+  IF position($r$p.customer_pays_partner AND i.look <> 'reid'$r$ in s) > 0 THEN   -- invoices with no look set count as the store's too (like the partner page)
+    EXECUTE replace(s, $r$p.customer_pays_partner AND i.look <> 'reid'$r$, $r$p.customer_pays_partner AND coalesce(i.look, '') <> 'reid'$r$);
+  END IF;
 END $$;
 NOTIFY pgrst, 'reload schema';
