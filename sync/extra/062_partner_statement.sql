@@ -65,7 +65,7 @@ BEGIN
   SELECT name INTO v_pname FROM partners WHERE id = p_partner;
   SELECT customer_account_id INTO v_pcust FROM partners WHERE id = p_partner;
   FOR g IN
-    SELECT l.doc_no, min(l.doc_date) doc_date, sum(l.amount) FILTER (WHERE l.amount > 0) sale, sum(l.hst + l.gst + l.qst) FILTER (WHERE l.amount > 0) tax
+    SELECT l.doc_no, min(l.doc_date) doc_date, sum(l.amount) FILTER (WHERE l.amount > 0) sale, sum(l.hst + l.gst + l.qst) FILTER (WHERE l.amount > 0) tax, sum(l.net) net
     FROM partner_statement_lines l
     WHERE l.partner_id = p_partner AND NOT EXISTS (SELECT 1 FROM partner_statement_matches m WHERE m.partner_id = p_partner AND m.doc_no = l.doc_no)
     GROUP BY l.doc_no HAVING sum(l.amount) FILTER (WHERE l.amount > 0) > 0 ORDER BY min(l.doc_date), l.doc_no
@@ -77,7 +77,9 @@ BEGIN
              OR EXISTS (SELECT 1 FROM customers pc WHERE pc.id IN (j.customer_id, i.customer_id) AND pc.display_name ILIKE v_pname || '%'))   -- billed to "Costco Inc."
         AND i.subtotal > 0
         AND i.invoice_date BETWEEN g.doc_date - 75 AND g.doc_date + 7
-        AND (abs((g.sale - g.tax) - round(i.subtotal * 0.89, 2)) <= 0.02 OR abs((g.sale - g.tax) - round(i.subtotal * 0.90, 2)) <= 0.02 OR abs((g.sale - g.tax) - i.subtotal) <= 0.02)
+        AND (abs((g.sale - g.tax) - round(i.subtotal * 0.89, 2)) <= 0.02 OR abs((g.sale - g.tax) - round(i.subtotal * 0.90, 2)) <= 0.02 OR abs((g.sale - g.tax) - i.subtotal) <= 0.02
+             -- older invoices typed in at what the store paid, or at the store's own total
+             OR abs(i.total - g.net) <= 0.02 OR abs(i.total - g.sale) <= 0.02 OR abs(coalesce(i.amount_paid, 0) - g.net) <= 0.02)
         AND NOT EXISTS (SELECT 1 FROM partner_statement_matches m WHERE m.partner_id = p_partner AND m.invoice_id = i.id))
     SELECT count(*) OVER (), id, dist INTO v_cnt, v_id, v_gap FROM cand ORDER BY dist, id LIMIT 1;
     IF v_id IS NOT NULL THEN
