@@ -3720,6 +3720,12 @@ article.sales .cl-hero-range > em { font-size: calc(17px * var(--fs, 1)); opacit
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; box-sizing: border-box; }
 .sl-t .sl-pay select, .sl-t .sl-pay input[type=date] { font-size: 11.5px; padding: 2px 3px; }
 .sinv-st { display: flex; flex-wrap: wrap; gap: 10px 26px; align-items: flex-end; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin: 10px 0 14px; }
+.sl-mynotes { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.sl-mynote { background: #fff6d6; border: 1px solid #ecd78a; border-radius: 8px; padding: 4px 8px; font-size: 13px; max-width: 320px; color: #3d3216; }
+.sl-mynote.done { background: transparent; border-style: dashed; opacity: .65; } .sl-mynote.done .sl-mn-txt { text-decoration: line-through; }
+.sl-mn-txt { display: block; white-space: pre-wrap; } .sl-mn-by { display: block; font-size: 11px; opacity: .75; }
+.sl-mn-acts { display: flex; gap: 10px; font-size: 12px; } .sl-note-add { font-size: 12px; }
+.sl-note-ed textarea { width: 100%; min-width: 220px; font: inherit; font-size: 13px; } .sl-note-ed > div { display: flex; gap: 6px; margin-top: 4px; }
 .sinv-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -4px 0 14px; max-height: 92px; overflow-y: auto; }
 .sinv-chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer; }
 .sinv-chip.pay { border-style: dashed; } .sinv-chip[aria-pressed="true"] { background: var(--ink, #173a40); color: #fff; border-color: transparent; }
@@ -6774,7 +6780,8 @@ async function openSales(msg) {
   SALES.since = since || d18;
   salesTake(data); scSet("list", { rows: data, since: SALES.since, people: SALES.people });
   if (shown) salesRerender(); else { renderSales(msg); salesLoadPaid(); salesLoadComm(); }
-  if (can("installs.manage") || ["owner", "accounting"].includes(ME.role)) { salesLoadHistInst(); if (!SALES.notes) salesLoadNotes(); }
+  if (can("installs.manage") || ["owner", "accounting"].includes(ME.role)) salesLoadHistInst();
+  if (!SALES.notes) salesLoadNotes();
   if (!SALES.pfix) salesLoadPtnFix();
 }
 // the list again from the database, quietly (after a change on the page), kept where the page is
@@ -6949,10 +6956,50 @@ const salesInstOf = r => { if (r.stage === "install") return r.job_id; const h =
   if (SALES.instByEstFor !== SALES.rows) { SALES.instByEstFor = SALES.rows; SALES.instByEst = new Map((SALES.rows || []).filter(x => x.stage === "install" && x.est_id).map(x => [x.est_id, x.job_id])); }
   return SALES.instByEst.get(r.est_id) || null; };
 // has the customer paid the install's invoice? (from the same numbers as the Installs page)
+function salesWireNotes() {
+  const redo = () => { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; };
+  const editor = (host, val, onSave) => {
+    host.innerHTML = `<div class="sl-note-ed"><textarea rows="2" maxlength="2000" placeholder="e.g. Oct 14 install delayed - wrong equipment ordered">${esc(val || "")}</textarea><div><button class="btn" type="button" data-s>Save</button><button class="btn quiet-btn" type="button" data-c>Cancel</button></div></div>`;
+    const ta = host.querySelector("textarea"); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    host.querySelector("[data-c]").onclick = redo;
+    host.querySelector("[data-s]").onclick = async () => { const v = ta.value.trim(); if (!v) return ta.focus(); host.querySelector("[data-s]").disabled = true;
+      const err = await onSave(v); if (err) { host.querySelector("[data-s]").disabled = false; return slNote(err); } await salesLoadNotes(); redo(); };
+    ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) host.querySelector("[data-s]").click(); if (e.key === "Escape") redo(); });
+  };
+  document.querySelectorAll("[data-sl-note-add]").forEach(b => b.addEventListener("click", () => {
+    const [e, j] = b.dataset.slNoteAdd.split("|"), host = document.createElement("div"); b.replaceWith(host);
+    editor(host, "", async v => { const { error } = await db.rpc("sale_note_add", { p_est: e ? Number(e) : null, p_job: j ? Number(j) : null, p_body: v }); return error && rpcErr(error); });
+  }));
+  document.querySelectorAll("[data-sl-note-edit]").forEach(b => b.addEventListener("click", () => {
+    const id = Number(b.dataset.slNoteEdit), box = b.closest(".sl-mynote"), n = [...(SALES.myNotes?.values() || [])].flat().find(x => x.id === id);
+    editor(box, n?.body, async v => { const { error } = await db.rpc("sale_note_set", { p_id: id, p_body: v, p_done: null }); return error && rpcErr(error); });
+  }));
+  document.querySelectorAll("[data-sl-note-done]").forEach(b => b.addEventListener("click", async () => {
+    const { error } = await db.rpc("sale_note_set", { p_id: Number(b.dataset.slNoteDone), p_body: null, p_done: !!b.dataset.v }); if (error) return slNote(rpcErr(error)); await salesLoadNotes(); redo(); }));
+  document.querySelectorAll("[data-sl-note-del]").forEach(b => b.addEventListener("click", async () => {
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Delete it?"; return; }
+    const { error } = await db.rpc("sale_note_del", { p_id: Number(b.dataset.slNoteDel) }); if (error) return slNote(rpcErr(error)); await salesLoadNotes(); redo(); }));
+}
+// your own notes on a sale ("Oct 14 install delayed - wrong equipment ordered"): under the customer, newest first
+function salesMyNotes(r) { const seen = new Set(), L = [];
+  for (const k of [r.est_id && "e" + r.est_id, r.job_id && "j" + r.job_id]) for (const n of (k && SALES.myNotes?.get(k)) || []) if (!seen.has(n.id)) { seen.add(n.id); L.push(n); }
+  return L.sort((a, b) => (a.done - b.done) || String(b.noted_at).localeCompare(String(a.noted_at))); }
+function salesMyNotesHtml(r) {
+  if (!SALES.myNotes) return "";
+  const L = salesMyNotes(r), mine = n => n.created_by === ME.id || ME.role === "owner";
+  return `<div class="sl-mynotes">${L.map(n => `<div class="sl-mynote ${n.done ? "done" : ""}" data-sl-note="${n.id}"><span class="sl-mn-txt">📝 ${esc(n.body)}</span>
+      <span class="sl-mn-by">${esc(fmtDate(String(n.noted_at).slice(0, 10)))}${n.author ? " · " + esc(n.author) : ""}${n.done ? " · done" : ""}</span>
+      ${mine(n) ? `<span class="sl-mn-acts"><button class="link" type="button" data-sl-note-edit="${n.id}">Edit</button><button class="link" type="button" data-sl-note-done="${n.id}" data-v="${n.done ? "" : "1"}">${n.done ? "Not done" : "Done"}</button><button class="link" type="button" data-sl-note-del="${n.id}">Delete</button></span>` : ""}</div>`).join("")}
+    <button class="link sl-note-add" type="button" data-sl-note-add="${r.est_id || ""}|${r.job_id || ""}">+ Note</button></div>`;
+}
 // notes kept on a sale (e.g. "Costco payment received Aug 4", copied from the customer's pinned notes)
-const salesNotesHtml = r => { const L = (r.est_id && SALES.notes?.get(r.est_id)) || []; return L.map(n => `<div class="sl-snote" title="From the pinned notes at this address${n.noted_at ? ", " + esc(fmtDate(n.noted_at.slice(0, 10))) : ""}">📌 ${esc(n.body)}</div>`).join(""); };
-async function salesLoadNotes() { const { data, error } = await db.from("sale_notes").select("est_id, body, noted_at").order("noted_at"); if (error) return;
-  SALES.notes = new Map(); (data || []).forEach(n => { if (!SALES.notes.has(n.est_id)) SALES.notes.set(n.est_id, []); SALES.notes.get(n.est_id).push(n); });
+const salesNotesHtml = r => { const L = ((r.est_id && SALES.notes?.get(r.est_id)) || []).filter(n => n.kind !== "note"); return L.map(n => `<div class="sl-snote" title="From the pinned notes at this address${n.noted_at ? ", " + esc(fmtDate(n.noted_at.slice(0, 10))) : ""}">📌 ${esc(n.body)}</div>`).join(""); };
+async function salesLoadNotes() { let { data, error } = await db.from("sale_notes").select("id, est_id, job_id, body, noted_at, kind, author, created_by, done").order("noted_at");
+  if (error) ({ data, error } = await db.from("sale_notes").select("est_id, body, noted_at").order("noted_at"));   // (before tonight's update)
+  if (error) return;
+  SALES.notes = new Map(); SALES.myNotes = new Map();
+  (data || []).forEach(n => { if (n.kind === "note") { [n.est_id && "e" + n.est_id, n.job_id && "j" + n.job_id].filter(Boolean).forEach(k => { if (!SALES.myNotes.has(k)) SALES.myNotes.set(k, []); SALES.myNotes.get(k).push(n); }); return; }
+    if (!SALES.notes.has(n.est_id)) SALES.notes.set(n.est_id, []); SALES.notes.get(n.est_id).push(n); });
   if (document.body.dataset.page === "sales" && SALES.rows && data?.length) { const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; } }
 function salesCustPaidCell(r) { return salesCustPaidCell0(r) + salesNotesHtml(r); }
 function salesCustPaidCell0(r) {
@@ -7343,7 +7390,7 @@ function renderSales(msg) {
     ${rows.length ? `<div class="staff-wrap sl-tablewrap" id="sl-tw"><table class="calls-table sl-t"><thead><tr>${th("stage", "Stage")}${th("sp", "Sales person")}${th("cust", "Customer")}${th("call", "Call")}${th("sold", "Sold")}${th("inst", "Installed")}${th("for", "For")}${th("prop", "Proposal", "r")}${SALES.comm ? th("cpaid", "Customer paid") + th("comm", "Commission", "r") : ""}${SALES.pay ? th("pay", "Payroll") : ""}<th></th></tr></thead><tbody>
       ${rows.map((r, ri, A) => `<tr data-k="${esc(salesRowKey(r, ri, A))}"><td><span class="sl-stage ${STAGE[r.stage][1]}">${STAGE[r.stage][0]}</span>${r.kind ? `<span class="sl-kind">${r.kind === "site" ? (r.on_site ? "On site" : "Site visit") : "Phone booking"}</span>` : ""}${r.from_call ? `<span class="sl-kind" title="Sold while out on ${esc(r.type || "another call")}">Sold on a call</span>` : ""}<div class="quiet">Job ${esc(r.job_number)}</div></td>
         <td>${salesSpPick(r) || `<span class="quiet">—</span>`}</td>
-        <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>${eqAgeSlot(r.job_id)}</td>
+        <td><button class="link" type="button" data-sl-cust="${r.customer_id}"><b>${esc(r.customer)}</b></button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>${eqAgeSlot(r.job_id)}${salesMyNotesHtml(r)}</td>
         <td>${r.visit_date ? `${esc(fmtDate(r.visit_date))}<div class="quiet">${r.visit_from ? esc(t(r.visit_from) + (r.visit_to ? "–" + t(r.visit_to) : "")) : "any time"}${r.seller ? " · " + esc(r.seller) : ""}</div>` : `<span class="quiet">${r.stage === "install" ? "Install not booked yet" : "Not booked yet"}</span>`}</td>
         <td>${r.sold_on ? esc(fmtDate(r.sold_on)) : `<span class="quiet">—</span>`}</td>
         <td>${salesInstCell(r)}</td>
@@ -7358,6 +7405,7 @@ function renderSales(msg) {
       : `<p class="quiet">${qq.length ? "Nothing matches your search." : SALES.tab === "open" ? "No open sales jobs. Press + New sales job to start one." : "Nothing here."}</p>`}
   </article>`;
   eqAgeFill();   // equipment ages under each customer
+  salesWireNotes();
   document.querySelectorAll("[data-sl-ptn]").forEach(b => b.addEventListener("click", () => { SALES.ptn = b.dataset.slPtn; salesSave(); const top = $("#main").scrollTop; renderSales(); $("#main").scrollTop = top; }));
   // a combo that was later sold as separate proposals: take it off the sales (owners; it can be put back)
   document.querySelectorAll("[data-sl-split]").forEach(b => b.addEventListener("click", async () => {
