@@ -204,6 +204,11 @@
   #main { overflow: auto; min-width: 0; grid-column: 2; grid-row: 1; }
   #search-page { display: none; overflow: auto; min-width: 0; grid-column: 2; grid-row: 1; }
   .gd-find.hidden, .sp-wrap.hidden { display: none; }
+  /* the training view of a customer: Section 1, equipment, proposals and photos only */
+  body.ui-guided .file #sec-1, body.ui-guided .file #sec-2, body.ui-guided .file #sec-4, body.ui-guided .file #sec-5, body.ui-guided .file #sec-6, body.ui-guided .file #sec-7, body.ui-guided .file #sec-9,
+  body.ui-guided .file-nav [data-sec="sec-1"], body.ui-guided .file-nav [data-sec="sec-2"], body.ui-guided .file-nav [data-sec="sec-4"], body.ui-guided .file-nav [data-sec="sec-5"],
+  body.ui-guided .file-nav [data-sec="sec-6"], body.ui-guided .file-nav [data-sec="sec-7"], body.ui-guided .file-nav [data-sec="sec-9"],
+  body.ui-guided .file #sec-3 .miss-x, body.ui-guided .file #sec-3 [data-tech-cancel], body.ui-guided .file #sec-3 [data-tech-copy], body.ui-guided .file #sec-3 [data-tech-send] { display: none !important; }
   .gd-wrap { max-width: 760px; margin: 0 auto; padding: 28px 16px 60px; }
   .gd-wrap h1 { margin: 0 0 22px; }
   .gd-two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; } @media (max-width: 640px) { .gd-two { grid-template-columns: 1fr; } }
@@ -5814,7 +5819,7 @@ async function openCustomer(id) {
       .eq("customer_id", id).order("created_at", { ascending: false }).limit(300),
     db.from("invoices").select("*")
       .eq("customer_id", id).order("invoice_date", { ascending: false }).limit(300),
-    db.from("estimates").select("id, estimate_number, status, created_at, job_id, location_id, st_id, cancelled_at, estimate_options!estimate_options_estimate_id_fkey(name, estimate_lines(line_total))")
+    db.from("estimates").select("id, estimate_number, status, created_at, job_id, location_id, st_id, cancelled_at, sold_by_employee_id, estimate_options!estimate_options_estimate_id_fkey(name, estimate_lines(line_total))")
       .eq("customer_id", id).order("created_at", { ascending: false }).limit(100),
     db.from("equipment").select("*, equipment_types(name), manufacturers(name), warranty_coverages(*), locations!inner(customer_id)")
       .eq("locations.customer_id", id).order("install_date", { ascending: false, nullsFirst: false }),
@@ -20935,8 +20940,8 @@ function equipmentHtml(list) {
     const line = (label, d) => d ? (d >= today ? `<span class="ok">${label} until ${monthYear(d)}</span>` : `<span class="gone">${label} ended ${monthYear(d)}</span>`) : "";
     const coverText = [line("Parts", partsEnd), line("Labour", labourEnd)].filter(Boolean).join(", ")
       || (e.no_warranty ? `<span class="gone">Out of warranty</span>`
-          : `<span class="gone">No warranty on file</span>${can("equipment.edit") ? ` <button class="link nw-link" type="button" data-no-warranty="${e.id}">Mark out of warranty</button>` : ""}${reqDateLink(e)}`);
-    const editable = can("equipment.edit");
+          : `<span class="gone">No warranty on file</span>${can("equipment.edit") && !ME.guided ? ` <button class="link nw-link" type="button" data-no-warranty="${e.id}">Mark out of warranty</button>` : ""}${reqDateLink(e)}`);
+    const editable = can("equipment.edit") && !ME.guided;
     return `<div class="eq${editable ? " editable" : ""}${e.status !== "active" ? " gone-eq" : ""}" data-eq="${e.id}" ${editable ? `role="button" tabindex="0" title="Click to edit"` : ""}>
       <div><div class="what">${esc(e.equipment_types?.name || "Equipment")}${e.manufacturers?.name ? ", " + esc(e.manufacturers.name) : ""}${e.status !== "active" ? ` <span class="badge">${e.status === "removed" ? "Removed" : "Replaced"}${e.removed_on ? " " + fmtDate(e.removed_on) : ""}</span>` : ""}</div>
         <div class="eq-facts">
@@ -21348,7 +21353,8 @@ let INV_EMAIL_CUR = null, INV_EMAIL_DRAFT = {}, INV_EMAIL_JUMP = false;
 /* ---------------- view an invoice ---------------- */
 document.addEventListener("click", e => {
   const t = e.target.closest("[data-estimate]"); if (!t || e.target.closest("#inv-view")) return;
-  e.stopPropagation(); openEstimate(Number(t.dataset.estimate));
+  e.stopPropagation(); if (t.dataset.estOwn === "1") return openEstEdit(Number(t.dataset.estimate));   // the training view: their own proposals open to work on; others only to look at
+  openEstimate(Number(t.dataset.estimate));
 });
 document.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.matches?.("tr[data-estimate]")) openEstimate(Number(e.target.dataset.estimate)); });
 document.addEventListener("click", e => {
@@ -21568,7 +21574,7 @@ async function fillTechBox(force) {
 }
 function techBoxHtml(t) {
   const out = [];
-  const canChange = can("notes.add") || can("equipment.edit");
+  const canChange = (can("notes.add") || can("equipment.edit")) && !ME.guided;
   if (t.missing.length) {
     const rq = t.request;
     const status = !rq ? "" : rq.status === "added"
@@ -21952,8 +21958,9 @@ function invoicesHtml(list) {
 function estimatesHtml(list) {
   return `<div class="scroll-box" tabindex="0" aria-label="Proposals"><table><thead><tr><th>Date</th><th>Proposal</th><th>Option</th><th class="r">Amount</th><th>Status</th></tr></thead><tbody>
     ${list.map((e, n) => { const opts = e.estimate_options || [], o = opts[0] || {}; const amt = (o.estimate_lines || []).reduce((s, l) => s + Number(l.line_total || 0), 0);
-      return `<tr class="inv-row" tabindex="0" data-estimate="${e.id}" title="Open proposal"><td class="num">${fmtDate(e.created_at)}</td><td class="num"><span class="inv-link">${esc(e.estimate_number)}</span></td>
-      <td>${esc(o.name || "")}${opts.length > 1 ? ` <span class="quiet">+ ${opts.length - 1} more ${opts.length === 2 ? "option" : "options"}</span>` : ""}</td><td class="r num">${money(amt)}</td><td>${badge(e.status)}${e.status === "accepted" && !e.cancelled_at && ME.role ? estSoldBtns(e.id, !!e.st_id) : ""}</td></tr>`; }).join("")}
+      const own = !ME.guided || (ME.emp && e.sold_by_employee_id === ME.emp);
+      return `<tr class="inv-row" tabindex="0" data-estimate="${e.id}" ${ME.guided && own ? `data-est-own="1"` : ""} title="${own && ME.guided ? "Open your proposal" : "Open proposal"}"><td class="num">${fmtDate(e.created_at)}</td><td class="num"><span class="inv-link">${esc(e.estimate_number)}</span></td>
+      <td>${esc(o.name || "")}${opts.length > 1 ? ` <span class="quiet">+ ${opts.length - 1} more ${opts.length === 2 ? "option" : "options"}</span>` : ""}</td><td class="r num">${money(amt)}</td><td>${badge(e.status)}${e.status === "accepted" && !e.cancelled_at && ME.role && own ? estSoldBtns(e.id, !!e.st_id) : ""}</td></tr>`; }).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} proposals.</div>` : ""}`;
 }
 
