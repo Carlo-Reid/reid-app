@@ -7993,6 +7993,7 @@ async function openEstEdit(id, msg) {
   setPage("est=" + id, "sales", "Proposal");
   EST.id = id; EST.msg = msg || "";
   $("#main").innerHTML = `<div class="loading">Opening the proposal…</div>`;
+  await Promise.resolve(db.rpc("est_expire_offers", { p_id: id })).catch(() => {});   // a timed offer that ran out comes off
   let [{ data, error }, co] = await Promise.all([
     db.from("estimates").select("*, estimate_options!estimate_options_estimate_id_fkey(*, estimate_lines(*)), customers(display_name, customer_number, customer_contacts(kind, value, is_primary, location_id), locations(id, street, unit, city, province, postal_code, active)), locations(street, unit, city, province, postal_code), jobs!estimates_job_id_fkey(job_number, partner_id, summary, job_types(name), partners(name, branding_name, branding_logo_url))").eq("id", id).maybeSingle(),
     COMPANY ? Promise.resolve({ data: COMPANY }) : db.from("company_settings").select("*").limit(1).maybeSingle()]);
@@ -8003,7 +8004,7 @@ async function openEstEdit(id, msg) {
   EST.x = data;
   EST.ij = data.status === "accepted" && !data.cancelled_at ? ((await db.rpc("est_install_job", { p_id: id })).data || null) : null;   // the install job the sale made
   EST.opts = (data.estimate_options || []).sort((a, b) => a.sequence - b.sequence).map(o => ({ id: o.id, name: o.name, recommended: o.is_recommended,
-    lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price), skip: (l.kit_skip || []).map(Number), disc: Number(l.unit_price) < 0 && !l.line_kind, ldesc: l.long_desc || "", kind: l.line_kind || null })) }));
+    lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price), skip: (l.kit_skip || []).map(Number), disc: Number(l.unit_price) < 0 && !l.line_kind, ldesc: l.long_desc || "", kind: l.line_kind || null, expires: l.offer_expires_at || null })) }));
   if (!EST.opts.length) EST.opts = [{ name: "Option 1", recommended: true, lines: [] }];
   EST.dirty = false;
   EST.costErr = "";
@@ -8564,7 +8565,14 @@ function wireEstEdit() {
   m.querySelectorAll("[data-lpd]").forEach(el => el.addEventListener("input", () => { const [i, k] = ij(el.dataset.lpd); EST.opts[i].lines[k].price = -Math.abs(Number(el.value.replace(/[^\d.]/g, "")) || 0); dirty(); refreshTotals(i); }));
   m.querySelectorAll("[data-omydisc]").forEach(el => el.addEventListener("click", () => { const [i, id] = el.dataset.omydisc.split(":").map(Number), d = MYDISC.get(id); if (!d) return;
     estApplyPromo(i, id); dirty(); renderEstEdit(); }));
-  m.querySelectorAll("[data-odisc]").forEach(el => el.addEventListener("click", () => { const i = Number(el.dataset.odisc); EST.opts[i].lines.push({ item_id: null, description: "", qty: 1, price: 0, disc: true }); dirty(); renderEstEdit();
+  m.querySelectorAll("[data-odisc]").forEach(el => el.addEventListener("click", () => { const i = Number(el.dataset.odisc), o = EST.opts[i];
+    if (ME.guided && !estPromos(o).length && !o.lines.some(l => l.disc)) {   // no rebate for this sale: a 48 hour offer, by the size of the sale
+      const sale = o.lines.reduce((s, l) => s + (l.disc || l.kind === "note" ? 0 : (Number(l.qty) || 0) * (Number(l.price) || 0)), 0);
+      const amt = sale < 5000 ? 300 : sale < 10000 ? 500 : 750, ends = new Date(Date.now() + 48 * 3600e3);
+      const endTxt = ends.toLocaleString("en-CA", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+      o.lines.push({ item_id: null, description: `Get up to ${money(amt)} off if this offer is accepted within 48 hours (offer ends ${endTxt})`, qty: 1, price: -amt, disc: true, expires: ends.toISOString() });
+      dirty(); renderEstEdit(); return; }
+    o.lines.push({ item_id: null, description: "", qty: 1, price: 0, disc: true }); dirty(); renderEstEdit();
     const ins = m.querySelectorAll(`[data-oi="${i}"] .est-disc .est-d`); ins[ins.length - 1]?.focus(); }));
   m.querySelectorAll("[data-lp]").forEach(el => el.addEventListener("input", () => { const [i, k] = ij(el.dataset.lp); EST.opts[i].lines[k].price = el.value.replace(/[^\d.]/g, ""); dirty(); refreshTotals(i); }));
   m.querySelectorAll("[data-ldel]").forEach(el => el.addEventListener("click", () => { const [i, k] = ij(el.dataset.ldel); EST.opts[i].lines.splice(k, 1); dirty(); renderEstEdit(); }));
@@ -8595,7 +8603,7 @@ function wireEstEdit() {
           m.querySelector(`[data-ofind="${i}"]`)?.focus(); })); }, 250); }); });
   const say = (t, err) => { const el = $("#est-msg"); if (el) { el.className = "staff-msg " + (err ? "err" : "ok"); el.textContent = t; } };
   const save = async sent => { const p = { options: EST.opts.map(o => ({ name: o.name, recommended: !!o.recommended, lines: o.lines.filter(l => String(l.description).trim() || (l.item_id && !l.kind)).map(l => l.kind ? { item_id: null, kind: l.kind, description: l.description, qty: 1, price: l.kind === "note" ? 0 : Number(l.price) || 0 }
-      : { item_id: l.item_id, description: l.description, qty: Number(l.qty) || 1, price: Number(l.price) || 0, skip: l.skip || [], ldesc: l.ldesc || null }) })) };
+      : { item_id: l.item_id, description: l.description, qty: Number(l.qty) || 1, price: Number(l.price) || 0, skip: l.skip || [], ldesc: l.ldesc || null, expires: l.expires || null }) })) };
     if (sent) p.sent = true;
     say("Saving…"); const { error } = await db.rpc("est_save", { p_id: EST.id, p });
     if (error) { say("Not saved: " + rpcErr(error), true); return false; } EST.dirty = false; return true; };
@@ -21280,6 +21288,7 @@ async function openEstimate(id) {
   $("#inv-emailbtn")?.classList.add("hidden"); INV_EMAIL_CUR = null; $("#doc-send")?.remove();
   const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open");
   $("#inv-paper").innerHTML = `<div class="quiet" style="padding:40px">Opening proposal…</div>`;
+  await Promise.resolve(db.rpc("est_expire_offers", { p_id: id })).catch(() => {});   // a timed offer that ran out comes off
   const [est, co] = await Promise.all([
     db.from("estimates").select("*, estimate_options!estimate_options_estimate_id_fkey(*, estimate_lines(*)), jobs!estimates_job_id_fkey(job_number, summary, job_types(name)), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id), locations(id, street, unit, city, province, postal_code, active)), business_units(name), employees!estimates_sold_by_employee_id_fkey(first_name, last_name)").eq("id", id).single(),
     COMPANY ? Promise.resolve({ data: COMPANY }) : db.from("company_settings").select("*").limit(1).maybeSingle()]);
