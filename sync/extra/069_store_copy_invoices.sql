@@ -188,7 +188,7 @@ BEGIN
     IF v_c IS NOT NULL THEN PERFORM public._store_copy_drop(v_c); END IF;
     RETURN NULL;
   END IF;
-  v_sig := md5(concat_ws('|', v_pay ->> 'discount', v_pay ->> 'fee', v_pay ->> 'tax', v_pay ->> 'pays', v_pay ->> 'card', s.invoice_date, s.job_id, s.location_id, s.subtotal, s.tax_total,
+  v_sig := md5(concat_ws('|', 'v2', v_pay ->> 'discount', v_pay ->> 'fee', v_pay ->> 'tax', v_pay ->> 'pays', v_pay ->> 'card', s.invoice_date, s.job_id, s.location_id, s.subtotal, s.tax_total,
     (SELECT string_agg(concat_ws(',', x.id, x.item_id, x.description, x.quantity, x.unit_price, x.unit_cost, x.taxable, x.tax_rate_pct, x.kit_parent_line_id, x.hidden, x.no_charge, x.line_type), ';' ORDER BY x.id)
        FROM invoice_lines x WHERE x.invoice_id = p_src)));
   IF v_c IS NULL THEN
@@ -222,14 +222,14 @@ BEGIN
     v_rate := CASE WHEN coalesce(s.subtotal, 0) > 0 THEN round(coalesce(s.tax_total, 0) / s.subtotal * 100, 3) ELSE 0 END;
     IF coalesce(v_disc, 0) <> 0 THEN
       INSERT INTO invoice_lines (invoice_id, sequence, line_type, description, quantity, unit_price, unit_cost, taxable, tax_rate_pct, store_adj)
-      VALUES (v_c, v_seq + 1, 'discount', p.name || ' ' || trim_scale(round((v_pay ->> 'discount_pct')::numeric, 2)) || '% off our price', 1, -v_disc, 0, v_rate > 0, v_rate, true);
+      VALUES (v_c, v_seq + 1, 'other', p.name || ' ' || trim_scale(round((v_pay ->> 'discount_pct')::numeric, 2)) || '% off our price', 1, -v_disc, 0, v_rate > 0, v_rate, true);
     END IF;
     -- the store's fee (and card fee); it also takes up any cents of rounding so the total is exactly what the store pays
     SELECT coalesce(sum(line_total), 0) + coalesce(sum(tax_amount), 0) INTO v_tot FROM invoice_lines WHERE invoice_id = v_c;
     v_pays := (v_pay ->> 'pays')::numeric;
     IF round(v_tot - v_pays, 2) <> 0 THEN
       INSERT INTO invoice_lines (invoice_id, sequence, line_type, description, quantity, unit_price, unit_cost, taxable, tax_rate_pct, store_adj)
-      VALUES (v_c, v_seq + 2, 'discount', p.name || ' fee' || CASE WHEN coalesce((v_pay ->> 'card')::numeric, 0) > 0 THEN ' and gift card fee' ELSE '' END
+      VALUES (v_c, v_seq + 2, 'other', p.name || ' fee' || CASE WHEN coalesce((v_pay ->> 'card')::numeric, 0) > 0 THEN ' and gift card fee' ELSE '' END
               || CASE WHEN (v_pay ->> 'from_statement')::boolean THEN ' (from ' || p.name || '''s payment)' ELSE '' END, 1, -round(v_tot - v_pays, 2), 0, false, 0, true);
     END IF;
     UPDATE invoices SET store_copy_sig = v_sig WHERE id = v_c;
