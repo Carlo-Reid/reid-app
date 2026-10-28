@@ -6810,7 +6810,12 @@ async function salesLoadComm() {
     const yy = d.getFullYear(), h = d.getMonth() < 6 ? 1 : 2; if (!parts.some(p => p.p_from.startsWith(yy + (h === 1 ? "-01" : "-07")))) parts.push({ p_from: yy + (h === 1 ? "-01-01" : "-07-01"), p_to: yy + (h === 1 ? "-06-30" : "-12-31") }); }
   const today = salesToday(); parts.sort((a, b) => (a.p_from <= today && a.p_to >= today ? -1 : 0) - (b.p_from <= today && b.p_to >= today ? -1 : 0) || (b.p_from <= today) - (a.p_from <= today) || (a.p_from <= today ? b.p_from.localeCompare(a.p_from) : a.p_from.localeCompare(b.p_from)));
   let paintT = 0; const paint = () => { clearTimeout(paintT); paintT = setTimeout(() => { if (seq === SALES.commSeq) salesRerender(); }, 150); };
-  const getAll = async () => { const out = [], q = parts.slice(); let bad = 0;
+  const getAll = async () => {
+    // all of it in one go (quick since the commission groups are remembered); in half-years if that's too much
+    const whole = { p_from: parts.map(p => p.p_from).sort()[0], p_to: parts.map(p => p.p_to).sort().slice(-1)[0] };
+    const w = await db.rpc("install_list", whole);
+    if (!w.error) { if (seq === SALES.commSeq) { SALES.comm = new Map((w.data || []).map(x => [x.job_id, x])); paint(); } return w.data || []; }
+    const out = [], q = parts.slice(); let bad = 0;
     const one = async a => { let r = await db.rpc("install_list", a); if (r.error) r = await db.rpc("install_list", a); if (r.error) { bad++; return; } out.push(...(r.data || []));
       if (seq === SALES.commSeq) { const m = new Map(SALES.comm || []); (r.data || []).forEach(x => m.set(x.job_id, x)); SALES.comm = m; paint(); } };   // show each piece as it comes
     await Promise.all([0, 1, 2].map(async () => { while (q.length) await one(q.shift()); }));
