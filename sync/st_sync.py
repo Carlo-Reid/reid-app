@@ -392,6 +392,26 @@ def remove_gone(cur, delta):
     return gone
 
 
+def sync_job_timesheets(cur, st, state, new_state):
+    """ServiceTitan's job timesheets (each tech's dispatched / arrived / done) into job_timesheets. Remembers where it stopped."""
+    frm = (state.get("job-timesheets") or {}).get("continue_from")
+    recs, nxt = pull_export(st, "payroll/v2/tenant/{t}/export/jobs/timesheets", frm)
+    def ts(v): return v or None
+    n = 0
+    for r in recs:
+        if not r.get("id"): continue
+        cur.execute("""INSERT INTO job_timesheets (id, job_id, visit_id, technician_id, dispatched_on, arrived_on, done_on, canceled_on, active, modified_on, raw, synced_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                       ON CONFLICT (id) DO UPDATE SET job_id = EXCLUDED.job_id, visit_id = EXCLUDED.visit_id, technician_id = EXCLUDED.technician_id,
+                         dispatched_on = EXCLUDED.dispatched_on, arrived_on = EXCLUDED.arrived_on, done_on = EXCLUDED.done_on, canceled_on = EXCLUDED.canceled_on,
+                         active = EXCLUDED.active, modified_on = EXCLUDED.modified_on, raw = EXCLUDED.raw, synced_at = now()""",
+                    (int(r["id"]), r.get("jobId"), r.get("appointmentId"), r.get("technicianId"), ts(r.get("dispatchedOn")), ts(r.get("arrivedOn")),
+                     ts(r.get("doneOn")), ts(r.get("canceledOn")), r.get("active") is not False, ts(r.get("modifiedOn")), json.dumps(r)))
+        n += 1
+    new_state["job-timesheets"] = {"continue_from": nxt, "since": datetime.now(timezone.utc).isoformat()}
+    return n
+
+
 def match_assignments(cur, st, day_from, day_to):
     """Make the techs on ServiceTitan's calls in a date range match ServiceTitan exactly.
     (Catches techs moved from one call to another that the change feed didn't report.)"""
@@ -4572,6 +4592,16 @@ def main():
                 cur.execute("ROLLBACK TO SAVEPOINT pos")
                 new_state.pop("purchase-orders", None); new_state.pop("po-backfill", None)
                 log("  Purchase orders skipped this time: " + ("see the Settings page" if QUIET else str(e)[:300]))
+        if st:   # each tech's timesheet on a job (dispatched / arrived / done), for the real labour in job costing
+            try:
+                cur.execute("SAVEPOINT ts")
+                n = sync_job_timesheets(cur, st, state, new_state)
+                cur.execute("RELEASE SAVEPOINT ts")
+                if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Job timesheets: {n} brought in", flush=True)
+            except Exception as e:
+                cur.execute("ROLLBACK TO SAVEPOINT ts"); new_state.pop("job-timesheets", None)
+                log("  Job timesheets skipped: " + str(e)[:300])
+                if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Job timesheets not brought in: {str(e)[:300]}", flush=True)
         if st:
             # the techs on calls from 2 days ago to 6 weeks ahead always match ServiceTitan; the first time, go back 6 months
             cur.execute("SELECT 1 FROM st_sync_state WHERE endpoint = 'techs-matched'")
