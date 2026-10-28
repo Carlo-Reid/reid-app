@@ -6835,6 +6835,7 @@ async function salesLoadComm() {
     SALES.pay = pr.error || !pr.data ? null : new Map(pr.data.map(x => [x.job_id, x.payroll_on])); }
   if (SALES.pay && (pr.data || []).some(x => { const c = SALES.comm.get(x.job_id); return c && !c.paid_at && x.payroll_on <= salesToday(); })) {
     rows = await getAll(); if (rows) SALES.comm = new Map(rows.map(r => [r.job_id, r])); }
+  db.rpc("store_paid_jobs").then(({ data }) => { if (seq !== SALES.commSeq) return; SALES.storePaid = new Map((data || []).map(x => [x.job_id, x])); if ((data || []).length) paint(); }, () => {});   // Costco's payment # on paid Costco sales
   db.rpc("refresh_comm_sale_jobs").then(() => {}, () => {});
   db.rpc("refresh_comm_item_groups", { p_max: 500 }).then(() => {}, () => {});   // remembers new price book items' commission groups (keeps this page quick)   // keeps the sold-on-a-call list fresh (only if it's over 10 minutes old)
   if (seq !== SALES.commSeq || document.body.dataset.page !== "sales") return;
@@ -7027,7 +7028,8 @@ function salesCustPaidCell0(r) {
   const sold = r.stage === "closed" || r.stage === "install" || !!r.installs; if (!sold) return `<span class="quiet">—</span>`;
   const id = salesInstOf(r), c = id ? SALES.comm?.get(id) : null, inv = Number(c?.invoiced) || 0, ow = Number(c?.owing) || 0;
   if (!c || !inv) return `<span class="quiet">Not invoiced yet</span>`;
-  if (c.customer_paid || ow <= 0.005) return `<span class="status s-done">Paid in full</span><div class="quiet">invoice ${money(inv)} before tax</div>`;
+  const sp = SALES.storePaid?.get(id);
+  if (c.customer_paid || ow <= 0.005) return `<span class="status s-done">Paid in full</span><div class="quiet">invoice ${money(inv)} before tax</div>${sp ? `<div class="quiet">${esc(sp.store)} paid ${money(sp.amount)} on ${fmtDate(sp.date)} · payment ${esc(sp.payment_no || "")} · ${esc(sp.store)} invoice ${esc(sp.doc_no || "")}</div>` : ""}`;
   return `<span class="status s-warn">Owes ${money(ow)}</span><div class="quiet">invoice ${money(inv)} before tax${c.financing_company ? " · " + esc(c.financing_company) : ""}</div>`;
 }
 const salesCustOwing = r => { const id = salesInstOf(r), c = id ? SALES.comm?.get(id) : null; return !c || !Number(c.invoiced) ? -1 : Number(c.owing) || 0; };
