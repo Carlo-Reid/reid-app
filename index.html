@@ -13806,6 +13806,97 @@ async function openPartnerPage(id) {
   if (document.body.dataset.page === "partners" && PP.solo) nameCurrentPage((PP.stores || []).find(x => x.id === id)?.name || name);
 }
 
+// ----- the partner's payment history (Costco's PAYMENTHISTORY download): load it, connect each of their invoices to our customer
+const ppTab = vis => { const t = PP.ptab || "main"; return t === "stmt" && vis ? "main" : t; };
+const PST = { partner: null, rows: null, q: "", show: "all", msg: "", err: false, busy: false };
+const pstNum = v => { const n = Number(String(v ?? "").replace(/^'/, "").replace(/[$,\s]/g, "")); return isFinite(n) ? n : 0; };
+const pstDate = v => { const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(v || "").trim()); return m ? `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}` : (/^\d{4}-\d\d-\d\d$/.test(String(v || "").trim()) ? String(v).trim() : null); };
+function pstParse(text) {   // CSV with quotes; Costco puts a ' in front of its numbers
+  const rows = []; let row = [], cur = "", q = false;
+  for (let i = 0; i < text.length; i++) { const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; continue; }
+    if (ch === '"') q = true; else if (ch === ",") { row.push(cur); cur = ""; } else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; row.push(cur); rows.push(row); row = []; cur = ""; } else cur += ch; }
+  if (cur || row.length) { row.push(cur); rows.push(row); }
+  const head = (rows.shift() || []).map(h => h.toLowerCase().replace(/[^a-z]/g, ""));
+  const col = (...names) => head.findIndex(h => names.some(n => h.startsWith(n)));
+  const c = { doc: col("invoiceno"), date: col("invoicedate"), amt: col("invoicetotal"), disc: col("discount"), net: col("netamount"), pno: col("paymentno"), pdate: col("paymentdate"), po: col("pono"), ra: col("rano"), gst: col("gst"), hst: col("hst"), qst: col("qst") };
+  if (c.doc < 0 || c.amt < 0) throw new Error("This doesn't look like the payment history download (no Invoice No. / Invoice Total columns).");
+  const t = v => String(v ?? "").trim().replace(/^'/, "");
+  return rows.filter(r => r.length > 1 && t(r[c.doc])).map(r => ({ doc_no: t(r[c.doc]), doc_date: pstDate(t(r[c.date])), amount: pstNum(r[c.amt]), discount: c.disc < 0 ? 0 : pstNum(r[c.disc]),
+    net: c.net < 0 ? pstNum(r[c.amt]) : pstNum(r[c.net]), payment_no: c.pno < 0 ? "" : t(r[c.pno]), payment_date: c.pdate < 0 ? null : pstDate(t(r[c.pdate])), po_no: c.po < 0 ? null : t(r[c.po]) || null,
+    ra_no: c.ra < 0 ? null : t(r[c.ra]) || null, gst: c.gst < 0 ? 0 : pstNum(r[c.gst]), hst: c.hst < 0 ? 0 : pstNum(r[c.hst]), qst: c.qst < 0 ? 0 : pstNum(r[c.qst]) }));
+}
+async function pstLoad() {
+  const { data, error } = await db.rpc("partner_statement_list", { p_partner: PST.partner });
+  if (error) { PST.rows = []; PST.msg = /PGRST202|could not find/i.test(error.message || "") ? "Almost ready: the database part is being set up. Try again in a few minutes." : rpcErr(error); PST.err = true; }
+  else PST.rows = data || [];
+  const t = document.querySelector('[data-pp-ptab="stmt"]'); if (t) t.innerHTML = `Payment history <span class="pp-n">${PST.rows.length}</span>`;
+}
+async function pstShow() {
+  const host = $("#pst-host"); if (!host) return;
+  if (PST.partner !== PP.store) { Object.assign(PST, { partner: PP.store, rows: null, msg: "", err: false }); }
+  if (!PST.rows) { host.innerHTML = `<div class="loading">Loading the payment history…</div>`; await pstLoad(); if (!$("#pst-host") || PST.partner !== PP.store) return; }
+  pstRender();
+}
+function pstRender() {
+  const host = $("#pst-host"); if (!host) return;
+  const st = (PP.stores || []).find(x => x.id === PST.partner) || { name: "Partner" }, R = PST.rows || [], q = PST.q.toLowerCase();
+  const n = { all: R.length, matched: R.filter(r => r.invoice_id).length }; n.open = n.all - n.matched;
+  const rows = R.filter(r => (PST.show === "all" || (PST.show === "open" ? !r.invoice_id : !!r.invoice_id)) &&
+    (!q || [r.doc_no, r.po_no, r.customer_name, r.invoice_number, ...(r.payments || []).map(p => p.no)].some(x => String(x || "").toLowerCase().includes(q))));
+  const sum = k => rows.reduce((s, r) => s + Number(r[k] || 0), 0);
+  const fd = d => d ? new Date(d + "T00:00:00Z").toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) : "";
+  const how = r => r.how === "hand" ? "set by hand" : r.how === "guess" ? "best guess, check it" : "matched";
+  host.innerHTML = `<section class="cl-tools pst">
+      <div class="cl-row">
+        <div class="cl-group"><span class="cl-label">Load</span><label class="btn" style="cursor:pointer">⬆ Load ${esc(st.name)}'s payment history (.csv)<input type="file" id="pst-file" accept=".csv,text/csv" hidden></label></div>
+        <div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${[["all", `All ${n.all}`], ["open", `Not connected ${n.open}`], ["matched", `Connected ${n.matched}`]].map(([k, t]) => `<button type="button" aria-pressed="${PST.show === k}" data-pst-show="${k}">${t}</button>`).join("")}</div></div>
+        <label class="cl-group pp-search"><span class="cl-label">Find</span><input type="search" id="pst-q" value="${esc(PST.q)}" placeholder="${esc(st.name)} invoice, PO, payment #, customer"></label>
+        ${n.open ? `<div class="cl-group"><span class="cl-label">Connect</span><button class="btn quiet-btn" type="button" id="pst-rematch">Try connecting again</button></div>` : ""}
+      </div>
+      ${PST.msg ? `<div class="staff-msg ${PST.err ? "err" : "ok"}" id="pst-msg">${esc(PST.msg)}</div>` : `<div id="pst-msg"></div>`}
+      <p class="muted" style="margin:6px 0 0">Each ${esc(st.name)} invoice is one sale line plus a negative fee line (sometimes paid on different days). It's connected to our invoice when ${esc(st.name)}'s price before tax is 89% or 90% of ours, dated before theirs. Type our invoice or job # to set or fix one.</p>
+    </section>
+    ${!R.length ? `<div class="empty"><div><h2>Nothing loaded yet</h2>Download the payment history from ${esc(st.name)}'s portal and load the .csv file here.</div></div>` : `
+    <div class="table-wrap"><table class="cl-table pst-table">
+      <thead><tr><th>${esc(st.name)} invoice</th><th>PO</th><th class="num">Sale (with tax)</th><th class="num">Fee</th><th class="num">Paid us</th><th>Paid on</th><th>Our customer / invoice</th></tr></thead>
+      <tbody>${rows.map(r => `<tr data-pst="${esc(r.doc_no)}">
+        <td><b>${esc(r.doc_no)}</b><br><small class="muted">${fd(r.doc_date)}</small></td>
+        <td><small>${esc(r.po_no || "")}</small></td>
+        <td class="num">${money(r.sale)}<br><small class="muted">HST ${money(r.tax)}</small></td>
+        <td class="num">${money(r.fee)}</td>
+        <td class="num"><b>${money(r.net)}</b></td>
+        <td>${(r.payments || []).map(p => `<small title="Payment ${esc(p.no || "")}">${fd(p.date)} · ${money(p.net)}</small>`).join("<br>")}</td>
+        <td>${r.invoice_id ? `<a href="#customer=${r.customer_id}" data-pst-cust="${r.customer_id}"><b>${esc(r.customer_name || "Customer")}</b></a><br><small class="muted">Invoice ${esc(r.invoice_number || "")} · ${fd(r.invoice_date)} · ${money(r.subtotal)} before tax · they paid ${r.pct}% · ${how(r)}</small>
+            <br><button class="link" type="button" data-pst-edit>change</button>`
+          : `<span class="muted">Not connected</span> <button class="link" type="button" data-pst-edit>connect</button>`}
+          <span class="pst-ed" hidden><input data-pst-num placeholder="Our invoice or job #" inputmode="numeric" style="width:11em"> <button class="link" type="button" data-pst-save>Save</button>${r.invoice_id ? ` · <button class="link" type="button" data-pst-clear>Take off</button>` : ""} · <button class="link" type="button" data-pst-x>Cancel</button></span></td>
+      </tr>`).join("")}</tbody>
+      <tfoot><tr><th colspan="2">${rows.length} invoice${rows.length === 1 ? "" : "s"}</th><th class="num">${money(sum("sale"))}</th><th class="num">${money(sum("fee"))}</th><th class="num">${money(sum("net"))}</th><th colspan="2"></th></tr></tfoot>
+    </table></div>`}`;
+  const say = (m, err) => { PST.msg = m; PST.err = !!err; const el = $("#pst-msg"); if (el) { el.className = err ? "staff-msg err" : "staff-msg ok"; el.textContent = m; } };
+  $("#pst-file")?.addEventListener("change", async e => { const f = e.target.files?.[0]; if (!f) return;
+    let rows; try { rows = pstParse(await f.text()); } catch (er) { return say(er.message, true); }
+    if (!rows.length) return say("No payment lines found in that file.", true);
+    say(`Loading ${rows.length} lines…`);
+    const { data, error } = await db.rpc("partner_statement_import", { p_partner: PST.partner, p_rows: rows });
+    if (error) return say("Not loaded: " + rpcErr(error), true);
+    await pstLoad(); PST.msg = `Loaded ${data.rows} lines (${data.new} new${data.rows - data.new ? `, ${data.rows - data.new} already here` : ""}). Connected ${data.matched} more invoice${data.matched === 1 ? "" : "s"} to our customers.`; PST.err = false; pstRender(); });
+  $("#pst-q")?.addEventListener("input", e => { PST.q = e.target.value; const pos = e.target.selectionStart; pstRender(); const i = $("#pst-q"); i.focus(); i.setSelectionRange(pos, pos); });
+  document.querySelectorAll("[data-pst-show]").forEach(b => b.addEventListener("click", () => { PST.show = b.dataset.pstShow; pstRender(); }));
+  $("#pst-rematch")?.addEventListener("click", async () => { const { data, error } = await db.rpc("partner_statement_match", { p_partner: PST.partner });
+    if (error) return say("Couldn't: " + rpcErr(error), true); await pstLoad(); PST.msg = `Connected ${data} more.`; PST.err = false; pstRender(); });
+  document.querySelectorAll("[data-pst-edit]").forEach(b => b.addEventListener("click", () => { const ed = b.closest("td").querySelector(".pst-ed"); ed.hidden = false; b.hidden = true; ed.querySelector("input").focus(); }));
+  document.querySelectorAll("[data-pst-x]").forEach(b => b.addEventListener("click", () => pstRender()));
+  const setTo = async (b, num) => { const doc = b.closest("tr").dataset.pst;
+    const { error } = await db.rpc("partner_statement_set", { p_partner: PST.partner, p_doc: doc, p_number: num });
+    if (error) return say("Not saved: " + rpcErr(error), true);
+    await pstLoad(); PST.msg = num ? `${st.name} invoice ${doc} connected.` : `${st.name} invoice ${doc} taken off.`; PST.err = false; pstRender(); };
+  document.querySelectorAll("[data-pst-save]").forEach(b => b.addEventListener("click", () => { const v = b.closest("td").querySelector("[data-pst-num]").value.trim(); if (!v) return say("Type our invoice or job #.", true); setTo(b, v); }));
+  document.querySelectorAll("[data-pst-num]").forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); i.closest("td").querySelector("[data-pst-save]").click(); } }));
+  document.querySelectorAll("[data-pst-clear]").forEach(b => b.addEventListener("click", () => setTo(b, "")));
+}
+
 // ----- the booking list on a partner's page
 const PBL = { partner: null, data: null, tab: "all", q: "", msg: "", err: false, nf: null };
 try { PBL.tab = localStorage.getItem("reid.pblTab") || "all"; } catch {}
@@ -14511,10 +14602,11 @@ function renderPartners(msg) {
           : `The customer pays ${esc(st.name)}. ${esc(st.name)} pays us what's left after its cut and the gift card fee. Record each payment here to see what's still owed.`}</p></div>
       <div class="cl-hero-range"><span>${esc(st.name)} still owes us</span><strong class="ow-hero-amt">${money(st.still_owed)}</strong><em>${Number(st.invoices).toLocaleString()} invoices waiting</em></div>
     </header>
-    <div class="pp-ptabs" role="tablist">${[["main", `${esc(String(st.name).split(/\s+/)[0])} Everything`], ["list", `${esc(PBL.data?.list_name || "Booking list")}${PBL.data?.all != null ? ` <span class="pp-n">${Number(PBL.data.all).toLocaleString()}</span>` : ""}`]].map(([k, t]) =>
-      `<button type="button" role="tab" class="pp-ptab" data-pp-ptab="${k}" aria-pressed="${(PP.ptab || "main") === k}" aria-selected="${(PP.ptab || "main") === k}">${t}</button>`).join("")}</div>
-    <div id="pbl-host" ${(PP.ptab || "main") === "list" ? "" : "hidden"}></div>
-    <div class="pp-main" ${(PP.ptab || "main") === "list" ? "hidden" : ""}>
+    <div class="pp-ptabs" role="tablist" style="grid-template-columns: repeat(${vis ? 2 : 3}, 1fr)">${[["main", `${esc(String(st.name).split(/\s+/)[0])} Everything`], ["list", `${esc(PBL.data?.list_name || "Booking list")}${PBL.data?.all != null ? ` <span class="pp-n">${Number(PBL.data.all).toLocaleString()}</span>` : ""}`], ...(vis ? [] : [["stmt", `Payment history${PST.partner === st.id && PST.rows ? ` <span class="pp-n">${PST.rows.length}</span>` : ""}`]])].map(([k, t]) =>
+      `<button type="button" role="tab" class="pp-ptab" data-pp-ptab="${k}" aria-pressed="${ppTab(vis) === k}" aria-selected="${ppTab(vis) === k}">${t}</button>`).join("")}</div>
+    <div id="pbl-host" ${ppTab(vis) === "list" ? "" : "hidden"}></div>
+    <div id="pst-host" ${ppTab(vis) === "stmt" ? "" : "hidden"}></div>
+    <div class="pp-main" ${ppTab(vis) !== "main" ? "hidden" : ""}>
     <section class="cl-tools">
       <div class="cl-row">
         <div class="cl-group"><span class="cl-label">Partner</span><button class="btn quiet-btn" type="button" id="pp-allp">‹ All partners</button></div>
@@ -14690,10 +14782,11 @@ function wirePartners(st, rows) {
     renderPartners(); if (PP.adding) $("#pp-addform [name=name]")?.focus({ preventScroll: true }); });
   $("#pp-addcancel")?.addEventListener("click", () => { PP.adding = false; renderPartners(); });
   $("#pp-allp")?.addEventListener("click", () => openPartners());
-  document.querySelectorAll("[data-pp-ptab]").forEach(b => b.addEventListener("click", () => { PP.ptab = b.dataset.ppPtab; const list = PP.ptab === "list"; try { localStorage.setItem("reid.ppTab", PP.ptab); } catch {}
-    $("#pbl-host").hidden = !list; document.querySelector(".pp-main").hidden = list;
+  document.querySelectorAll("[data-pp-ptab]").forEach(b => b.addEventListener("click", () => { PP.ptab = b.dataset.ppPtab; try { localStorage.setItem("reid.ppTab", PP.ptab); } catch {}
+    $("#pbl-host").hidden = PP.ptab !== "list"; $("#pst-host").hidden = PP.ptab !== "stmt"; document.querySelector(".pp-main").hidden = PP.ptab !== "main";
+    if (PP.ptab === "stmt") pstShow();
     document.querySelectorAll("[data-pp-ptab]").forEach(x => { const on = x.dataset.ppPtab === PP.ptab; x.setAttribute("aria-pressed", on); x.setAttribute("aria-selected", on); }); }));
-  pblShow();
+  pblShow(); if (ppTab(vis) === "stmt") pstShow();
   $("#pp-edit")?.addEventListener("click", async () => { PP.editing = !PP.editing; PP.adding = false;
     if (PP.editing) { const { data, error } = await db.rpc("partner_detail", { p_id: st.id }); if (error) { PP.editing = false; return say("Couldn't open it: " + rpcErr(error)); } PP.editData = data; }
     renderPartners(); });
