@@ -73,8 +73,8 @@ BEGIN
     WITH cand AS (
       SELECT i.id, i.invoice_date, abs(g.doc_date - i.invoice_date) + CASE WHEN i.invoice_date > g.doc_date THEN 30 ELSE 0 END AS dist
       FROM invoices i LEFT JOIN jobs j ON j.id = i.job_id
-      WHERE (j.partner_id = p_partner OR i.bill_to_partner_id = p_partner OR coalesce(j.customer_id, i.customer_id) = v_pcust
-             OR EXISTS (SELECT 1 FROM customers pc WHERE pc.id = coalesce(j.customer_id, i.customer_id) AND pc.display_name ILIKE v_pname || '%'))   -- jobs filed under "Costco Inc."
+      WHERE (j.partner_id = p_partner OR i.bill_to_partner_id = p_partner OR v_pcust IN (j.customer_id, i.customer_id)
+             OR EXISTS (SELECT 1 FROM customers pc WHERE pc.id IN (j.customer_id, i.customer_id) AND pc.display_name ILIKE v_pname || '%'))   -- billed to "Costco Inc."
         AND i.subtotal > 0
         AND i.invoice_date BETWEEN g.doc_date - 75 AND g.doc_date + 7
         AND (abs((g.sale - g.tax) - round(i.subtotal * 0.89, 2)) <= 0.02 OR abs((g.sale - g.tax) - round(i.subtotal * 0.90, 2)) <= 0.02 OR abs((g.sale - g.tax) - i.subtotal) <= 0.02)
