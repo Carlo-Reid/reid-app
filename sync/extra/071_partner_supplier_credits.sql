@@ -27,32 +27,41 @@ ALTER TABLE public.partner_supplier_credits ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.partner_supplier_credits FROM PUBLIC, anon, authenticated;
 
 -- connect by the customer's name on the store's sales (closest invoice before the memo); hand matches stay
+CREATE INDEX IF NOT EXISTS invoices_paid_at_store ON public.invoices (id) WHERE paid_at_store;
 CREATE OR REPLACE FUNCTION public._partner_credits_match(p_partner bigint) RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
-DECLARE r record; v_id bigint; v_n int; v_done int := 0; v_pname text; v_pcust bigint;
+DECLARE v_done int; v_pname text; v_pcust bigint;
 BEGIN
   SELECT name, customer_account_id INTO v_pname, v_pcust FROM partners WHERE id = p_partner;
   UPDATE partner_supplier_credits SET invoice_id = NULL, how = NULL WHERE partner_id = p_partner AND how IN ('auto', 'guess');
-  FOR r IN SELECT * FROM partner_supplier_credits WHERE partner_id = p_partner AND invoice_id IS NULL AND how IS NULL AND coalesce(last_name, '') <> '' LOOP
-    WITH cand AS (
-      SELECT i.id, i.job_id, i.invoice_date FROM invoices i
-        LEFT JOIN jobs j ON j.id = i.job_id
-        LEFT JOIN locations lo ON lo.id = coalesce(i.location_id, j.location_id)
-        LEFT JOIN customers c1 ON c1.id = lo.customer_id
-        LEFT JOIN customers c2 ON c2.id = coalesce(j.customer_id, i.customer_id)
-      WHERE i.store_copy_of IS NULL AND i.status NOT IN ('void', 'draft') AND i.subtotal > 0
-        AND (j.partner_id = p_partner OR i.bill_to_partner_id = p_partner OR i.paid_at_store OR v_pcust IN (j.customer_id, i.customer_id)
-             OR EXISTS (SELECT 1 FROM customers pc WHERE pc.id IN (j.customer_id, i.customer_id) AND pc.display_name ILIKE v_pname || '%'))
-        AND EXISTS (SELECT 1 FROM unnest(ARRAY[c1.display_name, c2.display_name, lo.name]) nm(x)
-                    WHERE nm.x ILIKE '%' || r.last_name || '%' AND (coalesce(r.first_name, '') = '' OR nm.x ILIKE '%' || split_part(r.first_name, ' ', 1) || '%')))
-    SELECT (SELECT count(DISTINCT coalesce(job_id, id)) FROM cand),
-           (SELECT id FROM cand ORDER BY (invoice_date <= coalesce(r.memo_date, current_date)) DESC, abs(coalesce(r.memo_date, current_date) - invoice_date), id DESC LIMIT 1)
-      INTO v_n, v_id;
-    IF v_id IS NOT NULL THEN
-      UPDATE partner_supplier_credits SET invoice_id = v_id, how = CASE WHEN v_n = 1 THEN 'auto' ELSE 'guess' END WHERE id = r.id;
-      v_done := v_done + 1;
-    END IF;
-    v_id := NULL;
-  END LOOP;
+  WITH pc AS (SELECT id FROM customers WHERE id = v_pcust OR display_name ILIKE v_pname || '%'),
+  ids AS (   -- the store's sales, each found by an index
+    SELECT i.id FROM jobs j JOIN invoices i ON i.job_id = j.id WHERE j.partner_id = p_partner
+    UNION SELECT i.id FROM invoices i WHERE i.bill_to_partner_id = p_partner
+    UNION SELECT i.id FROM invoices i WHERE i.paid_at_store
+    UNION SELECT i.id FROM invoices i WHERE i.customer_id IN (SELECT id FROM pc)
+    UNION SELECT i.id FROM jobs j JOIN invoices i ON i.job_id = j.id WHERE j.customer_id IN (SELECT id FROM pc)
+    UNION SELECT m.invoice_id FROM partner_statement_matches m WHERE m.partner_id = p_partner AND m.invoice_id IS NOT NULL),
+  sales AS MATERIALIZED (
+    SELECT i.id, i.job_id, i.invoice_date, upper(concat_ws(' | ', c1.display_name, c2.display_name, lo.name)) AS names
+    FROM ids JOIN invoices i ON i.id = ids.id
+    LEFT JOIN jobs j ON j.id = i.job_id
+    LEFT JOIN locations lo ON lo.id = coalesce(i.location_id, j.location_id)
+    LEFT JOIN customers c1 ON c1.id = lo.customer_id
+    LEFT JOIN customers c2 ON c2.id = coalesce(j.customer_id, i.customer_id)
+    WHERE i.store_copy_of IS NULL AND i.status NOT IN ('void', 'draft') AND i.subtotal > 0),
+  pick AS (
+    SELECT c.id AS credit_id, b.id AS inv, b.n
+    FROM partner_supplier_credits c
+    CROSS JOIN LATERAL (
+      SELECT s.id, count(DISTINCT coalesce(s.job_id, s.id)) OVER () AS n,
+             row_number() OVER (ORDER BY (s.invoice_date <= coalesce(c.memo_date, current_date)) DESC, abs(coalesce(c.memo_date, current_date) - s.invoice_date), s.id DESC) AS rn
+      FROM sales s
+      WHERE position(upper(c.last_name) in s.names) > 0
+        AND (coalesce(c.first_name, '') = '' OR position(upper(split_part(c.first_name, ' ', 1)) in s.names) > 0)) b
+    WHERE c.partner_id = p_partner AND c.invoice_id IS NULL AND c.how IS NULL AND coalesce(c.last_name, '') <> '' AND b.rn = 1)
+  UPDATE partner_supplier_credits c SET invoice_id = pick.inv, how = CASE WHEN pick.n = 1 THEN 'auto' ELSE 'guess' END
+  FROM pick WHERE c.id = pick.credit_id;
+  GET DIAGNOSTICS v_done = ROW_COUNT;
   RETURN v_done;
 END $function$;
 
