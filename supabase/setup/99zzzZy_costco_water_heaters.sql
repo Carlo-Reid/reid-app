@@ -29,8 +29,9 @@ BEGIN
     WHERE m.invoice_id = p_invoice AND l.partner_id = p_partner;
   v_pays := CASE WHEN v_stn > 0 THEN v_st ELSE v_calc END;
   -- a store water heater: the store's numbers are different every time, so they're typed in by hand
-  v_wh := EXISTS (SELECT 1 FROM invoice_lines x WHERE x.invoice_id = p_invoice AND coalesce(x.line_total, 0) > 0
-                  AND x.description ~* '(water heater|hot water tank|tankless|\mhwt\M|gallon|\m[0-9]+ ?gal\M)');
+  -- (the water heater is most of the sale: a furnace + AC job that also has a tank isn't one)
+  v_wh := v_sub > 0 AND coalesce((SELECT sum(x.line_total) FROM invoice_lines x WHERE x.invoice_id = p_invoice AND coalesce(x.line_total, 0) > 0
+                  AND x.description ~* '(water heater|hot water tank|tankless|\mhwt\M|gallon|\m[0-9]+ ?gal\M)'), 0) >= v_sub * 0.5;
   RETURN jsonb_build_object('method', v_method, 'sale', v_sub, 'total', v_total, 'card', v_card,
     'cut_pct', CASE WHEN v_method = 'cut' THEN v_cut END,
     'discount_pct', CASE WHEN v_method = 'discount_fee' THEN v_d END, 'discount', v_disc, 'after', v_after, 'tax', v_tax, 'fee', v_fee,
