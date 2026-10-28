@@ -8,6 +8,7 @@ ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS paid_at_store boolean NOT N
 ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS store_copy_sig text;
 ALTER TABLE public.invoice_lines ADD COLUMN IF NOT EXISTS store_adj boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS invoices_store_copy_of ON public.invoices (store_copy_of) WHERE store_copy_of IS NOT NULL;
+ANALYZE public.invoices (store_copy_of, paid_at_store);
 
 -- change a function in place: swap a piece of its text (skipped once done; stops the file if the text isn't there)
 CREATE OR REPLACE FUNCTION public._patch_fn(p_fn text, p_old text, p_new text) RETURNS int LANGUAGE plpgsql SET search_path TO 'public' AS $function$
@@ -31,7 +32,7 @@ BEGIN
   SELECT coalesce(store_copy_of, id) INTO v_src FROM invoices WHERE id = p_invoice;
   IF NOT FOUND THEN RETURN NULL; END IF;
   v_copy := v_src <> p_invoice;
-  SELECT id INTO v_c FROM invoices WHERE store_copy_of = v_src AND status <> 'void' ORDER BY id LIMIT 1;
+  SELECT min(id) INTO v_c FROM invoices WHERE store_copy_of = v_src AND status <> 'void';   -- (no ORDER BY ... LIMIT: that walks every invoice)
   SELECT subtotal, tax_total, total INTO i FROM invoices WHERE id = v_src;
   SELECT * INTO p FROM partners WHERE id = p_partner;
   IF NOT FOUND THEN RETURN NULL; END IF;
@@ -180,7 +181,7 @@ DECLARE s invoices; p partners; v_c bigint; v_old text; v_sig text; v_pay jsonb;
 BEGIN
   SELECT * INTO s FROM invoices WHERE id = p_src;
   SELECT * INTO p FROM partners WHERE id = p_partner;
-  SELECT id, store_copy_sig INTO v_c, v_old FROM invoices WHERE store_copy_of = p_src AND status <> 'void' ORDER BY id LIMIT 1;
+  SELECT id, store_copy_sig INTO v_c, v_old FROM invoices WHERE id = (SELECT min(x.id) FROM invoices x WHERE x.store_copy_of = p_src AND x.status <> 'void');
   v_pay := public._partner_pay(p_src, p_partner);
   IF s.id IS NULL OR p.id IS NULL OR s.status IN ('void', 'draft') OR coalesce(s.total, 0) <= 0 OR s.store_copy_of IS NOT NULL
      OR coalesce(v_pay ->> 'method', '') <> 'discount_fee' THEN
