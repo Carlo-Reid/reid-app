@@ -13854,15 +13854,18 @@ function pstRender() {
   const how = r => r.how === "hand" ? "set by hand" : r.how === "guess" ? `<b style="color:#b45309">best guess, check it</b>` : "matched";
   host.innerHTML = `<section class="cl-tools pst">
       <div class="cl-row">
+        <div class="cl-group"><span class="cl-label">See</span><div class="seg" role="group">${[["pay", `${esc(st.name)} payments ${R.length}`], ["credits", `Supplier credits ${(PST.credits || []).length}`]].map(([k, t]) => `<button type="button" aria-pressed="${(PST.part || "pay") === k}" data-pst-part="${k}">${t}</button>`).join("")}</div></div>
+      </div>
+      <div class="cl-row" ${PST.part === "credits" ? "hidden" : ""}>
         <div class="cl-group"><span class="cl-label">Load</span><label class="btn" style="cursor:pointer">⬆ Load ${esc(st.name)}'s payment history (.csv)<input type="file" id="pst-file" accept=".csv,text/csv" hidden></label></div>
         <div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${[["all", `All ${n.all}`], ["open", `Not connected ${n.open}`], ["matched", `Connected ${n.matched}`]].map(([k, t]) => `<button type="button" aria-pressed="${PST.show === k}" data-pst-show="${k}">${t}</button>`).join("")}</div></div>
         <label class="cl-group pp-search"><span class="cl-label">Find</span><input type="search" id="pst-q" value="${esc(PST.q)}" placeholder="${esc(st.name)} invoice, PO, payment #, customer"></label>
         ${n.open ? `<div class="cl-group"><span class="cl-label">Connect</span><button class="btn quiet-btn" type="button" id="pst-rematch">Try connecting again</button></div>` : ""}
       </div>
       ${PST.msg ? `<div class="staff-msg ${PST.err ? "err" : "ok"}" id="pst-msg">${esc(PST.msg)}</div>` : `<div id="pst-msg"></div>`}
-      <p class="muted" style="margin:6px 0 0">Each ${esc(st.name)} invoice is one sale line plus a negative fee line (sometimes paid on different days). It's connected to our invoice when ${esc(st.name)}'s price before tax is 89% or 90% of ours, dated before theirs. Type our invoice or job # to set or fix one.</p>
+      <p class="muted" style="margin:6px 0 0" ${PST.part === "credits" ? "hidden" : ""}>Each ${esc(st.name)} invoice is one sale line plus a negative fee line (sometimes paid on different days). It's connected to our invoice when ${esc(st.name)}'s price before tax is 89% or 90% of ours, dated before theirs. Type our invoice or job # to set or fix one.</p>
     </section>
-    ${!R.length ? `<div class="empty"><div><h2>Nothing loaded yet</h2>Download the payment history from ${esc(st.name)}'s portal and load the .csv file here.</div></div>` : `
+    ${PST.part === "credits" ? "" : !R.length ? `<div class="empty"><div><h2>Nothing loaded yet</h2>Download the payment history from ${esc(st.name)}'s portal and load the .csv file here.</div></div>` : `
     <div class="table-wrap"><table class="cl-table pst-table">
       <thead><tr><th>${esc(st.name)} invoice</th><th>PO</th><th class="num">Sale (with tax)</th><th class="num">Fee</th><th class="num">Paid us</th><th>Paid on</th><th>Our customer / invoice</th></tr></thead>
       <tbody>${rows.map(r => `<tr data-pst="${esc(r.doc_no)}">
@@ -13879,7 +13882,8 @@ function pstRender() {
       </tr>`).join("")}</tbody>
       <tfoot><tr><th colspan="2">${rows.length} invoice${rows.length === 1 ? "" : "s"}</th><th class="num">${money(sum("sale"))}</th><th class="num">${money(sum("fee"))}</th><th class="num">${money(sum("net"))}</th><th colspan="2"></th></tr></tfoot>
     </table></div>`}
-    ${(PST.credits || []).length ? (() => { const CR = PST.credits, on = CR.filter(c => c.invoice_id).length, tot = CR.reduce((s, c) => s + Number(c.amount), 0);
+    ${PST.part === "credits" && !(PST.credits || []).length ? `<div class="empty"><div><h2>No supplier credits yet</h2>Send the credit memos to Claude to add them.</div></div>` : ""}
+    ${PST.part === "credits" && (PST.credits || []).length ? (() => { const CR = PST.credits, on = CR.filter(c => c.invoice_id).length, tot = CR.reduce((s, c) => s + Number(c.amount), 0);
       return `<h2 style="margin:22px 0 6px">Supplier credits for ${esc(st.name)} sales <span class="count">${CR.length}</span></h2>
       <p class="muted" style="margin:0 0 8px">${money(tot)} in credit memos from ${esc([...new Set(CR.map(c => c.supplier_name))].join(", "))}. ${on} of ${CR.length} connected to the customer's sale (by the name on the memo). They show on both invoice copies, the Sales page and lower the job's cost in job costing.</p>
       <div class="table-wrap"><table class="cl-table pst-table"><thead><tr><th>Memo</th><th>Customer on the memo</th><th class="num">Credit</th><th>Our customer / invoice</th></tr></thead><tbody>
@@ -13899,6 +13903,7 @@ function pstRender() {
     if (error) return say("Not loaded: " + rpcErr(error), true);
     await pstLoad(); PST.msg = `Loaded ${data.rows} lines (${data.new} new${data.rows - data.new ? `, ${data.rows - data.new} already here` : ""}). Connected ${data.matched} more invoice${data.matched === 1 ? "" : "s"} to our customers.`; PST.err = false; pstRender(); });
   $("#pst-q")?.addEventListener("input", e => { PST.q = e.target.value; const pos = e.target.selectionStart; pstRender(); const i = $("#pst-q"); i.focus(); i.setSelectionRange(pos, pos); });
+  document.querySelectorAll("[data-pst-part]").forEach(b => b.addEventListener("click", () => { PST.part = b.dataset.pstPart; PST.msg = ""; pstRender(); }));
   document.querySelectorAll("[data-pst-show]").forEach(b => b.addEventListener("click", () => { PST.show = b.dataset.pstShow; pstRender(); }));
   $("#pst-rematch")?.addEventListener("click", async () => { const { data, error } = await db.rpc("partner_statement_match", { p_partner: PST.partner });
     if (error) return say("Couldn't: " + rpcErr(error), true); await pstLoad(); PST.msg = `Connected ${data} more.`; PST.err = false; pstRender(); });
