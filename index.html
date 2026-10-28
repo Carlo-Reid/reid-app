@@ -12321,7 +12321,9 @@ function sinvOwing(D) {
   const st = D.statements || [], keys = [...new Set(st.map(s => s.supplier_id + "|" + (s.account || "")))];
   return keys.map(k => {
     const mine = st.filter(s => s.supplier_id + "|" + (s.account || "") === k), owe = mine.find(s => s.aging?.kind !== "payment"), pay = mine.find(s => s.aging?.kind === "payment");
-    return { sup: mine[0].supplier_id, name: sinvShort(mine[0].supplier) + (mine[0].account ? ` · ${mine[0].aging?.account_name || "acct " + mine[0].account}` : ""), owe, pay };
+    // counted in the total only when it's still the latest word: not paid after it, and not older than 4 months
+    const old = owe && (Date.now() - new Date(owe.date + "T12:00")) / 864e5 > 120, paidAfter = owe && pay && pay.date > owe.date;
+    return { sup: mine[0].supplier_id, name: sinvShort(mine[0].supplier) + (mine[0].account ? ` · ${mine[0].aging?.account_name || "acct " + mine[0].account}` : ""), owe, pay, counted: !!owe && !old && !paidAfter, why: paidAfter ? "paid since, not counted" : old ? "old statement, not counted" : "" };
   }).sort((a, b) => a.name.localeCompare(b.name));
 }
 // statements of the supplier tab as buttons: "All invoices" first, then each statement (newest first)
@@ -12336,13 +12338,13 @@ function sinvStChips(D) {
 function sinvAllHead(D, rows) {
   const st = (D.statements || []).filter(s => SINV.sup == null || s.supplier_id === SINV.sup);
   const O = sinvOwing(D).filter(o => SINV.sup == null || o.sup === SINV.sup);
-  const tot = O.reduce((a, o) => a + (o.owe ? Number(o.owe.total) || 0 : 0), 0);
+  const tot = O.reduce((a, o) => a + (o.counted ? Number(o.owe.total) || 0 : 0), 0), left = O.filter(o => o.owe && !o.counted).length;
   const dates = st.map(s => s.date).sort();
   return `<section class="sinv-st">
     <div><span class="quiet">Showing</span><b>All invoices${SINV.sup == null ? " · every supplier" : ` · ${esc(sinvShort(st[0]?.supplier))}`}</b><span class="quiet">${st.length} statements${dates.length ? ` · ${esc(fmtDate(dates[0]))} to ${esc(fmtDate(dates[dates.length - 1]))}` : ""} · ${rows.length} invoices</span></div>
-    <div class="sinv-owing-total"><span class="quiet">${SINV.sup == null ? "Owing to all suppliers" : "Owing now"}</span><b>${money(tot)}</b><span class="quiet">from each one's latest statement</span></div>
+    <div class="sinv-owing-total"><span class="quiet">${SINV.sup == null ? "Owing to all suppliers" : "Owing now"}</span><b>${money(tot)}</b><span class="quiet">from each one's latest statement${left ? ` · ${left} older ${left === 1 ? "one" : "ones"} not counted` : ""}</span></div>
   </section>
-  ${O.length ? `<div class="sinv-owing">${O.map(o => `<button type="button" class="sinv-owe" data-sinv-sup="${o.sup}" ${SINV.sup === o.sup ? 'aria-pressed="true"' : ""}><span>${esc(o.name)}</span>${o.owe ? `<b>${money(o.owe.total)}</b><span class="quiet">statement ${esc(fmtDate(o.owe.date))}</span>` : `<b>—</b><span class="quiet">no statement</span>`}${o.pay && (!o.owe || o.pay.date > o.owe.date) ? `<span class="quiet">last paid ${money(o.pay.total)} on ${esc(fmtDate(o.pay.date))}</span>` : ""}</button>`).join("")}</div>` : ""}`;
+  ${O.length ? `<div class="sinv-owing">${O.map(o => `<button type="button" class="sinv-owe" data-sinv-sup="${o.sup}" ${SINV.sup === o.sup ? 'aria-pressed="true"' : ""}><span>${esc(o.name)}</span>${o.owe ? `<b ${o.counted ? "" : 'class="quiet"'}>${money(o.owe.total)}</b><span class="quiet">statement ${esc(fmtDate(o.owe.date))}${o.why ? ` · ${o.why}` : ""}</span>` : `<b>—</b><span class="quiet">no statement</span>`}${o.pay && (!o.owe || o.pay.date > o.owe.date) ? `<span class="quiet">last paid ${money(o.pay.total)} on ${esc(fmtDate(o.pay.date))}</span>` : ""}</button>`).join("")}</div>` : ""}`;
 }
 function sinvAddUp(S, slTot, all) {
   const T = Number(S.total); if (Math.abs(slTot - T) < 0.01) return " · add up ✓";
