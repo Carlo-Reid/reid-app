@@ -239,7 +239,10 @@
   .gd-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 16px; } .gd-chip { font-size: 16px; padding: 9px 14px; } .gd-clash { opacity: .6; }
   .gd-days { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 10px 0; }
   .gd-day { font: inherit; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper, #fff); color: var(--ink); cursor: pointer; min-height: 70px; }
-  .gd-day:hover { border-color: var(--blue, #1864ab); background: var(--blue-wash, #eef4fb); } .gd-day span { font-size: 13px; color: var(--steel); } .gd-freeday { color: var(--green, #2b8a3e) !important; font-weight: 700; }
+  .gd-day:hover { border-color: var(--blue, #1864ab); background: var(--blue-wash, #eef4fb); }
+  .gd-day.gd-booked { background: #fff4e6; border-color: #f0a35e; } .gd-day.gd-booked b { color: #b4530a; } .gd-day.gd-booked span { color: #8a4b12; }
+  .gd-say { font-size: calc(18px * var(--fs, 1)); margin: 2px 0 10px; }
+  .gd-mine { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: #fff4e6; border: 1px solid #f0a35e; } .gd-mine div { margin-top: 3px; } .gd-day span { font-size: 13px; color: var(--steel); } .gd-freeday { color: var(--green, #2b8a3e) !important; font-weight: 700; }
   /* the training view's Section 1: only + Book a sales call and the email address work */
   body.ui-guided .file .sec1a .zone-chip, body.ui-guided .file .sec1a .zone-bar, body.ui-guided .file .sec1a [data-edit-cust], body.ui-guided .file .sec1a [data-add-task],
   body.ui-guided .file .sec1a [data-book-board], body.ui-guided .file .sec1a #inv-start, body.ui-guided .file .sec1a .fu-tasklist { display: none !important; }
@@ -6310,7 +6313,15 @@ async function showFile(i) {
 /* ---------------- section side bar ---------------- */
 function buildFileNav() {
   const nav = document.querySelector(".file-nav"); if (!nav) return;
-  if (ME.guided) document.querySelectorAll('.file section.block[data-tag]').forEach(e => { if (!e.closest(".sec1a") && !["Section 3", "Section 7", "Section 8"].includes(e.dataset.tag)) e.remove(); });   // the training view: equipment, proposals, photos
+  if (ME.guided) document.querySelectorAll('.file section.block[data-tag]').forEach(e => { if (!e.closest(".sec1a") && !["Section 3", "Section 7", "Section 8"].includes(e.dataset.tag)) e.remove(); });
+  if (ME.guided && current?.c && !document.getElementById("gd-mine")) {   // the training view: their own booked visits with this customer
+    const s1 = document.querySelector(".file .sec1a"), cid = current.c.id; if (s1) { const box = document.createElement("div"); box.id = "gd-mine"; s1.appendChild(box);
+      (BOOK ? Promise.resolve() : bookLists().catch(() => {})).then(() => db.rpc("calls_next_days", { p_days: 60 })).then(({ data }) => { if (!document.body.contains(box) || current?.c?.id !== cid) return;
+        const myName = String((BOOK?.techs || []).find(t => t.id === ME.emp)?.name || "").trim(), locs = new Set((current.locs || []).map(l => l.id).concat((current.jobs || []).map(j => j.location_id)));
+        const jobs = new Set((current.jobs || []).map(j => j.id));
+        const mine = (data || []).filter(v => (Number(v.cust) === cid || jobs.has(v.job) || locs.has(v.loc)) && myName && (v.techs || "").split(/,\s*/).some(n => n.trim() === myName));
+        const tm = x => x ? new Date(x).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }) : "Any time";
+        box.className = mine.length ? "gd-mine" : ""; box.innerHTML = mine.length ? `<b>Your booked visits with this customer</b>${mine.map(v => `<div>${esc(dayText(v.d))} · ${esc(tm(v.from))}${v.to ? " – " + esc(tm(v.to)) : ""} · ${esc(v.type || "")}</div>`).join("")}` : ""; }); } }   // the training view: equipment, proposals, photos
   else if (salesBooking()) document.querySelectorAll('.file :is([data-tag="Section 3"], [data-tag="Section 4B"])').forEach(e => e.remove());   // the training view keeps the equipment   // no equipment or marketing on a file opened from Sales   // equipment never shows on a file opened from Sales
   const secs = [...document.querySelectorAll(".file section.block")].filter(sec => getComputedStyle(sec).display !== "none");
   secs.forEach((sec, i) => sec.id = "sec-" + i);
@@ -8800,7 +8811,7 @@ let GBK_CATS = null;
 function gdBookRender(msg) {
   const F = BK; F.gstep = F.gstep || "kind";
   const back = to => `<button class="link gd-over" type="button" data-gbk-to="${to}">← Back</button>`;
-  const card = (no, q, body) => `<div class="gd-card"><div class="gd-stepno">${no}</div><h2>${q}</h2>${body}</div>`;
+  const card = (no, q, body) => `<div class="gd-card"><div class="gd-stepno">${no}</div>${q ? `<h2>${q}</h2>` : ""}${body}</div>`;
   const say = msg ? `<div class="staff-msg ${msg.err ? "err" : "ok"}">${esc(msg.text || msg)}</div>` : "";
   let body = "";
   if (F.gstep === "kind") body = `<h1>Book a sales call</h1><p class="lead">${esc(F.cust.display_name)}</p><div class="gd-two">
@@ -8820,8 +8831,9 @@ function gdBookRender(msg) {
     const mine = v => !!name && (v.techs ? v.techs.split(/,\s*/) : []).some(n => n === name || (first(n) && first(n) === first(name) && !name.includes(" ")));
     const tm = x => { const d = new Date(x); return isNaN(d) ? "" : d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }); };
     const days = []; for (let i = 0; i < 31; i++) { const dt = new Date(); dt.setDate(dt.getDate() + i); if (dt.getDay() === 0) continue; days.push(ymd(dt)); }
-    body = card("Step 3", "Pick a day", !F.g30 ? `<p class="quiet">Loading your schedule…</p>` : `<p class="quiet">Your next 30 days. Each day shows the calls you already have.</p><div class="gd-days">${days.map(d => { const cs = F.g30.filter(v => v.d === d && mine(v)).sort((a, b) => String(a.from).localeCompare(String(b.from)));
-      return `<button type="button" class="gd-day ${cs.length ? "" : "free"}" data-gbk-day="${d}"><b>${esc(new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }))}</b>
+    const me1 = String((BOOK.techs || []).find(t => t.id === ME.emp)?.name || name || "").trim().split(/\s+/)[0];
+    body = card("Step 3", "", !F.g30 ? `<p class="quiet">Loading your schedule…</p>` : `<p class="gd-say"><b>${esc(me1 || "Here")}, this is a snapshot of your calendar for the next 30 days. Pick a day you are free to visit this customer.</b></p><div class="gd-days">${days.map(d => { const cs = F.g30.filter(v => v.d === d && mine(v)).sort((a, b) => String(a.from).localeCompare(String(b.from)));
+      return `<button type="button" class="gd-day ${cs.length ? "gd-booked" : "free"}" data-gbk-day="${d}"><b>${esc(new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }))}</b>
         ${cs.length ? cs.map(v => `<span>${esc(v.from ? tm(v.from) : "Any time")} · ${esc(v.city || v.street || "")}</span>`).join("") : `<span class="gd-freeday">Free</span>`}</button>`; }).join("")}</div>${back("notes")}`);
   } else if (F.gstep === "time") {
     const name = (BOOK.techs || []).find(t => t.id === ME.emp)?.name || bkSellerName(F), first = n => String(n || "").trim().split(/\s+/)[0].toLowerCase();
