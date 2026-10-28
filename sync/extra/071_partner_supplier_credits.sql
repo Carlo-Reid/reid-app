@@ -42,7 +42,7 @@ BEGIN
     UNION SELECT i.id FROM jobs j JOIN invoices i ON i.job_id = j.id WHERE j.customer_id IN (SELECT id FROM pc)
     UNION SELECT m.invoice_id FROM partner_statement_matches m WHERE m.partner_id = p_partner AND m.invoice_id IS NOT NULL),
   sales AS MATERIALIZED (
-    SELECT i.id, i.job_id, i.invoice_date, upper(concat_ws(' | ', c1.display_name, c2.display_name, lo.name)) AS names
+    SELECT i.id, i.job_id, i.invoice_date, regexp_replace(upper(concat_ws('|', c1.display_name, c2.display_name, lo.name)), '[^A-Z|]', '', 'g') AS names   -- letters only: O'Neal = O NEAL
     FROM ids JOIN invoices i ON i.id = ids.id
     LEFT JOIN jobs j ON j.id = i.job_id
     LEFT JOIN locations lo ON lo.id = coalesce(i.location_id, j.location_id)
@@ -56,8 +56,8 @@ BEGIN
       SELECT x.id, count(*) OVER () AS n,   -- n = how many different jobs fit
              row_number() OVER (ORDER BY (x.invoice_date <= coalesce(c.memo_date, current_date)) DESC, abs(coalesce(c.memo_date, current_date) - x.invoice_date), x.id DESC) AS rn
       FROM (SELECT DISTINCT ON (coalesce(s.job_id, s.id)) s.id, s.invoice_date FROM sales s
-            WHERE position(upper(c.last_name) in s.names) > 0
-              AND (coalesce(c.first_name, '') = '' OR position(upper(split_part(c.first_name, ' ', 1)) in s.names) > 0)
+            WHERE position(regexp_replace(upper(c.last_name), '[^A-Z]', '', 'g') in s.names) > 0
+              AND (coalesce(c.first_name, '') = '' OR position(regexp_replace(upper(split_part(c.first_name, ' ', 1)), '[^A-Z]', '', 'g') in s.names) > 0)
             ORDER BY coalesce(s.job_id, s.id), s.invoice_date DESC, s.id DESC) x) b
     WHERE c.partner_id = p_partner AND c.invoice_id IS NULL AND c.how IS NULL AND coalesce(c.last_name, '') <> '' AND b.rn = 1)
   UPDATE partner_supplier_credits c SET invoice_id = pick.inv, how = CASE WHEN pick.n = 1 THEN 'auto' ELSE 'guess' END
