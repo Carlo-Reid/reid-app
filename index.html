@@ -3728,7 +3728,7 @@ article.sales .cl-hero-range > em { font-size: calc(17px * var(--fs, 1)); opacit
 .sinv-det > td { background: var(--paper); } .sinv-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; } .sinv-cols h3, .sinv-scans h3 { margin: 4px 0 6px; font-size: 15px; }
 .sinv-cmp { margin-bottom: 14px; } .sinv-cmp h3 { margin: 4px 0 6px; font-size: 15px; } .sinv-cmp-w { overflow-x: auto; }
 .sinv-ct td, .sinv-ct th { vertical-align: top; } .sinv-ct .sinv-split { border-left: 2px solid var(--steel, #8a9aa8); }
-.sinv-bad { color: #c92a2a; font-weight: 700; } .sinv-ok { color: #2b8a3e; font-weight: 700; } .sinv-row-bad { background: #fff5f5; } .sinv-miss { color: #c92a2a; text-align: center; }
+.sinv-bad { color: #c92a2a; font-weight: 700; } .sinv-soft { color: #b35c00; font-weight: 600; } .sinv-row-soft { background: #fff9db; } .sinv-ok { color: #2b8a3e; font-weight: 700; } .sinv-row-bad { background: #fff5f5; } .sinv-miss { color: #c92a2a; text-align: center; }
 .sinv-why { min-width: 140px; font-size: 12px; } .sinv-sm { font-size: 11px; }
 .sinv-issues { background: #fff5f5; border: 1px solid #ffc9c9; border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; color: #c92a2a; } .sinv-issues ul { margin: 4px 0 0 18px; padding: 0; }
 .sinv-allok { background: #ebfbee; border: 1px solid #b2f2bb; border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; color: #2b8a3e; font-weight: 700; }
@@ -12324,14 +12324,14 @@ function sinvPair(L, P) {
   return rows;
 }
 function sinvCompare(r, L, P, what) {
-  const rows = sinvPair(L, P), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol;
+  const rows = sinvPair(L, P), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol, split = Number(r.po_other_invoices) > 0;
   const issues = []; let ia = 0, pa = 0;
   const bad = (ok, h) => ok ? h : `<span class="sinv-bad">${h}</span>`;
   const body = rows.map(({ a, b }) => {
     if (a?.amt != null) ia += a.amt; if (b) pa += b.amt || 0;
     let why = "";
     if (a && !b && !a.comp) { why = `Not on the PO`; issues.push(`${a.x.code || a.x.description}: on the ${what} but not on the PO${a.amt != null ? ` (${money(a.amt)})` : ""}`); }
-    else if (b && !a) { why = `Not on this ${what}`; issues.push(`${b.y.sku || b.y.description}: on the PO but not billed on this ${what}${b.amt ? ` (${money(b.amt)})` : ""}`); }
+    else if (b && !a) { why = split ? `Not on this ${what} (maybe on the other one)` : `Not on this ${what}`; if (!split) issues.push(`${b.y.sku || b.y.description}: on the PO but not billed on this ${what}${b.amt ? ` (${money(b.amt)})` : ""}`); }
     const qOk = !a || !b || a.q == null || Math.abs(a.q) === b.q, eOk = !a || !b || near(a.each, b.each, Math.max(0.011, b.each * 0.005)), mOk = !a || !b || near(a.amt, b.amt, 0.02);
     if (a && b) { const w = [];
       if (!qOk) w.push(`qty ${Math.abs(a.q)} vs ${b.q}`);
@@ -12343,11 +12343,13 @@ function sinvCompare(r, L, P, what) {
         <td class="r">${a.amt == null ? "" : bad(mOk, money(a.amt))}</td>` : `<td colspan="5" class="sinv-miss">—</td>`;
     const pc = b ? `<td class="sinv-split">${esc(b.y.sku || "")}</td><td>${esc(b.y.description || "")}</td><td class="r">${bad(qOk, b.q)}</td><td class="r">${bad(eOk, money(b.each))}</td><td class="r">${bad(mOk, money(b.amt))}</td>`
       : `<td colspan="5" class="sinv-miss sinv-split">—</td>`;
-    return `<tr class="${why ? "sinv-row-bad" : a && b ? "sinv-row-ok" : ""}">${ac}${pc}<td class="sinv-why">${why ? `<span class="sinv-bad">${esc(why)}</span>` : a && b ? `<span class="sinv-ok">✓</span>` : ""}</td></tr>`; }).join("");
+    const soft = b && !a && split;
+    return `<tr class="${why ? (soft ? "sinv-row-soft" : "sinv-row-bad") : a && b ? "sinv-row-ok" : ""}">${ac}${pc}<td class="sinv-why">${why ? `<span class="${soft ? "sinv-soft" : "sinv-bad"}">${esc(why)}</span>` : a && b ? `<span class="sinv-ok">✓</span>` : ""}</td></tr>`; }).join("");
   const sub = r.subtotal != null ? Number(r.subtotal) : Math.round(ia * 100) / 100, poT = Number(r.po_amount || pa);
-  if (Math.abs(Math.abs(sub) - poT) > 0.02) issues.unshift(`Before tax: ${what} ${money(sub)} vs PO ${money(poT)} (${Math.abs(sub) > poT ? "over" : "under"} by ${money(Math.abs(Math.abs(sub) - poT))})`);
+  const tip = split ? `The PO is billed over ${Number(r.po_other_invoices) + 1} invoices, so lines on the PO that aren't on this one may be on the other${Number(r.po_other_invoices) > 1 ? "s" : ""} (in yellow).` : "";
+  if (Math.abs(Math.abs(sub) - poT) > 0.02 && !split) issues.unshift(`Before tax: ${what} ${money(sub)} vs PO ${money(poT)} (${Math.abs(sub) > poT ? "over" : "under"} by ${money(Math.abs(Math.abs(sub) - poT))})`);
   return `<section class="sinv-cmp"><h3>${what[0].toUpperCase() + what.slice(1)} ${esc(r.number)} next to PO ${esc(r.po_number || "")}</h3>
-    ${issues.length ? `<div class="sinv-issues"><b>What doesn't match:</b><ul>${issues.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : `<div class="sinv-allok">✓ Every line matches the PO.</div>`}
+    ${issues.length ? `<div class="sinv-issues"><b>What doesn't match:</b><ul>${issues.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : `<div class="sinv-allok">✓ Every line ${split ? "on this " + what + " " : ""}matches the PO.</div>`}${tip ? `<p class="sinv-soft">${esc(tip)}</p>` : ""}
     <div class="sinv-cmp-w"><table class="sinv-lt sinv-ct"><thead><tr><th colspan="5">On the ${what}</th><th colspan="5" class="sinv-split">On the PO</th><th></th></tr>
       <tr><th>Code</th><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th><th class="sinv-split">Code</th><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th><th>Difference</th></tr></thead>
       <tbody>${body}</tbody>
