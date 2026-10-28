@@ -242,7 +242,13 @@
   .gd-day:hover { border-color: var(--blue, #1864ab); background: var(--blue-wash, #eef4fb); }
   .gd-day.gd-booked { background: #fff4e6; border-color: #f0a35e; } .gd-day.gd-booked b { color: #b4530a; } .gd-day.gd-booked span { color: #8a4b12; }
   .gd-say { font-size: calc(18px * var(--fs, 1)); margin: 2px 0 10px; }
-  .task-cal-btn { margin-left: auto; } body.ui-guided .est-rec, body.ui-guided .est-oh .es-on { display: none !important; } .est-more-add { padding: 8px !important; } .est-ltd { background: #e8590c !important; border-color: #e8590c !important; color: #fff !important; } .prac-band { background: #e7f5ff; border: 2px dashed #1c7ed6; color: #1864ab; font-weight: 700; padding: 10px 14px; border-radius: 10px; margin: 0 0 10px; }
+  .task-cal-btn { margin-left: auto; }
+  .est-hold { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: #fff4e6; border: 2px solid #e8590c; } .eh-head { font-size: calc(17px * var(--fs, 1)); }
+  .eh-days { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; } .eh-days .btn { display: flex; flex-direction: column; align-items: center; line-height: 1.2; } .eh-days small { font-weight: 500; font-size: 12px; }
+  .eh-held { margin: 6px 0; }
+  .dsp-holds { margin: 6px 0 10px; padding: 8px 10px; border: 2px dashed #e8590c; border-radius: 10px; background: #fff9f2; } .dsp-holds-h { font-weight: 700; margin-bottom: 4px; }
+  .dsp-hold { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 4px 0; } .dsp-hold-st { color: #e8590c; font-weight: 650; } .dsp-hold.ok .dsp-hold-st { color: #2b8a3e; }
+  .dr-holds .dsp-hold { flex-direction: column; align-items: flex-start; gap: 0; background: #fff4e6; border-left: 3px solid #e8590c; border-radius: 6px; padding: 2px 6px; margin-bottom: 4px; font-size: 12px; } body.ui-guided .est-rec, body.ui-guided .est-oh .es-on { display: none !important; } .est-more-add { padding: 8px !important; } .est-ltd { background: #e8590c !important; border-color: #e8590c !important; color: #fff !important; } .prac-band { background: #e7f5ff; border: 2px dashed #1c7ed6; color: #1864ab; font-weight: 700; padding: 10px 14px; border-radius: 10px; margin: 0 0 10px; }
   .mybk-prac { background: #e7f5ff; color: #1864ab; font-weight: 700; } .est-empty-add { text-align: center; padding: 14px !important; }
   .mybk-card { display: grid; grid-template-columns: 150px 1fr; gap: 6px 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; background: #fff; }
   .mybk-card.mybk-today { border-color: #f0a35e; background: #fff9f2; } .mybk-card.mybk-late { border-color: #e03131; }
@@ -8527,6 +8533,7 @@ function renderEstEdit() {
           <td class="r est-off">−<input class="est-p" data-lpd="${i}:${k}" value="${Math.abs(Number(l.price) || 0).toFixed(2)}" inputmode="decimal" ${closed ? "disabled" : ""} aria-label="Amount off"></td>
           <td>${closed ? "" : `<button class="link danger" type="button" data-ldel="${i}:${k}" title="Take it off">✕</button>`}</td></tr>`).join("")}</tbody></table>` : ""}
         <div class="est-tot"><span>Subtotal <b>${money(tot(o))}</b></span><span>HST (13%) <b>${money(tot(o) * HST)}</b></span><span class="est-big">Total <b>${money(tot(o) * (1 + HST))}</b></span><span class="est-fin" title="${esc(estFinNote())}">Est. financing <b>${estFin(tot(o) * (1 + HST)) ? money(estFin(tot(o) * (1 + HST))) + "/mo" : "—"}</b></span></div>
+        ${!closed && ME.guided && i === 0 && o.lines.some(l => l.disc) ? `<div class="est-hold no-print" data-hold-oi="${i}"></div>` : ""}
       </section>`).join("")}
         ${!closed && !ME.guided && EST.opts.length < 3 ? `<button type="button" class="est-newopt" id="est-newopt">+ Add another option <span class="quiet">(up to 3)</span></button>` : ""}</div>
       ${estAuthHtml()}
@@ -8534,7 +8541,39 @@ function renderEstEdit() {
     </div></div>
     <div id="est-dlg"></div>
   </article>`;
-  wireEstEdit(); estCommFill();
+  wireEstEdit(); estCommFill(); estHoldFill();
+}
+// "Book today with a deposit and we'll double your rebate": days in the week a week out with 2+ installers free; the day picked is held on the board
+const HOLD_BONUS = "Booked today with a deposit: your rebate is doubled";
+async function estHoldFill() {
+  const box = document.querySelector("[data-hold-oi]"); if (!box || !EST.id) return;
+  const id = EST.id, { data, error } = await db.rpc("install_hold_days", { p_estimate: id });
+  if (EST.id !== id || !document.body.contains(box)) return;
+  if (error || !data) { box.remove(); return; }
+  const dn = d => new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" });
+  const mine = data.mine, ok = (data.days || []).filter(d => d.free >= 2);
+  if (!mine && !ok.length) { box.remove(); return; }
+  box.innerHTML = `<div class="eh-head">🎉 <b>Book today with a deposit and we'll double your rebate!</b></div>
+    ${mine ? `<p class="eh-held">Install day held: <b>${esc(dn(mine.day))}</b> · ${mine.status === "confirmed" ? "confirmed by the office ✓" : "waiting for the office to confirm"}</p>` : `<p class="quiet">Pick the install day the customer wants. It's held on the dispatch board until the office confirms it.</p>`}
+    ${mine?.status === "confirmed" ? "" : `<div class="eh-days">${ok.map(d => `<button type="button" class="btn ${mine && mine.day === d.day ? "" : "quiet-btn"}" data-hold-day="${d.day}" title="Installers free: ${esc(d.names || "")}">${esc(dn(d.day))}<small>${d.free} installers free</small></button>`).join("")}</div>
+    ${mine ? `<button class="link danger" type="button" data-hold-off>Take the hold off (the rebate goes back to normal)</button>` : ""}`}
+    <span class="staff-msg" data-hold-msg></span>`;
+  const msg = (t, err) => { const m = box.querySelector("[data-hold-msg]"); m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; };
+  const o = EST.opts[0];
+  box.querySelectorAll("[data-hold-day]").forEach(b => b.addEventListener("click", async () => {
+    const day = b.dataset.holdDay; box.querySelectorAll("button").forEach(x => x.disabled = true); msg("Holding the day…");
+    const r = await db.rpc("install_hold_set", { p_estimate: id, p_day: day });
+    if (r.error) { box.querySelectorAll("button").forEach(x => x.disabled = false); return msg("Not held: " + rpcErr(r.error), true); }
+    o.lines = o.lines.filter(l => !String(l.description || "").startsWith(HOLD_BONUS));
+    const reb = o.lines.filter(l => l.disc).reduce((s, l) => s + Math.abs(Number(l.price) || 0), 0);
+    const exp = o.lines.filter(l => l.disc && l.expires).map(l => l.expires).sort()[0] || new Date(Date.now() + 48 * 3600e3).toISOString();
+    if (reb > 0) o.lines.push({ item_id: null, description: `${HOLD_BONUS} (install day held for ${dn(day)})`, qty: 1, price: -reb, disc: true, expires: exp });
+    EST.dirty = true;
+    if (EST.saveNow && await EST.saveNow(false)) openEstEdit(id, `${dn(day)} is held for the install. Rebate doubled.`); else renderEstEdit(); }));
+  box.querySelector("[data-hold-off]")?.addEventListener("click", async () => {
+    const r = await db.rpc("install_hold_set", { p_estimate: id, p_day: null }); if (r.error) return msg("Not changed: " + rpcErr(r.error), true);
+    o.lines = o.lines.filter(l => !String(l.description || "").startsWith(HOLD_BONUS)); EST.dirty = true;
+    if (EST.saveNow && await EST.saveNow(false)) openEstEdit(id, "The hold is off and the rebate is back to normal."); else renderEstEdit(); });
 }
 // the floating right column follows the option you're looking at
 function estPickFloat() {
@@ -8609,6 +8648,7 @@ function wireEstEdit() {
     if (sent) p.sent = true;
     say("Saving…"); const { error } = await db.rpc("est_save", { p_id: EST.id, p });
     if (error) { say("Not saved: " + rpcErr(error), true); return false; } EST.dirty = false; return true; };
+  EST.saveNow = save;
   $("#est-save")?.addEventListener("click", async () => { if (await save(false)) openEstEdit(EST.id, "Saved."); });
   $("#est-send")?.addEventListener("click", async () => { if (!$("#est-save") || !EST.dirty || await save(false)) { EST_SEND_NOW = true; openEstimate(EST.id); } });
   $("#est-preview")?.addEventListener("click", async () => { if (!$("#est-save") || !EST.dirty || await save(false)) { if ($("#est-save")) say("Saved."); openEstimate(EST.id); } });
@@ -10572,13 +10612,34 @@ function dspRangeDates() {
 async function loadDspRange() {
   const [a, b] = dspRangeDates(), from = ymd(a), to = ymd(b), key = DSP.range + from;
   if (!document.querySelector(".dsp")) $("#main").innerHTML = `<div class="loading">Loading the board…</div>`;
-  const [{ data, error }, bl] = await Promise.all([db.rpc("dispatch_range", { p_from: from, p_to: to }), db.rpc("staff_blocks_list", { p_from: from, p_to: to })]);
-  DSP.rangeBlocks = bl.error ? [] : bl.data || [];
+  const [{ data, error }, bl, hl] = await Promise.all([db.rpc("dispatch_range", { p_from: from, p_to: to }), db.rpc("staff_blocks_list", { p_from: from, p_to: to }), db.rpc("install_holds_list", { p_from: from, p_to: to })]);
+  DSP.rangeBlocks = bl.error ? [] : bl.data || []; DSP.rangeHolds = hl.error ? [] : hl.data || [];
   if (DSP.range === "day" || ymd(dspRangeDates()[0]) !== from) return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the board</h2>${esc(/PGRST202|could not find/i.test(error.message || "") ? "Almost ready: the database part is being set up. Try again in a few minutes." : rpcErr(error))}</div></div>`; return; }
   DSP.rangeRows = data || []; DSP.rangeKey = key;
   renderDspRange();
 }
+// installs a sales person held ("book today with a deposit"), waiting for the office
+function dspHoldsHtml(list, compact) {
+  return list.map(x => `<div class="dsp-hold ${x.status === "confirmed" ? "ok" : ""}"><b>🔒 ${esc(x.customer || "Customer")}</b>${compact ? "" : `<span>${esc([x.city, "proposal " + (x.estimate_number || ""), "held by " + (x.by || "")].filter(Boolean).join(" · "))}</span>`}
+    <span class="dsp-hold-st">${x.status === "confirmed" ? "Confirmed" : "Waiting for the office"}</span>${!compact && x.can_decide ? `${x.status === "held" ? `<button class="btn" type="button" data-hold-ok="${x.id}">Confirm</button>` : ""}<button class="link danger" type="button" data-hold-rel="${x.id}">Release</button>` : ""}
+    ${!compact ? `<button class="link" type="button" data-hold-est="${x.estimate_id}">Open proposal</button>` : ""}</div>`).join("");
+}
+function dspHoldsWire(root, reload) {
+  root.querySelectorAll("[data-hold-ok], [data-hold-rel]").forEach(b => b.addEventListener("click", async e => { e.stopPropagation();
+    const ok = !!b.dataset.holdOk; if (!ok && b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Release it"; return; }
+    const { error } = await db.rpc("install_hold_decide", { p_id: Number(b.dataset.holdOk || b.dataset.holdRel), p_status: ok ? "confirmed" : "released" });
+    if (error) return alertMsg("Not changed: " + rpcErr(error)); reload(); }));
+  root.querySelectorAll("[data-hold-est]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); openEstEdit(Number(b.dataset.holdEst)); }));
+}
+function dspHoldsBanner() {
+  const bar = document.querySelector(".dsp .dsp-bar"); document.getElementById("dsp-holds")?.remove();
+  if (!bar || DSP.range === "week" || DSP.range === "month" || !(DSP.holds || []).length) return;
+  const d = document.createElement("div"); d.id = "dsp-holds"; d.className = "dsp-holds";
+  d.innerHTML = `<div class="dsp-holds-h">Install days held by sales (deposit, rebate doubled)</div>${dspHoldsHtml(DSP.holds)}`;
+  bar.insertAdjacentElement("afterend", d); dspHoldsWire(d, () => loadDispatch());
+}
+{ const _rd = renderDispatch; renderDispatch = function () { const r = _rd.apply(this, arguments); try { dspHoldsBanner(); } catch {} return r; }; }   // the held installs above the day board
 function renderDspRange() {
   document.body.classList.remove("dsp-mapmode");
   const [a, b] = dspRangeDates(), days = []; for (let d = new Date(a); d <= b; d = addDays(d, 1)) days.push(ymd(d));
@@ -10615,6 +10676,8 @@ function renderDspRange() {
     <div class="dr-wrap"><table class="dr-grid ${month ? "dr-month" : "dr-week"}"><thead><tr><th class="dr-tech">Tech</th>${days.map(head).join("")}</tr></thead><tbody>
       ${techs.map(t => `<tr><th class="dr-tech">${esc(t.name)}<div class="quiet">${callsWord(rows.filter(r => (r.techs || []).some(x => x.id === t.id)).length)}</div></th>${days.map(d => cell(t.id, d)).join("")}</tr>`).join("")}
       ${none ? `<tr class="dr-none"><th class="dr-tech">No tech yet</th>${days.map(d => cell(null, d)).join("")}</tr>` : ""}
+      ${(DSP.rangeHolds || []).length ? `<tr class="dr-holds"><th class="dr-tech">🔒 Installs held</th>${days.map(d => { const hs = DSP.rangeHolds.filter(x => x.day === d);
+        return `<td class="dr-cell" data-dr-day="${d}">${month ? (hs.length ? `<div class="dr-n"><b>${hs.length}</b> held</div>` : "") : dspHoldsHtml(hs, true)}</td>`; }).join("")}</tr>` : ""}
     </tbody></table></div></article>`;
   dspRangeWire();
   const move = n => { const d = new Date(DSP.date + "T12:00:00"); if (month) { d.setDate(1); d.setMonth(d.getMonth() + n); } else d.setDate(d.getDate() + 7 * n); DSP.date = ymd(d); loadDspRange(); };
@@ -10633,6 +10696,7 @@ async function loadDispatch() {
   DSP.rows = day.data; DSP.waiting = wait.error ? [] : wait.data;
   { const n = await db.rpc("board_notes_for", { p_date: d }); DSP.notes = n.error ? [] : n.data || []; if (DSP.date !== d) return; }
   { const b = await db.rpc("staff_blocks_list", { p_from: d, p_to: d }); DSP.blocks = b.error ? [] : b.data || []; if (DSP.date !== d) return; }
+  { const b = await db.rpc("install_holds_list", { p_from: d, p_to: d }); DSP.holds = b.error ? [] : b.data || []; if (DSP.date !== d) return; }
   DSP.sig = JSON.stringify([DSP.rows, DSP.waiting]);
   renderDispatch();
 }
