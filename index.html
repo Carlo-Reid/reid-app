@@ -13676,12 +13676,16 @@ async function openSupStatement(stId, sup) {
   $("#inv-emailbtn")?.classList.add("hidden"); $("#inv-cancelbtn")?.classList.add("hidden"); INV_EMAIL_CUR = null; $("#doc-send")?.remove();
   $("#inv-paper").innerHTML = `<div class="quiet" style="padding:40px">Making the statement…</div>`;
   if (!COMPANY) { const { data } = await db.from("company_settings").select("*").limit(1).maybeSingle(); COMPANY = data || { company_name: "Reid Heating & Cooling" }; }
-  const { data, error } = await db.rpc("supplier_invoices_list", { p_supplier: sup, p_statement: stId });
+  const [{ data, error }, all] = await Promise.all([db.rpc("supplier_invoices_list", { p_supplier: sup, p_statement: stId }),
+    STV.allFor === sup && STV.all ? Promise.resolve({ data: { rows: STV.all } }) : db.rpc("supplier_invoices_list", { p_supplier: sup, p_statement: 0 })]);
   if (error) { $("#inv-paper").innerHTML = `<div class="staff-msg err" style="padding:40px">Couldn't open the statement: ${esc(rpcErr(error))}</div>`; return; }
+  STV.all = all.data?.rows || []; STV.allFor = sup;   // every invoice of theirs we have, whichever month it was loaded with
   STV.D = data; drawSupStatement();
 }
 function drawSupStatement() {
-  const D = STV.D || {}, S = (D.statements || []).find(s => s.id === STV.id) || {}, SL = D.statement_lines || [], rows = new Map((D.rows || []).map(r => [r.id, r]));
+  const D = STV.D || {}, S = (D.statements || []).find(s => s.id === STV.id) || {}, SL = D.statement_lines || [], rows = new Map([...(STV.all || []), ...(D.rows || [])].map(r => [r.id, r]));
+  const byNum = new Map([...(STV.all || []), ...(D.rows || [])].map(r => [String(r.number || "").trim(), r]));
+  SL.forEach(l => { if (!l.invoice_id) { const r = byNum.get(String(l.reference || "").trim()); if (r) l.invoice_id = r.id; } });   // found in an earlier month's load
   const ag = S.aging || {}, mon = String(S.date || "").slice(0, 7), co = COMPANY || {};
   const ours = l => { const r = l.invoice_id && rows.get(l.invoice_id); if (!r) return { t: "No copy in the app", c: "st-no" }; const s = sinvState(r);
     return { t: s.k === "ok" || s.k === "match" ? "✓ " + s.label : s.label, c: s.k === "ok" || s.k === "match" ? "st-ok" : s.look ? "st-look" : "", r }; };
