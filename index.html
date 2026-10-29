@@ -11927,11 +11927,14 @@ function renderDispatch() {
   if (DSP.page === "map") { document.body.classList.remove("dsp-mapmode"); return renderDispatchMapPage(); }
   const rows = DSP.rows.filter(r => r.status !== "cancelled"), cancelled = DSP.rows.length - rows.length;
   const onDay = new Set(rows.flatMap(r => r.techs.map(t => t.id)).concat((DSP.blocks || []).map(b => b.employee_id)));
-  // owners are always on the board (their own group), even if they aren't on the tech list
+  // owners are always on the board (their own group), each one once: the record on the tech list (where calls are booked) wins,
+  // and two records of the same owner (same first name) count as one
+  const fn = n => String(n || "").trim().split(/\s+/)[0].toLowerCase();
   const ownersIn = DSP_GRP ? [...DSP_GRP.entries()].filter(([, g]) => g === "owner").map(([id]) => id) : [];
-  const techs = (BOOK.techs || []).filter(t => DSP.all || t.recent || onDay.has(t.id) || ownersIn.includes(t.id))
-    .concat(ownersIn.filter(id => !(BOOK.techs || []).some(t => t.id === id || (DSP_GNAME.get(id) && String(t.name).trim().toLowerCase() === String(DSP_GNAME.get(id)).trim().toLowerCase())))
-      .map(id => ({ id, name: DSP_GNAME.get(id) || "Owner", recent: true })));   // (not twice when he's on the tech list under another record)
+  const onList = (BOOK.techs || []).filter(t => ownersIn.includes(t.id)), seenFn = new Set(onList.map(t => fn(t.name)));
+  const extraOwners = []; ownersIn.forEach(id => { if (onList.some(t => t.id === id)) return; const nm = DSP_GNAME.get(id) || "Owner", k = fn(nm); if (seenFn.has(k)) return; seenFn.add(k); extraOwners.push({ id, name: nm, recent: true }); });
+  const dupOwner = new Set(); { const f = new Map(); onList.forEach(t => { const k = fn(t.name); if (f.has(k)) dupOwner.add(onDay.has(t.id) ? f.get(k) : t.id); else f.set(k, t.id); }); }
+  const techs = (BOOK.techs || []).filter(t => !dupOwner.has(t.id) && (DSP.all || t.recent || onDay.has(t.id) || ownersIn.includes(t.id))).concat(extraOwners);
   rows.flatMap(r => r.techs).forEach(t => { if (!techs.some(x => x.id === t.id)) techs.push({ id: t.id, name: t.name }); });
   const colOf = id => rows.filter(r => r.techs.some(t => t.id === id));
   techs.sort((a, b) => (colOf(b.id).length > 0) - (colOf(a.id).length > 0) || a.name.localeCompare(b.name));
