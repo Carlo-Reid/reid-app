@@ -6328,6 +6328,15 @@ function renderFile() {
   const locJobs = jobs.filter(j => !l || j.location_id === l.id);
   const locEquip = equipment.filter(e => !l || e.location_id === l.id);
   const locContacts = (c.customer_contacts || []).filter(x => l && x.location_id === l.id);
+  // the customer's phones and emails and the on-site ones, together under the service address, each number or email once
+  const ckey = x => x.kind === "email" ? String(x.value || "").trim().toLowerCase() : String(x.value_digits || x.value || "").replace(/\D/g, "").slice(-10);
+  const seenC = new Set(), allContacts = contacts.map(x => ({ ...x, onsite: false })).concat(locContacts.map(x => ({ ...x, onsite: true })))
+    .filter(x => { const k = ckey(x); if (!k || seenC.has(k)) return false; seenC.add(k); return true; });
+  const allContactHtml = allContacts.map(x => {
+    const kind = x.onsite ? "On site" : { phone: "Phone", mobile: "Mobile", email: "Email", fax: "Fax" }[x.kind] || "Phone";
+    const shown = x.kind === "email" ? x.value : phoneFmt(x.value), href = x.kind === "email" ? "mailto:" + x.value : "tel:" + (x.value_digits || x.value);
+    return `<span><span class="kind">${kind}${x.contact_name ? " (" + esc(x.contact_name) + ")" : ""}</span><a href="${esc(href)}"${x.kind === "email" ? ` data-compose="${esc(x.value)}" data-compose-name="${esc(x.contact_name || "")}"` : ""}>${esc(shown)}</a></span>`;
+  }).join("");
   const custNotes = notes.filter(n => n.entity_type === "customer" && n.source !== "podium" && n.source !== "vista");
   const vistaNotes = notes.filter(n => n.entity_type === "customer" && n.source === "vista");
   const podNotes = notes.filter(n => n.entity_type === "customer" && n.source === "podium");
@@ -6358,9 +6367,7 @@ function renderFile() {
              <div class="quiet">${esc([l.city, l.province, l.postal_code].filter(Boolean).join(", "))}</div>
              ${zoneChip(l)}
              ${l.access_notes ? `<div class="address-note">${esc(l.access_notes)}</div>` : ""}
-             ${locContacts.length ? `<div class="contacts">${locContacts.map(x => `<span><span class="kind">On site${x.contact_name ? " (" + esc(x.contact_name) + ")" : ""}</span>${x.kind === "email"
-                 ? `<a href="mailto:${esc(x.value)}" data-compose="${esc(x.value)}" data-compose-name="${esc(x.contact_name || "")}">${esc(x.value)}</a>`
-                 : `<a href="tel:${esc(x.value_digits || x.value)}">${esc(phoneFmt(x.value))}</a>`}</span>`).join("")}</div>` : ""}` : `<div class="quiet">No address on file.</div>`}
+             ${allContactHtml ? `<div class="contacts">${allContactHtml}</div>` : ""}` : `<div class="quiet">No address on file.</div>${contactHtml ? `<div class="contacts">${contactHtml}</div>` : ""}`}
     </div>
         <div class="s1-acts" id="s1-acts">
         ${salesBooking() ? (ME.booking ? `<span class="fu-file"><button class="fu-check book-check" type="button" data-book-call title="Book a sales call for this customer">+ Book a sales call</button></span>` : "") : FU.off ? (can("calls.book") && ME.booking ? `<span class="fu-file"><button class="fu-check book-check" type="button" data-book-call title="Book a call for this customer">+ Book a call</button><button class="fu-check book-check" type="button" data-book-board title="Open the dispatch board: click a free spot to book this customer there">Dispatch board</button></span>` : "") : `<span class="fu-file">${FU.byCust?.[c.id] ? `<button class="link fu-open" type="button" data-goto-tasks title="Open your Tasks page">${fileTaskLabel(c.id)}</button>` : ""}<button class="fu-check" type="button" data-add-task title="Add a task for this customer to your Tasks page">+ Task</button>${can("calls.book") && ME.booking ? `<button class="fu-check book-check" type="button" data-book-call title="Book a call for this customer">+ Book a call</button><button class="fu-check book-check" type="button" data-book-board title="Open the dispatch board: click a free spot to book this customer there">Dispatch board</button>` : ""}</span>
@@ -6377,7 +6384,6 @@ function renderFile() {
     ${flags.length ? `<div class="flags">${flags.join("")}</div>` : ""}
     ${c.merged_into_id ? `<div class="approve-banner dup-banner"><div><strong>This customer was merged into another one.</strong> Everything was moved there.</div><button class="btn" type="button" data-open-merged="${c.merged_into_id}">Open it</button></div>` : ""}
     ${(current.dupes || []).length && !c.merged_into_id ? `<div class="approve-banner dup-banner"><div><strong>Might be the same person as</strong> ${current.dupes.map(d => `<button class="link" type="button" data-dupe-cmp="${d.id}">${esc(d.name)}</button> <span class="quiet">(same ${d.same.join(", ")})</span>`).join(", ")}</div></div>` : ""}
-    ${contactHtml ? `<div class="contacts">${contactHtml}</div>` : ""}
     ${can("customers.edit") && !c.merged_into_id && !(c.customer_contacts || []).some(x => x.kind === "email") ? `<form class="ask-email" id="ask-email" autocomplete="off"><span><b>No email on file.</b> Ask for it: invoices, reminders and plan renewals go by email.</span>
       <input type="email" name="email" placeholder="their@email.com" aria-label="Customer's email" value="${esc(current.askEmail || "")}"><button class="btn quiet-btn" type="submit">Save email</button><span class="staff-msg" id="ask-email-msg" role="status"></span></form>` : ""}
 
