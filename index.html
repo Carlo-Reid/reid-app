@@ -369,6 +369,11 @@
   .file section.block:not(.folded) > h2.fold-head::after { transform: rotate(180deg); } .file section.block h2.fold-head:hover { color: var(--blue); }
   .file .sec1a .sec1a-plans .plan-tag .pl-last { display: block; margin-top: 2px; font-size: calc(11.5px * var(--fs, 1)); font-weight: 600; color: var(--steel); }
   .file .sec1a .sec1a-plans .plan-tag .pl-last.pl-wait { display: none; } .file .sec1a .sec1a-plans .plan-tag .pl-last.pl-due { color: #a15c00; } .file .sec1a .sec1a-plans .plan-tag .pl-last.pl-ok { color: var(--green, #2b8a3e); }
+  .amt-open { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; text-decoration-color: rgba(0,0,0,.2); }
+  .amt-open:hover, .amt-open:focus-visible { text-decoration-color: currentColor; }
+  .owing-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; max-height: 50vh; overflow-y: auto; }
+  .owing-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper, #fff); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+  .owing-row:hover, .owing-row:focus-visible { border-color: var(--blue); background: var(--blue-wash, #eaf2fb); } .owing-row small { display: block; color: var(--steel); font-size: 12px; } .owing-row .num { color: #c2410c; white-space: nowrap; }
   .gd-mine.gm-calm .gm-time { color: #2c5a7f; } .gd-mine.gm-calm .gm-day { color: #1f2a37; }
   .gd-mine .gm-head { font-size: calc(17px * var(--fs, 1)); color: #a63c00; margin-bottom: 6px; }
   .gd-mine .gm-visit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; padding: 8px 12px; border-radius: 10px; background: #fff; border-left: 6px solid #f76707; }
@@ -6275,7 +6280,7 @@ function renderFile() {
   if (current.c && NAV.stack.length && NAV.stack[NAV.stack.length - 1].hash === "#customer=" + current.c.id) nameCurrentPage(current.c.display_name);
   if (current.pendingNotes) { current.notes = current.pendingNotes; current.pendingNotes = null; }
   const { c, notes, plans, jobs, invoices, estimates, equipment, loc } = current;
-  const owed = invoices.reduce((s, i) => s + (i.status !== "void" && !i.not_owed_reason && !i.paid_at_store && i.balance_due > 0 ? Number(i.balance_due) : 0), 0);
+  const owed = invoices.reduce((s, i) => s + (owingInv(i) ? Number(i.balance_due) : 0), 0);
   const flags = [];
   (c.customer_flags || []).filter(f => !f.resolved_at).forEach(f =>
     flags.push(`<span class="flag ${f.flag_type === "do_not_service" || f.flag_type === "declined_payment" ? "red" : "amber"}">${esc(f.message)}</span>`));
@@ -6324,8 +6329,8 @@ function renderFile() {
       <div class="balance ${owed > 0.004 ? "due" : ""}">
         ${zoneBox(l)}
         <div class="sec1a-plans">${planBadge(plans, l)}${lastMaintHtml(l)}</div>
-        <div class="quiet">${owed > 0.004 ? "Owes" : "Balance"}</div>
-        <div class="amt num">${money(owed)}</div>
+        <div class="quiet">${owed > 0.004 ? "Balance owing" : "Balance"}</div>
+        ${owed > 0.004 ? `<button type="button" class="amt num amt-open" data-owing title="Open the invoice${invoices.filter(owingInv).length > 1 ? "s" : ""} with money owing">${money(owed)}</button>` : `<div class="amt num">${money(owed)}</div>`}
       </div>
     </div>
     <div class="s1-body">
@@ -6683,6 +6688,16 @@ function lastMaintHtml(l) {
     document.querySelectorAll(".file .sec1a .plan-tag[data-mship]").forEach(b => { if (current?.planSvcLoc !== loc) return; const old = b.querySelector(".pl-last"); const html = plSvcLine(Number(b.dataset.mship)); if (old) old.outerHTML = html || ""; else if (html) b.insertAdjacentHTML("beforeend", html); }); }); }
   return "";
 }
+// Section 1: the invoices with money owing (the Balance owing amount opens them)
+var owingInv = i => i.status !== "void" && !i.not_owed_reason && !i.paid_at_store && i.balance_due > 0;
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-owing]"); if (!b) return; e.preventDefault();
+  const L = (current?.invoices || []).filter(owingInv).sort((a, b) => String(a.invoice_date || "").localeCompare(String(b.invoice_date || "")));
+  if (!L.length) return; if (L.length === 1) return openInvoice(L[0].id);
+  const k = await askChoice(`${L.length} invoices with money owing`, `<span class="quiet">Pick the one you want to see.</span><div class="owing-list">${L.map(i => `<button type="button" class="owing-row" data-ask="${i.id}">
+      <span><b>Invoice ${esc(i.invoice_number || String(i.id))}</b><small>${esc(fmtDate(i.invoice_date))}${i.summary ? " · " + esc(String(i.summary).slice(0, 60)) : ""}</small></span><b class="num">${money(i.balance_due)}</b></button>`).join("")}</div>`, [["", "Close"]]);
+  if (k) openInvoice(Number(k));
+});
 function markFileNav() {
   const nav = document.querySelector(".file-nav"); if (!nav) return;
   const main = $("#main"), mainTop = main.getBoundingClientRect().top;
