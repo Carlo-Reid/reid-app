@@ -3793,6 +3793,7 @@ body.ui-guided .file .sec1a .zone-box .zb-edit { display: none !important; } bod
 .est-toolbar .est-tb-gap { flex: 1; }
 .est-toolbar .btn { border-radius: 999px; padding: 6px 14px; }
 .est-tb-btns { display: contents; }
+body.ui-guided .est-toolbar .btn.est-close-file { background: #495057 !important; border-color: #495057 !important; }
 #pbpk-back.pbpk-view [data-pbp-add], #pbpk-back.pbpk-view #pbpk-cmp, #pbpk-back.pbpk-view [data-pbp-cmp], #pbpk-back.pbpk-view label:has(> [data-pbp-cmp]), body:has(#pbpk-back.pbpk-view:not([hidden])) .show [data-show-add] { display: none !important; }
 body.ui-guided #pbpk-back #pbpk-cmp, body.ui-guided #pbpk-back [data-pbp-cmp], body.ui-guided #pbpk-back label:has(> [data-pbp-cmp]) { display: none !important; }
 body.ui-guided.gd-est #page-bar-back { display: none !important; }
@@ -8683,6 +8684,7 @@ function renderEstEdit() {
       ${ME.guided ? "" : `<button class="link" type="button" id="est-back">← Back to Sales</button>`}
       <span class="est-st est-${esc(x.status)}">${x.cancelled_at ? "Cancelled" : ME.guided && x.status === "draft" ? `"${esc(String((BOOK?.techs || []).find(t => t.id === ME.emp)?.name || EST.seller || "You").trim().split(/\s+/)[0])}" is working on Proposal` : esc(STATUS[x.status] || x.status)}</span>
       <span class="est-tb-gap"></span><span class="est-tb-btns">
+      ${ME.guided ? `<button class="btn est-close-file" type="button" id="est-closefile" title="Close this proposal and go back">✕ Close</button>` : ""}
       <button class="btn est-send-btn" type="button" id="est-send" title="Email or text it to the customer: a link, or a link and the PDF">Email / Text</button>
       ${closed ? `<button class="btn quiet-btn" type="button" id="est-preview">Print preview</button>
       ${x.status === "accepted" && !x.cancelled_at ? `<button class="btn" type="button" id="est-walk" title="Book a visit to walk the site before the install (on install job ${esc(EST.ij?.number || "")})">${EST.ij?.walk ? "Walk booked " + esc(fmtDate(EST.ij.walk.date)) : "Book a walk"}</button>
@@ -8926,6 +8928,10 @@ function wireEstEdit() {
     say("Saving…"); const { error } = await db.rpc("est_save", { p_id: EST.id, p });
     if (error) { say("Not saved: " + rpcErr(error), true); return false; } EST.dirty = false; return true; };
   EST.saveNow = save;
+  $("#est-closefile")?.addEventListener("click", async () => {   // the training view: close the proposal (saved first) and go back to where it was opened from
+    if (EST.dirty && !(await save(false))) return;
+    EST.dirty = false; const from = EST.from; EST.from = null;
+    if (from === "mybooked") return openMyBooked(); if (from === "customer" && EST.x?.customer_id) return openCustomer(EST.x.customer_id); openSales(); });
   m.querySelector("[data-hold-undo]")?.addEventListener("click", async e => { const b = e.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Take it off"; return; }
     const r = await db.rpc("install_hold_set", { p_estimate: EST.id, p_day: null }); if (r.error) return say("Not changed: " + rpcErr(r.error), true);
     EST.opts[0].lines = EST.opts[0].lines.filter(l => !String(l.description || "").startsWith(HOLD_BONUS)); EST.dirty = true;
@@ -10826,7 +10832,7 @@ async function openMyBooked(msg) {
   const m = $("#main");
   m.querySelectorAll("[data-bk-start]").forEach(b => b.addEventListener("click", async () => { b.disabled = true;
     const job = Number(b.dataset.bkStart), r = rows.find(x => x.job === job);   // a practice job has a real (hidden) job, so the estimate works the same
-    if (b.dataset.bkEst) return openEstEdit(Number(b.dataset.bkEst));
+    EST.from = "mybooked"; if (b.dataset.bkEst) return openEstEdit(Number(b.dataset.bkEst));
     if (r?.kind !== "phone" && !r?.on_site) { const s = await db.rpc("sales_on_site", { p_job: job }); if (s.error) { b.disabled = false; return openMyBooked("Not saved: " + rpcErr(s.error)); } }
     const { data, error } = await db.rpc("est_create", { p_job: job });
     if (error) { b.disabled = false; return openMyBooked("Couldn't start the estimate: " + rpcErr(error)); }
@@ -22034,7 +22040,7 @@ let INV_EMAIL_CUR = null, INV_EMAIL_DRAFT = {}, INV_EMAIL_JUMP = false;
 /* ---------------- view an invoice ---------------- */
 document.addEventListener("click", e => {
   const t = e.target.closest("[data-estimate]"); if (!t || e.target.closest("#inv-view")) return;
-  e.stopPropagation(); if (t.dataset.estOwn === "1") return openEstEdit(Number(t.dataset.estimate));   // the training view: their own proposals open to work on; others only to look at
+  e.stopPropagation(); if (t.dataset.estOwn === "1") { EST.from = "customer"; return openEstEdit(Number(t.dataset.estimate)); }   // the training view: their own proposals open to work on; others only to look at
   openEstimate(Number(t.dataset.estimate));
 });
 document.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.matches?.("tr[data-estimate]")) openEstimate(Number(e.target.dataset.estimate)); });
