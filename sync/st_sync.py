@@ -4479,15 +4479,20 @@ def main():
             if os.environ.get("GITHUB_ACTIONS") and attempt == 2: print(f"::notice::Find by amount not added: {str(e)[:200]}", flush=True)
             time.sleep(5)
     # newer database pieces, one file each in sync/extra (in name order): each runs on its own, so one can't hold up another
+    # each piece gives way at once if something else (like the job-files loader on the PC) is using a table it needs to lock,
+    # instead of the two blocking each other until the database stops one of them ("deadlock detected"); it tries again after
     for path in sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "extra", "*.sql"))):
         name = os.path.basename(path)
         for attempt in range(3):
             try:
+                cur.execute("SET lock_timeout = '500ms'")
                 cur.execute(open(path, encoding="utf-8").read()); conn.commit(); log(f"  {name} checked."); break
             except Exception as e:
                 conn.rollback(); log(f"  {name} not added (try {attempt + 1}): {str(e)[:200]}")
                 if os.environ.get("GITHUB_ACTIONS") and attempt == 2: print(f"::notice::{name} not added: {str(e)[:200]}", flush=True)
                 time.sleep(5)
+    try: cur.execute("SET lock_timeout = 0"); conn.commit()
+    except Exception: conn.rollback()
 
     try:
         new_state = {}
