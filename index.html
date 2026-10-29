@@ -4925,19 +4925,26 @@ const CONFIG = Object.assign({
 
 /* "Working…" with a ticking clock while something you asked for is still loading (after a click, a key or a change, if it takes more than a moment) */
 (function workingClock() {
-  let lastAct = 0, busy = 0, shownAt = 0, timer = null, tick = null, el = null;
+  let lastAct = 0, busy = 0, shownAt = 0, timer = null, tick = null, el = null, idleSince = 0;
   ["pointerdown", "keydown", "change", "submit"].forEach(t => document.addEventListener(t, () => { lastAct = Date.now(); }, true));
   window.addEventListener("hashchange", () => { lastAct = Date.now(); });
-  const show = () => { if (el || busy <= 0) return; shownAt = Date.now();
+  // still loading: a request is out, or the page still shows a "Loading… / Opening… / Getting…" placeholder
+  const waiting = () => busy > 0 || [...document.querySelectorAll("#main .loading, #inv-paper .quiet, .stv-busy")].some(e => e.offsetParent && /^(Loading|Opening|Getting|Making|Reading|Searching)/i.test(e.textContent.trim()));
+  const show = () => { if (el) return; shownAt = Date.now(); idleSince = 0;
     el = document.createElement("div"); el.className = "work-clock"; el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite");
-    el.innerHTML = `<span class="wc-face" aria-hidden="true"><i></i><b></b></span><span><b>Working…</b><small>Please wait <span class="wc-s">0</span>s</small></span>`;
-    document.body.append(el); tick = setInterval(() => { const s = el?.querySelector(".wc-s"); if (s) s.textContent = Math.floor((Date.now() - shownAt) / 1000) + 1; }, 1000); };
+    el.innerHTML = `<span class="wc-face" aria-hidden="true"><i></i><b></b></span><span><b>Working…</b><small>Please wait <span class="wc-s">1</span>s</small></span>`;
+    document.body.append(el);
+    tick = setInterval(() => { if (!el) return; const s = el.querySelector(".wc-s"); if (s) s.textContent = Math.floor((Date.now() - shownAt) / 1000) + 1;
+      // it stays until everything has come in and the page has drawn it (nothing out for half a second)
+      if (waiting()) idleSince = 0; else if (!idleSince) idleSince = Date.now(); else if (Date.now() - idleSince > 500) hide();
+      if (el && Date.now() - shownAt > 60000 && !el.dataset.long) { el.dataset.long = "1"; el.querySelector("b").textContent = "Still working…"; el.querySelector("small").innerHTML = `It's taking a while · <span class="wc-s"></span>s. If nothing changes, press Refresh.`; }
+      if (el && Date.now() - shownAt > 180000) hide(); }, 250); };
   const hide = () => { clearTimeout(timer); timer = null; if (!el) return; clearInterval(tick); const e = el; el = null; e.classList.add("wc-out"); setTimeout(() => e.remove(), 200); };
   const of = window.fetch.bind(window);
   window.fetch = function (...a) {
-    const mine = Date.now() - lastAct < 2500; if (!mine) return of(...a);
-    busy++; if (!timer && !el) timer = setTimeout(() => { timer = null; show(); }, 700);
-    const done = () => { busy = Math.max(0, busy - 1); if (!busy) hide(); };
+    const mine = el || Date.now() - lastAct < 2500; if (!mine) return of(...a);   // once it's showing, everything that follows counts too
+    busy++; if (!timer && !el) timer = setTimeout(() => { timer = null; if (waiting()) show(); }, 700);
+    const done = () => { busy = Math.max(0, busy - 1); if (!busy && !el && !waiting()) { clearTimeout(timer); timer = null; } };
     return of(...a).then(r => { done(); return r; }, e => { done(); throw e; });
   };
 })();
