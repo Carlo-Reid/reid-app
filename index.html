@@ -354,6 +354,8 @@
   .miss-open { background: none; border: 0; padding: 0; font: inherit; color: var(--blue, #1c5d99); font-weight: 700; cursor: pointer; text-align: left; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgba(28,93,153,.35); }
   .miss-open:hover, .miss-open:focus-visible { text-decoration-color: currentColor; }
   .eq.eq-flash { animation: eq-flash 1.8s ease-out; } @keyframes eq-flash { 0%, 40% { box-shadow: 0 0 0 4px rgba(28, 93, 153, .45); background: var(--blue-wash, #eaf2fb); } 100% { box-shadow: none; } }
+  .eq-end { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #d5dde6; }
+  .eq-retire { background: #fff7e6; border-color: #e8b04a; color: #8a5a00; } .eq-retire:hover { background: #e8b04a; color: #fff; }
   .gd-mine.gm-calm .gm-time { color: #2c5a7f; } .gd-mine.gm-calm .gm-day { color: #1f2a37; }
   .gd-mine .gm-head { font-size: calc(17px * var(--fs, 1)); color: #a63c00; margin-bottom: 6px; }
   .gd-mine .gm-visit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; padding: 8px 12px; border-radius: 10px; background: #fff; border-left: 6px solid #f76707; }
@@ -22664,8 +22666,23 @@ async function startEditEquipment(id) {
       </div>
     </div>
     <div class="row"><button class="btn" type="submit">Save</button><button class="btn quiet-btn" type="button" data-cancel>Cancel</button><span class="msg" role="status"></span></div>
+    <div class="eq-end">
+      ${e.status === "active" ? `<button class="btn eq-retire" type="button" data-eq-retire title="It was replaced with something else: it stays in the history as Replaced">↺ Retire it (replaced)</button>`
+        : `<button class="btn quiet-btn" type="button" data-eq-back title="It's still there and in use">Put back in use</button>`}
+      <button class="row-del" type="button" data-eq-del title="Entered by mistake: delete it for good"><span aria-hidden="true">✕</span> Delete (entered by mistake)</button></div>
   </form>`;
   const f = el.querySelector("form"), msg = f.querySelector(".msg");
+  f.querySelector("[data-eq-retire]")?.addEventListener("click", async () => {
+    const k = await askChoice("Retire this equipment?", `It stays in the history as <b>Replaced</b>, taken out on the date you pick below. Add the new equipment with ＋ Add equipment.`, [["yes", "Retire it", true], ["", "Not now"]]);
+    if (k !== "yes") return; f.status.value = "replaced"; f.querySelector(".eq-removed").classList.remove("hidden");
+    if (!f.removed_on.value) f.removed_on.value = new Date().toISOString().slice(0, 10); f.requestSubmit(); });
+  f.querySelector("[data-eq-back]")?.addEventListener("click", () => { f.status.value = "active"; f.removed_on.value = ""; f.querySelector(".eq-removed").classList.add("hidden"); f.requestSubmit(); });
+  f.querySelector("[data-eq-del]").addEventListener("click", async () => {
+    const k = await askChoice("Delete this equipment?", `Only if it was entered by mistake. It and its warranties are deleted for good. If it was replaced, use <b>Retire it</b> instead so it stays in the history.`, [["yes", "Delete it", true], ["", "Keep it"]]);
+    if (k !== "yes") return; msg.className = "msg"; msg.textContent = "Deleting…";
+    const { error } = await db.rpc("equipment_delete", { p_id: id });
+    if (error) { msg.className = "msg err"; msg.textContent = "Not deleted: " + rpcErr(error); return; }
+    current.equipment = (current.equipment || []).filter(x => x.id !== id); await reloadEquipment(); alertMsg("Equipment deleted."); });
   f.status.addEventListener("change", () => f.querySelector(".eq-removed").classList.toggle("hidden", f.status.value === "active"));
   f.querySelector("[data-w-add-open]").addEventListener("click", ev => {
     ev.target.classList.add("hidden"); f.querySelector(".eq-warr-new").classList.remove("hidden");
