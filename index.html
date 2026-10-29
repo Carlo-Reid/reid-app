@@ -4071,6 +4071,8 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .sinv-app.sa-month .sa-tn { font-size: 12px; }
 .sinv-app .sa-bd { position: absolute; top: -7px; right: -7px; min-width: 22px; padding: 2px 7px; border-radius: 999px; background: #34404b; color: #fff; font-size: 11px; box-shadow: 0 2px 6px rgba(16, 24, 40, .25); }
 .sinv-panel .sinv-stv-open { margin-top: 16px; width: 100%; }
+.sinv-tabs .sinv-ow { font-size: 11.5px; font-weight: 800; color: #1f5fa8; margin-top: -4px; } .sinv-tabs .sinv-ow.quiet { color: #8795a1; font-weight: 600; }
+.sinv-tabs button[aria-pressed="true"] .sinv-ow { color: #fff; } .sinv-tabs button { gap: 6px !important; } .sinv-tabs .sinv-ic { height: 46px; } .sinv-tabs .sinv-ini { width: 46px; height: 46px; } .sinv-tabs .sinv-lg { max-height: 46px; }
 /* SU 2: the suppliers as square app-style tiles: the logo (or first letter) big, the name under it, the count in a badge */
 .sinv-tabs { display: flex !important; align-items: flex-start; gap: 14px !important; }   /* All suppliers stays on its own at the left; the suppliers fill the rows beside it */
 .sinv-tabs .sinv-tiles { flex: 1; display: grid; grid-template-columns: repeat(auto-fill, 124px); gap: 14px; padding-top: 7px; }
@@ -13486,7 +13488,7 @@ function renderSupInv(msg) {
   const SL = D.statement_lines || [], slTot = SL.reduce((a, l) => a + Number(l.amount), 0);
   const cls = { ok: "s-done", match: "s-done", credit: "", charge: "", nocopy: "s-warn", nopo: "s-warn", notfound: "s-warn", differs: "s-warn" };
   $("#main").innerHTML = `<article class="staff sinv">
-    <div class="pos-head"><h1>Supplier invoices</h1><span><button class="btn quiet-btn" type="button" id="sinv-pos">‹ Purchase orders</button></span></div>
+    <div class="pos-head"><h1>Supplier invoices</h1><span><button class="btn quiet-btn" type="button" id="sinv-pos">‹ Purchase orders</button>${D.can_edit ? ` <button class="btn quiet-btn" type="button" data-sinv-logos>${SINV.logoEd ? "Close the logos" : "🖼 Supplier logos"}</button>` : ""}</span></div>
     <p class="lead">Every invoice and credit a supplier sends us, matched to our PO by the PO number printed on it. Click a row to see its lines next to the PO's, and the scanned pages.</p>
     ${msg ? `<div class="staff-msg ok sl-toast" role="status">${esc(msg)}</div>` : ""}
     ${SINV.backTo ? `<div class="stv-back"><button class="btn" type="button" data-stv-back>‹ Back to the statement</button><button class="link" type="button" data-stv-backx>✕</button></div>` : ""}
@@ -13525,9 +13527,14 @@ function sinvTabs(D) {
   const name = id => sinvShort(st.find(s => s.supplier_id === id).supplier);
   ids.sort((a, b) => name(a).localeCompare(name(b)));
   const all = Object.values(cnt).reduce((a, n) => a + Number(n), 0);
-  const lg = id => SINV.logos?.get(id);
-  return `<section class="sinv-panel"><div class="sp-h">Suppliers</div><nav class="sinv-tabs seg" aria-label="Suppliers"><button type="button" data-sinv-sup="" aria-pressed="${SINV.sup == null}"><span class="sinv-ic"><span class="sinv-ini sinv-all">▦</span></span><span class="sinv-tn">All suppliers</span><b>${all}</b></button><div class="sinv-tiles">${ids.map(id => `<button type="button" data-sinv-sup="${id}" aria-pressed="${SINV.sup === id}" title="${esc(st.find(s => s.supplier_id === id).supplier)}" class="${lg(id) ? "has-logo" : ""}"><span class="sinv-ic">${lg(id) ? `<img class="sinv-lg" alt="" src="${lg(id)}">` : `<span class="sinv-ini">${esc(name(id).slice(0, 1).toUpperCase())}</span>`}</span><span class="sinv-tn">${esc(name(id))}</span><b>${Number(cnt[id] || 0)}</b></button>`).join("")}</div></nav>
-    ${D.can_edit ? `<div class="sinv-lg-bar"><button class="link" type="button" data-sinv-logos>${SINV.logoEd ? "Close the logos" : "🖼 Supplier logos"}</button></div>${SINV.logoEd ? sinvLogoEditor(ids, st) : ""}` : ""}</section>`;
+  const lg = id => SINV.logos?.get(id), OW = new Map(); sinvOwing(D).forEach(o => { const t = OW.get(o.sup) || []; t.push(o); OW.set(o.sup, t); });
+  const owe = id => { const L = OW.get(id) || []; if (!L.length) return { h: "", t: "" };
+    const amt = L.reduce((a, o) => a + (o.counted ? Number(o.owe.total) || 0 : 0), 0), any = L.some(o => o.counted);
+    const t = L.map(o => `${o.name}: ${o.owe ? `${money(o.owe.total)} on the statement of ${fmtDate(o.owe.date)}${o.why ? " (" + o.why + ")" : ""}` : "no statement"}${o.pay && (!o.owe || o.pay.date > o.owe.date) ? ` · last paid ${money(o.pay.total)} on ${fmtDate(o.pay.date)}` : ""}`).join("\n");
+    const last = L.find(o => o.pay && (!o.owe || o.pay.date > o.owe.date));
+    return { h: `<span class="sinv-ow ${any ? "" : "quiet"}">${any ? money(amt) : last ? "Paid " + fmtDate(last.pay.date) : L[0].owe ? money(L[0].owe.total) : "—"}</span>`, t }; };
+  return `<section class="sinv-panel"><div class="sp-h">Suppliers</div><nav class="sinv-tabs seg" aria-label="Suppliers"><button type="button" data-sinv-sup="" aria-pressed="${SINV.sup == null}"><span class="sinv-ic"><span class="sinv-ini sinv-all">▦</span></span><span class="sinv-tn">All suppliers</span><span class="sinv-ow">${money(sinvOwing(D).reduce((a, o) => a + (o.counted ? Number(o.owe.total) || 0 : 0), 0))}</span><b>${all}</b></button><div class="sinv-tiles">${ids.map(id => `<button type="button" data-sinv-sup="${id}" aria-pressed="${SINV.sup === id}" title="${esc(st.find(s => s.supplier_id === id).supplier + (owe(id).t ? "\n" + owe(id).t : ""))}" class="${lg(id) ? "has-logo" : ""}"><span class="sinv-ic">${lg(id) ? `<img class="sinv-lg" alt="" src="${lg(id)}">` : `<span class="sinv-ini">${esc(name(id).slice(0, 1).toUpperCase())}</span>`}</span><span class="sinv-tn">${esc(name(id))}</span>${owe(id).h}<b>${Number(cnt[id] || 0)}</b></button>`).join("")}</div></nav>
+    ${D.can_edit && SINV.logoEd ? sinvLogoEditor(ids, st) : ""}</section>`;
 }
 // drop in a supplier's logo (it shows on its button and its statement page), replace it or delete it
 function sinvLogoEditor(ids, st) {
@@ -13590,7 +13597,6 @@ function sinvAllHead(D, rows) {
   return `<section class="sinv-sum">
     <div class="ss-top"><div class="ss-show"><span class="quiet">Showing</span><b>${SINV.sup != null && SINV.pick === "year" && SINV.year ? esc(SINV.year) + " invoices" : "All invoices"}${SINV.sup == null ? " · every supplier" : ` · ${esc(sinvShort(st[0]?.supplier))}`}</b><span class="quiet">${st.length} statements${dates.length ? ` · ${esc(fmtDate(dates[0]))} to ${esc(fmtDate(dates[dates.length - 1]))}` : ""} · ${rows.length} invoices</span></div>
     <div class="sinv-owing-total"><span class="quiet">${SINV.sup == null ? "Owing to all suppliers" : "Owing now"}</span><b>${money(tot)}</b><span class="quiet">from each one's latest statement${left ? ` · ${left} older ${left === 1 ? "one" : "ones"} not counted` : ""}</span></div></div>
-  ${O.length ? `<div class="ss-lbl">${SINV.sup == null ? "What we owe each supplier · click one to see its invoices" : "From the latest statement"}</div><div class="sinv-owing">${O.map(o => `<button type="button" class="sinv-owe" data-sinv-sup="${o.sup}" ${SINV.sup === o.sup ? 'aria-pressed="true"' : ""}><span>${esc(o.name)}</span>${o.owe ? `<b ${o.counted ? "" : 'class="quiet"'}>${money(o.owe.total)}</b><span class="quiet">statement ${esc(fmtDate(o.owe.date))}${o.why ? ` · ${o.why}` : ""}</span>` : `<b>—</b><span class="quiet">no statement</span>`}${o.pay && (!o.owe || o.pay.date > o.owe.date) ? `<span class="quiet">last paid ${money(o.pay.total)} on ${esc(fmtDate(o.pay.date))}</span>` : ""}</button>`).join("")}</div>` : ""}
   </section>`;
 }
 function sinvAddUp(S, slTot, all) {
