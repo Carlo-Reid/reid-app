@@ -340,6 +340,11 @@
   @media (prefers-reduced-motion: reduce) { .gd-mine { animation: none; } }
   .gd-mine.gm-calm { background: #f3f8fc; border: 2px solid #8fb8d8; box-shadow: 0 2px 8px rgba(40, 90, 130, .10); animation: none; }
   .gd-mine.gm-calm .gm-head { color: #2c5a7f; } .gd-mine.gm-calm .gm-visit { border-left: 5px solid #6a9fc8; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .row-del { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; border: 1.5px solid #e3a5a5; background: #fff5f5; color: #b42318;
+    font: inherit; font-size: calc(13px * var(--fs, 1)); font-weight: 700; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s, border-color .15s, box-shadow .15s; }
+  .row-del span { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: #b42318; color: #fff; font-size: 11px; line-height: 1; }
+  .row-del:hover, .row-del:focus-visible { background: #b42318; color: #fff; border-color: #b42318; box-shadow: 0 2px 8px rgba(180, 35, 24, .25); }
+  .row-del:hover span, .row-del:focus-visible span { background: #fff; color: #b42318; }
   .gd-mine.gm-calm .gm-time { color: #2c5a7f; } .gd-mine.gm-calm .gm-day { color: #1f2a37; }
   .gd-mine .gm-head { font-size: calc(17px * var(--fs, 1)); color: #a63c00; margin-bottom: 6px; }
   .gd-mine .gm-visit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; padding: 8px 12px; border-radius: 10px; background: #fff; border-left: 6px solid #f76707; }
@@ -4912,7 +4917,9 @@ document.addEventListener("wheel", e => {
   if (r.top >= top - 1 && r.bottom <= bottom + 1) return;                 // already fully in view: scroll the box
   const room = bottom - top, target = r.height >= room ? top : top + (room - r.height) / 2;
   // how far the page can really move (a box near the end of the page can't come all the way up)
-  const want = r.top - target, can = want > 0 ? Math.min(want, main.scrollHeight - main.clientHeight - main.scrollTop) : Math.max(want, -main.scrollTop);
+  const want = r.top - target;
+  if (Math.sign(want) !== Math.sign(e.deltaY)) return;                    // never pull the page against the way you're scrolling: just scroll the box
+  const can = want > 0 ? Math.min(want, main.scrollHeight - main.clientHeight - main.scrollTop) : Math.max(want, -main.scrollTop);
   if (Math.abs(can) < 4) return;                                            // the page can't move: scroll the box
   e.preventDefault();
   centeringUntil = Date.now() + 450;
@@ -22095,10 +22102,39 @@ document.addEventListener("click", async e => {   // Section 7: delete a proposa
   const d = e.target.closest("[data-est-del]"); if (!d) return; e.stopPropagation();
   const k = await askChoice("Delete this proposal?", `Proposal ${esc(d.dataset.estNum)} and everything on it is deleted for good. This can't be undone.`, [["yes", "Delete it", true], ["", "Keep it"]]);
   if (k !== "yes") return;
-  const { error } = await db.rpc("est_delete", { p_id: Number(d.dataset.estDel) });
+  const id = Number(d.dataset.estDel), num = d.dataset.estNum;
+  const { error } = await db.rpc("est_delete", { p_id: id });
+  if (error && /linked to something/i.test(rpcErr(error))) return estLinksDialog(id, num);
   if (error) return alertMsg("Not deleted: " + rpcErr(error));
   if (current?.c?.id) openCustomer(current.c.id);
 }, true);
+// why a proposal can't be deleted: show what it is tied to, with a way to open (or remove) each thing
+const EST_LINK_NAMES = { customer_comparisons: "Saved side-by-side comparison", invoices: "Invoice", invoice_lines: "Invoice line", jobs: "Job",
+  doc_sends: "Sent copy (email or text)", sent_docs: "Sent copy (email or text)", doc_opens: "Sent copy opened by the customer", payments: "Payment", purchase_orders: "Purchase order" };
+async function estLinksDialog(id, num) {
+  for (;;) {
+    const { data, error } = await db.rpc("est_links", { p_id: id });
+    if (error) return alertMsg("Couldn't check what it's linked to: " + rpcErr(error));
+    const links = data || [];
+    if (!links.length) { const r = await db.rpc("est_delete", { p_id: id }); if (r.error) return alertMsg("Not deleted: " + rpcErr(r.error)); alertMsg("Proposal " + num + " deleted."); return current?.c?.id && openCustomer(current.c.id); }
+    let cmps = [];
+    if (links.some(l => l.tbl === "customer_comparisons") && current?.c?.id) { const r = await db.rpc("cmp_list", { p_customer: current.c.id }); cmps = r.data || []; }
+    const rows = links.map(l => { const name = EST_LINK_NAMES[l.tbl] || l.tbl.replace(/_/g, " ");
+      const items = (l.ids || []).map(x => {
+        if (l.tbl === "invoices") { const inv = (current?.invoices || []).find(i => i.id === x); return `<li>Invoice ${esc(inv?.invoice_number || String(x))} <button type="button" class="link" data-ask="inv:${x}">Open ›</button></li>`; }
+        if (l.tbl === "jobs") { const j = (current?.jobs || []).find(i => i.id === x); return `<li>Job ${esc(j?.job_number || String(x))} <button type="button" class="link" data-ask="job:${x}">Show ›</button></li>`; }
+        if (l.tbl === "customer_comparisons") { const c = cmps.find(i => i.id === x); return `<li>${esc(c?.title || "Comparison")}${c?.at ? " · " + esc(fmtDate(c.at)) : ""}${c?.by ? " · " + esc(c.by) : ""} <button type="button" class="link danger" data-ask="cmpdel:${x}">Delete this comparison</button></li>`; }
+        return `<li>#${esc(String(x))}</li>`; }).join("");
+      return `<div style="margin:8px 0"><b>${esc(name)}</b>${l.n > 1 ? ` <span class="quiet">(${l.n})</span>` : ""}${items ? `<ul style="margin:4px 0 0 18px;padding:0">${items}</ul>` : ""}</div>`; }).join("");
+    const k = await askChoice("Proposal " + num + " is linked to:", `${rows}<span class="quiet">Remove these links (or delete them), then try again. Or cancel the proposal instead.</span>`, [["retry", "Try deleting again", true], ["", "Close"]]);
+    if (!k) return;
+    if (k.startsWith("inv:")) return openInvoice(Number(k.slice(4)));
+    if (k.startsWith("job:")) { const r = document.querySelector(`.job-row[data-job="${k.slice(4)}"]`); if (r) { r.scrollIntoView({ block: "center" }); if (!r.nextElementSibling?.classList.contains("job-detail")) toggleJob(r); } return; }
+    if (k.startsWith("cmpdel:")) { const sure = await askChoice("Delete this saved comparison?", "It's only the side-by-side the customer was shown. The proposal stays.", [["yes", "Delete it", true], ["", "Keep it"]]);
+      if (sure === "yes") { const r = await db.rpc("cmp_delete", { p_id: Number(k.slice(7)) }); if (r.error) alertMsg("Not deleted: " + rpcErr(r.error)); } continue; }
+    if (k === "retry") continue;
+  }
+}
 document.addEventListener("click", e => {
   const t = e.target.closest("[data-estimate]"); if (!t || e.target.closest("#inv-view")) return;
   e.stopPropagation(); if (t.dataset.estOwn === "1") { EST.from = "customer"; return openEstEdit(Number(t.dataset.estimate)); }   // the training view: their own proposals open to work on; others only to look at
@@ -22640,7 +22676,7 @@ function jobsHtml(jobs) {
       <td class="num">${fmtDate(j.created_at)}</td><td class="num">${esc(j.job_number)}</td>
       <td>${esc(j.job_types?.name || "")}<div class="quiet">${esc((j.summary || "").slice(0, 120))}</div></td>
       <td class="hide-sm">${esc(j.business_units?.name || "")}${j.partners ? `<div class="quiet">${esc(j.partners.name)}</div>` : ""}${j.tank_payer ? `<div class="htin-tank">${esc(BK_TANK.find(x => x[0] === j.tank_payer)?.[1] || "")}</div>` : ""}</td>
-      <td>${badge(j.status)}</td><td class="no-print">${j.status !== "completed" && !j.completed_at && (ME.role === "owner" || can("calls.dispatch")) && !(current?.invoices || []).some(x => x.job_id === j.id) ? `<button class="link danger est-del" type="button" data-job-del="${j.id}" data-job-num="${esc(j.job_number)}" title="Delete this job">✕ Delete</button>` : ""}</td></tr>`).join("")}
+      <td>${badge(j.status)}</td><td class="no-print">${j.status !== "completed" && !j.completed_at && (ME.role === "owner" || can("calls.dispatch")) && !(current?.invoices || []).some(x => x.job_id === j.id) ? `<button class="row-del" type="button" data-job-del="${j.id}" data-job-num="${esc(j.job_number)}" title="Delete this job"><span aria-hidden="true">✕</span> Delete</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>${jobs.length > 8 ? `<div class="notes-foot">Scroll inside the box to see all ${jobs.length} jobs.</div>` : ""}`;
 }
 
@@ -22709,7 +22745,7 @@ function estimatesHtml(list) {
       const own = !ME.guided || (ME.emp && e.sold_by_employee_id === ME.emp);
       return `<tr class="inv-row" tabindex="0" data-estimate="${e.id}" ${ME.guided && own ? `data-est-own="1"` : ""} title="${own && ME.guided ? "Open your proposal" : "Open proposal"}"><td class="num">${fmtDate(e.created_at)}</td><td class="num"><span class="inv-link">${esc(e.estimate_number)}</span></td>
       <td>${esc(o.name || "")}${opts.length > 1 ? ` <span class="quiet">+ ${opts.length - 1} more ${opts.length === 2 ? "option" : "options"}</span>` : ""}</td><td class="r num">${money(amt)}</td><td>${badge(e.status)}${e.status === "accepted" && !e.cancelled_at && ME.role && own ? estSoldBtns(e.id, !!e.st_id) : ""}</td>
-      <td class="no-print">${!e.st_id && !(e.status === "accepted" && !e.cancelled_at) && (ME.role === "owner" || (ME.emp && e.sold_by_employee_id === ME.emp)) ? `<button class="link danger est-del" type="button" data-est-del="${e.id}" data-est-num="${esc(e.estimate_number)}" title="Delete this proposal">✕ Delete</button>` : ""}</td></tr>`; }).join("")}
+      <td class="no-print">${!e.st_id && !(e.status === "accepted" && !e.cancelled_at) && (ME.role === "owner" || (ME.emp && e.sold_by_employee_id === ME.emp)) ? `<button class="row-del" type="button" data-est-del="${e.id}" data-est-num="${esc(e.estimate_number)}" title="Delete this proposal"><span aria-hidden="true">✕</span> Delete</button>` : ""}</td></tr>`; }).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} proposals.</div>` : ""}`;
 }
 
