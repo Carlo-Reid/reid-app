@@ -4042,6 +4042,13 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .sinv-stv-open { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 12px 16px; border-radius: 12px; border: 2px solid #1f5fa8; background: #eaf2fb; color: #1f2a37; font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; text-align: left; }
 .sinv-stv-open b { font-size: 20px; color: #1f5fa8; } .sinv-stv-open small { flex-basis: 100%; font-size: 12px; font-weight: 500; color: #5b6b78; } .sinv-stv-open:hover { background: #1f5fa8; color: #fff; } .sinv-stv-open:hover b, .sinv-stv-open:hover small { color: #fff; }
 .stv-totbtn { font: inherit; font-size: inherit; font-weight: inherit; }
+.sinv-tabs button .sinv-lg { height: 26px; max-width: 110px; object-fit: contain; flex: 0 0 auto; } .sinv-tabs button.has-logo .sinv-tn { font-size: 12px; color: #5b6b78; } .sinv-tabs button.has-logo[aria-pressed="true"] .sinv-tn { color: #fff; }
+.sinv-tabs button[aria-pressed="true"] .sinv-lg { background: #fff; border-radius: 6px; padding: 2px 4px; }
+.sinv-lg-bar { margin: 6px 0 0; text-align: right; }
+.sinv-lged { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin: 8px 0 14px; }
+.sinv-lgc { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px; border: 2px dashed #b9cde0; border-radius: 12px; background: #fff; text-align: center; }
+.sinv-lgc.over { border-color: #1f5fa8; background: #eaf2fb; } .sinv-lgc .lgc-pic { height: 64px; display: flex; align-items: center; justify-content: center; } .sinv-lgc .lgc-pic img { max-height: 64px; max-width: 180px; object-fit: contain; }
+.stv-logo-img { max-height: 70px; max-width: 280px; object-fit: contain; }
 .dropin-t { margin-top: 14px; font-family: Inter, system-ui, sans-serif; font-size: 13px; } .dropin-t td { border-bottom: 1px solid #ddd; padding: 6px; vertical-align: top; }
 .sinv-drop { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; margin: 14px 0; padding: 26px 18px; border: 2.5px dashed #1f5fa8; border-radius: 14px; background: #f3f8fd; }
 .sinv-drop.over { background: #dbeafe; border-style: solid; } .sinv-drop .sd-ico { font-size: 30px; color: #1f5fa8; } .sinv-drop b { font-size: 16px; }
@@ -13403,6 +13410,7 @@ async function openSupInv(msg) {
   if (document.body.dataset.page !== "supplier-invoices") return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load supplier invoices</h2>${esc(/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : rpcErr(error))}</div></div>`; return; }
   if (!SINV.rets) { const rt = await db.rpc("supplier_returns_list", { p_invoice: null }); SINV.rets = rt.error ? [] : rt.data || []; }
+  if (!SINV.logos) { const lg = await db.rpc("supplier_logos_list"); SINV.logos = new Map((lg.error ? [] : lg.data || []).map(x => [x.supplier_id, `data:${x.mime || "image/png"};base64,${x.image}`])); }
   SINV.data = data; if (SINV.st == null && data.statement_id) SINV.st = data.statement_id;   // (the list opens on the newest statement)
   else if (SINV.st == null && data.statements?.length) { SINV.st = data.statements[0].id; return openSupInv(msg); }
   renderSupInv(msg);
@@ -13477,8 +13485,30 @@ function sinvTabs(D) {
   const name = id => sinvShort(st.find(s => s.supplier_id === id).supplier);
   ids.sort((a, b) => name(a).localeCompare(name(b)));
   const all = Object.values(cnt).reduce((a, n) => a + Number(n), 0);
-  return `<nav class="sinv-tabs seg" aria-label="Suppliers"><button type="button" data-sinv-sup="" aria-pressed="${SINV.sup == null}">All suppliers <b>${all}</b></button>${ids.map(id => `<button type="button" data-sinv-sup="${id}" aria-pressed="${SINV.sup === id}" title="${esc(st.find(s => s.supplier_id === id).supplier)}">${esc(name(id))} <b>${Number(cnt[id] || 0)}</b></button>`).join("")}</nav>`;
+  const lg = id => SINV.logos?.get(id);
+  return `<nav class="sinv-tabs seg" aria-label="Suppliers"><button type="button" data-sinv-sup="" aria-pressed="${SINV.sup == null}">All suppliers <b>${all}</b></button>${ids.map(id => `<button type="button" data-sinv-sup="${id}" aria-pressed="${SINV.sup === id}" title="${esc(st.find(s => s.supplier_id === id).supplier)}" class="${lg(id) ? "has-logo" : ""}">${lg(id) ? `<img class="sinv-lg" alt="" src="${lg(id)}">` : ""}<span class="sinv-tn">${esc(name(id))}</span> <b>${Number(cnt[id] || 0)}</b></button>`).join("")}</nav>
+    ${D.can_edit ? `<div class="sinv-lg-bar"><button class="link" type="button" data-sinv-logos>${SINV.logoEd ? "Close the logos" : "🖼 Supplier logos"}</button></div>${SINV.logoEd ? sinvLogoEditor(ids, st) : ""}` : ""}`;
 }
+// drop in a supplier's logo (it shows on its button and its statement page), replace it or delete it
+function sinvLogoEditor(ids, st) {
+  return `<section class="sinv-lged">${ids.map(id => { const nm = sinvShort(st.find(s => s.supplier_id === id).supplier), lg = SINV.logos?.get(id);
+    return `<div class="sinv-lgc" data-lg-drop="${id}" tabindex="0"><div class="lgc-pic">${lg ? `<img alt="${esc(nm)} logo" src="${lg}">` : `<span class="quiet">Drop the logo here</span>`}</div>
+      <b>${esc(nm)}</b><span class="lgc-acts"><label class="link">${lg ? "Replace" : "Pick a picture"}<input type="file" accept="image/*" hidden data-lg-file="${id}"></label>${lg ? ` · <button class="link danger" type="button" data-lg-del="${id}">Delete</button>` : ""}</span>
+      <span class="lgc-msg quiet"></span></div>`; }).join("")}</section>`;
+}
+async function sinvLogoFile(id, f) {
+  const card = document.querySelector(`[data-lg-drop="${id}"]`), m = card?.querySelector(".lgc-msg"); if (!f || !/^image\//.test(f.type)) { if (m) m.textContent = "That isn't a picture."; return; }
+  if (m) m.textContent = "Saving…";
+  const img = await createImageBitmap(f), sc = Math.min(1, 400 / img.width, 160 / img.height), c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(img.width * sc)); c.height = Math.max(1, Math.round(img.height * sc)); c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  const url = c.toDataURL("image/png"), { error } = await db.rpc("supplier_logo_set", { p_supplier: id, p_image: url.split(",")[1], p_mime: "image/png" });
+  if (error) { if (m) m.textContent = "Not saved: " + rpcErr(error); return; }
+  SINV.logos.set(id, url); const top = $("#main").scrollTop; renderSupInv("Logo saved."); $("#main").scrollTop = top;
+}
+document.addEventListener("dragover", e => { const b = e.target.closest?.("[data-lg-drop]"); if (!b) return; e.preventDefault(); b.classList.add("over"); });
+document.addEventListener("dragleave", e => { const b = e.target.closest?.("[data-lg-drop]"); if (b && !b.contains(e.relatedTarget)) b.classList.remove("over"); });
+document.addEventListener("drop", e => { const b = e.target.closest?.("[data-lg-drop]"); if (!b) return; e.preventDefault(); b.classList.remove("over"); sinvLogoFile(Number(b.dataset.lgDrop), e.dataTransfer?.files?.[0]); });
+document.addEventListener("change", e => { const i = e.target.closest?.("[data-lg-file]"); if (i) sinvLogoFile(Number(i.dataset.lgFile), i.files[0]); });
 // what each supplier is owed now: the newest statement of each supplier (and each of our accounts with them); payment-only suppliers show their last payment
 function sinvOwing(D) {
   const st = D.statements || [], keys = [...new Set(st.map(s => s.supplier_id + "|" + (s.account || "")))];
@@ -13823,7 +13853,7 @@ function drawSupStatement() {
   const sum = SL.reduce((a, l) => a + Number(l.amount || 0), 0), R = STV.read;
   const cmp = R ? stCompare(SL, R.lines) : null;
   $("#inv-paper").innerHTML = `<div class="stv">
-    <div class="stv-hd"><div class="stv-sup"><div class="stv-logo">${esc(sinvShort(S.supplier || ""))}</div><div class="stv-supn">${esc(S.supplier || "")}</div></div>
+    <div class="stv-hd"><div class="stv-sup">${SINV.logos?.get(S.supplier_id) ? `<img class="stv-logo-img" alt="${esc(sinvShort(S.supplier || ""))}" src="${SINV.logos.get(S.supplier_id)}">` : `<div class="stv-logo">${esc(sinvShort(S.supplier || ""))}</div>`}<div class="stv-supn">${esc(S.supplier || "")}</div></div>
       <div class="stv-box"><div class="stv-ttl">STATEMENT</div><table><tr><th>PAGES</th><th>DATE</th></tr><tr><td>${esc(String(S.pages || "—"))}</td><td>${esc(stDate(S.date))}</td></tr>
         <tr><th colspan="2">CUSTOMER NO.</th></tr><tr><td colspan="2">${esc(S.account || ag.account_name || "—")}</td></tr></table></div></div>
     <div class="stv-to">${esc((co.company_name || "Home Service Group Inc.").toUpperCase())}</div>
@@ -13967,6 +13997,10 @@ function wireSupInv() {
   document.querySelector("[data-stv-back]")?.addEventListener("click", () => { const t = SINV.backTo; if (t) openSupStatement(t.id, t.sup); });
   document.querySelector("[data-stv-backx]")?.addEventListener("click", () => { SINV.backTo = null; redo(); });
   document.querySelectorAll("[data-stv-open]").forEach(b => b.addEventListener("click", () => openSupStatement(Number(b.dataset.stvOpen), SINV.sup ?? (SINV.data?.statements || []).find(x => x.id === Number(b.dataset.stvOpen))?.supplier_id)));
+  document.querySelector("[data-sinv-logos]")?.addEventListener("click", () => { SINV.logoEd = !SINV.logoEd; redo(); });
+  document.querySelectorAll("[data-lg-del]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.lgDel);
+    if (await askChoice("Delete this logo?", "The button shows the supplier's name again.", [["yes", "Delete it", true], ["", "Keep it"]]) !== "yes") return;
+    const { error } = await db.rpc("supplier_logo_set", { p_supplier: id, p_image: null }); if (error) return alertMsg("Not deleted: " + rpcErr(error)); SINV.logos.delete(id); redo(); }));
   document.querySelectorAll("[data-sinv-dropin]").forEach(b => b.addEventListener("click", () => openDropInvoices(Number(b.dataset.sinvDropin), sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === Number(b.dataset.sinvDropin))?.supplier || "the supplier"))));
   document.querySelectorAll("[data-stv-new]").forEach(b => b.addEventListener("click", () => openNewStatement(Number(b.dataset.stvNew), sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === Number(b.dataset.stvNew))?.supplier || "the supplier"))));
   document.querySelectorAll("[data-sinv-pk]").forEach(b => b.addEventListener("click", () => { SINV.pick = b.dataset.sinvPk; SINV.open = null;
