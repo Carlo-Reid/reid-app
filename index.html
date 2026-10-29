@@ -363,9 +363,11 @@
   .last-maint .lm-d b { color: var(--ink); } .last-maint .lm-d span, .last-maint .lm-t { color: var(--steel); font-size: calc(12px * var(--fs, 1)); }
   .last-maint .lm-ask { margin-top: 4px; font-weight: 700; color: #a15c00; } .last-maint .lm-ok { margin-top: 4px; font-weight: 700; color: var(--green, #2b8a3e); }
   .last-maint.lm-due { background: #fff8e6; }
-  .file section.block h2.fold-head { cursor: pointer; user-select: none; } .file section.block h2.fold-head .fold { display: none !important; }
+  .file section.block h2.fold-head { cursor: pointer; user-select: none; border-left: 0 !important; padding-left: 0 !important; } .file section.block h2.fold-head .fold { display: none !important; }
   .file section.block h2.fold-head::after { content: "▾"; margin-left: 10px; font-size: .7em; color: var(--steel); display: inline-block; transition: transform .15s; }
   .file section.block:not(.folded) > h2.fold-head::after { transform: rotate(180deg); } .file section.block h2.fold-head:hover { color: var(--blue); }
+  .file .sec1a .sec1a-plans .plan-tag .pl-last { display: block; margin-top: 2px; font-size: calc(11.5px * var(--fs, 1)); font-weight: 600; color: var(--steel); }
+  .file .sec1a .sec1a-plans .plan-tag .pl-last.pl-wait { display: none; } .file .sec1a .sec1a-plans .plan-tag .pl-last.pl-due { color: #a15c00; } .file .sec1a .sec1a-plans .plan-tag .pl-last.pl-ok { color: var(--green, #2b8a3e); }
   .gd-mine.gm-calm .gm-time { color: #2c5a7f; } .gd-mine.gm-calm .gm-day { color: #1f2a37; }
   .gd-mine .gm-head { font-size: calc(17px * var(--fs, 1)); color: #a63c00; margin-bottom: 6px; }
   .gd-mine .gm-visit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; padding: 8px 12px; border-radius: 10px; background: #fff; border-left: 6px solid #f76707; }
@@ -6115,6 +6117,7 @@ async function openCustomer(id) {
   document.querySelectorAll("#results .result").forEach(b => b.setAttribute("aria-current", b.dataset.id == id));
   // reopening the file that is already showing (after a delete or a change): come back to the same section, not the top
   const mainEl = $("#main"), same = current?.c?.id === id && mainEl.querySelector(".file");
+  if (!same) PLSVC.clear();   // a fresh look at each plan's last service when a customer opens
   let place = null;
   if (same) { const mt = mainEl.getBoundingClientRect().top, secs = [...mainEl.querySelectorAll(".file [data-tag]")].filter(x => x.offsetParent);
     const sec = secs.find(x => x.getBoundingClientRect().bottom > mt + 40); place = { top: mainEl.scrollTop, tag: sec?.dataset.tag, off: sec ? sec.getBoundingClientRect().top - mt : 0 }; }
@@ -6640,8 +6643,8 @@ function buildFileNav() {
     if (!h || h.querySelector(".fold")) return;
     sec.classList.toggle("folded", !!folded[name]);
     h.insertAdjacentHTML("beforeend", `<button class="fold" type="button" aria-expanded="${!folded[name]}">${folded[name] ? "Show ▾" : "Hide ▴"}</button>`);
-    if (name === "Calls nearby") {   // Section 1B: no Show button, the title itself opens and closes it
-      h.classList.add("fold-head"); h.setAttribute("role", "button"); h.tabIndex = 0; h.title = "Click to show or hide the calls nearby";
+    if (["Section 1B", "Section 3", "Section 4", "Section 4B", "Section 5"].includes(sec.dataset.tag)) {   // no Show / Hide button: the title itself opens and closes it
+      h.classList.add("fold-head"); h.setAttribute("role", "button"); h.tabIndex = 0; h.title = "Click to show or hide";
       const go = ev => { if (ev.target.closest(".fold") || ev.target.closest("a, input, select, button:not(.fold)")) return; h.querySelector(".fold").click(); };
       h.addEventListener("click", go); h.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(ev); } });
     }
@@ -6661,22 +6664,23 @@ function buildFileNav() {
   markFileNav();
 }
 var SHUT_SECS = ["Plans", "Marketing"], SHUT_OPEN = { cust: null, open: new Set() };
-// Section 1, Plans box: the last maintenance we have on record at this address (so we can offer the next one)
-const isMaintJob = j => /maintenance|clean\s*&\s*check|tune[- ]?up/i.test(j.job_types?.name || "") && !/duct|carpet|coil/i.test(j.job_types?.name || "");
+// Section 1, Plans box: under each plan, the last time we did that plan's work at this address (and the next one booked),
+// so we can ask if they'd like it done. Filled in after the page shows (plan_last_service), kept for the page.
+var PLSVC = new Map();   // location id -> { membership id -> row }
+function plSvcLine(mid) {
+  const loc = current?.planSvcLoc, m = loc && PLSVC.get(loc); if (!m) return `<span class="pl-last pl-wait"></span>`;
+  const r = m[mid]; if (!r) return "";
+  const ago = d => { const mo = Math.max(0, Math.round((Date.now() - Date.parse(d + "T12:00:00")) / 2629800000)); return mo < 1 ? "this month" : mo < 12 ? mo + " mo ago" : Math.floor(mo / 12) + " yr" + (mo % 12 ? " " + (mo % 12) + " mo" : "") + " ago"; };
+  const old = !r.last || (Date.now() - Date.parse(r.last + "T12:00:00")) / 2629800000 >= 11;
+  return `<span class="pl-last ${r.next ? "pl-ok" : old ? "pl-due" : ""}" title="${r.last ? esc("Job " + (r.job_number || "") + (r.job_type ? " · " + r.job_type : "")) : "No job for this plan on record at this address"}">${r.last ? "Last done " + esc(fmtDate(r.last)) + " · " + esc(ago(r.last)) : "Never done on record"}${r.next ? " · ✓ next booked " + esc(fmtDate(r.next)) : old ? " · ask if they'd like it done" : ""}</span>`;
+}
 function lastMaintHtml(l) {
   if (!l) return "";
-  const done = (current?.jobs || []).filter(j => j.location_id === l.id && isMaintJob(j) && (j.status === "completed" || j.completed_at)).map(j => {
-    const vd = (j.visits || []).filter(v => v.status === "completed").map(v => v.scheduled_date).filter(Boolean).sort().pop();
-    return { j, d: (j.completed_at || "").slice(0, 10) || vd || "" }; }).filter(x => x.d).sort((a, b) => b.d.localeCompare(a.d));
-  const booked = (current?.jobs || []).filter(j => j.location_id === l.id && isMaintJob(j) && !["completed", "cancelled"].includes(j.status) && !j.completed_at)
-    .flatMap(j => (j.visits || []).filter(v => !["completed", "cancelled"].includes(v.status) && v.scheduled_date >= ymd(new Date())).map(v => v.scheduled_date)).sort()[0];
-  const ago = d => { const m = Math.max(0, Math.round((Date.now() - Date.parse(d + "T12:00:00")) / 2629800000)); return m < 1 ? "this month" : m < 12 ? m + " month" + (m === 1 ? "" : "s") + " ago" : (() => { const y = Math.floor(m / 12), r = m % 12; return y + " yr" + (r ? " " + r + " mo" : "") + " ago"; })(); };
-  const last = done[0], months = last ? (Date.now() - Date.parse(last.d + "T12:00:00")) / 2629800000 : null;
-  const due = !booked && (!last || months >= 11);
-  return `<div class="last-maint ${due ? "lm-due" : ""}"><div class="lm-h">🔧 Last maintenance</div>
-    ${last ? `<div class="lm-d"><b>${esc(fmtDate(last.d))}</b> <span>${esc(ago(last.d))}</span></div><div class="lm-t">${esc(last.j.job_types?.name || "Maintenance")} · job ${esc(last.j.job_number)}</div>`
-      : `<div class="lm-d"><b>None on record</b></div>`}
-    ${booked ? `<div class="lm-ok">✓ Next one booked ${esc(fmtDate(booked))}</div>` : due ? `<div class="lm-ask">${last ? "Due: ask if they'd like it done." : "Ask if they'd like a maintenance."}</div>` : ""}</div>`;
+  if (current) current.planSvcLoc = l.id;
+  if (!PLSVC.has(l.id)) { const loc = l.id; db.rpc("plan_last_service", { p_location: loc }).then(({ data, error }) => { if (error) return;
+    const m = {}; (data || []).forEach(r => m[r.membership_id] = r); PLSVC.set(loc, m);
+    document.querySelectorAll(".file .sec1a .plan-tag[data-mship]").forEach(b => { if (current?.planSvcLoc !== loc) return; const old = b.querySelector(".pl-last"); const html = plSvcLine(Number(b.dataset.mship)); if (old) old.outerHTML = html || ""; else if (html) b.insertAdjacentHTML("beforeend", html); }); }); }
+  return "";
 }
 function markFileNav() {
   const nav = document.querySelector(".file-nav"); if (!nav) return;
@@ -10029,7 +10033,7 @@ function planBadge(plans, l) {
   const on = (plans || []).filter(p => p.status === "active" && (!p.end_date || p.end_date >= new Date().toISOString().slice(0, 10)));
   const here = l ? on.filter(p => p.location_id === l.id) : on, other = on.filter(p => !here.includes(p));
   if (here.length || other.length)
-    return `<div class="plan-tags">${here.map(p => `<button type="button" class="plan-tag" data-goto-plans title="Since ${esc(fmtDate(p.start_date))}${p.end_date ? ", ends " + esc(fmtDate(p.end_date)) : ""}">★ ${esc(p.plan_types?.name || "Plan")}</button>`).join("")}
+    return `<div class="plan-tags">${here.map(p => `<button type="button" class="plan-tag" data-goto-plans data-mship="${p.id}" title="Since ${esc(fmtDate(p.start_date))}${p.end_date ? ", ends " + esc(fmtDate(p.end_date)) : ""}">★ ${esc(p.plan_types?.name || "Plan")}${plSvcLine(p.id)}</button>`).join("")}
       ${other.map(p => `<button type="button" class="plan-tag other" data-goto-plans title="This plan is for another address">★ ${esc(p.plan_types?.name || "Plan")} <small>(other address)</small></button>`).join("")}</div>`;
   const last = (plans || []).filter(p => p.status !== "active" || p.end_date).sort((a, b) => String(b.cancelled_on || b.end_date || "").localeCompare(String(a.cancelled_on || a.end_date || "")))[0];
   return `<div class="plan-tags"><button type="button" class="plan-tag none" data-goto-plans>${last ? `No plan now <small>(${esc(last.plan_types?.name || "plan")} ${last.status === "cancelled" ? "cancelled" : "ended"}${last.cancelled_on || last.end_date ? " " + esc(monthYear(last.cancelled_on || last.end_date)) : ""})</small>` : "No plan"}</button></div>`;
