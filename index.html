@@ -4039,6 +4039,13 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .sinv-tabs { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }   /* SU 2: every supplier box the same size */
 .sinv-tabs button { width: 100%; min-height: 48px; justify-content: space-between; box-sizing: border-box; text-align: left; }
 .sinv-tabs button b { margin-left: auto !important; }
+.sinv-pick { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 16px; }
+.sinv-pk-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; } .sinv-pk-months { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.sinv-pk { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 54px; padding: 9px 14px; border-radius: 12px; border: 1px solid #c9d3de; background: #fff; color: #1f2a37;
+  font: inherit; text-align: left; cursor: pointer; box-shadow: 0 1px 2px rgba(16, 24, 40, .06); transition: border-color .12s, box-shadow .12s, transform .12s; }
+.sinv-pk b { font-size: 15px; } .sinv-pk small { font-size: 12px; color: #5b6b78; }
+.sinv-pk:hover, .sinv-pk:focus-visible { border-color: #1f5fa8; box-shadow: 0 4px 10px rgba(31, 95, 168, .15); transform: translateY(-1px); outline: none; }
+.sinv-pk.on { background: #1f5fa8; border-color: #1f5fa8; color: #fff; } .sinv-pk.on small, .sinv-pk.on .quiet { color: rgba(255,255,255,.85) !important; }
 .sinv-st > div { display: flex; flex-direction: column; } .sinv-st b { font-size: 18px; }
 .sinv-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; } .sinv-bar input[type=search] { flex: 1 1 220px; min-width: 180px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
 .sinv-bar .seg button b { margin-left: 4px; font-weight: 700; opacity: .75; }
@@ -13369,7 +13376,7 @@ function sinvState(r) {
 const SINV_F = [["look", "Needs a look"], ["match", "Matches PO"], ["credit", "Credits & returns"], ["ok", "Checked"], ["all", "All"]];
 function renderSupInv(msg) {
   const D = SINV.data || { rows: [], statements: [] }, S = (D.statements || []).find(s => s.id === SINV.st), edit = D.can_edit;
-  const rows = (D.rows || []).map(r => ({ ...r, _s: sinvState(r) }));
+  const rows = (D.rows || []).filter(r => !(SINV.st === 0 && SINV.sup != null && SINV.pick === "year" && SINV.year) || String(r.invoice_date || "").startsWith(SINV.year)).map(r => ({ ...r, _s: sinvState(r) }));   // By year: that year's invoices
   const inF = (r, f) => f === "all" || (f === "look" ? r._s.look : f === "credit" ? ["credit", "charge"].includes(r._s.k) : r._s.k === f);
   const qq = SINV.q.trim().toLowerCase(), hay = r => [r.number, r.po_text, r.po_number, r.po_customer, r.po_job_number, r.job_name, r.handwriting, r.match_note].join(" ").toLowerCase();
   const list = rows.filter(r => qq ? hay(r).includes(qq) : inF(r, SINV.f));
@@ -13427,13 +13434,23 @@ function sinvOwing(D) {
   }).sort((a, b) => a.name.localeCompare(b.name));
 }
 // statements of the supplier tab as buttons: "All invoices" first, then each statement (newest first)
-function sinvStChips(D) {
+function sinvStChips(D) {   // a supplier's statements as boxes: All time / By year, then the years, then that year's months
   if (SINV.sup == null) return "";
   const st = (D.statements || []).filter(s => s.supplier_id === SINV.sup);
   if (!st.length) return "";
-  const lab = s => `${esc(new Date(s.date + "T12:00").toLocaleDateString("en-CA", { month: "short", year: "numeric" }))}${s.account ? ` · ${esc(s.aging?.account_name || "acct " + s.account)}` : ""}${s.aging?.kind === "payment" ? " · paid" : ""}`;
-  return `<div class="sinv-chips"><label class="sinv-stpick"><span class="quiet">Statement:</span><select data-sinv-stsel aria-label="Statement month">
-    <option value="0" ${SINV.st === 0 ? "selected" : ""}>All invoices</option>${st.map(s => `<option value="${s.id}" ${SINV.st === s.id ? "selected" : ""}>${lab(s)} · ${esc(fmtDate(s.date))} · ${money(s.total)}</option>`).join("")}</select></label></div>`;
+  const cur = st.find(s => s.id === SINV.st), mode = cur ? "year" : SINV.pick || "all", yr = cur ? cur.date.slice(0, 4) : SINV.year;
+  const years = [...new Set(st.map(s => s.date.slice(0, 4)))].sort().reverse();
+  const box = (attrs, on, top, sub) => `<button type="button" class="sinv-pk ${on ? "on" : ""}" ${attrs} aria-pressed="${on}"><b>${top}</b>${sub ? `<small>${sub}</small>` : ""}</button>`;
+  const sumY = y => st.filter(s => s.date.startsWith(y)).length;
+  let html = `<div class="sinv-pick"><div class="sinv-pk-row">${box('data-sinv-pk="all"', mode === "all", "All time", `${st.length} statements`)}${box('data-sinv-pk="year"', mode === "year", "By year", `${years.length} ${years.length === 1 ? "year" : "years"}`)}</div>`;
+  if (mode === "year") {
+    html += `<div class="sinv-pk-row">${years.map(y => box(`data-sinv-yr="${y}"`, yr === y, y, `${sumY(y)} ${sumY(y) === 1 ? "statement" : "statements"}`)).join("")}</div>`;
+    if (yr) { const ms = st.filter(s => s.date.startsWith(yr)).sort((a, b) => a.date.localeCompare(b.date));
+      html += `<div class="sinv-pk-row sinv-pk-months">${ms.map(s => box(`data-sinv-stid="${s.id}"`, SINV.st === s.id,
+        esc(new Date(s.date + "T12:00").toLocaleDateString("en-CA", { month: "long" })) + (s.account ? ` <span class="quiet">· ${esc(s.aging?.account_name || "acct " + s.account)}</span>` : ""),
+        `${esc(fmtDate(s.date))} · ${money(s.total)}${s.aging?.kind === "payment" ? " · paid" : ""}`)).join("")}</div>`; }
+  }
+  return html + `</div>`;
 }
 // "All invoices": what's loaded, and what we owe each supplier now (newest statement), with the total of all of them
 function sinvAllHead(D, rows) {
@@ -13442,7 +13459,7 @@ function sinvAllHead(D, rows) {
   const tot = O.reduce((a, o) => a + (o.counted ? Number(o.owe.total) || 0 : 0), 0), left = O.filter(o => o.owe && !o.counted).length;
   const dates = st.map(s => s.date).sort();
   return `<section class="sinv-st">
-    <div><span class="quiet">Showing</span><b>All invoices${SINV.sup == null ? " · every supplier" : ` · ${esc(sinvShort(st[0]?.supplier))}`}</b><span class="quiet">${st.length} statements${dates.length ? ` · ${esc(fmtDate(dates[0]))} to ${esc(fmtDate(dates[dates.length - 1]))}` : ""} · ${rows.length} invoices</span></div>
+    <div><span class="quiet">Showing</span><b>${SINV.sup != null && SINV.pick === "year" && SINV.year ? esc(SINV.year) + " invoices" : "All invoices"}${SINV.sup == null ? " · every supplier" : ` · ${esc(sinvShort(st[0]?.supplier))}`}</b><span class="quiet">${st.length} statements${dates.length ? ` · ${esc(fmtDate(dates[0]))} to ${esc(fmtDate(dates[dates.length - 1]))}` : ""} · ${rows.length} invoices</span></div>
     <div class="sinv-owing-total"><span class="quiet">${SINV.sup == null ? "Owing to all suppliers" : "Owing now"}</span><b>${money(tot)}</b><span class="quiet">from each one's latest statement${left ? ` · ${left} older ${left === 1 ? "one" : "ones"} not counted` : ""}</span></div>
   </section>
   ${O.length ? `<div class="sinv-owing">${O.map(o => `<button type="button" class="sinv-owe" data-sinv-sup="${o.sup}" ${SINV.sup === o.sup ? 'aria-pressed="true"' : ""}><span>${esc(o.name)}</span>${o.owe ? `<b ${o.counted ? "" : 'class="quiet"'}>${money(o.owe.total)}</b><span class="quiet">statement ${esc(fmtDate(o.owe.date))}${o.why ? ` · ${o.why}` : ""}</span>` : `<b>—</b><span class="quiet">no statement</span>`}${o.pay && (!o.owe || o.pay.date > o.owe.date) ? `<span class="quiet">last paid ${money(o.pay.total)} on ${esc(fmtDate(o.pay.date))}</span>` : ""}</button>`).join("")}</div>` : ""}`;
@@ -13551,9 +13568,14 @@ function wireSupInv() {
   $("#sinv-pos")?.addEventListener("click", () => openPOs());
   document.querySelectorAll("[data-sinv-stid]").forEach(b => b.addEventListener("click", () => { SINV.st = Number(b.dataset.sinvStid); SINV.open = null; sinvSaveTab(); openSupInv(); }));
   document.querySelector("[data-sinv-stsel]")?.addEventListener("change", e => { SINV.st = Number(e.target.value); SINV.open = null; sinvSaveTab(); openSupInv(); });
+  document.querySelectorAll("[data-sinv-pk]").forEach(b => b.addEventListener("click", () => { SINV.pick = b.dataset.sinvPk; SINV.open = null;
+    if (SINV.pick === "all") { SINV.year = null; if (SINV.st !== 0) { SINV.st = 0; sinvSaveTab(); return openSupInv(); } }
+    else if (SINV.st && SINV.st !== 0) { /* stay on the month */ } redo(); }));
+  document.querySelectorAll("[data-sinv-yr]").forEach(b => b.addEventListener("click", () => { SINV.pick = "year"; SINV.year = b.dataset.sinvYr; SINV.open = null;
+    if (SINV.st !== 0) { SINV.st = 0; sinvSaveTab(); return openSupInv(); } redo(); }));
   document.querySelectorAll("[data-sinv-sup]").forEach(b => b.addEventListener("click", () => {
     const v = b.dataset.sinvSup ? Number(b.dataset.sinvSup) : null; if (v === SINV.sup) return;
-    SINV.sup = v; SINV.st = 0; SINV.open = null; sinvSaveTab();   // a supplier tab opens on all of its invoices
+    SINV.sup = v; SINV.st = 0; SINV.open = null; SINV.pick = "all"; SINV.year = null; sinvSaveTab();   // a supplier tab opens on all of its invoices
     document.querySelectorAll("[data-sinv-sup]").forEach(x => x.setAttribute("aria-pressed", x === b)); openSupInv();
   }));
   document.querySelectorAll("[data-sinv-f]").forEach(b => b.addEventListener("click", () => { SINV.f = b.dataset.sinvF; SINV.q = ""; try { localStorage.setItem("reid.sinvF", SINV.f); } catch {} redo(); }));
