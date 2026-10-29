@@ -4954,6 +4954,22 @@ html body[data-page="calls"] #main article.calls .calls-table th { background: #
 html body[data-page="calls"] #main article.calls .calls-table, html body[data-page="calls"] #main article.calls .staff-wrap { border-radius: 16px; }
 html body[data-page="calls"] #main article.calls .cl-tools .cl-row .cl-dates-in input[type=date], html body[data-page="calls"] #main article.calls .cl-tools .cl-row:has(.seg-black) .cl-dates-in input[type=date] { background: #fff !important; background-image: none !important; color: #1f2a37 !important; border: 1px solid #c9d3de !important; border-radius: 10px !important; }
 html body[data-page="calls"] #main article.calls > .cl-tools { margin-top: 0 !important; }
+/* CA 1: Tech picker in the top right corner; the box kept short */
+html body[data-page="calls"] #main article.calls > .cl-tools { display: grid !important; grid-template-columns: minmax(0, 1fr) auto; column-gap: 20px; row-gap: 0; padding: 8px 16px 8px !important; }
+html body[data-page="calls"] #main article.calls > .cl-tools > .cl-row { grid-column: 1; margin: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; gap: 4px 18px !important; }
+html body[data-page="calls"] #main article.calls > .cl-tools > .cl-row-2 { grid-column: 1 / -1; margin-top: 6px !important; padding-top: 6px !important; }
+html body[data-page="calls"] #main article.calls > .cl-tools > .cl-row-3 { grid-column: 2; grid-row: 1; align-self: start; justify-content: flex-end; }
+html body[data-page="calls"] #main article.calls > .cl-tools .cl-group, html body[data-page="calls"] #main article.calls > .cl-tools .cl-dates { gap: 3px !important; }
+html body[data-page="calls"] #main article.calls > .cl-tools .cl-label { margin: 0 !important; font-size: 10.5px !important; }
+html body[data-page="calls"] #main article.calls > .cl-tools .cl-tp-btn { min-width: 190px; }
+html body[data-page="calls"] #main article.calls > .cl-tools .cl-tp-pop { left: auto !important; right: 0 !important; }
+/* CA 3a: the totals open their list */
+html body[data-page="calls"] #main article.calls .cl-mt { position: relative; cursor: pointer; text-align: left; font: inherit; padding-right: 24px !important; }
+html body[data-page="calls"] #main article.calls .cl-mt:hover { border-color: #1f5fa8 !important; box-shadow: 0 4px 10px rgba(31, 95, 168, .18) !important; transform: translateY(-1px); }
+html body[data-page="calls"] #main article.calls .cl-mt[aria-expanded="true"] { border-color: #1f5fa8 !important; box-shadow: 0 0 0 3px rgba(31, 95, 168, .22) !important; }
+html body[data-page="calls"] #main article.calls .cl-mt .cl-mt-car { position: absolute; right: 10px; top: 6px; font-style: normal; font-size: 11px; color: #5b6b78; }
+html body[data-page="calls"] #main article.calls .cl-mt-list { margin: 10px 0 4px; background: #fff; border: 1px solid #dbe3ec; border-radius: 16px; padding: 8px 10px; max-height: 420px; overflow: auto; }
+html body[data-page="calls"] #main article.calls .cl-mt-lh { display: flex; align-items: baseline; gap: 10px; padding: 2px 4px 6px; } html body[data-page="calls"] #main article.calls .cl-mt-lh .link { margin-left: auto; }
 </style>
 </head>
 <body>
@@ -7439,11 +7455,33 @@ const clTechHead = id => `<label class="cl-techhead" title="Show every tech or j
   <option value="">Tech: all</option><option value="0" ${CALLS.tech === "0" ? "selected" : ""}>No tech assigned</option>
   ${(CALL_TECHS || []).map(x => `<option value="${x.employee_id}" ${String(x.employee_id) === CALLS.tech ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>`;
 // Money for the calls shown: each invoice counted once (a job with several visits has one invoice), split evenly between the techs on it
+// CA 3a: click a total to open the list it's made of, right under the totals (click again to close)
+let CALLS_MT = null;
+function callsMtList(k, list, data) {
+  const dt = d => d ? esc(new Date(d + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric" })) : "";
+  const cust = (name, id) => `<button class="link" type="button" data-mt-cust="${id}">${esc(name || "")}</button>`;
+  const invB = i => `<button class="link" type="button" data-invoice="${i.id}"><strong>${esc(i.number || "#" + i.id)}</strong></button>`;
+  const title = { sub: "Invoices: earned before HST", tot: "Invoices: with HST", avg: "Finished calls", owed: "Invoices still owing" }[k];
+  let head, body, n;
+  if (k === "avg") {
+    const rows = data.filter(r => r.visit_status === "completed").sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)); n = rows.length;
+    head = `<th>Date</th><th>Customer</th><th>Tech</th><th>Invoices</th><th class="r">Before HST</th>`;
+    body = rows.map(r => { const iv = (r.invoices || []).filter(i => i.status !== "void"); return `<tr><td class="num">${dt(r.scheduled_date)}</td><td>${cust(r.customer_name, r.customer_id)}</td><td>${esc(r.techs || "")}</td>
+      <td>${iv.map(invB).join(" ") || '<span class="quiet">None yet</span>'}</td><td class="r num">${money(iv.reduce((t, i) => t + Number(i.subtotal ?? i.total ?? 0), 0))}</td></tr>`; }).join("");
+  } else {
+    const rows = (k === "owed" ? list.filter(i => Number(i.balance) > 0.004) : list).sort((a, b) => String(a.day).localeCompare(String(b.day))); n = rows.length;
+    head = `<th>Date</th><th>Invoice</th><th>Customer</th><th>Tech</th><th class="r">Before HST</th><th class="r">With HST</th><th class="r">Owing</th>`;
+    body = rows.map(i => `<tr><td class="num">${dt(i.day)}</td><td>${invB(i)}</td><td>${cust(i.cust, i.custId)}</td><td>${esc([...i.techs].join(", "))}</td>
+      <td class="r num">${money(i.subtotal ?? i.total)}</td><td class="r num">${money(i.total)}</td><td class="r num">${Number(i.balance) > 0.004 ? `<span class="owe">${money(i.balance)}</span>` : ""}</td></tr>`).join("");
+  }
+  return `<div class="cl-mt-list" data-atag-fixed="CA 3d Totals list"><div class="cl-mt-lh"><strong>${title}</strong><span class="quiet">${n.toLocaleString()}</span><button class="link" type="button" data-cmt-close>Close</button></div>
+    ${n ? `<table class="calls-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>` : `<div class="quiet" style="padding:10px 4px">Nothing here.</div>`}</div>`;
+}
 function callsMoneyHtml(data) {
   const inv = new Map();
   data.forEach(r => (r.invoices || []).forEach(i => {
     if (i.status === "void") return;
-    const x = inv.get(i.id) || { ...i, techs: new Set(), sales: r.salesperson || "" };
+    const x = inv.get(i.id) || { ...i, techs: new Set(), sales: r.salesperson || "", cust: r.customer_name || "", custId: r.customer_id, day: r.scheduled_date };
     (r.techs || "").split(", ").filter(Boolean).forEach(n => x.techs.add(n));
     if (!x.sales && r.salesperson) x.sales = r.salesperson;
     inv.set(i.id, x);
@@ -7465,11 +7503,11 @@ function callsMoneyHtml(data) {
   const rows = Object.entries(by).sort((a, b) => (a[0].startsWith("No ") - b[0].startsWith("No ")) || b[1].sub - a[1].sub), max = Math.max(1, ...rows.map(r => r[1].sub));
   return `<section class="cl-money" id="cl-money" data-atag-fixed="CA 3 Money">
     <div class="cl-money-tiles" data-atag-fixed="CA 3a Totals">
-      <div class="cl-mt big"><span>Earned (invoiced, before HST)</span><strong>${money(sub)}</strong><em>${list.length.toLocaleString()} invoices</em></div>
-      <div class="cl-mt"><span>With HST</span><strong>${money(tot)}</strong></div>
-      <div class="cl-mt"><span>Average per finished call</span><strong>${money(done ? sub / done : 0)}</strong><em>${done.toLocaleString()} finished</em></div>
-      <div class="cl-mt owe"><span>Still owed on these</span><strong>${money(owed)}</strong></div>
+      ${[["sub", "big", "Earned (invoiced, before HST)", money(sub), `${list.length.toLocaleString()} invoices`], ["tot", "", "With HST", money(tot), ""],
+        ["avg", "", "Average per finished call", money(done ? sub / done : 0), `${done.toLocaleString()} finished`], ["owed", "owe", "Still owed on these", money(owed), ""]].map(([k, c, t, v, e]) =>
+        `<button type="button" class="cl-mt ${c}" data-cmt="${k}" aria-expanded="${CALLS_MT === k}" title="Click to see the list"><span>${t}</span><strong>${v}</strong>${e ? `<em>${e}</em>` : ""}<i class="cl-mt-car" aria-hidden="true">${CALLS_MT === k ? "▴" : "▾"}</i></button>`).join("")}
     </div>
+    ${CALLS_MT ? callsMtList(CALLS_MT, list, data) : ""}
     <div class="cl-break-head" data-atag-fixed="CA 3b Break it down"><span class="cl-label">Break it down by</span>
       <div class="seg seg-black" role="group">${[["tech", "Tech"], ["sales", "Salesperson"], ["none", "Hide"]].map(([k, x]) => `<button type="button" aria-pressed="${mode === k}" data-cbreak="${k}">${x}</button>`).join("")}</div>
       ${mode === "tech" ? `<span class="quiet">An invoice shared by two techs is split evenly between them.</span>` : mode === "sales" ? `<span class="quiet">The salesperson who sold the job (from the proposal).</span>` : ""}</div>
@@ -7536,6 +7574,9 @@ async function runCalls() {
     CALLS.breakdown = x.dataset.cbreak; try { localStorage.setItem("reid.calls", JSON.stringify(CALLS)); } catch {}
     $("#cl-money").outerHTML = callsMoneyHtml(data); wireBreak(); }));
   const wireNames = () => { const box = $("#cl-money"); if (!box) return;
+    box.querySelectorAll("[data-cmt]").forEach(b => b.addEventListener("click", () => { CALLS_MT = CALLS_MT === b.dataset.cmt ? null : b.dataset.cmt; box.outerHTML = callsMoneyHtml(data); wireBreak(); }));
+    box.querySelector("[data-cmt-close]")?.addEventListener("click", () => { CALLS_MT = null; box.outerHTML = callsMoneyHtml(data); wireBreak(); });
+    box.querySelectorAll("[data-mt-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.mtCust))));
     box.querySelectorAll("[data-cbname]").forEach(b => b.addEventListener("click", () => {
       const k = (CALLS.breakdown || "tech") + ":" + b.dataset.cbname; CALLS_OPEN.has(k) ? CALLS_OPEN.delete(k) : CALLS_OPEN.add(k);
       box.outerHTML = callsMoneyHtml(data); wireBreak(); }));
