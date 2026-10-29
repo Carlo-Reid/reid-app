@@ -4042,6 +4042,10 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .sinv-stv-open { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 12px 16px; border-radius: 12px; border: 2px solid #1f5fa8; background: #eaf2fb; color: #1f2a37; font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; text-align: left; }
 .sinv-stv-open b { font-size: 20px; color: #1f5fa8; } .sinv-stv-open small { flex-basis: 100%; font-size: 12px; font-weight: 500; color: #5b6b78; } .sinv-stv-open:hover { background: #1f5fa8; color: #fff; } .sinv-stv-open:hover b, .sinv-stv-open:hover small { color: #fff; }
 .stv-totbtn { font: inherit; font-size: inherit; font-weight: inherit; }
+.sinv-drop { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; margin: 14px 0; padding: 26px 18px; border: 2.5px dashed #1f5fa8; border-radius: 14px; background: #f3f8fd; }
+.sinv-drop.over { background: #dbeafe; border-style: solid; } .sinv-drop .sd-ico { font-size: 30px; color: #1f5fa8; } .sinv-drop b { font-size: 16px; }
+.sinv-drop .sd-read { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: center; margin-top: 8px; } .sinv-drop .sd-read input { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; max-width: 140px; }
+.sinv-addcopy { margin-top: 4px; font: inherit; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; border: 1.5px solid #1f5fa8; background: #eaf2fb; color: #1f5fa8; cursor: pointer; } .sinv-addcopy:hover { background: #1f5fa8; color: #fff; }
 .stv-back { position: sticky; top: 0; z-index: 5; display: flex; gap: 10px; align-items: center; margin: 6px 0 10px; padding: 8px 0; background: var(--bg, #f6f8fa); }
 /* the statement page: laid out like the supplier's paper one */
 .stv { font-family: "Courier New", Courier, monospace; color: #111; max-width: 960px; margin: 0 auto; padding: 24px; background: #fff; }
@@ -13457,7 +13461,7 @@ function renderSupInv(msg) {
           ${Number(r.po_other_invoices) ? `<div class="quiet">PO is also on ${r.po_other_invoices} other ${r.po_other_invoices == 1 ? "invoice" : "invoices"}</div>` : ""}</td>
         <td>${r.po_customer ? `<button class="link" type="button" data-sinv-cust="${r.po_customer_id}">${esc(r.po_customer)}</button><div class="quiet">Job ${esc(r.po_job_number || "")}</div>` : r.po_id ? `<span class="quiet">Stock / shop</span>` : ""}${r.handwriting ? `<div class="sinv-hw" title="Handwritten on the slip">✎ ${esc(r.handwriting.slice(0, 60))}</div>` : ""}</td>
         <td class="r num">${money(r._s.before)}</td><td class="r num">${r._s.po != null ? money(r._s.po) : `<span class="quiet">—</span>`}</td>
-        <td><span class="status ${cls[r._s.k] || ""}">${esc(r._s.label)}</span>${r.match_note ? `<div class="quiet">${esc(r.match_note)}</div>` : ""}</td></tr>
+        <td><span class="status ${cls[r._s.k] || ""}">${esc(r._s.label)}</span>${r._s.k === "nocopy" && edit ? `<div><button class="sinv-addcopy" type="button" data-sinv-addcopy="${r.id}">⬆ Add the invoice</button></div>` : ""}${r.match_note ? `<div class="quiet">${esc(r.match_note)}</div>` : ""}</td></tr>
         ${SINV.open === r.id ? `<tr class="sinv-det"><td colspan="7">${sinvDetail(r, edit)}</td></tr>` : ""}`).join("")}</tbody></table></div>`
       : `<p class="quiet" style="padding:20px 0">${qq ? "Nothing matches your search." : "Nothing here."}</p>`}
   </article>`;
@@ -13626,9 +13630,57 @@ function sinvDetail(r, edit) {
       ${(d.changes || []).length ? sinvHistory(d.changes) : ""}</section></div>
     ${(d.returns || []).length ? sinvReturnsHtml(d.returns, edit) : ""}
     ${(d.pages || []).length ? `<section class="sinv-scans"><h3>Scanned ${d.pages.length === 1 ? "page" : "pages"}</h3>${d.pages.map(p => `<figure class="sinv-scan" data-sinv-img="${p.id}">${SINV.img.has(p.id) ? `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">` : `<span class="quiet">Loading page ${p.page_no}…</span>`}</figure>`).join("")}
-      <p class="quiet">Click a page to zoom in.</p></section>` : `<p class="quiet">There's no copy of this one in the file: only its line on the statement.</p>`}
+      <p class="quiet">Click a page to zoom in.</p></section>` : edit ? sinvDropHtml(r) : `<p class="quiet">There's no copy of this one in the file: only its line on the statement.</p>`}
   </div>`;
 }
+// an invoice that's on the statement but was never loaded: drop its PDF (from the email) here; the app keeps the pages and reads the PO number
+function sinvDropHtml(r) {
+  return `<section class="sinv-drop" data-sinv-drop="${r.id}" tabindex="0"><div class="sd-ico" aria-hidden="true">⬇</div>
+    <b>Drop ${esc(sinvShort(r.supplier) || "the supplier")}'s invoice ${esc(r.number)} here</b>
+    <span>Drag the PDF attachment from the email (not the email itself) onto this box, or <label class="link">pick the file<input type="file" accept="application/pdf,image/*" multiple hidden data-sinv-dropfile="${r.id}"></label>.</span>
+    <div class="sd-msg" role="status"></div></section>`;
+}
+async function sinvAttachFiles(id, files) {
+  const box = document.querySelector(`[data-sinv-drop="${id}"]`), msg = box?.querySelector(".sd-msg"), say = t => { if (msg) msg.innerHTML = t; };
+  const r = (SINV.data?.rows || []).find(x => x.id === id); if (!files.length || !box) return;
+  try {
+    say("Getting the reader ready…");
+    await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"); await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const cv = [];
+    for (const f of files) {
+      if (/pdf/i.test(f.type) || /\.pdf$/i.test(f.name)) { const pdf = await window.pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise;
+        for (let n = 1; n <= pdf.numPages; n++) { say(`Opening page ${n} of ${pdf.numPages}…`); const pg = await pdf.getPage(n), vp = pg.getViewport({ scale: 3 }), c = document.createElement("canvas");
+          c.width = vp.width; c.height = vp.height; const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: g, viewport: vp }).promise; cv.push(c); } }
+      else if (/^image\//.test(f.type)) { const img = await createImageBitmap(f), c = document.createElement("canvas"); c.width = img.width; c.height = img.height; c.getContext("2d").drawImage(img, 0, 0); cv.push(c); }
+    }
+    if (!cv.length) return say(`<span class="st-bad">That isn't a PDF or a picture. Drag the invoice's PDF attachment from the email.</span>`);
+    const worker = await window.Tesseract.createWorker("eng"); let text = "";
+    for (let i = 0; i < cv.length; i++) { say(`Reading page ${i + 1} of ${cv.length}…`); text += "\n" + (await worker.recognize(cv[i])).data.text; }
+    await worker.terminate();
+    const pages = cv.map(c => { const w = Math.min(1500, c.width), h = Math.round(c.height * w / c.width), o = document.createElement("canvas"); o.width = w; o.height = h; o.getContext("2d").drawImage(c, 0, 0, w, h); return o.toDataURL("image/jpeg", 0.72).split(",")[1]; });
+    const n = t => t == null ? null : Number(String(t).replace(/[, ]/g, ""));
+    const po = (text.match(/(?:P\.?\s?O\.?|PURCHASE\s+ORDER|CUSTOMER\s+ORDER|ORDER|COMMANDE)\s*(?:#|NO\.?|NUMBER|NUM\.?)?\s*[:#.]?\s*([A-Z]{0,3}\d[\w-]{2,})/i) || [])[1] || "";
+    const sub = n((text.match(/SUB\s*-?\s*TOTAL\D{0,12}([\d,]+\.\d{2})/i) || [])[1]), hst = n((text.match(/(?:H\.?S\.?T|TVH|TAX)\D{0,12}([\d,]+\.\d{2})/i) || [])[1]);
+    const hasNum = r && text.replace(/\W/g, "").toUpperCase().includes(String(r.number).replace(/\W/g, "").toUpperCase());
+    say(`<div class="sd-read">${hasNum ? `✓ It's invoice ${esc(r.number)}.` : `<span class="st-bad">⚠ I couldn't find the number ${esc(r?.number || "")} on it: make sure it's the right invoice.</span>`} ${cv.length} ${cv.length === 1 ? "page" : "pages"}.
+      <label>PO number on it <input type="text" data-sd-po value="${esc(po)}" placeholder="PO number"></label>
+      <label>Subtotal <input type="number" step="0.01" data-sd-sub value="${sub ?? ""}"></label><label>HST <input type="number" step="0.01" data-sd-hst value="${hst ?? ""}"></label>
+      <button class="btn" type="button" data-sd-save>Save the invoice</button></div>`);
+    box.querySelector("[data-sd-save]").addEventListener("click", async e => { e.target.disabled = true; say2("Saving…");
+      const v = q => box.querySelector(q)?.value.trim() || null;
+      const { error } = await db.rpc("supplier_invoice_attach", { p_invoice: id, p: { pages, po_text: v("[data-sd-po]"), subtotal: v("[data-sd-sub]"), hst: v("[data-sd-hst]"), file: files.map(f => f.name).join(" + ") } });
+      if (error) { e.target.disabled = false; return say2(`<span class="st-bad">Not saved: ${esc(rpcErr(error))}</span>`); }
+      SINV.det.delete(id); SINV.open = id; await openSupInv(`Invoice ${r?.number || ""} loaded.`); });
+    function say2(t) { const m2 = box.querySelector(".sd-read"); if (m2) m2.insertAdjacentHTML("beforeend", `<div>${t}</div>`); }
+  } catch (e) { say(`<span class="st-bad">Couldn't load it: ${esc(e.message || String(e))}</span>`); }
+}
+document.addEventListener("dragover", e => { const b = e.target.closest?.("[data-sinv-drop]"); if (!b) return; e.preventDefault(); b.classList.add("over"); });
+document.addEventListener("dragleave", e => { const b = e.target.closest?.("[data-sinv-drop]"); if (b && !b.contains(e.relatedTarget)) b.classList.remove("over"); });
+document.addEventListener("drop", e => { const b = e.target.closest?.("[data-sinv-drop]"); if (!b) return; e.preventDefault(); b.classList.remove("over");
+  const files = [...(e.dataTransfer?.files || [])]; if (!files.length) { const m = b.querySelector(".sd-msg"); if (m) m.innerHTML = `<span class="st-bad">Nothing came through. Save the attachment from the email first, then drag the file here (dragging the email itself doesn't work).</span>`; return; }
+  sinvAttachFiles(Number(b.dataset.sinvDrop), files); });
+document.addEventListener("change", e => { const i = e.target.closest?.("[data-sinv-dropfile]"); if (i) sinvAttachFiles(Number(i.dataset.sinvDropfile), [...i.files]); });
 // type your own PO lines: change qty / each / description, take a line off, add lines; saved together and recorded
 function sinvPoEditor(r, P, d) {
   return `<form class="sinv-ped" data-sinv-ped="${r.id}"><h4>Edit PO ${esc(r.po_number || "")} lines</h4>${d.po_st ? `<p class="quiet">This PO came from ServiceTitan. Once you change it here, ServiceTitan won't overwrite its lines.</p>` : ""}
@@ -13881,6 +13933,8 @@ function wireSupInv() {
     retSet(id, p, { sent: "Marked sent back.", credited: "Credit received. The return is done.", cancelled: "Return cancelled.", open: "Back to: to send back." }[v]); }));
   document.querySelectorAll("[data-sret-rm]").forEach(b => b.addEventListener("click", () => { const [id, ln] = b.dataset.sretRm.split(":").map(Number); retSet(id, { remove_line: ln }, "Taken off the return."); }));
   document.querySelectorAll("[data-sret-open]").forEach(b => b.addEventListener("click", () => { SINV.open = Number(b.dataset.sretOpen); SINV.f = "all"; SINV.q = ""; redo(); setTimeout(() => document.querySelector(".sinv-row.open")?.scrollIntoView({ block: "start" }), 300); }));
+  document.querySelectorAll("[data-sinv-addcopy]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); SINV.open = Number(b.dataset.sinvAddcopy); redo();
+    setTimeout(() => { const z = document.querySelector(`[data-sinv-drop="${SINV.open}"]`); z?.scrollIntoView({ block: "center" }); z?.focus({ preventScroll: true }); }, 400); }));
   document.querySelectorAll("[data-sinv-edpo]").forEach(b => b.addEventListener("click", () => { SINV.edPo = SINV.edPo === Number(b.dataset.sinvEdpo) ? null : Number(b.dataset.sinvEdpo); redo(); }));
   document.querySelectorAll("[data-sinv-ped]").forEach(f => {
     f.querySelector("[data-sinv-addln]").addEventListener("click", () => f.querySelector(".sinv-ped-new").insertAdjacentHTML("beforeend",
