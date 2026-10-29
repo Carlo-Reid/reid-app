@@ -8712,18 +8712,18 @@ async function estHoldCal(id, pick) {
   if (error || !data) { back.querySelector(".eh-cal").innerHTML = `<p class="staff-msg err">${esc(error ? rpcErr(error) : "Couldn't open the calendar")}</p><button class="btn" type="button" data-x>Close</button>`; back.querySelector("[data-x]").onclick = close; return; }
   const by = new Map((data.days || []).map(d => [d.day, d])), start = new Date(data.from + "T12:00:00"), end = new Date(data.to + "T12:00:00");
   const cells = []; for (let i = 0; i < (start.getDay() + 6) % 7; i++) cells.push(`<span class="ehc-blank"></span>`);
-  for (let d = new Date(start); d <= end; d = addDays(d, 1)) { const k = ymd(d), x = by.get(k), wk = d.getDay() % 6 === 0, ok = x && x.free >= 2;
-    const one = ok && x.free < 4;   // room for just one more install (each one takes 2 installers)
-    cells.push(`<button type="button" class="ehc-day ${wk ? "wk" : one ? "ok one" : ok ? "ok" : "full"}" ${ok ? `data-cal-day="${k}"` : `data-cal-no="${wk ? "wk" : "full"}"`}>
+  for (let d = new Date(start); d <= end; d = addDays(d, 1)) { const k = ymd(d), x = by.get(k), wk = d.getDay() % 6 === 0, MIN = data.min || 2, ok = x && x.free >= MIN, np = !wk && !ok && x && x.free >= 2;
+    const one = ok && x.free - MIN < 2;   // room for just one more promo install (each one takes 2 installers; MIN are kept free)
+    cells.push(`<button type="button" class="ehc-day ${wk ? "wk" : one ? "ok one" : ok ? "ok" : np ? "full np" : "full"}" ${ok ? `data-cal-day="${k}"` : `data-cal-no="${wk ? "wk" : np ? "np" : "full"}"`}>
       <span class="ehc-m">${esc(d.toLocaleDateString("en-CA", { month: "short" }).replace(".", ""))}</span><span class="ehc-d">${d.getDate()}</span>
-      <span class="ehc-s">${wk ? "Closed" : one ? "⚡ Only 1 spot left" : ok ? "🎉 Rebate ×2" : "Booked up"}</span></button>`); }
+      <span class="ehc-s">${wk ? "Closed" : one ? "⚡ Only 1 spot left" : ok ? "🎉 Rebate ×2" : np ? "Not in this promo" : "Booked up"}</span></button>`); }
   back.querySelector(".eh-cal").innerHTML = `<div class="ehc-head"><b>🗓️ Pick a day and see if your rebate is available</b><button class="link" type="button" data-x aria-label="Close">✕</button></div>
-    <p class="quiet">Green days are open: pick one and the rebate is doubled. Orange days have only one install spot left.</p>
+    <p class="quiet">Green days are open: pick one and the rebate is doubled. Orange days have only one promo spot left.</p>
     <div class="ehc-grid">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(w => `<span class="ehc-w">${w}</span>`).join("")}${cells.join("")}</div>
     <p class="staff-msg" data-cal-msg></p>`;
   back.querySelector("[data-x]").onclick = close;
   const say = (t, err) => { const m = back.querySelector("[data-cal-msg]"); m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; };
-  back.querySelectorAll("[data-cal-no]").forEach(b => b.addEventListener("click", () => say(b.dataset.calNo === "wk" ? "We don't install on weekends. Pick a green day." : "Sorry, that day is booked up. Pick a green day to get your rebate doubled.", true)));
+  back.querySelectorAll("[data-cal-no]").forEach(b => b.addEventListener("click", () => say(b.dataset.calNo === "wk" ? "We don't install on weekends. Pick a green day." : b.dataset.calNo === "np" ? "That day isn't available for this promo. Pick a green day to get your rebate doubled." : "Sorry, that day is booked up. Pick a green day to get your rebate doubled.", true)));
   back.querySelectorAll("[data-cal-day]").forEach(b => b.addEventListener("click", async () => {
     say("🎉 That day is available! Your rebate is doubled."); back.querySelectorAll("button").forEach(x => x.disabled = true);
     if (await pick(b.dataset.calDay)) close(); else { back.querySelectorAll("button").forEach(x => x.disabled = false); say("That day just filled up. Pick another green day.", true); } }));
@@ -8754,7 +8754,7 @@ async function estHoldFill() {
   if (EST.id !== id || !document.body.contains(box)) return;
   if (error || !data) { box.remove(); return; }
   const dn = d => new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" });
-  const mine = data.mine, ok = (data.days || []).filter(d => d.free >= 2);
+  const MIN = data.min || 2, mine = data.mine, ok = (data.days || []).filter(d => d.free >= MIN);
   const showFree = !ME.guided && EST.x?.jobs?.sales_kind === "phone";   // how many installers are free: only on a phone sale, never in the training view
   if (EST.opts[0]?.lines.some(l => String(l.description || "").startsWith(HOLD_BONUS))) { box.remove(); return; }   // added: it shows on the right side bar instead
   const o0 = EST.opts[0], reb0 = sumOff(o0, l => !isBonus(l)), bon0 = estBookBonus(o0);
@@ -8771,7 +8771,7 @@ async function estHoldFill() {
     ${mine?.status === "confirmed" ? "" : `<div class="eh-pick"><div class="eh-pick-h">📅 Pick the install day:</div>${ok.length ? "" : `<p class="quiet">No days left the week of ${esc(dn(data.from))}. Pick another day below.</p>`}<div class="eh-days">${ok.map((d, k) => { const dt = new Date(d.day + "T12:00:00");
       return `<button type="button" class="eh-tile eh-c${k % 5} ${mine && mine.day === d.day ? "on" : ""}" data-hold-day="${d.day}" ${showFree ? `title="Installers free: ${esc(d.names || "")}"` : `title="${esc(dn(d.day))}"`}>
         <span class="eh-tw">${esc(dt.toLocaleDateString("en-CA", { weekday: "short" }).replace(".", ""))}</span><span class="eh-td">${dt.getDate()}</span><span class="eh-tm">${esc(dt.toLocaleDateString("en-CA", { month: "short" }).replace(".", ""))}</span>
-        ${showFree ? `<span class="eh-tf">${d.free} free</span>` : d.free < 4 ? `<span class="eh-tone">1 spot left</span>` : ""}${mine && mine.day === d.day ? `<span class="eh-tok">✓</span>` : ""}</button>`; }).join("")}
+        ${showFree ? `<span class="eh-tf">${d.free} free</span>` : d.free - MIN < 2 ? `<span class="eh-tone">1 spot left</span>` : ""}${mine && mine.day === d.day ? `<span class="eh-tok">✓</span>` : ""}</button>`; }).join("")}
       <button class="eh-tile eh-caltile" type="button" data-hold-cal title="Pick a day and see if your rebate is available" aria-label="Pick a day and see if your rebate is available">
         <span class="eh-tw">Other day</span><span class="eh-cal-ic" aria-hidden="true">🗓️</span><span class="eh-cal-tx">Pick a day &amp; see if your rebate is available</span></button></div>
     ${mine ? `<button class="link danger" type="button" data-hold-off>Take the hold off (the rebate goes back to normal)</button>` : ""}
