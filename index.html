@@ -4051,7 +4051,7 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .stv-logo-img { max-height: 70px; max-width: 280px; object-fit: contain; }
 .dsp .tl-div { position: relative; margin: 10px 0 2px; height: 0; border-top: 2px solid #34404b; width: calc(var(--name-w) + var(--any-w) + var(--track-w, 900px)); min-width: 100%; }
 .dsp .tl-div span { position: sticky; left: 0; display: inline-block; transform: translateY(-55%); margin-left: 4px; padding: 1px 10px; border-radius: 999px; background: #34404b; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
-.dsp .tl-div-office { border-top-color: #1f6fbf; } .dsp .tl-div-office span { background: #1f6fbf; } .dsp .tl-div-sales { border-top-color: #2b8a3e; } .dsp .tl-div-sales span { background: #2b8a3e; }
+.dsp .tl-div-owner { border-top-color: #e67700; } .dsp .tl-div-owner span { background: #e67700; } .dsp .tl-div-office { border-top-color: #1f6fbf; } .dsp .tl-div-office span { background: #1f6fbf; } .dsp .tl-div-sales { border-top-color: #2b8a3e; } .dsp .tl-div-sales span { background: #2b8a3e; }
 .dp-head .dp-assigned { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 800; font-size: 15px; } .dp-head .dp-assigned .dm-dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
 .dp-head .dp-none { color: #c92a2a; } .dsp-panel .dp-cname { display: block; font-size: 15px; margin: 2px 0 1px; }
 .dsp .dsp-bar .dsp-legend-d { order: -2 !important; } .dsp .dsp-bar .dsp-legend-d > summary { font-size: 11.5px !important; line-height: 1.1; padding: 0 !important; white-space: nowrap; }
@@ -11631,8 +11631,8 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
       <div class="tl-hours" style="--hours:${span}">${hours.map(h => `<span style="left:${pct(h)}">${label(h)}</span>`).join("")}</div></div>
     ${row(0, "No tech yet", callsWord(none.length), none, "none")}
     ${(() => {   // Techs, then Office, then Sales, each under its own divider
-      if (!DSP_GRP && !DSP_GRP_P) DSP_GRP_P = db.rpc("dsp_staff_groups").then(({ data }) => { DSP_GRP = new Map((data || []).map(x => [x.id, x.grp])); if (document.body.dataset.page === "dispatch") renderDispatch(); }).catch(() => { DSP_GRP = new Map(); });
-      const g = t => DSP_GRP?.get(t.id) || "tech", order = { tech: 0, office: 1, sales: 2 }, names = { tech: "Techs", office: "Office", sales: "Sales" };
+      if (!DSP_GRP && !DSP_GRP_P) DSP_GRP_P = db.rpc("dsp_staff_groups").then(({ data }) => { DSP_GRP = new Map((data || []).map(x => [x.id, x.grp])); (data || []).forEach(x => x.name && DSP_GNAME.set(x.id, x.name)); if (document.body.dataset.page === "dispatch") renderDispatch(); }).catch(() => { DSP_GRP = new Map(); });
+      const g = t => DSP_GRP?.get(t.id) || "tech", order = { tech: 0, owner: 1, office: 2, sales: 3 }, names = { tech: "Techs", owner: "Owners", office: "Office", sales: "Sales" };
       const list = DSP_GRP ? techs.slice().sort((a, b) => order[g(a)] - order[g(b)]) : techs, groups = new Set(list.map(g));
       let last = null;
       return list.map(t => { const k = g(t), div = DSP_GRP && groups.size > 1 && k !== last ? `<div class="tl-div tl-div-${k}"><span>${names[k]}</span></div>` : ""; last = k;
@@ -11895,7 +11895,10 @@ function renderDispatch() {
   if (DSP.page === "map") { document.body.classList.remove("dsp-mapmode"); return renderDispatchMapPage(); }
   const rows = DSP.rows.filter(r => r.status !== "cancelled"), cancelled = DSP.rows.length - rows.length;
   const onDay = new Set(rows.flatMap(r => r.techs.map(t => t.id)).concat((DSP.blocks || []).map(b => b.employee_id)));
-  const techs = (BOOK.techs || []).filter(t => DSP.all || t.recent || onDay.has(t.id));
+  // owners are always on the board (their own group), even if they aren't on the tech list
+  const ownersIn = DSP_GRP ? [...DSP_GRP.entries()].filter(([, g]) => g === "owner").map(([id]) => id) : [];
+  const techs = (BOOK.techs || []).filter(t => DSP.all || t.recent || onDay.has(t.id) || ownersIn.includes(t.id))
+    .concat(ownersIn.filter(id => !(BOOK.techs || []).some(t => t.id === id)).map(id => ({ id, name: DSP_GNAME.get(id) || "Owner", recent: true })));
   rows.flatMap(r => r.techs).forEach(t => { if (!techs.some(x => x.id === t.id)) techs.push({ id: t.id, name: t.name }); });
   const colOf = id => rows.filter(r => r.techs.some(t => t.id === id));
   techs.sort((a, b) => (colOf(b.id).length > 0) - (colOf(a.id).length > 0) || a.name.localeCompare(b.name));
@@ -23915,7 +23918,7 @@ function viewBar() {
   (slot || host).prepend(bar);
   if (k === "supplier-invoices") setTimeout(() => typeof sinvPlaceLogoBtn === "function" && sinvPlaceLogoBtn(), 0);
 }
-var DSP_GRP = null, DSP_GRP_P = null;   // employee id -> tech / office / sales (dispatch board dividers)
+var DSP_GRP = null, DSP_GRP_P = null, DSP_GNAME = new Map();   // employee id -> tech / office / sales (dispatch board dividers)
 const SUPPLIER_SITES = [{ name: "Lennox", url: "https://www.lennoxpros.com/" }, { name: "Master", url: "https://www.master.ca/" }];
 (function viewBars() {
   let t; const run = () => { clearTimeout(t); t = setTimeout(viewBar, 30); };
