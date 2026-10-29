@@ -4039,6 +4039,15 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .sinv-tabs { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }   /* SU 2: every supplier box the same size */
 .sinv-tabs button { width: 100%; min-height: 48px; justify-content: space-between; box-sizing: border-box; text-align: left; }
 .sinv-tabs button b { margin-left: auto !important; }
+.sinv-fx { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.sinv-acc, .sinv-ign { font: inherit; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+.sinv-acc { border: 1.5px solid #2b8a3e; background: #ebfbee; color: #2b8a3e; } .sinv-acc:hover { background: #2b8a3e; color: #fff; }
+.sinv-ign { border: 1.5px solid #c9d3de; background: #fff; color: #5b6b78; } .sinv-ign:hover { border-color: #5b6b78; color: #1f2a37; }
+.sinv-accall { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-top: 10px; } .sinv-accall .btn { background: #2b8a3e; border-color: #2b8a3e; }
+.sinv-ped { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper, #fff); } .sinv-ped h4 { margin: 0 0 6px; }
+.sinv-ped input:not([type=checkbox]) { width: 100%; box-sizing: border-box; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; } .sinv-ped td.r input { max-width: 100px; text-align: right; }
+.sinv-ped label { display: block; margin: 8px 0; } .sinv-ped .row label { display: inline-flex; gap: 6px; margin: 0 0 0 8px; }
+.sinv-hist { margin-top: 12px; } .sinv-hist summary { cursor: pointer; font-weight: 700; } .sinv-hist ul { margin: 6px 0 0; padding-left: 18px; } .sinv-hist li { margin: 6px 0; }
 .sinv-sum { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin: 10px 0 14px; box-shadow: 0 1px 3px rgba(16, 24, 40, .06); }   /* SU 3: what's showing, the total owing and each supplier, in one box */
 .sinv-sum .ss-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 10px 26px; }
 .sinv-sum .ss-top > div { display: flex; flex-direction: column; } .sinv-sum .ss-show b { font-size: 18px; } .sinv-sum .sinv-owing-total { text-align: right; align-items: flex-end; }
@@ -13508,9 +13517,10 @@ function sinvCompare(r, L, P, what) {
     partial = r.subtotal == null && /continued/i.test(r.read_notes || "") && !/end of order/i.test(r.read_notes || "");
   const issues = []; let ia = 0, pa = 0;
   const bad = (ok, h) => ok ? h : `<span class="sinv-bad">${h}</span>`;
+  const D = SINV.det.get(r.id) || {}, IGN = new Set(D.ignored || []), canFix = !!SINV.data?.can_edit; SINV.acc = new Map(); let nFix = 0, nIgn = 0;
   const body = rows.map(({ a, b }) => {
     if (a?.amt != null) ia += a.amt; if (b) pa += b.amt || 0;
-    let why = "";
+    let why = ""; const iss0 = issues.length, key = (a ? "i:" + (a.x.code || a.x.description || a.i) : "-") + "|" + (b ? "p:" + (b.y.id ?? b.j) : "-");
     if (a && !b && !a.comp) { why = `Not on the PO`; issues.push(`${a.x.code || a.x.description}: on the ${what} but not on the PO${a.amt != null ? ` (${money(a.amt)})` : ""}`); }
     else if (b && !a) { why = split || partial ? `Not on this ${what} (maybe on ${split ? "the other one" : "the missing page"})` : `Not on this ${what}`; if (!split && !partial) issues.push(`${b.y.sku || b.y.description}: on the PO but not billed on this ${what}${b.amt ? ` (${money(b.amt)})` : ""}`); }
     // the PO keeps prices to the cent, Boone to a tenth of a cent: a few cents apart over a line isn't a mistake
@@ -13526,14 +13536,27 @@ function sinvCompare(r, L, P, what) {
         <td class="r">${a.amt == null ? "" : bad(mOk, money(a.amt))}</td>` : `<td colspan="5" class="sinv-miss">—</td>`;
     const pc = b ? `<td class="sinv-split">${esc(b.y.sku || "")}</td><td>${esc(b.y.description || "")}</td><td class="r">${bad(qOk, b.q)}</td><td class="r">${bad(eOk, money(b.each))}</td><td class="r">${bad(mOk, money(b.amt))}</td>`
       : `<td colspan="5" class="sinv-miss sinv-split">—</td>`;
-    const soft = b && !a && (split || partial);
-    return `<tr class="${why ? (soft ? "sinv-row-soft" : "sinv-row-bad") : a && b ? "sinv-row-ok" : ""}">${ac}${pc}<td class="sinv-why">${why ? `<span class="${soft ? "sinv-soft" : "sinv-bad"}">${esc(why)}</span>` : a && b ? `<span class="sinv-ok">✓</span>` : ""}</td></tr>`; }).join("");
+    const soft = b && !a && (split || partial), ign = why && IGN.has(key);
+    if (ign) { issues.length = iss0; nIgn++; }
+    // what accepting this difference does to the PO: take the invoice's qty / price, add the billed line, or take the unbilled line off
+    let fix = null;
+    if (why && !soft && !ign && canFix) {
+      if (a && b && b.y.id) { const c = { id: b.y.id }; if (a.q != null && Math.abs(a.q) !== b.q) c.quantity = Math.abs(a.q); if (a.each != null && Math.abs(a.each - b.each) > 0.0001) c.unit_cost = a.each;
+        if (c.quantity == null && c.unit_cost == null && a.amt != null && b.q) c.unit_cost = Math.round(Math.abs(a.amt) / b.q * 10000) / 10000; fix = { c, t: "Use the invoice's" }; }
+      else if (a && !b && !a.comp) fix = { c: { description: [a.x.code, a.x.description].filter(Boolean).join(" ").trim() || "Line from invoice " + r.number, quantity: a.q != null ? Math.abs(a.q) : 1, unit_cost: a.each ?? (a.amt != null ? Math.abs(a.amt) : 0) }, t: "Add it to the PO" };
+      else if (b && !a && b.y.id) fix = { c: { id: b.y.id, delete: true }, t: "Take it off the PO" };
+      if (fix) { SINV.acc.set(key, fix.c); nFix++; } }
+    const acts = why && !soft && canFix ? (ign ? `<div class="sinv-fx"><span class="quiet">Let go</span></div>`
+      : `<div class="sinv-fx">${fix ? `<button class="sinv-acc" type="button" data-sinv-acc="${esc(key)}">✓ ${esc(fix.t)}</button>` : ""}<button class="sinv-ign" type="button" data-sinv-ign="${esc(key)}" title="Leave the PO as it is for this one (it's recorded)">Ignore</button></div>`) : "";
+    return `<tr class="${why && !ign ? (soft ? "sinv-row-soft" : "sinv-row-bad") : a && b ? "sinv-row-ok" : ""}">${ac}${pc}<td class="sinv-why">${why ? `<span class="${ign ? "quiet" : soft ? "sinv-soft" : "sinv-bad"}">${esc(why)}</span>${acts}` : a && b ? `<span class="sinv-ok">✓</span>` : ""}</td></tr>`; }).join("");
   // before tax: as printed, else from the statement's total (13% HST), else the lines added up
   const sub = r.subtotal != null ? Number(r.subtotal) : r.total ? Math.round(Number(r.total) / 1.13 * 100) / 100 : Math.round(ia * 100) / 100, poT = Number(r.po_amount || pa);
   const tip = (partial ? `A page of this ${what} looks to be missing from the scan (it says CONTINUED), so some of the PO's lines may be on that page. ` : "") + (split ? `The PO is billed over ${Number(r.po_other_invoices) + 1} invoices, so lines on the PO that aren't on this one may be on the other${Number(r.po_other_invoices) > 1 ? "s" : ""} (in yellow).` : "");
   if (Math.abs(Math.abs(sub) - poT) > Math.max(0.05, poT * 0.003) && !split) issues.unshift(`Before tax: ${what} ${money(sub)} vs PO ${money(poT)} (${Math.abs(sub) > poT ? "over" : "under"} by ${money(Math.abs(Math.abs(sub) - poT))})`);
   return `<section class="sinv-cmp"><h3>${what[0].toUpperCase() + what.slice(1)} ${esc(r.number)} next to PO ${esc(r.po_number || "")}</h3>
-    ${issues.length ? `<div class="sinv-issues"><b>What doesn't match:</b><ul>${issues.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : `<div class="sinv-allok">✓ Every line ${split ? "on this " + what + " " : ""}matches the PO.</div>`}${tip ? `<p class="sinv-soft">${esc(tip)}</p>` : ""}
+    ${issues.length ? `<div class="sinv-issues"><b>What doesn't match:</b><ul>${issues.map(t => `<li>${esc(t)}</li>`).join("")}</ul>
+      ${canFix && nFix ? `<div class="sinv-accall"><button class="btn" type="button" data-sinv-accall="${r.id}">✓ Accept the invoice's prices (${nFix} ${nFix === 1 ? "change" : "changes"} to the PO)</button><span class="quiet">Puts the invoice's quantities and prices on the PO, adds what it billed, and marks it checked. Every change is recorded.</span></div>` : ""}</div>`
+      : `<div class="sinv-allok">✓ Every line ${split ? "on this " + what + " " : ""}matches the PO${nIgn ? ` (${nIgn} difference${nIgn === 1 ? "" : "s"} let go)` : ""}.</div>`}${tip ? `<p class="sinv-soft">${esc(tip)}</p>` : ""}
     <div class="sinv-cmp-w"><table class="sinv-lt sinv-ct"><thead><tr><th colspan="5">On the ${what}</th><th colspan="5" class="sinv-split">On the PO</th><th></th></tr>
       <tr><th>Code</th><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th><th class="sinv-split">Code</th><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th><th>Difference</th></tr></thead>
       <tbody>${body}</tbody>
@@ -13555,10 +13578,31 @@ function sinvDetail(r, edit) {
     <section><h3>${r.po_number ? `On PO ${esc(r.po_number)}` : "PO"}</h3>${r.po_id ? (L.length ? "" : lt(P, false)) + `<p class="quiet">PO total before tax ${money(r.po_amount || 0)}${r.po_status ? ` · ${esc(r.po_status)}` : ""}</p>` : `<p class="quiet">${r.po_text ? `No PO ${esc(r.po_text)} in the app.` : "No PO number on it."}</p>`}
       ${edit ? `<div class="sinv-acts"><label>Match to PO <input id="sinv-po-${r.id}" placeholder="PO number" value="${esc(r.po_by_hand ? r.po_number : "")}"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button>${r.po_by_hand ? `<button class="link" type="button" data-sinv-unpo="${r.id}">Use the printed PO</button>` : ""}
         <label>Note <input id="sinv-note-${r.id}" value="${esc(r.match_note || "")}" placeholder="e.g. split over 2 invoices"></label><button class="btn quiet-btn" type="button" data-sinv-note="${r.id}">Save note</button>
-        ${r.match_state === "ok" ? `<button class="btn quiet-btn" type="button" data-sinv-ok="${r.id}" data-v="">Undo checked</button>` : `<button class="btn" type="button" data-sinv-ok="${r.id}" data-v="ok">✓ Mark checked</button>`}</div>` : ""}</section></div>
+        ${r.match_state === "ok" ? `<button class="btn quiet-btn" type="button" data-sinv-ok="${r.id}" data-v="">Undo checked</button>` : `<button class="btn" type="button" data-sinv-ok="${r.id}" data-v="ok">✓ Mark checked</button>`}
+        ${r.po_id ? `<button class="btn quiet-btn" type="button" data-sinv-edpo="${r.id}">${SINV.edPo === r.id ? "Close the editor" : "✎ Edit the PO lines"}</button>` : ""}</div>` : ""}
+      ${edit && r.po_id && SINV.edPo === r.id ? sinvPoEditor(r, P, d) : ""}
+      ${(d.changes || []).length ? sinvHistory(d.changes) : ""}</section></div>
     ${(d.pages || []).length ? `<section class="sinv-scans"><h3>Scanned ${d.pages.length === 1 ? "page" : "pages"}</h3>${d.pages.map(p => `<figure class="sinv-scan" data-sinv-img="${p.id}">${SINV.img.has(p.id) ? `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">` : `<span class="quiet">Loading page ${p.page_no}…</span>`}</figure>`).join("")}
       <p class="quiet">Click a page to zoom in.</p></section>` : `<p class="quiet">There's no copy of this one in the file: only its line on the statement.</p>`}
   </div>`;
+}
+// type your own PO lines: change qty / each / description, take a line off, add lines; saved together and recorded
+function sinvPoEditor(r, P, d) {
+  return `<form class="sinv-ped" data-sinv-ped="${r.id}"><h4>Edit PO ${esc(r.po_number || "")} lines</h4>${d.po_st ? `<p class="quiet">This PO came from ServiceTitan. Once you change it here, ServiceTitan won't overwrite its lines.</p>` : ""}
+    <table class="sinv-lt"><thead><tr><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Take off</th></tr></thead><tbody>
+    ${P.map(y => `<tr data-pl="${y.id}"><td><input name="d" value="${esc(y.description || "")}"></td><td class="r"><input name="q" type="number" step="any" value="${esc(String(y.quantity ?? ""))}"></td>
+      <td class="r"><input name="e" type="number" step="any" value="${esc(String(y.unit_cost ?? ""))}"></td><td class="r"><input name="x" type="checkbox" ${Number(y.received) ? `disabled title="Already received"` : ""}></td></tr>`).join("")}
+    <tbody class="sinv-ped-new"></tbody></table>
+    <p><button class="link" type="button" data-sinv-addln>+ Add a line</button></p>
+    <label>Why <input name="why" placeholder="e.g. price went up, extra fittings"></label>
+    <div class="row"><button class="btn" type="submit">Save the PO</button> <label><input type="checkbox" name="chk"> and mark the invoice checked</label> <span class="msg" role="status"></span></div></form>`;
+}
+function sinvHistory(C) {
+  const m = v => v == null ? "" : `${esc(v.description || "")} · qty ${esc(String(v.quantity ?? ""))} · ${money(v.unit_cost || 0)} each`;
+  const act = { edit: "Changed", add: "Added", delete: "Took off", ignore: "Let go" };
+  return `<details class="sinv-hist" open><summary>Changes to this PO <span class="quiet">(${C.length})</span></summary><ul>${C.map(c => `<li><b>${act[c.action] || c.action}</b>
+    ${c.action === "edit" ? `${m(c.old)} <span aria-hidden="true">→</span> ${m(c.new)}` : c.action === "add" ? m(c.new) : c.action === "delete" ? m(c.old) : esc(String(c.key || "").replace(/^i:|\|p:\d+$|\|-$/g, "").replace(/^-\|p:/, "PO line "))}
+    <div class="quiet">${esc(fmtDate(String(c.at).slice(0, 10)))} ${esc(new Date(c.at).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }))}${c.by ? " · " + esc(c.by) : ""}${c.invoice ? " · from invoice " + esc(c.invoice) : ""}${c.reason ? " · " + esc(c.reason) : ""}</div></li>`).join("")}</ul></details>`;
 }
 async function sinvLoadDet(id) {
   if (SINV.det.has(id) || SINV.detBusy === id) return; SINV.detBusy = id;
@@ -13594,6 +13638,27 @@ function wireSupInv() {
   document.querySelectorAll("[data-sinv-unpo]").forEach(b => b.addEventListener("click", () => save(Number(b.dataset.sinvUnpo), { po_number: "" }, "Back to the PO printed on it.")));
   document.querySelectorAll("[data-sinv-note]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.sinvNote); save(id, { match_note: $("#sinv-note-" + id).value }, "Note saved."); }));
   document.querySelectorAll("[data-sinv-ok]").forEach(b => b.addEventListener("click", () => save(Number(b.dataset.sinvOk), { match_state: b.dataset.v }, b.dataset.v ? "Marked checked." : "Not checked any more.")));
+  const apply = async (id, changes, check, msg, why) => { const { data, error } = await db.rpc("po_lines_apply", { p_invoice: id, p_changes: changes, p_check: !!check, p_reason: why || null });
+    if (error) { alertMsg("Not saved: " + rpcErr(error)); return false; } SINV.det.delete(id); await openSupInv(msg); return true; };
+  document.querySelectorAll("[data-sinv-acc]").forEach(b => b.addEventListener("click", () => { const c = SINV.acc?.get(b.dataset.sinvAcc); if (c) apply(SINV.open, [c], false, "PO changed. It's recorded under Changes to this PO."); }));
+  document.querySelectorAll("[data-sinv-ign]").forEach(b => b.addEventListener("click", () => apply(SINV.open, [{ ignore: b.dataset.sinvIgn }], false, "Left as it is (recorded).")));
+  document.querySelectorAll("[data-sinv-accall]").forEach(b => b.addEventListener("click", async () => { const ch = [...(SINV.acc?.values() || [])]; if (!ch.length) return;
+    const k = await askChoice("Accept the invoice's prices?", `${ch.length} ${ch.length === 1 ? "change" : "changes"} go on the PO, and the invoice is marked checked. Each change is recorded under <b>Changes to this PO</b>.`, [["yes", "Accept them", true], ["", "Not now"]]);
+    if (k === "yes") apply(Number(b.dataset.sinvAccall), ch, true, "PO updated from the invoice and marked checked."); }));
+  document.querySelectorAll("[data-sinv-edpo]").forEach(b => b.addEventListener("click", () => { SINV.edPo = SINV.edPo === Number(b.dataset.sinvEdpo) ? null : Number(b.dataset.sinvEdpo); redo(); }));
+  document.querySelectorAll("[data-sinv-ped]").forEach(f => {
+    f.querySelector("[data-sinv-addln]").addEventListener("click", () => f.querySelector(".sinv-ped-new").insertAdjacentHTML("beforeend",
+      `<tr data-new><td><input name="d" placeholder="What"></td><td class="r"><input name="q" type="number" step="any" value="1"></td><td class="r"><input name="e" type="number" step="any" placeholder="0.00"></td><td></td></tr>`));
+    f.addEventListener("submit", async e => { e.preventDefault(); const id = Number(f.dataset.sinvPed), d = SINV.det.get(id) || {}, P = d.po_lines || [], ch = [];
+      f.querySelectorAll("tr[data-pl]").forEach(tr => { const y = P.find(x => x.id === Number(tr.dataset.pl)); if (!y) return; const v = n => tr.querySelector(`[name=${n}]`);
+        if (v("x").checked) return ch.push({ id: y.id, delete: true });
+        const c = { id: y.id }; const q = v("q").value === "" ? null : Number(v("q").value), ea = v("e").value === "" ? null : Number(v("e").value), ds = v("d").value.trim();
+        if (q != null && q !== Number(y.quantity)) c.quantity = q; if (ea != null && Math.abs(ea - Number(y.unit_cost)) > 0.00001) c.unit_cost = ea; if (ds && ds !== (y.description || "")) c.description = ds;
+        if (Object.keys(c).length > 1) ch.push(c); });
+      f.querySelectorAll("tr[data-new]").forEach(tr => { const ds = tr.querySelector("[name=d]").value.trim(); if (!ds) return; ch.push({ description: ds, quantity: Number(tr.querySelector("[name=q]").value || 1), unit_cost: Number(tr.querySelector("[name=e]").value || 0) }); });
+      const chk = f.chk.checked; if (!ch.length && !chk) { f.querySelector(".msg").textContent = "Nothing changed."; return; }
+      if (await apply(id, ch, chk, `PO saved${ch.length ? ` (${ch.length} ${ch.length === 1 ? "change" : "changes"}, recorded)` : ""}${chk ? " and marked checked" : ""}.`, f.why.value.trim())) SINV.edPo = null; });
+  });
   if (SINV.open && !SINV.det.has(SINV.open)) sinvLoadDet(SINV.open);
 }
 async function openPOs() {

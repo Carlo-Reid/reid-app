@@ -547,11 +547,16 @@ def sync_purchase_orders(cur, st, state, new_state):
           notes = EXCLUDED.notes, description = EXCLUDED.description, amount = EXCLUDED.amount,
           created_at = least(purchase_orders.created_at, EXCLUDED.created_at, coalesce(EXCLUDED.ordered_at, EXCLUDED.created_at))""")
     saved = cur.rowcount
+    # a PO whose lines were fixed in the app (from the supplier's invoice) keeps the app's lines: ServiceTitan doesn't overwrite them
+    cur.execute("SELECT to_regclass('public.po_line_changes') IS NOT NULL")
+    keep = ("AND NOT EXISTS (SELECT 1 FROM po_line_changes c WHERE c.purchase_order_id = po.id AND c.action <> 'ignore')"
+            if cur.fetchone()[0] else "")
     cur.execute("""DELETE FROM purchase_order_lines l USING purchase_orders po
                    WHERE l.purchase_order_id = po.id AND po.st_id IN (SELECT st_id FROM _s_po)
-                     AND NOT EXISTS (SELECT 1 FROM po_receipt_lines r WHERE r.purchase_order_line_id = l.id)""")
+                     AND NOT EXISTS (SELECT 1 FROM po_receipt_lines r WHERE r.purchase_order_line_id = l.id) """ + keep)
     cur.execute("""INSERT INTO purchase_order_lines (purchase_order_id, description, quantity, unit_cost, quantity_received, job_id)
                    SELECT po.id, l.descr, l.qty, l.cost, l.rec, po.job_id FROM _s_pol l JOIN purchase_orders po ON po.st_id = l.po_st
+                   WHERE true """ + keep + """
                    ORDER BY po.id, l.n""")
     return saved
 
