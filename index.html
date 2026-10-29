@@ -3647,7 +3647,7 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .sl-cancel { color: var(--red) !important; border-color: color-mix(in srgb, var(--red) 40%, var(--line)) !important; }
 /* sales people: only what they need on a customer's file */
 body.sales-only #main :is([data-tag="Section 2"], [data-tag="Section 3"], [data-tag="Section 4"], [data-tag="Section 4B"], [data-tag="Section 5"], [data-tag="Section 8"]) { display: none !important; }
-body.sales-only.ui-guided #main .file :is([data-tag="Section 3"], [data-tag="Section 8"]) { display: block !important; }   /* the training view: equipment and photos to look at */
+body.sales-only.ui-guided #main .file :is([data-tag="Section 3"], [data-tag="Section 5"], [data-tag="Section 8"]) { display: block !important; }   /* the training view: equipment and photos to look at */
 body.sales-only:not(.sales-inv) #main [data-tag="Section 6"], body.sales-only:not(.sales-inv) #main .sec1a .balance > :not(.zone-box) { display: none !important; }   /* sales people: no balance, but the zone box shows */
 body.sales-only #main #inv-start, body.sales-only #side .pin-slots, body.sales-only #main .dup-banner { display: none !important; }
 body.sales-only [data-bk-mode="new"], body.sales-only [data-bk-mode="visit"] { display: none !important; }
@@ -6557,7 +6557,7 @@ async function showFile(i) {
 /* ---------------- section side bar ---------------- */
 function buildFileNav() {
   const nav = document.querySelector(".file-nav"); if (!nav) return;
-  if (ME.guided) document.querySelectorAll('.file section.block[data-tag]').forEach(e => { if (!e.closest(".sec1a") && !["Section 3", "Section 7", "Section 8"].includes(e.dataset.tag)) e.remove(); });
+  if (ME.guided) document.querySelectorAll('.file section.block[data-tag]').forEach(e => { if (!e.closest(".sec1a") && !["Section 3", "Section 5", "Section 7", "Section 8"].includes(e.dataset.tag)) e.remove(); });
   if (ME.guided) { const s3 = [...document.querySelectorAll('.file section.block[data-tag="Section 3"]')].find(e => !e.closest(".sec1a")), s7 = [...document.querySelectorAll('.file section.block[data-tag="Section 7"]')].find(e => !e.closest(".sec1a"));
     if (s3 && s7 && (s3.compareDocumentPosition(s7) & Node.DOCUMENT_POSITION_FOLLOWING)) s3.before(s7); }   // the training view: proposals before equipment
   if (current?.c?.practice_user_id && !document.getElementById("prac-band")) { const f = document.querySelector(".file");
@@ -22064,6 +22064,14 @@ async function invEmailSetupOld(D) {
 }
 let INV_EMAIL_CUR = null, INV_EMAIL_DRAFT = {}, INV_EMAIL_JUMP = false;
 /* ---------------- view an invoice ---------------- */
+document.addEventListener("click", async e => {   // Section 7: delete a proposal (asks first)
+  const d = e.target.closest("[data-est-del]"); if (!d) return; e.stopPropagation();
+  const k = await askChoice("Delete this proposal?", `Proposal ${esc(d.dataset.estNum)} and everything on it is deleted for good. This can't be undone.`, [["yes", "Delete it", true], ["", "Keep it"]]);
+  if (k !== "yes") return;
+  const { error } = await db.rpc("est_delete", { p_id: Number(d.dataset.estDel) });
+  if (error) return alertMsg("Not deleted: " + rpcErr(error));
+  if (current?.c?.id) openCustomer(current.c.id);
+}, true);
 document.addEventListener("click", e => {
   const t = e.target.closest("[data-estimate]"); if (!t || e.target.closest("#inv-view")) return;
   e.stopPropagation(); if (t.dataset.estOwn === "1") { EST.from = "customer"; return openEstEdit(Number(t.dataset.estimate)); }   // the training view: their own proposals open to work on; others only to look at
@@ -22669,11 +22677,12 @@ function invoicesHtml(list) {
 }
 
 function estimatesHtml(list) {
-  return `<div class="scroll-box" tabindex="0" aria-label="Proposals"><table><thead><tr><th>Date</th><th>Proposal</th><th>Option</th><th class="r">Amount</th><th>Status</th></tr></thead><tbody>
+  return `<div class="scroll-box" tabindex="0" aria-label="Proposals"><table><thead><tr><th>Date</th><th>Proposal</th><th>Option</th><th class="r">Amount</th><th>Status</th><th class="no-print"></th></tr></thead><tbody>
     ${list.map((e, n) => { const opts = e.estimate_options || [], o = opts[0] || {}; const amt = (o.estimate_lines || []).reduce((s, l) => s + Number(l.line_total || 0), 0);
       const own = !ME.guided || (ME.emp && e.sold_by_employee_id === ME.emp);
       return `<tr class="inv-row" tabindex="0" data-estimate="${e.id}" ${ME.guided && own ? `data-est-own="1"` : ""} title="${own && ME.guided ? "Open your proposal" : "Open proposal"}"><td class="num">${fmtDate(e.created_at)}</td><td class="num"><span class="inv-link">${esc(e.estimate_number)}</span></td>
-      <td>${esc(o.name || "")}${opts.length > 1 ? ` <span class="quiet">+ ${opts.length - 1} more ${opts.length === 2 ? "option" : "options"}</span>` : ""}</td><td class="r num">${money(amt)}</td><td>${badge(e.status)}${e.status === "accepted" && !e.cancelled_at && ME.role && own ? estSoldBtns(e.id, !!e.st_id) : ""}</td></tr>`; }).join("")}
+      <td>${esc(o.name || "")}${opts.length > 1 ? ` <span class="quiet">+ ${opts.length - 1} more ${opts.length === 2 ? "option" : "options"}</span>` : ""}</td><td class="r num">${money(amt)}</td><td>${badge(e.status)}${e.status === "accepted" && !e.cancelled_at && ME.role && own ? estSoldBtns(e.id, !!e.st_id) : ""}</td>
+      <td class="no-print">${!e.st_id && !(e.status === "accepted" && !e.cancelled_at) && (ME.role === "owner" || (ME.emp && e.sold_by_employee_id === ME.emp)) ? `<button class="link danger est-del" type="button" data-est-del="${e.id}" data-est-num="${esc(e.estimate_number)}" title="Delete this proposal">✕ Delete</button>` : ""}</td></tr>`; }).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} proposals.</div>` : ""}`;
 }
 
