@@ -4049,6 +4049,7 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .sinv-lgc { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px; border: 2px dashed #b9cde0; border-radius: 12px; background: #fff; text-align: center; }
 .sinv-lgc.over { border-color: #1f5fa8; background: #eaf2fb; } .sinv-lgc .lgc-pic { height: 64px; display: flex; align-items: center; justify-content: center; } .sinv-lgc .lgc-pic img { max-height: 64px; max-width: 180px; object-fit: contain; }
 .stv-logo-img { max-height: 70px; max-width: 280px; object-fit: contain; }
+.sinv-stcards > div.st-paid { border-color: #b2f2bb; background: linear-gradient(180deg, #f4fbf5, #e9f7ec); } .sinv-stcards > div.st-paid b { color: #2b8a3e !important; }
 .sinv-app.sa-pay { background: linear-gradient(180deg, #ffd43b, #f59f00); border-color: #f08c00; color: #3d2a00; box-shadow: 0 2px 4px rgba(16, 24, 40, .06), 0 8px 18px rgba(245, 159, 0, .35); }
 .sinv-app.sa-pay .sa-ic { background: rgba(255, 255, 255, .35); color: #3d2a00; font-size: 30px; border: 2px solid rgba(255, 255, 255, .7); }
 .sup-pay { font-family: Inter, system-ui, sans-serif; } .sup-pay .sp-head { display: flex; align-items: center; gap: 16px; } .sup-pay h2 { margin: 0; }
@@ -13557,6 +13558,7 @@ async function openSupInv(msg) {
   if (document.body.dataset.page !== "supplier-invoices") return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load supplier invoices</h2>${esc(/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : rpcErr(error))}</div></div>`; return; }
   if (!SINV.rets) { const rt = await db.rpc("supplier_returns_list", { p_invoice: null }); SINV.rets = rt.error ? [] : rt.data || []; }
+  if (!SINV.pays) { const pp = await db.rpc("supplier_payments_all"); SINV.pays = pp.error ? [] : pp.data || []; }
   if (!SINV.logos) { const lg = await db.rpc("supplier_logos_list"); SINV.logos = new Map((lg.error ? [] : lg.data || []).map(x => [x.supplier_id, `data:${x.mime || "image/png"};base64,${x.image}`])); }
   SINV.data = data; if (SINV.st == null && data.statement_id) SINV.st = data.statement_id;   // (the list opens on the newest statement)
   else if (SINV.st == null && data.statements?.length) { SINV.st = data.statements[0].id; return openSupInv(msg); }
@@ -13591,6 +13593,8 @@ function renderSupInv(msg) {
   const list = rows.filter(r => qq ? hay(r).includes(qq) : inF(r, SINV.f));
   const sum = L => L.reduce((a, r) => a + Number(r.total || 0), 0);
   const SL = D.statement_lines || [], slTot = SL.reduce((a, l) => a + Number(l.amount), 0);
+  const AP = S && S.aging?.kind !== "payment" ? sinvApplyPaid(S, D.statements) : { paid: 0, total: S?.total, ag: S?.aging || {} };
+  const agCard = (t, k) => { const was = Number(S.aging?.[k] || 0), now = Number(AP.ag?.[k] ?? was); return `<div class="${now !== was ? "st-paid" : ""}"><span class="quiet">${t}</span><b>${money(now)}</b>${now !== was ? `<span class="quiet">was ${money(was)}</span>` : ""}</div>`; };
   const cls = { ok: "s-done", match: "s-done", credit: "", charge: "", nocopy: "s-warn", nopo: "s-warn", notfound: "s-warn", differs: "s-warn" };
   $("#main").innerHTML = `<article class="staff sinv" data-hero="1">
     <div class="sinv-top"><h1>Supplier invoices</h1>${D.can_edit ? `<button class="btn quiet-btn" type="button" data-sinv-logos>${SINV.logoEd ? "Close the logos" : "🖼 Supplier logos"}</button>` : ""}</div>
@@ -13600,10 +13604,11 @@ function renderSupInv(msg) {
     ${sinvTabs(D)}
     ${SINV.st === 0 ? sinvAllHead(D, rows) : S ? `<section class="sinv-st sinv-panel sinv-stcards">
       <div><span class="quiet">Statement</span><b>${esc(S.supplier)}${S.account ? ` · account ${esc(S.account)}${S.aging?.account_name ? ` (${esc(S.aging.account_name)})` : ""}` : ""} · ${esc(fmtDate(S.date))}</b><span class="quiet">${esc(S.file || "")}${S.pages ? ` · ${S.pages} pages` : ""}</span></div>
-      <div><span class="quiet">${S.aging?.kind === "payment" ? `Payment${S.aging.number ? ` ${esc(S.aging.number)}` : ""}` : "Total owing"}</span><b><button type="button" class="link stv-totbtn" data-stv-open="${S.id}" title="Open the statement">${money(S.total)} 📄</button></b><span class="quiet">${SL.length} ${S.aging?.kind === "payment" ? "invoices paid" : "lines"}${sinvAddUp(S, slTot, D.statements)}</span></div>
+      <div><span class="quiet">${S.aging?.kind === "payment" ? `Payment${S.aging.number ? ` ${esc(S.aging.number)}` : ""}` : AP.paid ? "Still owing" : "Total owing"}</span><b><button type="button" class="link stv-totbtn" data-stv-open="${S.id}" title="Open the statement">${money(S.aging?.kind === "payment" ? S.total : AP.total)} 📄</button></b><span class="quiet">${AP.paid && S.aging?.kind !== "payment" ? `statement ${money(S.total)} · ` : ""}${SL.length} ${S.aging?.kind === "payment" ? "invoices paid" : "lines"}${sinvAddUp(S, slTot, D.statements)}</span></div>
+      ${AP.paid && S.aging?.kind !== "payment" ? `<div class="st-paid"><span class="quiet">We paid since</span><b>${money(AP.paid)}</b><span class="quiet">taken off the oldest first</span></div>` : ""}
       ${S.aging?.paid != null && S.aging?.kind !== "payment" ? `<div><span class="quiet">Paid the same day</span><b>${money(S.aging.paid)}</b></div>` : ""}
-      ${S.aging?.past_due != null ? `<div><span class="quiet">Past due</span><b>${money(S.aging.past_due)}</b></div>` : ""}
-      ${S.aging?.current != null ? `<div><span class="quiet">Current</span><b>${money(S.aging.current)}</b></div><div><span class="quiet">31–60 days</span><b>${money(S.aging.d31_60)}</b></div><div><span class="quiet">61–90 days</span><b>${money(S.aging.d61_90)}</b></div>` : ""}
+      ${S.aging?.past_due != null ? agCard("Past due", "past_due") : ""}
+      ${S.aging?.current != null ? agCard("Current", "current") + agCard("31–60 days", "d31_60") + agCard("61–90 days", "d61_90") + (S.aging.d91_120 ? agCard("91–120 days", "d91_120") : "") + (S.aging.over120 ? agCard("Over 120 days", "over120") : "") : ""}
     </section>` : `<p class="quiet">No supplier statements loaded yet.</p>`}
     ${sinvStChips(D)}
     <div class="sinv-bar"><span class="seg">${SINV_F.map(([k, t]) => { const L = rows.filter(r => inF(r, k)); return `<button type="button" data-sinv-f="${k}" aria-pressed="${SINV.f === k && !qq}">${t} <b>${L.length}</b></button>`; }).join("")}</span>
@@ -13633,11 +13638,11 @@ function sinvTabs(D) {
   const all = Object.values(cnt).reduce((a, n) => a + Number(n), 0);
   const lg = id => SINV.logos?.get(id), OW = new Map(); sinvOwing(D).forEach(o => { const t = OW.get(o.sup) || []; t.push(o); OW.set(o.sup, t); });
   const owe = id => { const L = OW.get(id) || []; if (!L.length) return { h: "", t: "" };
-    const amt = L.reduce((a, o) => a + (o.counted ? Number(o.owe.total) || 0 : 0), 0), any = L.some(o => o.counted);
-    const t = L.map(o => `${o.name}: ${o.owe ? `${money(o.owe.total)} on the statement of ${fmtDate(o.owe.date)}${o.why ? " (" + o.why + ")" : ""}` : "no statement"}${o.pay && (!o.owe || o.pay.date > o.owe.date) ? ` · last paid ${money(o.pay.total)} on ${fmtDate(o.pay.date)}` : ""}`).join("\n");
+    const amt = L.reduce((a, o) => a + (o.counted ? o.left : 0), 0), any = L.some(o => o.counted);
+    const t = L.map(o => `${o.name}: ${o.owe ? `${money(o.owe.total)} on the statement of ${fmtDate(o.owe.date)}${o.paidSince ? `, ${money(o.paidSince)} paid since, ${money(o.left)} left` : ""}${o.why ? " (" + o.why + ")" : ""}` : "no statement"}${o.pay && (!o.owe || o.pay.date > o.owe.date) ? ` · last paid ${money(o.pay.total)} on ${fmtDate(o.pay.date)}` : ""}`).join("\n");
     const last = L.find(o => o.pay && (!o.owe || o.pay.date > o.owe.date));
     return { h: `<span class="sinv-ow ${any ? "" : "quiet"}">${any ? money(amt) : last ? "Paid " + fmtDate(last.pay.date) : L[0].owe ? money(L[0].owe.total) : "—"}</span>`, t }; };
-  return `<section class="sinv-panel"><div class="sp-h">Suppliers</div><nav class="sinv-tabs seg" aria-label="Suppliers"><button type="button" data-sinv-sup="" aria-pressed="${SINV.sup == null}"><span class="sinv-ic"><span class="sinv-ini sinv-all">▦</span></span><span class="sinv-tn">All suppliers</span><span class="sinv-ow">${money(sinvOwing(D).reduce((a, o) => a + (o.counted ? Number(o.owe.total) || 0 : 0), 0))}</span></button><div class="sinv-tiles">${ids.map(id => `<button type="button" data-sinv-sup="${id}" aria-pressed="${SINV.sup === id}" title="${esc(st.find(s => s.supplier_id === id).supplier + (owe(id).t ? "\n" + owe(id).t : ""))}" class="${lg(id) ? "has-logo" : ""}"><span class="sinv-ic">${lg(id) ? `<img class="sinv-lg" alt="" src="${lg(id)}">` : `<span class="sinv-ini">${esc(name(id).slice(0, 1).toUpperCase())}</span>`}</span><span class="sinv-tn">${esc(name(id))}</span>${owe(id).h}</button>`).join("")}</div></nav>
+  return `<section class="sinv-panel"><div class="sp-h">Suppliers</div><nav class="sinv-tabs seg" aria-label="Suppliers"><button type="button" data-sinv-sup="" aria-pressed="${SINV.sup == null}"><span class="sinv-ic"><span class="sinv-ini sinv-all">▦</span></span><span class="sinv-tn">All suppliers</span><span class="sinv-ow">${money(sinvOwing(D).reduce((a, o) => a + (o.counted ? o.left : 0), 0))}</span></button><div class="sinv-tiles">${ids.map(id => `<button type="button" data-sinv-sup="${id}" aria-pressed="${SINV.sup === id}" title="${esc(st.find(s => s.supplier_id === id).supplier + (owe(id).t ? "\n" + owe(id).t : ""))}" class="${lg(id) ? "has-logo" : ""}"><span class="sinv-ic">${lg(id) ? `<img class="sinv-lg" alt="" src="${lg(id)}">` : `<span class="sinv-ini">${esc(name(id).slice(0, 1).toUpperCase())}</span>`}</span><span class="sinv-tn">${esc(name(id))}</span>${owe(id).h}</button>`).join("")}</div></nav>
     ${D.can_edit && SINV.logoEd ? sinvLogoEditor(ids, st) : ""}</section>`;
 }
 // Supplier logos sits on the same line as the Stock · Purchase orders · Supplier invoices buttons, at the right
@@ -13671,13 +13676,25 @@ document.addEventListener("dragleave", e => { const b = e.target.closest?.("[dat
 document.addEventListener("drop", e => { const b = e.target.closest?.("[data-lg-drop]"); if (!b) return; e.preventDefault(); b.classList.remove("over"); sinvLogoFile(Number(b.dataset.lgDrop), e.dataTransfer?.files?.[0]); });
 document.addEventListener("change", e => { const i = e.target.closest?.("[data-lg-file]"); if (i) sinvLogoFile(Number(i.dataset.lgFile), i.files[0]); });
 // what each supplier is owed now: the newest statement of each supplier (and each of our accounts with them); payment-only suppliers show their last payment
+// payments we made to a supplier after a statement (and before its next one): they come off what that statement says we owe,
+// oldest money first (over 120 days, 91–120, 61–90, 31–60, then current)
+const sinvPaidSince = (sup, from, to) => Math.round((SINV.pays || []).filter(p => p.supplier_id === sup && p.paid_on > from && (!to || p.paid_on <= to)).reduce((a, p) => a + Number(p.amount || 0), 0) * 100) / 100;
+function sinvApplyPaid(S, all) {
+  const next = (all || []).filter(x => x.supplier_id === S.supplier_id && (x.account || "") === (S.account || "") && x.date > S.date && x.aging?.kind !== "payment").sort((a, b) => a.date.localeCompare(b.date))[0];
+  const paid = sinvPaidSince(S.supplier_id, S.date, next?.date), ag = S.aging || {}, out = { paid, total: Math.max(0, Math.round((Number(S.total || 0) - paid) * 100) / 100), ag: { ...ag } };
+  let left = paid; for (const k of ["over120", "d91_120", "d61_90", "d31_60", "current"]) { if (ag[k] == null || left <= 0) continue; const take = Math.min(Number(ag[k]) || 0, left); out.ag[k] = Math.round((Number(ag[k]) - take) * 100) / 100; left -= take; }
+  if (ag.past_due != null) out.ag.past_due = Math.max(0, Math.round((Number(ag.past_due) - Math.min(paid, Number(ag.past_due) || 0)) * 100) / 100);
+  return out;
+}
 function sinvOwing(D) {
   const st = D.statements || [], keys = [...new Set(st.map(s => s.supplier_id + "|" + (s.account || "")))];
   return keys.map(k => {
     const mine = st.filter(s => s.supplier_id + "|" + (s.account || "") === k), owe = mine.find(s => s.aging?.kind !== "payment"), pay = mine.find(s => s.aging?.kind === "payment");
     // counted in the total only when it's still the latest word: not paid after it, and not older than 4 months
     const old = owe && (Date.now() - new Date(owe.date + "T12:00")) / 864e5 > 120, paidAfter = owe && pay && pay.date > owe.date;
-    return { sup: mine[0].supplier_id, name: sinvShort(mine[0].supplier) + (mine[0].account ? ` · ${mine[0].aging?.account_name || "acct " + mine[0].account}` : ""), owe, pay, counted: !!owe && !old && !paidAfter, why: paidAfter ? "paid since, not counted" : old ? "old statement, not counted" : "" };
+    const ps = owe ? sinvPaidSince(mine[0].supplier_id, owe.date, null) : 0;
+    return { sup: mine[0].supplier_id, name: sinvShort(mine[0].supplier) + (mine[0].account ? ` · ${mine[0].aging?.account_name || "acct " + mine[0].account}` : ""), owe, pay, paidSince: ps, left: owe ? Math.max(0, Math.round((Number(owe.total) - ps) * 100) / 100) : 0,
+      counted: !!owe && !old && !paidAfter, why: paidAfter ? "paid since, not counted" : old ? "old statement, not counted" : "" };
   }).sort((a, b) => a.name.localeCompare(b.name));
 }
 // statements of the supplier tab as buttons: "All invoices" first, then each statement (newest first)
@@ -13707,11 +13724,11 @@ function sinvStChips(D) {   // a supplier's statements as app tiles: All time / 
 function sinvAllHead(D, rows) {
   const st = (D.statements || []).filter(s => (SINV.sup == null || s.supplier_id === SINV.sup) && !(SINV.sup != null && SINV.pick === "year" && SINV.year && !s.date.startsWith(SINV.year)));
   const O = sinvOwing(D).filter(o => SINV.sup == null || o.sup === SINV.sup);
-  const tot = O.reduce((a, o) => a + (o.counted ? Number(o.owe.total) || 0 : 0), 0), left = O.filter(o => o.owe && !o.counted).length;
+  const tot = O.reduce((a, o) => a + (o.counted ? o.left : 0), 0), left = O.filter(o => o.owe && !o.counted).length, paidS = O.reduce((a, o) => a + (o.counted ? o.paidSince : 0), 0);
   const dates = st.map(s => s.date).sort();
   return `<section class="sinv-panel sinv-sum"><div class="sp-h">Summary</div>
     <div class="ss-top"><div class="ss-show">${SINV.sup != null && SINV.logos?.get(SINV.sup) ? `<span class="ss-ic ss-ic-logo" aria-hidden="true"><img alt="" src="${SINV.logos.get(SINV.sup)}"></span>` : `<span class="ss-ic" aria-hidden="true">📄</span>`}<span class="quiet">Showing</span><b>${SINV.sup != null && SINV.pick === "year" && SINV.year ? esc(SINV.year) + " invoices" : "All invoices"}${SINV.sup == null ? " · every supplier" : ` · ${esc(sinvShort(st[0]?.supplier))}`}</b><span class="quiet">${st.length} statements${dates.length ? ` · ${esc(fmtDate(dates[0]))} to ${esc(fmtDate(dates[dates.length - 1]))}` : ""} · ${rows.length} invoices</span></div>
-    <div class="sinv-owing-total"><span class="ss-ic ss-ic-owe" aria-hidden="true">$</span>${SINV.sup != null && SINV.logos?.get(SINV.sup) ? `<span class="ss-ic ss-ic-logo ss-ic-right" aria-hidden="true"><img alt="" src="${SINV.logos.get(SINV.sup)}"></span>` : ""}<span class="quiet">${SINV.sup == null ? "Owing to all suppliers" : "Owing now"}</span><b>${money(tot)}</b><span class="quiet">from each one's latest statement${left ? ` · ${left} older ${left === 1 ? "one" : "ones"} not counted` : ""}</span></div></div>
+    <div class="sinv-owing-total"><span class="ss-ic ss-ic-owe" aria-hidden="true">$</span>${SINV.sup != null && SINV.logos?.get(SINV.sup) ? `<span class="ss-ic ss-ic-logo ss-ic-right" aria-hidden="true"><img alt="" src="${SINV.logos.get(SINV.sup)}"></span>` : ""}<span class="quiet">${SINV.sup == null ? "Owing to all suppliers" : "Owing now"}</span><b>${money(tot)}</b><span class="quiet">from each one's latest statement${paidS ? `, less ${money(paidS)} we paid since` : ""}${left ? ` · ${left} older ${left === 1 ? "one" : "ones"} not counted` : ""}</span></div></div>
   </section>`;
 }
 function sinvAddUp(S, slTot, all) {
@@ -13875,6 +13892,8 @@ document.addEventListener("drop", e => { const b = e.target.closest?.("[data-sin
   const files = [...(e.dataTransfer?.files || [])]; if (!files.length) { const m = b.querySelector(".sd-msg"); if (m) m.innerHTML = `<span class="st-bad">Nothing came through. Save the attachment from the email first, then drag the file here (dragging the email itself doesn't work).</span>`; return; }
   sinvAttachFiles(Number(b.dataset.sinvDrop), files); });
 document.addEventListener("change", e => { const i = e.target.closest?.("[data-sinv-dropfile]"); if (i) sinvAttachFiles(Number(i.dataset.sinvDropfile), [...i.files]); });
+// the page under the payment window catches up with the new payments
+async function openSupInvQuiet() { if (document.body.dataset.page !== "supplier-invoices") return; const pp = await db.rpc("supplier_payments_all"); SINV.pays = pp.error ? [] : pp.data || []; const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; }
 // Make a payment to a supplier: how much, when, how (the ways of paying are learned: a new one is in the drop-down next time), a reference
 async function openSupPay(sup, name) {
   const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open"); $("#inv-cancelbtn")?.classList.add("hidden"); $("#inv-emailbtn")?.classList.add("hidden");
@@ -13893,7 +13912,7 @@ async function openSupPay(sup, name) {
       <div class="row sp-wide"><button class="btn sp-save" type="submit">Save the payment</button><span class="msg" role="status"></span></div></form>
     <h3>Payments to ${esc(name)}</h3>
     ${H.length ? `<table class="stv-t sp-hist"><thead><tr><th>Paid on</th><th class="r">Amount</th><th>How</th><th>Reference</th><th>Note</th><th>By</th><th></th></tr></thead><tbody>
-      ${H.map(x => `<tr class="${x.voided ? "sp-void" : ""}"><td>${esc(fmtDate(x.paid_on))}</td><td class="r num">${money(x.amount)}</td><td>${esc(x.method)}</td><td>${esc(x.reference || "")}</td><td>${esc(x.note || "")}</td>
+      ${H.filter(x => !x.voided).map(x => `<tr><td>${esc(fmtDate(x.paid_on))}</td><td class="r num">${money(x.amount)}</td><td>${esc(x.method)}</td><td>${esc(x.reference || "")}</td><td>${esc(x.note || "")}</td>
         <td>${esc(x.by || "")}</td><td>${x.voided ? "Cancelled" : `<button class="link danger" type="button" data-sp-void="${x.id}">Cancel</button>`}</td></tr>`).join("")}</tbody></table>` : `<p class="quiet">No payments recorded yet.</p>`}</div>`;
   const f = $("#sp-form"), pick = f.method_pick, nw = f.querySelector(".sp-new");
   pick.addEventListener("change", () => { nw.classList.toggle("hidden", pick.value !== "__new"); if (pick.value === "__new") f.method_new.focus(); });
@@ -13905,10 +13924,10 @@ async function openSupPay(sup, name) {
     f.querySelector(".sp-save").disabled = true;
     const { error } = await db.rpc("supplier_payment_add", { p: { supplier_id: sup, amount: amt, paid_on: f.paid_on.value, method, reference: f.reference.value, note: f.note.value } });
     if (error) { f.querySelector(".sp-save").disabled = false; msg.className = "msg err"; msg.textContent = "Not saved: " + rpcErr(error); return; }
-    alertMsg("Payment saved."); openSupPay(sup, name); });
+    alertMsg("Payment saved."); SINV.pays = null; openSupPay(sup, name); openSupInvQuiet(); });
   $("#inv-paper").querySelectorAll("[data-sp-void]").forEach(b => b.addEventListener("click", async () => {
     if (await askChoice("Cancel this payment?", "It stays in the list marked Cancelled.", [["yes", "Cancel it", true], ["", "Keep it"]]) !== "yes") return;
-    const { error } = await db.rpc("supplier_payment_void", { p_id: Number(b.dataset.spVoid) }); if (error) return alertMsg("Not cancelled: " + rpcErr(error)); openSupPay(sup, name); }));
+    const { error } = await db.rpc("supplier_payment_void", { p_id: Number(b.dataset.spVoid) }); if (error) return alertMsg("Not cancelled: " + rpcErr(error)); SINV.pays = null; openSupPay(sup, name); openSupInvQuiet(); }));
 }
 // a supplier's invoices dropped in from the email (one PDF per invoice): each is read, matched to the invoice we already have
 // (by its number) or made new, and its pages kept
