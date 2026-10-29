@@ -4039,6 +4039,13 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .sinv-tabs { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }   /* SU 2: every supplier box the same size */
 .sinv-tabs button { width: 100%; min-height: 48px; justify-content: space-between; box-sizing: border-box; text-align: left; }
 .sinv-tabs button b { margin-left: auto !important; }
+.sinv-ret { font: inherit; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap; border: 1.5px solid #c2410c; background: #fff4ed; color: #c2410c; } .sinv-ret:hover { background: #c2410c; color: #fff; }
+.sinv-extra { padding: 8px 10px; border-radius: 10px; background: #fff8e6; }
+.sinv-rets { margin-top: 14px; } .sinv-rt { border: 1px solid var(--line); border-left: 5px solid #c2410c; border-radius: 10px; padding: 8px 12px; margin: 8px 0; background: var(--paper, #fff); }
+.sinv-rt.sr-sent { border-left-color: #1f5fa8; } .sinv-rt.sr-done { border-left-color: #2b8a3e; } .sinv-rt.sr-x { border-left-color: #adb5bd; opacity: .75; }
+.sinv-rt .sr-h { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; } .sinv-rt .sr-tot { margin-left: auto; } .sinv-rt .sr-st { font-weight: 700; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: #f1f3f5; }
+.sinv-rt ul { margin: 6px 0; padding-left: 18px; } .sinv-rt .sr-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+.sinv-retbox { margin: 10px 0 14px; padding: 10px 14px; border: 2px solid #c2410c; border-radius: 12px; background: #fff8f3; } .sinv-retbox summary { cursor: pointer; font-weight: 700; }
 .sinv-fx { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
 .sinv-acc, .sinv-ign { font: inherit; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
 .sinv-acc { border: 1.5px solid #2b8a3e; background: #ebfbee; color: #2b8a3e; } .sinv-acc:hover { background: #2b8a3e; color: #fff; }
@@ -13363,6 +13370,7 @@ async function openSupInv(msg) {
   const { data, error } = await db.rpc("supplier_invoices_list", { p_supplier: SINV.sup, p_statement: SINV.st });
   if (document.body.dataset.page !== "supplier-invoices") return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load supplier invoices</h2>${esc(/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : rpcErr(error))}</div></div>`; return; }
+  if (!SINV.rets) { const rt = await db.rpc("supplier_returns_list", { p_invoice: null }); SINV.rets = rt.error ? [] : rt.data || []; }
   SINV.data = data; if (SINV.st == null && data.statement_id) SINV.st = data.statement_id;   // (the list opens on the newest statement)
   else if (SINV.st == null && data.statements?.length) { SINV.st = data.statements[0].id; return openSupInv(msg); }
   renderSupInv(msg);
@@ -13401,6 +13409,7 @@ function renderSupInv(msg) {
     <div class="pos-head"><h1>Supplier invoices</h1><span><button class="btn quiet-btn" type="button" id="sinv-pos">‹ Purchase orders</button></span></div>
     <p class="lead">Every invoice and credit a supplier sends us, matched to our PO by the PO number printed on it. Click a row to see its lines next to the PO's, and the scanned pages.</p>
     ${msg ? `<div class="staff-msg ok sl-toast" role="status">${esc(msg)}</div>` : ""}
+    ${(SINV.rets || []).length ? `<details class="sinv-retbox" ${SINV.retOpen ? "open" : ""}><summary>↩ Returns to the suppliers <b>${SINV.rets.length}</b> <span class="quiet">still to send back or waiting for the credit</span></summary>${sinvReturnsHtml(SINV.rets, edit, true)}</details>` : ""}
     ${sinvTabs(D)}
     ${SINV.st === 0 ? sinvAllHead(D, rows) : S ? `<section class="sinv-st">
       <div><span class="quiet">Statement</span><b>${esc(S.supplier)}${S.account ? ` · account ${esc(S.account)}${S.aging?.account_name ? ` (${esc(S.aging.account_name)})` : ""}` : ""} · ${esc(fmtDate(S.date))}</b><span class="quiet">${esc(S.file || "")}${S.pages ? ` · ${S.pages} pages` : ""}</span></div>
@@ -13517,7 +13526,8 @@ function sinvCompare(r, L, P, what) {
     partial = r.subtotal == null && /continued/i.test(r.read_notes || "") && !/end of order/i.test(r.read_notes || "");
   const issues = []; let ia = 0, pa = 0;
   const bad = (ok, h) => ok ? h : `<span class="sinv-bad">${h}</span>`;
-  const D = SINV.det.get(r.id) || {}, IGN = new Set(D.ignored || []), canFix = !!SINV.data?.can_edit; SINV.acc = new Map(); let nFix = 0, nIgn = 0;
+  const D = SINV.det.get(r.id) || {}, IGN = new Set(D.ignored || []), canFix = !!SINV.data?.can_edit; SINV.acc = new Map(); SINV.ret = new Map(); let nFix = 0, nIgn = 0;
+  const RET = new Set((D.returns || []).filter(x => x.status !== "cancelled").flatMap(x => (x.lines || []).map(l => l.key)));
   const body = rows.map(({ a, b }) => {
     if (a?.amt != null) ia += a.amt; if (b) pa += b.amt || 0;
     let why = ""; const iss0 = issues.length, key = (a ? "i:" + (a.x.code || a.x.description || a.i) : "-") + "|" + (b ? "p:" + (b.y.id ?? b.j) : "-");
@@ -13536,8 +13546,9 @@ function sinvCompare(r, L, P, what) {
         <td class="r">${a.amt == null ? "" : bad(mOk, money(a.amt))}</td>` : `<td colspan="5" class="sinv-miss">—</td>`;
     const pc = b ? `<td class="sinv-split">${esc(b.y.sku || "")}</td><td>${esc(b.y.description || "")}</td><td class="r">${bad(qOk, b.q)}</td><td class="r">${bad(eOk, money(b.each))}</td><td class="r">${bad(mOk, money(b.amt))}</td>`
       : `<td colspan="5" class="sinv-miss sinv-split">—</td>`;
-    const soft = b && !a && (split || partial), ign = why && IGN.has(key);
+    const soft = b && !a && (split || partial), retd = why && RET.has(key), ign = why && (IGN.has(key) || retd);
     if (ign) { issues.length = iss0; nIgn++; }
+    if (why && !ign && canFix && a && !b && !a.comp) SINV.ret.set(key, { key, code: a.x.code || "", description: a.x.description || a.x.code || "Item", quantity: a.q != null ? Math.abs(a.q) : 1, unit_cost: a.each ?? (a.amt != null ? Math.abs(a.amt) : 0) });
     // what accepting this difference does to the PO: take the invoice's qty / price, add the billed line, or take the unbilled line off
     let fix = null;
     if (why && !soft && !ign && canFix) {
@@ -13546,8 +13557,8 @@ function sinvCompare(r, L, P, what) {
       else if (a && !b && !a.comp) fix = { c: { description: [a.x.code, a.x.description].filter(Boolean).join(" ").trim() || "Line from invoice " + r.number, quantity: a.q != null ? Math.abs(a.q) : 1, unit_cost: a.each ?? (a.amt != null ? Math.abs(a.amt) : 0) }, t: "Add it to the PO" };
       else if (b && !a && b.y.id) fix = { c: { id: b.y.id, delete: true }, t: "Take it off the PO" };
       if (fix) { SINV.acc.set(key, fix.c); nFix++; } }
-    const acts = why && !soft && canFix ? (ign ? `<div class="sinv-fx"><span class="quiet">Let go</span></div>`
-      : `<div class="sinv-fx">${fix ? `<button class="sinv-acc" type="button" data-sinv-acc="${esc(key)}">✓ ${esc(fix.t)}</button>` : ""}<button class="sinv-ign" type="button" data-sinv-ign="${esc(key)}" title="Leave the PO as it is for this one (it's recorded)">Ignore</button></div>`) : "";
+    const acts = why && !soft && canFix ? (ign ? `<div class="sinv-fx"><span class="quiet">${retd ? "↩ Being sent back" : "Let go"}</span></div>`
+      : `<div class="sinv-fx">${fix ? `<button class="sinv-acc" type="button" data-sinv-acc="${esc(key)}">✓ ${esc(fix.t)}</button>` : ""}${SINV.ret.has(key) ? `<button class="sinv-ret" type="button" data-sinv-ret="${esc(key)}" title="It wasn't ordered: put it on a return to the supplier">↩ Return it</button>` : ""}<button class="sinv-ign" type="button" data-sinv-ign="${esc(key)}" title="Leave the PO as it is for this one (it's recorded)">Ignore</button></div>`) : "";
     return `<tr class="${why && !ign ? (soft ? "sinv-row-soft" : "sinv-row-bad") : a && b ? "sinv-row-ok" : ""}">${ac}${pc}<td class="sinv-why">${why ? `<span class="${ign ? "quiet" : soft ? "sinv-soft" : "sinv-bad"}">${esc(why)}</span>${acts}` : a && b ? `<span class="sinv-ok">✓</span>` : ""}</td></tr>`; }).join("");
   // before tax: as printed, else from the statement's total (13% HST), else the lines added up
   const sub = r.subtotal != null ? Number(r.subtotal) : r.total ? Math.round(Number(r.total) / 1.13 * 100) / 100 : Math.round(ia * 100) / 100, poT = Number(r.po_amount || pa);
@@ -13555,6 +13566,8 @@ function sinvCompare(r, L, P, what) {
   if (Math.abs(Math.abs(sub) - poT) > Math.max(0.05, poT * 0.003) && !split) issues.unshift(`Before tax: ${what} ${money(sub)} vs PO ${money(poT)} (${Math.abs(sub) > poT ? "over" : "under"} by ${money(Math.abs(Math.abs(sub) - poT))})`);
   return `<section class="sinv-cmp"><h3>${what[0].toUpperCase() + what.slice(1)} ${esc(r.number)} next to PO ${esc(r.po_number || "")}</h3>
     ${issues.length ? `<div class="sinv-issues"><b>What doesn't match:</b><ul>${issues.map(t => `<li>${esc(t)}</li>`).join("")}</ul>
+      ${canFix && SINV.ret.size ? `<div class="sinv-accall sinv-extra"><b>${SINV.ret.size} ${SINV.ret.size === 1 ? "item" : "items"} billed that ${SINV.ret.size === 1 ? "isn't" : "aren't"} on the PO:</b>
+        <button class="btn quiet-btn" type="button" data-sinv-addx="${r.id}">＋ Add ${SINV.ret.size === 1 ? "it" : "them all"} to the PO</button><button class="btn quiet-btn" type="button" data-sinv-retx="${r.id}">↩ Return ${SINV.ret.size === 1 ? "it" : "them all"}</button></div>` : ""}
       ${canFix && nFix ? `<div class="sinv-accall"><button class="btn" type="button" data-sinv-accall="${r.id}">✓ Accept the invoice's prices (${nFix} ${nFix === 1 ? "change" : "changes"} to the PO)</button><span class="quiet">Puts the invoice's quantities and prices on the PO, adds what it billed, and marks it checked. Every change is recorded.</span></div>` : ""}</div>`
       : `<div class="sinv-allok">✓ Every line ${split ? "on this " + what + " " : ""}matches the PO${nIgn ? ` (${nIgn} difference${nIgn === 1 ? "" : "s"} let go)` : ""}.</div>`}${tip ? `<p class="sinv-soft">${esc(tip)}</p>` : ""}
     <div class="sinv-cmp-w"><table class="sinv-lt sinv-ct"><thead><tr><th colspan="5">On the ${what}</th><th colspan="5" class="sinv-split">On the PO</th><th></th></tr>
@@ -13582,6 +13595,7 @@ function sinvDetail(r, edit) {
         ${r.po_id ? `<button class="btn quiet-btn" type="button" data-sinv-edpo="${r.id}">${SINV.edPo === r.id ? "Close the editor" : "✎ Edit the PO lines"}</button>` : ""}</div>` : ""}
       ${edit && r.po_id && SINV.edPo === r.id ? sinvPoEditor(r, P, d) : ""}
       ${(d.changes || []).length ? sinvHistory(d.changes) : ""}</section></div>
+    ${(d.returns || []).length ? sinvReturnsHtml(d.returns, edit) : ""}
     ${(d.pages || []).length ? `<section class="sinv-scans"><h3>Scanned ${d.pages.length === 1 ? "page" : "pages"}</h3>${d.pages.map(p => `<figure class="sinv-scan" data-sinv-img="${p.id}">${SINV.img.has(p.id) ? `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">` : `<span class="quiet">Loading page ${p.page_no}…</span>`}</figure>`).join("")}
       <p class="quiet">Click a page to zoom in.</p></section>` : `<p class="quiet">There's no copy of this one in the file: only its line on the statement.</p>`}
   </div>`;
@@ -13597,17 +13611,28 @@ function sinvPoEditor(r, P, d) {
     <label>Why <input name="why" placeholder="e.g. price went up, extra fittings"></label>
     <div class="row"><button class="btn" type="submit">Save the PO</button> <label><input type="checkbox" name="chk"> and mark the invoice checked</label> <span class="msg" role="status"></span></div></form>`;
 }
+const SRET_ST = { open: ["To send back", "sr-open"], sent: ["Sent back · waiting for the credit", "sr-sent"], credited: ["Credit received", "sr-done"], cancelled: ["Cancelled", "sr-x"] };
+function sinvReturnsHtml(R, edit, page) {
+  return `<section class="sinv-rets">${page ? "" : `<h3>Returns from this invoice</h3>`}${R.map(x => `<div class="sinv-rt ${SRET_ST[x.status]?.[1] || ""}">
+    <div class="sr-h"><b>Return #${x.id}</b><span class="sr-st">${esc(SRET_ST[x.status]?.[0] || x.status)}</span>${page ? `<span class="quiet">${esc(x.supplier || "")} · invoice ${esc(x.invoice || "")}${x.po ? " · PO " + esc(x.po) : ""}</span>` : ""}
+      <span class="quiet">${esc(fmtDate(String(x.at).slice(0, 10)))}${x.by ? " · " + esc(x.by) : ""}${x.ra ? " · RA " + esc(x.ra) : ""}</span><b class="sr-tot">${money(x.total)}</b></div>
+    <ul>${(x.lines || []).map(l => `<li>${esc([l.code, l.description].filter(Boolean).join(" · "))} <span class="quiet">× ${esc(String(l.quantity))} @ ${money(l.unit_cost)}</span>${edit && x.status === "open" ? ` <button class="link danger" type="button" data-sret-rm="${x.id}:${l.id}" title="Take it off the return">✕</button>` : ""}</li>`).join("")}</ul>
+    ${x.note ? `<div class="quiet">${esc(x.note)}</div>` : ""}
+    ${edit ? `<div class="sr-acts">${x.status === "open" ? `<button class="btn" type="button" data-sret="${x.id}" data-v="sent">Sent back</button>` : ""}${x.status === "sent" ? `<button class="btn" type="button" data-sret="${x.id}" data-v="credited">✓ Credit received</button><button class="link" type="button" data-sret="${x.id}" data-v="open">Not sent yet</button>` : ""}
+      ${x.status === "credited" ? `<button class="link" type="button" data-sret="${x.id}" data-v="sent">Undo credit received</button>` : ""}${["open", "sent"].includes(x.status) ? `<button class="link danger" type="button" data-sret="${x.id}" data-v="cancelled">Cancel the return</button>` : ""}
+      ${page && x.invoice_id ? `<button class="link" type="button" data-sret-open="${x.invoice_id}">Open the invoice</button>` : ""}</div>` : ""}</div>`).join("")}</section>`;
+}
 function sinvHistory(C) {
   const m = v => v == null ? "" : `${esc(v.description || "")} · qty ${esc(String(v.quantity ?? ""))} · ${money(v.unit_cost || 0)} each`;
-  const act = { edit: "Changed", add: "Added", delete: "Took off", ignore: "Let go" };
+  const act = { edit: "Changed", add: "Added", delete: "Took off", ignore: "Let go", return: "Put on a return" };
   return `<details class="sinv-hist" open><summary>Changes to this PO <span class="quiet">(${C.length})</span></summary><ul>${C.map(c => `<li><b>${act[c.action] || c.action}</b>
-    ${c.action === "edit" ? `${m(c.old)} <span aria-hidden="true">→</span> ${m(c.new)}` : c.action === "add" ? m(c.new) : c.action === "delete" ? m(c.old) : esc(String(c.key || "").replace(/^i:|\|p:\d+$|\|-$/g, "").replace(/^-\|p:/, "PO line "))}
+    ${c.action === "edit" ? `${m(c.old)} <span aria-hidden="true">→</span> ${m(c.new)}` : c.action === "add" || c.action === "return" ? m(c.new) : c.action === "delete" ? m(c.old) : esc(String(c.key || "").replace(/^i:|\|p:\d+$|\|-$/g, "").replace(/^-\|p:/, "PO line "))}
     <div class="quiet">${esc(fmtDate(String(c.at).slice(0, 10)))} ${esc(new Date(c.at).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }))}${c.by ? " · " + esc(c.by) : ""}${c.invoice ? " · from invoice " + esc(c.invoice) : ""}${c.reason ? " · " + esc(c.reason) : ""}</div></li>`).join("")}</ul></details>`;
 }
 async function sinvLoadDet(id) {
   if (SINV.det.has(id) || SINV.detBusy === id) return; SINV.detBusy = id;
-  const { data, error } = await db.rpc("supplier_invoice_get", { p_id: id }); SINV.detBusy = null;
-  SINV.det.set(id, error ? { lines: [], po_lines: [], pages: [], err: rpcErr(error) } : data);
+  const [{ data, error }, rt] = await Promise.all([db.rpc("supplier_invoice_get", { p_id: id }), db.rpc("supplier_returns_list", { p_invoice: id })]); SINV.detBusy = null;
+  SINV.det.set(id, error ? { lines: [], po_lines: [], pages: [], err: rpcErr(error) } : { ...data, returns: rt.error ? [] : rt.data || [] });
   if (SINV.open === id && document.body.dataset.page === "supplier-invoices") { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; }
   for (const p of (data?.pages || [])) if (!SINV.img.has(p.id)) { const r = await db.rpc("supplier_doc_page", { p_id: p.id }); if (r.data) SINV.img.set(p.id, "data:image/jpeg;base64," + r.data);
     const fig = document.querySelector(`[data-sinv-img="${p.id}"]`); if (fig && r.data) fig.innerHTML = `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">`; }
@@ -13645,6 +13670,22 @@ function wireSupInv() {
   document.querySelectorAll("[data-sinv-accall]").forEach(b => b.addEventListener("click", async () => { const ch = [...(SINV.acc?.values() || [])]; if (!ch.length) return;
     const k = await askChoice("Accept the invoice's prices?", `${ch.length} ${ch.length === 1 ? "change" : "changes"} go on the PO, and the invoice is marked checked. Each change is recorded under <b>Changes to this PO</b>.`, [["yes", "Accept them", true], ["", "Not now"]]);
     if (k === "yes") apply(Number(b.dataset.sinvAccall), ch, true, "PO updated from the invoice and marked checked."); }));
+  const retAdd = async (id, items, msg) => { const { error } = await db.rpc("supplier_return_add", { p_invoice: id, p_items: items, p_note: null });
+    if (error) return alertMsg("Not saved: " + rpcErr(error)); SINV.det.delete(id); await openSupInv(msg); };
+  document.querySelectorAll("[data-sinv-ret]").forEach(b => b.addEventListener("click", () => { const it = SINV.ret?.get(b.dataset.sinvRet); if (it) retAdd(SINV.open, [it], "Put on a return to the supplier. It's under Returns from this invoice."); }));
+  document.querySelectorAll("[data-sinv-retx]").forEach(b => b.addEventListener("click", async () => { const items = [...(SINV.ret?.values() || [])]; if (!items.length) return;
+    const k = await askChoice("Return what wasn't ordered?", `${items.length} ${items.length === 1 ? "item goes" : "items go"} on a return to the supplier: ${esc(items.map(x => x.description).join(", "))}.`, [["yes", "Make the return", true], ["", "Not now"]]);
+    if (k === "yes") retAdd(Number(b.dataset.sinvRetx), items, "Return made. Mark it Sent back when it goes, and Credit received when the credit comes."); }));
+  document.querySelectorAll("[data-sinv-addx]").forEach(b => b.addEventListener("click", async () => { const ch = [...(SINV.ret?.keys() || [])].map(k => SINV.acc?.get(k)).filter(Boolean); if (!ch.length) return;
+    const k = await askChoice("Add what was billed to the PO?", `${ch.length} ${ch.length === 1 ? "line is" : "lines are"} added to the PO with the invoice's qty and price. It's recorded under Changes to this PO.`, [["yes", "Add them", true], ["", "Not now"]]);
+    if (k === "yes") apply(Number(b.dataset.sinvAddx), ch, false, "Added to the PO (recorded)."); }));
+  const retSet = async (id, p, msg) => { const { error } = await db.rpc("supplier_return_set", { p_id: id, p }); if (error) return alertMsg("Not saved: " + rpcErr(error)); if (SINV.open) SINV.det.delete(SINV.open); SINV.rets = null; await openSupInv(msg); };
+  document.querySelectorAll("[data-sret]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sret), v = b.dataset.v; let p = { status: v };
+    if (v === "sent") { window.__ra = ""; const k = await askChoice("Sent back to the supplier?", `<label>Their return (RA) number, if they gave one <input type="text" id="sret-ra" style="width:100%;margin-top:4px"></label>`, [["yes", "Sent back", true], ["", "Not yet"]]); if (k !== "yes") return; p.ra_number = window.__ra || ""; }
+    if (v === "cancelled" && await askChoice("Cancel this return?", "The items stay on the invoice as differences again.", [["yes", "Cancel it", true], ["", "Keep it"]]) !== "yes") return;
+    retSet(id, p, { sent: "Marked sent back.", credited: "Credit received. The return is done.", cancelled: "Return cancelled.", open: "Back to: to send back." }[v]); }));
+  document.querySelectorAll("[data-sret-rm]").forEach(b => b.addEventListener("click", () => { const [id, ln] = b.dataset.sretRm.split(":").map(Number); retSet(id, { remove_line: ln }, "Taken off the return."); }));
+  document.querySelectorAll("[data-sret-open]").forEach(b => b.addEventListener("click", () => { SINV.open = Number(b.dataset.sretOpen); SINV.f = "all"; SINV.q = ""; redo(); setTimeout(() => document.querySelector(".sinv-row.open")?.scrollIntoView({ block: "start" }), 300); }));
   document.querySelectorAll("[data-sinv-edpo]").forEach(b => b.addEventListener("click", () => { SINV.edPo = SINV.edPo === Number(b.dataset.sinvEdpo) ? null : Number(b.dataset.sinvEdpo); redo(); }));
   document.querySelectorAll("[data-sinv-ped]").forEach(f => {
     f.querySelector("[data-sinv-addln]").addEventListener("click", () => f.querySelector(".sinv-ped-new").insertAdjacentHTML("beforeend",
@@ -23027,7 +23068,7 @@ document.addEventListener("click", async e => {
   if (document.body.classList.contains("inv-open")) closeInvoice();
   if (current?.c?.id && document.body.dataset.page === "customer") openCustomer(current.c.id);
 }, true);
-document.addEventListener("input", e => { if (e.target.id === "inv-cancel-why") window.__invWhy = e.target.value; });
+document.addEventListener("input", e => { if (e.target.id === "inv-cancel-why") window.__invWhy = e.target.value; if (e.target.id === "sret-ra") window.__ra = e.target.value; });
 function invoicesHtml(list) {
   return `<div class="scroll-box" tabindex="0" aria-label="Invoices"><table><thead><tr><th>Date</th><th>Invoice</th><th class="r">Total</th><th class="r">Owing</th><th>Status</th><th class="no-print"></th></tr></thead><tbody>
     ${list.map((i, n) => `<tr class="inv-row" tabindex="0" data-invoice="${i.id}" title="Open invoice"><td class="num">${fmtDate(i.invoice_date)}</td><td class="num"><span class="inv-link">${esc(i.invoice_number)}</span></td>
