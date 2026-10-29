@@ -299,7 +299,8 @@
   .est-disc-gd .est-off { font-size: 17px; color: #2b8a3e !important; font-weight: 900; } .est-disc-gd .est-off .est-p { width: 5.5em; text-align: right; font-size: 17px; font-weight: 900; color: #2b8a3e; }
   .est-disc-gd tfoot td { background: #d3f9d8; color: #1b5e20; font-weight: 900; font-size: 16px; padding: 8px 12px !important; border: 0 !important; }
   .est-disc-ta { width: 100%; box-sizing: border-box; resize: none; overflow: hidden; font: inherit; font-weight: 800; color: #2b8a3e; line-height: 1.35; min-height: 0; }
-  body.ui-guided .est-disc .est-off, body.ui-guided .est-disc .est-off input { font-weight: 800; color: #2b8a3e; } .est-ltd { background: #e8590c !important; border-color: #e8590c !important; color: #fff !important; } .est-tools .est-ltd, .est-tools .est-ltd-on { min-height: 56px; font-size: 15px; font-weight: 800; }   /* twice as tall as the other side bar buttons */
+  body.ui-guided .est-disc .est-off, body.ui-guided .est-disc .est-off input { font-weight: 800; color: #2b8a3e; } .est-ltd { background: #e8590c !important; border-color: #e8590c !important; color: #fff !important; } .est-loy { background: #c2255c !important; border-color: #c2255c !important; color: #fff !important; font-weight: 800; } .est-loy-on, .est-loy-on:disabled { background: #1b5e20 !important; border-color: #1b5e20 !important; color: #fff !important; opacity: 1 !important; }
+ .est-tools .est-ltd, .est-tools .est-ltd-on { min-height: 56px; font-size: 15px; font-weight: 800; }   /* twice as tall as the other side bar buttons */
  .est-ltd-on, .est-ltd-on:disabled { background: #1b5e20 !important; border-color: #1b5e20 !important; color: #fff !important; opacity: 1 !important; cursor: default; } .prac-band { background: #e7f5ff; border: 2px dashed #1c7ed6; color: #1864ab; font-weight: 700; padding: 10px 14px; border-radius: 10px; margin: 0 0 10px; }
   .mybk-prac { background: #e7f5ff; color: #1864ab; font-weight: 700; } .est-empty-add { text-align: center; padding: 14px !important; }
   .mybk-card { display: grid; grid-template-columns: 150px 1fr; gap: 6px 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; background: #fff; }
@@ -8076,6 +8077,7 @@ async function openEstEdit(id, msg) {
   EST.dirty = false;
   EST.costErr = "";
   EST.seller = (await Promise.resolve(db.rpc("est_seller", { p_id: id })).catch(() => ({})))?.data || "";
+  EST.loy = ME.guided && data.customer_id ? (await Promise.resolve(db.rpc("customer_loyalty", { p_customer: data.customer_id })).catch(() => ({})))?.data || null : null;
   await Promise.all([estInfo(EST.opts.flatMap(o => o.lines.map(l => l.item_id))).catch(() => {}), estCosting(EST.opts.flatMap(o => o.lines.map(l => l.item_id))).catch(() => {})]);
   renderEstEdit();
 }
@@ -8489,8 +8491,10 @@ const estToolsHtml = (o, i) => `<div class="est-tools no-print">${ME.guided ? ""
   <button class="btn quiet-btn est-tool" type="button" data-odisc="${i}" title="Money off the option">Rebate or discount</button>
   ${ME.guided && !estIsPartner() && o.lines.some(l => String(l.description || "").startsWith(HOLD_BONUS)) ? `<button class="btn est-tool est-ltd-on" type="button" disabled title="${esc((o.lines.find(l => String(l.description || "").startsWith(HOLD_BONUS)) || {}).description || "")}">✓ Book-today deal added</button>
     <div class="est-ltd-sub">${esc(((o.lines.find(l => String(l.description || "").startsWith(HOLD_BONUS)) || {}).description || "").replace(/^.*held for /, "Install day: ").replace(/\)$/, ""))} <button class="link danger" type="button" data-hold-undo>Take it off</button></div>` : ""}
+  ${!ME.guided || estIsPartner() || !(EST.loy?.amount > 0) ? "" : o.lines.some(isLoy) ? `<button class="btn est-tool est-loy-on" type="button" disabled>✓ Loyalty rebate added</button>`
+    : `<button class="btn est-tool est-loy" type="button" data-oloy="${i}" title="$50 for every year they've been a customer (since ${esc(EST.loy.since ? fmtDate(EST.loy.since) : "")}), no questions asked">💚 Loyalty rebate · ${EST.loy.years} yr${EST.loy.years === 1 ? "" : "s"} = ${money(EST.loy.amount).replace(/\.00$/, "")}</button>`}
   ${!ME.guided || estIsPartner() ? "" : o.lines.some(l => l.disc && /^Get up to /.test(l.description || "")) ? `<button class="btn est-tool est-ltd-on" type="button" disabled title="The limited time deal is on this proposal">✓ Rebate added</button>`
-    : o.lines.some(l => !l.disc && !l.kind) && !estPromos(o).length && !o.lines.some(l => l.disc) ? `<button class="btn est-tool est-ltd" type="button" data-oltd="${i}" title="No rebate on this sale: add money off if the customer says yes within 48 hours">⏱ Limited time deal</button>` : ""}
+    : o.lines.some(l => !l.disc && !l.kind) && !estPromos(o).length && !o.lines.some(l => l.disc && !isLoy(l)) && sumOff(o, isLoy) < ltdTier(o) ? `<button class="btn est-tool est-ltd" type="button" data-oltd="${i}" title="No rebate on this sale: add money off if the customer says yes within 48 hours">⏱ Limited time deal</button>` : ""}
   ${(() => { const P = estPromos(o); return P.length ? `<div class="est-tools-h est-mydisc-h">Promo on this option</div>${P.map(({ d, l }) => `<button class="btn quiet-btn est-tool est-mydisc" type="button" data-omydisc="${i}:${d.item_id}" title="Adds the promo for ${esc(l.description)} as a discount line">${esc(l.description)}<span>${discWord(d, l.price)}</span></button>`).join("")}` : ""; })()}</div>`;
 // SA 2, owners only: the sales commission on each option, line by line (type of work, the person's %, the amount) and the total.
 // It uses the proposal's sales person; pick another to see what they'd get. Never printed or shown to the customer.
@@ -8612,7 +8616,7 @@ function renderEstEdit() {
   document.querySelectorAll(".est-disc-ta").forEach(t => { const fit = () => { t.style.height = "auto"; t.style.height = t.scrollHeight + 2 + "px"; }; fit(); t.addEventListener("input", fit); });   // rebates: the whole text shows
 }
 // "Book today with a deposit and we'll double your rebate": days in the week a week out with 2+ installers free; the day picked is held on the board
-const HOLD_BONUS = "Booked today with a deposit: your rebate is doubled";
+const HOLD_BONUS = "Booked today with a deposit";   // the start of the book-today line
 // the 30 day calendar: every weekday from a week out, open where 2+ installers are free
 async function estHoldCal(id, pick) {
   let back = document.getElementById("eh-cal-back"); if (back) back.remove();
@@ -8639,6 +8643,25 @@ async function estHoldCal(id, pick) {
     say("🎉 That day is available! Your rebate is doubled."); back.querySelectorAll("button").forEach(x => x.disabled = true);
     if (await pick(b.dataset.calDay)) close(); else { back.querySelectorAll("button").forEach(x => x.disabled = false); say("That day just filled up. Pick another green day.", true); } }));
 }
+// Loyalty, limited time deal and book-today: how they work together
+const LOY_TXT = "Customer loyalty rebate";
+const isLoy = l => l.disc && String(l.description || "").startsWith(LOY_TXT), isLtd = l => l.disc && /^Get up to /.test(l.description || ""), isBonus = l => String(l.description || "").startsWith(HOLD_BONUS);
+const sumOff = (o, f) => o.lines.filter(l => l.disc && f(l)).reduce((s, l) => s + Math.abs(Number(l.price) || 0), 0);
+const ltdTier = o => { const sale = o.lines.reduce((s, l) => s + (l.disc || l.kind === "note" ? 0 : (Number(l.qty) || 0) * (Number(l.price) || 0)), 0); return sale < 5000 ? 300 : sale < 10000 ? 500 : 750; };
+function estBookBonus(o) {   // the extra for booking today: doubles the rebates; with more than $500 loyalty only up to about $1000 in all (to the $50); none at $1000 loyalty
+  const loy = sumOff(o, isLoy), reb = sumOff(o, l => !isBonus(l));
+  if (loy >= 1000 || reb <= 0) return 0;
+  if (loy <= 500) return reb;
+  return Math.max(0, Math.ceil((1000 - reb) / 50) * 50);
+}
+function estFitDeals(o) {   // after loyalty is added: the limited time deal is cut by it (gone if loyalty covers it), and the book-today extra worked out again
+  const loy = sumOff(o, isLoy), ltd = o.lines.find(isLtd);
+  if (ltd) { const amt = ltdTier(o) - loy; if (amt <= 0) o.lines = o.lines.filter(l => l !== ltd);
+    else { ltd.price = -amt; ltd.description = ltd.description.replace(/^Get up to \$[\d,]+(\.\d\d)?/, "Get up to " + money(amt)); } }
+  const bonus = o.lines.find(isBonus);
+  if (bonus) { o.lines = o.lines.filter(l => l !== bonus); const b = estBookBonus(o); if (b > 0) { bonus.price = -b; o.lines.push(bonus); } else return "released"; }
+  return "";
+}
 const estIsPartner = () => !!(EST.x?.partner_id || EST.x?.jobs?.partner_id);   // the limited time deal and book-today deal are for Reid proposals only, never a partner's
 async function estHoldFill() {
   const box = document.querySelector("[data-hold-oi]"); if (!box || !EST.id) return;
@@ -8649,11 +8672,12 @@ async function estHoldFill() {
   const mine = data.mine, ok = (data.days || []).filter(d => d.free >= 2);
   const showFree = !ME.guided && EST.x?.jobs?.sales_kind === "phone";   // how many installers are free: only on a phone sale, never in the training view
   if (EST.opts[0]?.lines.some(l => String(l.description || "").startsWith(HOLD_BONUS))) { box.remove(); return; }   // added: it shows on the right side bar instead
-  const o0 = EST.opts[0], reb0 = o0.lines.filter(l => l.disc && !String(l.description || "").startsWith(HOLD_BONUS)).reduce((s, l) => s + Math.abs(Number(l.price) || 0), 0);
+  const o0 = EST.opts[0], reb0 = sumOff(o0, l => !isBonus(l)), bon0 = estBookBonus(o0);
+  if (bon0 <= 0 && !mine) { box.remove(); return; }   // loyalty at $1000 (or rebates already over): no book-today deal
   const m0 = v => money(v).replace(/\.00$/, "");
   const co = COMPANY || {};
   box.innerHTML = `<div class="eh-coupon"><span class="eh-scissors" aria-hidden="true">✂</span>
-    ${reb0 > 0 ? `<div class="eh-stub"><span class="eh-tag">Book-today deal</span><span class="eh-now">${m0(reb0 * 2)}<small>OFF</small></span><span class="eh-was">Your rebate ${m0(reb0)} <b>× 2</b></span></div>` : ""}
+    ${reb0 > 0 ? `<div class="eh-stub"><span class="eh-tag">Book-today deal</span><span class="eh-now">${m0(reb0 + bon0)}<small>OFF</small></span><span class="eh-was">${bon0 === reb0 ? `Your rebate ${m0(reb0)} <b>× 2</b>` : `Your rebate ${m0(reb0)} <b>+ ${m0(bon0)}</b>`}</span></div>` : ""}
     <div class="eh-body"><img class="eh-logo" src="${esc(coLogo(co))}" alt="${esc(co.company_name || "Reid Heating & Cooling")}" crossorigin="anonymous"><div class="eh-head">🎉 <b>Book today with a deposit and we'll double your rebate!</b></div>
     ${mine ? `<p class="eh-held">Install day held: <b>${esc(dn(mine.day))}</b> · ${mine.status === "confirmed" ? "confirmed by the office ✓" : "waiting for the office to confirm"}</p>` : `<p class="quiet eh-pick-txt">Pick the install day the customer wants. It's held on the dispatch board until the office confirms it.</p>`}
     </div></div>
@@ -8671,9 +8695,9 @@ async function estHoldFill() {
     const r = await db.rpc("install_hold_set", { p_estimate: id, p_day: day });
     if (r.error) { box.querySelectorAll("button").forEach(x => x.disabled = false); msg("Not held: " + rpcErr(r.error), true); return false; }
     o.lines = o.lines.filter(l => !String(l.description || "").startsWith(HOLD_BONUS));
-    const reb = o.lines.filter(l => l.disc).reduce((s, l) => s + Math.abs(Number(l.price) || 0), 0);
+    const reb = estBookBonus(o);
     const exp = o.lines.filter(l => l.disc && l.expires).map(l => l.expires).sort()[0] || new Date(Date.now() + 48 * 3600e3).toISOString();
-    if (reb > 0) o.lines.push({ item_id: null, description: `${HOLD_BONUS} (install day held for ${dn(day)})`, qty: 1, price: -reb, disc: true, expires: exp });
+    if (reb > 0) o.lines.push({ item_id: null, description: `${HOLD_BONUS}: ${reb === sumOff(o, l => !isBonus(l)) ? "your rebate is doubled" : "an extra " + money(reb) + " off"} (install day held for ${dn(day)})`, qty: 1, price: -reb, disc: true, expires: exp });
     EST.dirty = true;
     if (EST.saveNow && await EST.saveNow(false)) openEstEdit(id, `${dn(day)} is held for the install. Rebate doubled.`); else renderEstEdit(); return true; };
   box.querySelectorAll("[data-hold-day]").forEach(b => b.addEventListener("click", () => pick(b.dataset.holdDay)));
@@ -8716,10 +8740,15 @@ function wireEstEdit() {
   m.querySelectorAll("[data-oltd]").forEach(el => el.addEventListener("click", () => { const i = Number(el.dataset.oltd), o = EST.opts[i];
     {   // Limited time deal (no rebate for this sale): a 48 hour offer, by the size of the sale
       const sale = o.lines.reduce((s, l) => s + (l.disc || l.kind === "note" ? 0 : (Number(l.qty) || 0) * (Number(l.price) || 0)), 0);
-      const amt = sale < 5000 ? 300 : sale < 10000 ? 500 : 750, ends = new Date(Date.now() + 48 * 3600e3);
+      const amt = (sale < 5000 ? 300 : sale < 10000 ? 500 : 750) - sumOff(o, isLoy), ends = new Date(Date.now() + 48 * 3600e3);   // less their loyalty rebate
+      if (amt <= 0) return;
       const endTxt = ends.toLocaleString("en-CA", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
       o.lines.push({ item_id: null, description: `Get up to ${money(amt)} off if this offer is accepted within 48 hours (offer ends ${endTxt})`, qty: 1, price: -amt, disc: true, expires: ends.toISOString() });
       dirty(); renderEstEdit(); } }));
+  m.querySelectorAll("[data-oloy]").forEach(el => el.addEventListener("click", async () => { const i = Number(el.dataset.oloy), o = EST.opts[i], L = EST.loy; if (!L?.amount || o.lines.some(isLoy)) return;
+    o.lines.push({ item_id: null, description: `${LOY_TXT}: thank you for ${L.years} year${L.years === 1 ? "" : "s"} with Reid ($50 for every year)`, qty: 1, price: -L.amount, disc: true });
+    if (estFitDeals(o) === "released") await db.rpc("install_hold_set", { p_estimate: EST.id, p_day: null });
+    dirty(); renderEstEdit(); }));
   m.querySelectorAll("[data-odisc]").forEach(el => el.addEventListener("click", () => { const i = Number(el.dataset.odisc), o = EST.opts[i];
     o.lines.push({ item_id: null, description: "", qty: 1, price: 0, disc: true }); dirty(); renderEstEdit();
     const ins = m.querySelectorAll(`[data-oi="${i}"] .est-disc .est-d`); ins[ins.length - 1]?.focus(); }));
