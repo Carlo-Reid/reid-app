@@ -22083,6 +22083,14 @@ async function invEmailSetupOld(D) {
 }
 let INV_EMAIL_CUR = null, INV_EMAIL_DRAFT = {}, INV_EMAIL_JUMP = false;
 /* ---------------- view an invoice ---------------- */
+document.addEventListener("click", async e => {   // Section 5: delete a job that was never done (asks first)
+  const d = e.target.closest("[data-job-del]"); if (!d) return; e.stopPropagation();
+  const k = await askChoice("Delete this job?", `Job ${esc(d.dataset.jobNum)}, its visits and its notes are deleted for good. This can't be undone.`, [["yes", "Delete it", true], ["", "Keep it"]]);
+  if (k !== "yes") return;
+  const { error } = await db.rpc("job_delete", { p_id: Number(d.dataset.jobDel) });
+  if (error) return alertMsg("Not deleted: " + rpcErr(error));
+  if (current?.c?.id) openCustomer(current.c.id);
+}, true);
 document.addEventListener("click", async e => {   // Section 7: delete a proposal (asks first)
   const d = e.target.closest("[data-est-del]"); if (!d) return; e.stopPropagation();
   const k = await askChoice("Delete this proposal?", `Proposal ${esc(d.dataset.estNum)} and everything on it is deleted for good. This can't be undone.`, [["yes", "Delete it", true], ["", "Keep it"]]);
@@ -22627,12 +22635,12 @@ async function reloadEquipment() {
 }
 
 function jobsHtml(jobs) {
-  return `<div class="scroll-box" tabindex="0" aria-label="Job history"><table><thead><tr><th>Date</th><th>Job</th><th>What</th><th class="hide-sm">Unit</th><th>Status</th></tr></thead><tbody>
+  return `<div class="scroll-box" tabindex="0" aria-label="Job history"><table><thead><tr><th>Date</th><th>Job</th><th>What</th><th class="hide-sm">Unit</th><th>Status</th><th class="no-print"></th></tr></thead><tbody>
     ${jobs.map((j, i) => `<tr class="job-row" tabindex="0" data-job="${j.id}">
       <td class="num">${fmtDate(j.created_at)}</td><td class="num">${esc(j.job_number)}</td>
       <td>${esc(j.job_types?.name || "")}<div class="quiet">${esc((j.summary || "").slice(0, 120))}</div></td>
       <td class="hide-sm">${esc(j.business_units?.name || "")}${j.partners ? `<div class="quiet">${esc(j.partners.name)}</div>` : ""}${j.tank_payer ? `<div class="htin-tank">${esc(BK_TANK.find(x => x[0] === j.tank_payer)?.[1] || "")}</div>` : ""}</td>
-      <td>${badge(j.status)}</td></tr>`).join("")}
+      <td>${badge(j.status)}</td><td class="no-print">${j.status !== "completed" && !j.completed_at && (ME.role === "owner" || can("calls.dispatch")) && !(current?.invoices || []).some(x => x.job_id === j.id) ? `<button class="link danger est-del" type="button" data-job-del="${j.id}" data-job-num="${esc(j.job_number)}" title="Delete this job">✕ Delete</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>${jobs.length > 8 ? `<div class="notes-foot">Scroll inside the box to see all ${jobs.length} jobs.</div>` : ""}`;
 }
 
@@ -22647,7 +22655,7 @@ function toggleJob(row) {
   }).join("");
   const tr = document.createElement("tr");
   tr.className = "job-detail";
-  tr.innerHTML = `<td colspan="5">
+  tr.innerHTML = `<td colspan="6">
     ${j.description ? `<div style="white-space:pre-wrap;margin-bottom:8px">${esc(j.description)}</div>` : ""}
     ${visits || '<div class="quiet">No visits recorded.</div>'}
     ${inv.length ? `<div style="margin-top:6px">${inv.map(i => `<button class="link" type="button" data-invoice="${i.id}">Invoice ${esc(i.invoice_number)}</button>: <span class="num">${money(i.total)}</span> ${badge(i.status)}`).join("<br>")}</div>` : ""}
