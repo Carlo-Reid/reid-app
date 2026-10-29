@@ -4049,6 +4049,10 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .sinv-lgc { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px; border: 2px dashed #b9cde0; border-radius: 12px; background: #fff; text-align: center; }
 .sinv-lgc.over { border-color: #1f5fa8; background: #eaf2fb; } .sinv-lgc .lgc-pic { height: 64px; display: flex; align-items: center; justify-content: center; } .sinv-lgc .lgc-pic img { max-height: 64px; max-width: 180px; object-fit: contain; }
 .stv-logo-img { max-height: 70px; max-width: 280px; object-fit: contain; }
+.result .res-more { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 5px; }
+.result .rm-c { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: #f1f3f5; color: #34404b; font-size: 11.5px; font-weight: 600; line-height: 1.6; }
+.result .rm-zone .dm-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; } .result .rm-plan { background: #1d2733; color: #ffd43b; } .result .rm-none { background: none; color: #8795a1; font-weight: 500; }
+.result .rm-inst { background: #ebfbee; color: #2b8a3e; }
 .fields #f-addr { grid-column: auto !important; }   /* the Unit # box sits right beside Address */
 /* the suppliers and the statements, each in its own box, all as matching app tiles */
 .sinv-panel { margin: 12px 0 14px; padding: 12px 16px 16px; border: 1px solid #dbe3ec; border-radius: 20px; background: linear-gradient(180deg, #f9fbfd, #eef3f8); box-shadow: 0 1px 3px rgba(16, 24, 40, .05); }
@@ -5503,6 +5507,35 @@ async function runFieldSearch() {
       <div class="sub">${esc([r.street, r.city].filter(Boolean).join(", "))}</div>
       ${r.phone ? `<div class="why">${esc(phoneFmt(r.phone))}</div>` : ""}</button>`).join("");
   box.querySelectorAll(".result").forEach(b => b.addEventListener("click", () => openCustomerTab(Number(b.dataset.id))));
+  resEnrich(box);
+}
+// each customer found: their unit, phone, zone, plans and whether we installed their equipment, under the name
+const RES_INFO = new Map();
+async function resEnrich(box) {
+  const ids = [...new Set([...box.querySelectorAll(".result[data-id]")].map(b => Number(b.dataset.id)))].filter(Boolean); if (!ids.length) return;
+  const need = ids.filter(id => !RES_INFO.has(id)).slice(0, 80);
+  if (need.length) {
+    const [cu, eq] = await Promise.all([
+      db.from("customers").select("id, locations(id, street, unit, city, postal_code, neighbourhood_id, community_id, latitude, longitude, border_zone, active), customer_contacts(kind, value, is_primary, location_id), memberships(status, end_date, location_id, plan_types(name))").in("id", need),
+      db.from("equipment").select("installed_by_company, status, locations!inner(customer_id)").in("locations.customer_id", need).eq("installed_by_company", true)]);
+    const inst = new Set((eq.data || []).filter(e => e.status === "active").map(e => e.locations?.customer_id));
+    (cu.data || []).forEach(c => RES_INFO.set(c.id, { c, inst: inst.has(c.id) }));
+    need.forEach(id => { if (!RES_INFO.has(id)) RES_INFO.set(id, null); });
+  }
+  const ready = MAPH.list && MAPZ.zones && MAPT.list && MAPC.list;
+  const draw = () => box.querySelectorAll(".result[data-id]").forEach(b => {
+    const I = RES_INFO.get(Number(b.dataset.id)); if (!I) return; b.querySelector(".res-more")?.remove();
+    const c = I.c, L = (c.locations || []).slice().sort((a, x) => x.active - a.active), l = L[0];
+    const ph = (c.customer_contacts || []).filter(k => k.kind !== "email").sort((a, x) => x.is_primary - a.is_primary)[0];
+    const today = new Date().toISOString().slice(0, 10), plans = (c.memberships || []).filter(m => m.status === "active" && (!m.end_date || m.end_date >= today));
+    let z = null; if (l && MAPH.list && MAPZ.zones && MAPT.list && MAPC.list) try { z = zoneOf2(l); } catch {}
+    const chips = [l?.unit ? `<span class="rm-c">Unit ${esc(l.unit)}</span>` : "", ph && !b.querySelector(".why, .sub")?.textContent.includes(phoneFmt(ph.value)) ? `<span class="rm-c">📞 ${esc(phoneFmt(ph.value))}</span>` : "",
+      z ? `<span class="rm-c rm-zone"><span class="dm-dot" style="background:${esc(z.color || MAP_GREY)}"></span>${esc(z.name)}</span>` : "",
+      plans.length ? `<span class="rm-c rm-plan" title="${esc(plans.map(m => m.plan_types?.name || "Plan").join("\n"))}">★ ${plans.length === 1 ? esc(String(plans[0].plan_types?.name || "Plan").replace(/^\w+\s*-\s*/, "")) : plans.length + " plans"}</span>` : `<span class="rm-c rm-none">No plan</span>`,
+      I.inst ? `<span class="rm-c rm-inst">✓ We installed their equipment</span>` : "", L.length > 1 ? `<span class="rm-c">${L.length} addresses</span>` : ""].filter(Boolean).join("");
+    b.insertAdjacentHTML("beforeend", `<div class="res-more">${chips}</div>`); });
+  draw();
+  if (!ready) Promise.all([loadHoods(false, false), loadMapZones(), loadTowns(), loadComms()]).then(() => { if (box.isConnected) draw(); }).catch(() => {});
 }
 // a customer picked from a search opens in its own browser tab, so the search stays open here (the training view keeps one tab)
 function openCustomerTab(id) {
@@ -5565,6 +5598,7 @@ async function runSearch() {
       ${why[c.id] ? `<div class="why">${esc(why[c.id])}</div>` : ""}</button>`; }).join("") : "");
   box.querySelectorAll(".result").forEach(b => b.addEventListener("click", () => openCustomerTab(Number(b.dataset.id))));
   document.querySelectorAll("#results .result").forEach(b => b.setAttribute("aria-current", b.dataset.id == lastCustomer));
+  resEnrich(box);
 }
 
 /* ---------------- customer file ---------------- */
