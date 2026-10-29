@@ -4042,6 +4042,7 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .sinv-stv-open { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 12px 16px; border-radius: 12px; border: 2px solid #1f5fa8; background: #eaf2fb; color: #1f2a37; font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; text-align: left; }
 .sinv-stv-open b { font-size: 20px; color: #1f5fa8; } .sinv-stv-open small { flex-basis: 100%; font-size: 12px; font-weight: 500; color: #5b6b78; } .sinv-stv-open:hover { background: #1f5fa8; color: #fff; } .sinv-stv-open:hover b, .sinv-stv-open:hover small { color: #fff; }
 .stv-totbtn { font: inherit; font-size: inherit; font-weight: inherit; }
+.dropin-t { margin-top: 14px; font-family: Inter, system-ui, sans-serif; font-size: 13px; } .dropin-t td { border-bottom: 1px solid #ddd; padding: 6px; vertical-align: top; }
 .sinv-drop { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; margin: 14px 0; padding: 26px 18px; border: 2.5px dashed #1f5fa8; border-radius: 14px; background: #f3f8fd; }
 .sinv-drop.over { background: #dbeafe; border-style: solid; } .sinv-drop .sd-ico { font-size: 30px; color: #1f5fa8; } .sinv-drop b { font-size: 16px; }
 .sinv-drop .sd-read { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: center; margin-top: 8px; } .sinv-drop .sd-read input { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; max-width: 140px; }
@@ -13497,7 +13498,7 @@ function sinvStChips(D) {   // a supplier's statements as boxes: All time / By y
   const years = [...new Set(st.map(s => s.date.slice(0, 4)))].sort().reverse();
   const box = (attrs, on, top, sub) => `<button type="button" class="sinv-pk ${on ? "on" : ""}" ${attrs} aria-pressed="${on}"><b>${top}</b>${sub ? `<small>${sub}</small>` : ""}</button>`;
   const sumY = y => st.filter(s => s.date.startsWith(y)).length;
-  let html = `<div class="sinv-pick"><div class="sinv-pk-row">${box('data-sinv-pk="all"', mode === "all", "All time", `${st.length} statements`)}${box('data-sinv-pk="year"', mode === "year", "By year", `${years.length} ${years.length === 1 ? "year" : "years"}`)}${D.can_edit ? box(`data-stv-new="${SINV.sup}"`, false, "⬆ Load a statement", "Read their PDF and compare") : ""}</div>`;
+  let html = `<div class="sinv-pick"><div class="sinv-pk-row">${box('data-sinv-pk="all"', mode === "all", "All time", `${st.length} statements`)}${box('data-sinv-pk="year"', mode === "year", "By year", `${years.length} ${years.length === 1 ? "year" : "years"}`)}${D.can_edit ? box(`data-stv-new="${SINV.sup}"`, false, "⬆ Load a statement", "Read their PDF and compare") + box(`data-sinv-dropin="${SINV.sup}"`, false, "⬇ Drop invoices in", "From the email: one PDF per invoice") : ""}</div>`;
   if (mode === "year") {
     html += `<div class="sinv-pk-row">${years.map(y => box(`data-sinv-yr="${y}"`, yr === y, y, `${sumY(y)} ${sumY(y) === 1 ? "statement" : "statements"}`)).join("")}</div>`;
     if (yr) { const ms = st.filter(s => s.date.startsWith(yr)).sort((a, b) => a.date.localeCompare(b.date));
@@ -13681,6 +13682,84 @@ document.addEventListener("drop", e => { const b = e.target.closest?.("[data-sin
   const files = [...(e.dataTransfer?.files || [])]; if (!files.length) { const m = b.querySelector(".sd-msg"); if (m) m.innerHTML = `<span class="st-bad">Nothing came through. Save the attachment from the email first, then drag the file here (dragging the email itself doesn't work).</span>`; return; }
   sinvAttachFiles(Number(b.dataset.sinvDrop), files); });
 document.addEventListener("change", e => { const i = e.target.closest?.("[data-sinv-dropfile]"); if (i) sinvAttachFiles(Number(i.dataset.sinvDropfile), [...i.files]); });
+// a supplier's invoices dropped in from the email (one PDF per invoice): each is read, matched to the invoice we already have
+// (by its number) or made new, and its pages kept
+const DROPIN = { sup: null, name: "", items: [], known: null };
+async function openDropInvoices(sup, name) {
+  DROPIN.sup = sup; DROPIN.name = name; DROPIN.items = [];
+  const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open"); $("#inv-cancelbtn")?.classList.add("hidden"); $("#inv-emailbtn")?.classList.add("hidden");
+  drawDropIn();
+  if (!DROPIN.known || DROPIN.known.sup !== sup) { const { data } = await db.rpc("supplier_invoices_list", { p_supplier: sup, p_statement: 0 });
+    DROPIN.known = { sup, rows: data?.rows || [], lines: (data?.statement_lines || []) }; }
+}
+function drawDropIn() {
+  const I = DROPIN.items;
+  $("#inv-paper").innerHTML = `<div class="stv"><h2>Drop ${esc(DROPIN.name)}'s invoices in</h2>
+    <p class="lead">Drag the invoice PDFs from the email onto the box (one PDF per invoice; several at once is fine). Each one is read, matched to the invoice we already have by its number, or added as new. Check what was read, then save.</p>
+    <section class="sinv-drop" data-dropin tabindex="0"><div class="sd-ico" aria-hidden="true">⬇</div><b>Drop the invoices here</b>
+      <span>Drag the PDF attachments (not the email itself), or <label class="link">pick the files<input type="file" accept="application/pdf,image/*" multiple hidden data-dropin-file></label>.</span></section>
+    ${I.length ? `<table class="stv-t dropin-t"><thead><tr><th>File</th><th>Invoice #</th><th>Date</th><th>PO</th><th class="r">Total</th><th>What happens</th><th></th></tr></thead><tbody>
+      ${I.map((x, i) => `<tr data-di="${i}"><td>${esc(x.file)}<div class="quiet">${x.pages ? x.pages.length + (x.pages.length === 1 ? " page" : " pages") : ""}</div></td>
+        ${x.busy ? `<td colspan="5" class="quiet">${esc(x.busy)}</td><td></td>` : x.done ? `<td>${esc(x.number)}</td><td>${esc(stDate(x.date))}</td><td>${esc(x.po || "")}</td><td class="r">${x.total != null ? money(x.total) : ""}</td><td class="st-ok">✓ ${esc(x.done)}</td><td></td>`
+        : `<td><input name="number" value="${esc(x.number || "")}"></td><td><input name="date" type="date" value="${esc(x.date || "")}"></td><td><input name="po" value="${esc(x.po || "")}"></td>
+        <td class="r"><input name="total" type="number" step="0.01" value="${x.total ?? ""}"></td><td>${x.match ? `<span class="st-ok">Adds the copy to our invoice ${esc(x.match.number)}</span>` : x.number ? `<span class="st-look">New invoice${x.onSt ? " (it's on a statement)" : ""}</span>` : `<span class="st-bad">Put in the invoice number</span>`}${x.err ? `<div class="st-bad">${esc(x.err)}</div>` : ""}</td>
+        <td><button class="link danger" type="button" data-di-x="${i}">✕</button></td>`}</tr>`).join("")}</tbody></table>
+      ${I.some(x => !x.done && !x.busy) ? `<div class="row"><button class="btn" type="button" data-di-save>Save ${I.filter(x => !x.done && !x.busy).length === 1 ? "it" : "them all"}</button></div>` : ""}` : ""}</div>`;
+  const P = $("#inv-paper");
+  P.querySelector("[data-dropin-file]")?.addEventListener("change", e => dropInFiles([...e.target.files]));
+  P.querySelectorAll("tr[data-di] input").forEach(inp => inp.addEventListener("change", () => { const x = DROPIN.items[Number(inp.closest("tr").dataset.di)]; x[inp.name] = inp.type === "number" ? (inp.value === "" ? null : Number(inp.value)) : inp.value.trim(); dropInMatch(x); drawDropIn(); }));
+  P.querySelectorAll("[data-di-x]").forEach(b => b.addEventListener("click", () => { DROPIN.items.splice(Number(b.dataset.diX), 1); drawDropIn(); }));
+  P.querySelector("[data-di-save]")?.addEventListener("click", dropInSave);
+}
+function dropInMatch(x) {
+  const norm = t => String(t || "").replace(/\W/g, "").toUpperCase(), K = DROPIN.known?.rows || [];
+  x.match = x.number ? K.find(r => norm(r.number) === norm(x.number)) : null;
+  x.onSt = !!(x.number && (DROPIN.known?.lines || []).some(l => norm(l.reference) === norm(x.number)));
+}
+async function dropInFiles(files) {
+  if (!files.length) return;
+  const items = files.map(f => ({ file: f.name, f, busy: "Waiting…" })); DROPIN.items.push(...items); drawDropIn();
+  try {
+    await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"); await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const worker = await window.Tesseract.createWorker("eng");
+    for (const x of items) {
+      try {
+        x.busy = "Opening…"; drawDropIn(); const cv = [], f = x.f;
+        if (/pdf/i.test(f.type) || /\.pdf$/i.test(f.name)) { const pdf = await window.pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise;
+          for (let n = 1; n <= pdf.numPages; n++) { const pg = await pdf.getPage(n), vp = pg.getViewport({ scale: 3 }), c = document.createElement("canvas"); c.width = vp.width; c.height = vp.height;
+            const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: g, viewport: vp }).promise; cv.push(c); } }
+        else if (/^image\//.test(f.type)) { const img = await createImageBitmap(f), c = document.createElement("canvas"); c.width = img.width; c.height = img.height; c.getContext("2d").drawImage(img, 0, 0); cv.push(c); }
+        if (!cv.length) { x.busy = null; x.err = "Not a PDF or a picture"; continue; }
+        let text = ""; for (let i = 0; i < cv.length; i++) { x.busy = `Reading page ${i + 1} of ${cv.length}…`; drawDropIn(); text += "\n" + (await worker.recognize(cv[i])).data.text; }
+        x.pages = cv.map(c => { const w = Math.min(1500, c.width), h = Math.round(c.height * w / c.width), o = document.createElement("canvas"); o.width = w; o.height = h; o.getContext("2d").drawImage(c, 0, 0, w, h); return o.toDataURL("image/jpeg", 0.72).split(",")[1]; });
+        const T = text.toUpperCase(), flat = T.replace(/\W/g, ""), n = t => t == null ? null : Number(String(t).replace(/[, ]/g, ""));
+        const hit = (DROPIN.known?.rows || []).find(r => r.number && String(r.number).length >= 5 && flat.includes(String(r.number).replace(/\W/g, "").toUpperCase()))
+          || (DROPIN.known?.lines || []).map(l => ({ number: l.reference })).find(l => l.number && String(l.number).length >= 5 && flat.includes(String(l.number).replace(/\W/g, "").toUpperCase()));
+        x.number = hit?.number || (T.match(/INVOICE\s*(?:NO\.?|#|NUMBER)?\s*[:#.]?\s*([A-Z]{0,3}\d{4,})/) || T.match(/\b([A-Z]\d{6})\b/) || [])[1] || "";
+        const d = text.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/); x.date = d ? `${d[3].length === 2 ? "20" + d[3] : d[3]}-${d[1].padStart(2, "0")}-${d[2].padStart(2, "0")}` : "";
+        x.po = (text.match(/(?:P\.?\s?O\.?|PURCHASE\s+ORDER|CUSTOMER\s+ORDER|COMMANDE)\s*(?:#|NO\.?|NUMBER|NUM\.?)?\s*[:#.]?\s*([A-Z]{0,3}\d[\w-]{2,})/i) || [])[1] || "";
+        const tots = [...T.matchAll(/TOTAL\D{0,15}([\d,]+\.\d{2})/g)].map(m => n(m[1])); x.total = tots.length ? tots[tots.length - 1] : null;
+        x.subtotal = n((T.match(/SUB\s*-?\s*TOTAL\D{0,12}([\d,]+\.\d{2})/) || [])[1]); x.hst = n((T.match(/(?:H\.?S\.?T|TVH)\D{0,12}([\d,]+\.\d{2})/) || [])[1]);
+        x.busy = null; dropInMatch(x); drawDropIn();
+      } catch (e) { x.busy = null; x.err = e.message || String(e); drawDropIn(); }
+    }
+    await worker.terminate();
+  } catch (e) { items.forEach(x => { x.busy = null; x.err = e.message || String(e); }); drawDropIn(); }
+}
+async function dropInSave() {
+  for (const x of DROPIN.items.filter(x => !x.done && !x.busy)) {
+    if (!x.number || !x.pages?.length) { x.err = !x.number ? "Put in the invoice number" : "No pages read"; continue; }
+    const p = { supplier_id: DROPIN.sup, number: x.number, date: x.date || null, total: x.total, po_text: x.po, subtotal: x.subtotal, hst: x.hst, pages: x.pages, file: x.file };
+    const { error } = x.match ? await db.rpc("supplier_invoice_attach", { p_invoice: x.match.id, p }) : await db.rpc("supplier_invoice_add", { p });
+    if (error) x.err = "Not saved: " + rpcErr(error); else { x.err = null; x.done = x.match ? "Copy added to our invoice" : "Added"; }
+  }
+  DROPIN.known = null; SINV.det.clear(); drawDropIn(); openSupInv("Invoices loaded."); 
+}
+["dragover", "drop"].forEach(t => document.addEventListener(t, e => { if (document.body.dataset.page === "supplier-invoices" && [...(e.dataTransfer?.types || [])].includes("Files") && !e.target.closest?.("[data-dropin], [data-sinv-drop]")) e.preventDefault(); }));   // a file dropped next to the box doesn't open in the browser
+document.addEventListener("dragover", e => { const b = e.target.closest?.("[data-dropin]"); if (!b) return; e.preventDefault(); b.classList.add("over"); });
+document.addEventListener("dragleave", e => { const b = e.target.closest?.("[data-dropin]"); if (b && !b.contains(e.relatedTarget)) b.classList.remove("over"); });
+document.addEventListener("drop", e => { const b = e.target.closest?.("[data-dropin]"); if (!b) return; e.preventDefault(); b.classList.remove("over"); dropInFiles([...(e.dataTransfer?.files || [])]); });
 // type your own PO lines: change qty / each / description, take a line off, add lines; saved together and recorded
 function sinvPoEditor(r, P, d) {
   return `<form class="sinv-ped" data-sinv-ped="${r.id}"><h4>Edit PO ${esc(r.po_number || "")} lines</h4>${d.po_st ? `<p class="quiet">This PO came from ServiceTitan. Once you change it here, ServiceTitan won't overwrite its lines.</p>` : ""}
@@ -13888,6 +13967,7 @@ function wireSupInv() {
   document.querySelector("[data-stv-back]")?.addEventListener("click", () => { const t = SINV.backTo; if (t) openSupStatement(t.id, t.sup); });
   document.querySelector("[data-stv-backx]")?.addEventListener("click", () => { SINV.backTo = null; redo(); });
   document.querySelectorAll("[data-stv-open]").forEach(b => b.addEventListener("click", () => openSupStatement(Number(b.dataset.stvOpen), SINV.sup ?? (SINV.data?.statements || []).find(x => x.id === Number(b.dataset.stvOpen))?.supplier_id)));
+  document.querySelectorAll("[data-sinv-dropin]").forEach(b => b.addEventListener("click", () => openDropInvoices(Number(b.dataset.sinvDropin), sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === Number(b.dataset.sinvDropin))?.supplier || "the supplier"))));
   document.querySelectorAll("[data-stv-new]").forEach(b => b.addEventListener("click", () => openNewStatement(Number(b.dataset.stvNew), sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === Number(b.dataset.stvNew))?.supplier || "the supplier"))));
   document.querySelectorAll("[data-sinv-pk]").forEach(b => b.addEventListener("click", () => { SINV.pick = b.dataset.sinvPk; SINV.open = null;
     if (SINV.pick === "all") { SINV.year = null; if (SINV.st !== 0) { SINV.st = 0; sinvSaveTab(); return openSupInv(); } }
