@@ -30,6 +30,9 @@ BEGIN
         coalesce(j.completed_at::date, (SELECT max(v.scheduled_date) FROM visits v WHERE v.job_id = j.id AND v.status = 'completed')) AS done_on,
         CASE WHEN EXISTS (SELECT 1 FROM membership_visits mv WHERE mv.membership_id = m.id AND mv.job_id = j.id)
                OR EXISTS (SELECT 1 FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id WHERE i.job_id = j.id AND il.membership_id = m.id) THEN 'plan'
+             -- otherwise only maintenance / cleaning jobs count (not installs, repairs or site visits)
+             WHEN NOT (coalesce(jt.name, '') ~* 'maintenance|clean|check|tune' AND (coalesce(jt.name, '') !~* 'duct|carpet' OR 'duct' = ANY (v_cats)))
+                  AND NOT ('security' = ANY (v_cats) AND coalesce(jt.name, '') ~* 'security|monitor|alarm') THEN NULL
              WHEN cardinality(v_cats) > 0 AND public._svc_cats(coalesce(jt.name, '')) && v_cats THEN 'type'
              WHEN v_code IS NOT NULL AND lower(coalesce(j.summary, '') || ' ' || coalesce(j.description, '')) ~ ('\m' || v_code || '\M') THEN 'notes'
              WHEN cardinality(v_cats) > 0 AND public._svc_cats(coalesce(j.summary, '')) && v_cats THEN 'notes' END AS how
@@ -39,8 +42,9 @@ BEGIN
     SELECT min(v.scheduled_date) INTO v_next FROM jobs j JOIN visits v ON v.job_id = j.id LEFT JOIN job_types jt ON jt.id = j.job_type_id
       WHERE j.location_id = p_location AND j.status NOT IN ('cancelled', 'completed') AND v.status NOT IN ('cancelled', 'completed') AND v.scheduled_date >= current_date
         AND (EXISTS (SELECT 1 FROM membership_visits mv WHERE mv.membership_id = m.id AND mv.job_id = j.id)
-             OR (cardinality(v_cats) > 0 AND public._svc_cats(coalesce(jt.name, '')) && v_cats)
-             OR (v_code IS NOT NULL AND lower(coalesce(j.summary, '') || ' ' || coalesce(j.description, '')) ~ ('\m' || v_code || '\M')));
+             OR ((coalesce(jt.name, '') ~* 'maintenance|clean|check|tune' OR ('security' = ANY (v_cats) AND coalesce(jt.name, '') ~* 'security|monitor|alarm'))
+                 AND ((cardinality(v_cats) > 0 AND (public._svc_cats(coalesce(jt.name, '')) && v_cats OR public._svc_cats(coalesce(j.summary, '')) && v_cats))
+                      OR (v_code IS NOT NULL AND lower(coalesce(j.summary, '') || ' ' || coalesce(j.description, '')) ~ ('\m' || v_code || '\M')))));
     v_out := v_out || jsonb_build_object('membership_id', m.id, 'plan', m.name, 'last', v_last.done_on, 'job_number', v_last.job_number,
       'job_type', v_last.jtype, 'how', v_last.how, 'next', v_next);
   END LOOP;
