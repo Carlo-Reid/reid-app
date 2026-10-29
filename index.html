@@ -4707,6 +4707,7 @@ body.ui-guided .est-tools .est-ltd-sub { background: #ebfbee; border-radius: 10p
     <button class="btn quiet-btn" type="button" id="inv-copy">Copy</button>
     <button class="btn quiet-btn hidden" type="button" id="inv-emailbtn">Email</button>
     <button class="btn quiet-btn hidden" type="button" id="inv-aplbtn">+ Partner list</button>
+    <button class="row-del hidden no-print" type="button" id="inv-cancelbtn" title="Made by mistake: cancel this invoice"><span aria-hidden="true">✕</span> Cancel invoice</button>
     <button class="btn quiet-btn" type="button" onclick="closeInvoice()">Close</button></div>
   <div class="inv-paper" id="inv-paper" tabindex="-1"></div>
   <aside class="cl-tools ie-cost inv-cost hidden" id="inv-cost" aria-label="Job costing"></aside>
@@ -22317,7 +22318,7 @@ document.addEventListener("keydown", e => {
 });
 let COMPANY = null;
 const PAY_NAMES = { cash: "Cash", cheque: "Cheque", card: "Card", credit: "Credit card", e_transfer: "e-Transfer", eft: "EFT", autopay: "Auto-pay", financing: "Financing" };
-function closeInvoice() { $("#inv-view").classList.add("hidden"); document.body.classList.remove("inv-open"); document.getElementById("est-page-foot")?.remove(); }
+function closeInvoice() { $("#inv-cancelbtn")?.classList.add("hidden"); $("#inv-view").classList.add("hidden"); document.body.classList.remove("inv-open"); document.getElementById("est-page-foot")?.remove(); }
 document.addEventListener("keydown", e => { if (e.key === "Escape" && document.body.classList.contains("inv-open") && !document.querySelector(".ask-back, .askc-back")) closeInvoice(); });
 let INV_COST_OPEN = false;
 try { INV_COST_OPEN = sessionStorage.getItem("invCostOpen") === "1"; } catch (e) {}
@@ -22359,6 +22360,7 @@ async function openInvoice(id, keep) {
   if (inv.error) { $("#inv-paper").innerHTML = `<div class="staff-msg err" style="padding:40px">Couldn't open this invoice: ${esc(inv.error.message)}</div>`; return; }
   COMPANY = co.data || { company_name: "Reid Heating & Cooling" };
   const i = inv.data, c = COMPANY, l = i.locations || {}, cust = i.customers || {};
+  { const cb = $("#inv-cancelbtn"); if (cb) { const ok = invCanCancel(i) && !(i.payment_applications || []).length; cb.classList.toggle("hidden", !ok); cb.dataset.invCancel = i.id; cb.dataset.invNum = i.invoice_number || ""; } }
   // ServiceTitan's $0 "Used to track…" lines are for costing only, so the customer doesn't see them
   const lines = (i.invoice_lines || []).filter(x => !x.hidden && !(Number(x.line_total || 0) === 0 && /^used to track/i.test(x.description || "")))
     .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0) || a.id - b.id);
@@ -22913,10 +22915,28 @@ function toggleJob(row) {
   });
 }
 
+// cancel an invoice made by mistake (Section 6 and the invoice view): a draft is removed, a finished one is kept marked Void.
+// Not one with a payment on it (the office takes the payment off first), and not one from ServiceTitan.
+var invCanCancel = i => i && i.status !== "void" && !i.st_id && (ME.role === "owner" || ME.booking || can("invoices.adjust"));
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-inv-cancel]"); if (!b) return; e.preventDefault(); e.stopPropagation();
+  const id = Number(b.dataset.invCancel), num = b.dataset.invNum; let why = ""; window.__invWhy = "";
+  const k = await askChoice("Cancel invoice " + num + "?", `If it's still a draft it's removed. If it was finished it stays on the file marked <b>Void</b>.
+    <label style="display:block;margin-top:10px">Why? <input type="text" id="inv-cancel-why" placeholder="Made by mistake, wrong customer…" style="width:100%;margin-top:4px"></label>`,
+    [["yes", "Cancel the invoice", true], ["", "Keep it"]]);
+  if (k !== "yes") return;
+  why = (window.__invWhy || "").trim();
+  const { data, error } = await db.rpc("inv_cancel", { p_invoice: id, p_reason: why || "Made in error" });
+  if (error) return alertMsg("Not cancelled: " + rpcErr(error));
+  alertMsg(data === "removed" ? "Invoice " + num + " cancelled and removed." : "Invoice " + num + " cancelled. It's kept on the file marked Void.");
+  if (document.body.classList.contains("inv-open")) closeInvoice();
+  if (current?.c?.id && document.body.dataset.page === "customer") openCustomer(current.c.id);
+}, true);
+document.addEventListener("input", e => { if (e.target.id === "inv-cancel-why") window.__invWhy = e.target.value; });
 function invoicesHtml(list) {
-  return `<div class="scroll-box" tabindex="0" aria-label="Invoices"><table><thead><tr><th>Date</th><th>Invoice</th><th class="r">Total</th><th class="r">Owing</th><th>Status</th></tr></thead><tbody>
+  return `<div class="scroll-box" tabindex="0" aria-label="Invoices"><table><thead><tr><th>Date</th><th>Invoice</th><th class="r">Total</th><th class="r">Owing</th><th>Status</th><th class="no-print"></th></tr></thead><tbody>
     ${list.map((i, n) => `<tr class="inv-row" tabindex="0" data-invoice="${i.id}" title="Open invoice"><td class="num">${fmtDate(i.invoice_date)}</td><td class="num"><span class="inv-link">${esc(i.invoice_number)}</span></td>
-      <td class="r num">${money(i.total)}</td><td class="r num">${i.paid_at_store ? `<span class="quiet">Paid at the store</span>` : i.balance_due > 0.004 ? (i.not_owed_reason ? `<span class="not-owed" title="${esc(i.not_owed_reason)}">Not owed</span>` : money(i.balance_due)) : ""}</td><td>${badge(i.status)}</td></tr>`).join("")}
+      <td class="r num">${money(i.total)}</td><td class="r num">${i.paid_at_store ? `<span class="quiet">Paid at the store</span>` : i.balance_due > 0.004 ? (i.not_owed_reason ? `<span class="not-owed" title="${esc(i.not_owed_reason)}">Not owed</span>` : money(i.balance_due)) : ""}</td><td>${badge(i.status)}</td><td class="no-print">${invCanCancel(i) ? `<button class="row-del" type="button" data-inv-cancel="${i.id}" data-inv-num="${esc(i.invoice_number || "")}" title="Made by mistake: cancel this invoice"><span aria-hidden="true">✕</span> Cancel</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} invoices.</div>` : ""}`;
 }
 
