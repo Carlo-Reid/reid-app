@@ -262,6 +262,17 @@
   .eh-tile.on { box-shadow: 0 0 0 3px #2b8a3e inset, 0 6px 14px rgba(43, 138, 62, .35); } .eh-tok { position: absolute; top: 26px; right: 6px; background: #2b8a3e; color: #fff; border-radius: 50%; width: 20px; height: 20px; font-size: 12px; line-height: 20px; }
   .eh-c0 { --ehc: #e8590c; --ehr: -2deg; } .eh-c1 { --ehc: #1c7ed6; --ehr: 1.5deg; } .eh-c2 { --ehc: #2f9e44; --ehr: -1deg; } .eh-c3 { --ehc: #ae3ec9; --ehr: 2deg; } .eh-c4 { --ehc: #f59f00; --ehr: -1.5deg; }
   @media (prefers-reduced-motion: reduce) { .eh-tile { transition: none; transform: none; } }
+  .eh-calbtn { display: block; margin: 12px 0 2px; padding: 10px 18px; border: 0; border-radius: 999px; cursor: pointer; font: inherit; font-weight: 800; color: #fff;
+    background: linear-gradient(90deg, #1c7ed6, #ae3ec9); box-shadow: 0 4px 12px rgba(174, 62, 201, .35); transition: transform .15s ease; }
+  .eh-calbtn:hover, .eh-calbtn:focus-visible { transform: translateY(-2px) scale(1.02); outline: none; }
+  .eh-cal-back { position: fixed; inset: 0; background: rgba(20, 30, 40, .45); z-index: 9000; display: grid; place-items: center; padding: 16px; }
+  .eh-cal { background: #fff; border-radius: 16px; padding: 16px 18px; width: min(640px, 100%); max-height: 92vh; overflow: auto; box-shadow: 0 20px 50px rgba(0, 0, 0, .3); border-top: 6px solid #e8590c; }
+  .ehc-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 18px; color: #7a2e00; }
+  .ehc-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 8px; } .ehc-w { text-align: center; font-size: 12px; font-weight: 800; color: #5b6b78; text-transform: uppercase; }
+  .ehc-day { display: flex; flex-direction: column; align-items: center; padding: 4px 2px 6px; border-radius: 10px; border: 0; font: inherit; cursor: pointer; min-height: 64px; }
+  .ehc-m { font-size: 10.5px; font-weight: 700; text-transform: uppercase; opacity: .8; } .ehc-d { font-size: 22px; font-weight: 900; line-height: 1.1; } .ehc-s { font-size: 10.5px; font-weight: 700; }
+  .ehc-day.ok { background: #d3f9d8; color: #1b5e20; box-shadow: 0 0 0 2px #2f9e44 inset; transition: transform .12s ease; } .ehc-day.ok:hover, .ehc-day.ok:focus-visible { transform: scale(1.08); background: #b2f2bb; outline: none; }
+  .ehc-day.full { background: #f1f3f5; color: #868e96; } .ehc-day.wk { background: #f8f9fa; color: #adb5bd; } .ehc-day.full .ehc-d, .ehc-day.wk .ehc-d { text-decoration: line-through; }
   .est-ltd-sub { font-size: 12.5px; color: #1b5e20; font-weight: 650; margin: -2px 0 6px; }
   .eh-scissors { position: absolute; top: -2px; left: 34px; font-size: 15px; color: #e8590c; background: #fffdf5; padding: 0 4px; line-height: 1; transform: translateY(-50%); z-index: 3; }
   .eh-stub { flex: none; width: 150px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 12px 10px 12px 18px; text-align: center;
@@ -8590,6 +8601,31 @@ function renderEstEdit() {
 }
 // "Book today with a deposit and we'll double your rebate": days in the week a week out with 2+ installers free; the day picked is held on the board
 const HOLD_BONUS = "Booked today with a deposit: your rebate is doubled";
+// the 30 day calendar: every weekday from a week out, open where 2+ installers are free
+async function estHoldCal(id, pick) {
+  let back = document.getElementById("eh-cal-back"); if (back) back.remove();
+  back = document.createElement("div"); back.id = "eh-cal-back"; back.className = "eh-cal-back"; document.body.appendChild(back);
+  back.innerHTML = `<div class="eh-cal" role="dialog" aria-label="Pick a day"><div class="quiet" style="padding:30px">Checking the calendar…</div></div>`;
+  const close = () => back.remove(); back.addEventListener("click", e => { if (e.target === back) close(); });
+  const { data, error } = await db.rpc("install_hold_cal", { p_estimate: id });
+  if (error || !data) { back.querySelector(".eh-cal").innerHTML = `<p class="staff-msg err">${esc(error ? rpcErr(error) : "Couldn't open the calendar")}</p><button class="btn" type="button" data-x>Close</button>`; back.querySelector("[data-x]").onclick = close; return; }
+  const by = new Map((data.days || []).map(d => [d.day, d])), start = new Date(data.from + "T12:00:00"), end = new Date(data.to + "T12:00:00");
+  const cells = []; for (let i = 0; i < (start.getDay() + 6) % 7; i++) cells.push(`<span class="ehc-blank"></span>`);
+  for (let d = new Date(start); d <= end; d = addDays(d, 1)) { const k = ymd(d), x = by.get(k), wk = d.getDay() % 6 === 0, ok = x && x.free >= 2;
+    cells.push(`<button type="button" class="ehc-day ${wk ? "wk" : ok ? "ok" : "full"}" ${ok ? `data-cal-day="${k}"` : `data-cal-no="${wk ? "wk" : "full"}"`}>
+      <span class="ehc-m">${esc(d.toLocaleDateString("en-CA", { month: "short" }).replace(".", ""))}</span><span class="ehc-d">${d.getDate()}</span>
+      <span class="ehc-s">${wk ? "Closed" : ok ? "🎉 Rebate ×2" : "Booked up"}</span></button>`); }
+  back.querySelector(".eh-cal").innerHTML = `<div class="ehc-head"><b>🗓️ Pick a day and see if your rebate is available</b><button class="link" type="button" data-x aria-label="Close">✕</button></div>
+    <p class="quiet">Green days are open: pick one and the rebate is doubled.</p>
+    <div class="ehc-grid">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(w => `<span class="ehc-w">${w}</span>`).join("")}${cells.join("")}</div>
+    <p class="staff-msg" data-cal-msg></p>`;
+  back.querySelector("[data-x]").onclick = close;
+  const say = (t, err) => { const m = back.querySelector("[data-cal-msg]"); m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; };
+  back.querySelectorAll("[data-cal-no]").forEach(b => b.addEventListener("click", () => say(b.dataset.calNo === "wk" ? "We don't install on weekends. Pick a green day." : "Sorry, that day is booked up. Pick a green day to get your rebate doubled.", true)));
+  back.querySelectorAll("[data-cal-day]").forEach(b => b.addEventListener("click", async () => {
+    say("🎉 That day is available! Your rebate is doubled."); back.querySelectorAll("button").forEach(x => x.disabled = true);
+    if (await pick(b.dataset.calDay)) close(); else { back.querySelectorAll("button").forEach(x => x.disabled = false); say("That day just filled up. Pick another green day.", true); } }));
+}
 const estIsPartner = () => !!(EST.x?.partner_id || EST.x?.jobs?.partner_id);   // the limited time deal and book-today deal are for Reid proposals only, never a partner's
 async function estHoldFill() {
   const box = document.querySelector("[data-hold-oi]"); if (!box || !EST.id) return;
@@ -8599,7 +8635,6 @@ async function estHoldFill() {
   const dn = d => new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" });
   const mine = data.mine, ok = (data.days || []).filter(d => d.free >= 2);
   const showFree = !ME.guided && EST.x?.jobs?.sales_kind === "phone";   // how many installers are free: only on a phone sale, never in the training view
-  if (!mine && !ok.length) { box.remove(); return; }
   if (EST.opts[0]?.lines.some(l => String(l.description || "").startsWith(HOLD_BONUS))) { box.remove(); return; }   // added: it shows on the right side bar instead
   const o0 = EST.opts[0], reb0 = o0.lines.filter(l => l.disc && !String(l.description || "").startsWith(HOLD_BONUS)).reduce((s, l) => s + Math.abs(Number(l.price) || 0), 0);
   const m0 = v => money(v).replace(/\.00$/, "");
@@ -8609,24 +8644,27 @@ async function estHoldFill() {
     <div class="eh-body"><img class="eh-logo" src="${esc(coLogo(co))}" alt="${esc(co.company_name || "Reid Heating & Cooling")}" crossorigin="anonymous"><div class="eh-head">🎉 <b>Book today with a deposit and we'll double your rebate!</b></div>
     ${mine ? `<p class="eh-held">Install day held: <b>${esc(dn(mine.day))}</b> · ${mine.status === "confirmed" ? "confirmed by the office ✓" : "waiting for the office to confirm"}</p>` : `<p class="quiet eh-pick-txt">Pick the install day the customer wants. It's held on the dispatch board until the office confirms it.</p>`}
     </div></div>
-    ${mine?.status === "confirmed" ? "" : `<div class="eh-pick"><div class="eh-pick-h">📅 Pick the install day:</div><div class="eh-days">${ok.map((d, k) => { const dt = new Date(d.day + "T12:00:00");
+    ${mine?.status === "confirmed" ? "" : `<div class="eh-pick"><div class="eh-pick-h">📅 Pick the install day:</div>${ok.length ? "" : `<p class="quiet">No days left the week of ${esc(dn(data.from))}. Pick another day below.</p>`}<div class="eh-days">${ok.map((d, k) => { const dt = new Date(d.day + "T12:00:00");
       return `<button type="button" class="eh-tile eh-c${k % 5} ${mine && mine.day === d.day ? "on" : ""}" data-hold-day="${d.day}" ${showFree ? `title="Installers free: ${esc(d.names || "")}"` : `title="${esc(dn(d.day))}"`}>
         <span class="eh-tw">${esc(dt.toLocaleDateString("en-CA", { weekday: "short" }).replace(".", ""))}</span><span class="eh-td">${dt.getDate()}</span><span class="eh-tm">${esc(dt.toLocaleDateString("en-CA", { month: "short" }).replace(".", ""))}</span>
         ${showFree ? `<span class="eh-tf">${d.free} free</span>` : ""}${mine && mine.day === d.day ? `<span class="eh-tok">✓</span>` : ""}</button>`; }).join("")}</div>
-    ${mine ? `<button class="link danger" type="button" data-hold-off>Take the hold off (the rebate goes back to normal)</button>` : ""}</div>`}
+    ${mine ? `<button class="link danger" type="button" data-hold-off>Take the hold off (the rebate goes back to normal)</button>` : ""}
+      <button class="eh-calbtn" type="button" data-hold-cal>🗓️ Pick a day and see if your rebate is available</button></div>`}
     <span class="staff-msg" data-hold-msg></span>`;
   const msg = (t, err) => { const m = box.querySelector("[data-hold-msg]"); m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; };
   const o = EST.opts[0];
-  box.querySelectorAll("[data-hold-day]").forEach(b => b.addEventListener("click", async () => {
-    const day = b.dataset.holdDay; box.querySelectorAll("button").forEach(x => x.disabled = true); msg("Holding the day…");
+  const pick = async day => {
+    box.querySelectorAll("button").forEach(x => x.disabled = true); msg("Holding the day…");
     const r = await db.rpc("install_hold_set", { p_estimate: id, p_day: day });
-    if (r.error) { box.querySelectorAll("button").forEach(x => x.disabled = false); return msg("Not held: " + rpcErr(r.error), true); }
+    if (r.error) { box.querySelectorAll("button").forEach(x => x.disabled = false); msg("Not held: " + rpcErr(r.error), true); return false; }
     o.lines = o.lines.filter(l => !String(l.description || "").startsWith(HOLD_BONUS));
     const reb = o.lines.filter(l => l.disc).reduce((s, l) => s + Math.abs(Number(l.price) || 0), 0);
     const exp = o.lines.filter(l => l.disc && l.expires).map(l => l.expires).sort()[0] || new Date(Date.now() + 48 * 3600e3).toISOString();
     if (reb > 0) o.lines.push({ item_id: null, description: `${HOLD_BONUS} (install day held for ${dn(day)})`, qty: 1, price: -reb, disc: true, expires: exp });
     EST.dirty = true;
-    if (EST.saveNow && await EST.saveNow(false)) openEstEdit(id, `${dn(day)} is held for the install. Rebate doubled.`); else renderEstEdit(); }));
+    if (EST.saveNow && await EST.saveNow(false)) openEstEdit(id, `${dn(day)} is held for the install. Rebate doubled.`); else renderEstEdit(); return true; };
+  box.querySelectorAll("[data-hold-day]").forEach(b => b.addEventListener("click", () => pick(b.dataset.holdDay)));
+  box.querySelector("[data-hold-cal]")?.addEventListener("click", () => estHoldCal(id, pick));
   box.querySelector("[data-hold-off]")?.addEventListener("click", async () => {
     const r = await db.rpc("install_hold_set", { p_estimate: id, p_day: null }); if (r.error) return msg("Not changed: " + rpcErr(r.error), true);
     o.lines = o.lines.filter(l => !String(l.description || "").startsWith(HOLD_BONUS)); EST.dirty = true;
