@@ -4049,6 +4049,13 @@ article.sales .sl-comm-grid b { font-size: calc(15px * var(--fs, 1)); } article.
 .sinv-lgc { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px; border: 2px dashed #b9cde0; border-radius: 12px; background: #fff; text-align: center; }
 .sinv-lgc.over { border-color: #1f5fa8; background: #eaf2fb; } .sinv-lgc .lgc-pic { height: 64px; display: flex; align-items: center; justify-content: center; } .sinv-lgc .lgc-pic img { max-height: 64px; max-width: 180px; object-fit: contain; }
 .stv-logo-img { max-height: 70px; max-width: 280px; object-fit: contain; }
+.sinv-app.sa-pay { background: linear-gradient(180deg, #ffd43b, #f59f00); border-color: #f08c00; color: #3d2a00; box-shadow: 0 2px 4px rgba(16, 24, 40, .06), 0 8px 18px rgba(245, 159, 0, .35); }
+.sinv-app.sa-pay .sa-ic { background: rgba(255, 255, 255, .35); color: #3d2a00; font-size: 30px; border: 2px solid rgba(255, 255, 255, .7); }
+.sup-pay { font-family: Inter, system-ui, sans-serif; } .sup-pay .sp-head { display: flex; align-items: center; gap: 16px; } .sup-pay h2 { margin: 0; }
+.sp-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 16px; margin: 18px 0 24px; padding: 16px; border: 1px solid #dbe3ec; border-radius: 16px; background: #f9fbfd; }
+.sp-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 700; color: #5b6b78; } .sp-form .sp-wide { grid-column: 1 / -1; }
+.sp-form input, .sp-form select { font: inherit; font-size: 15px; font-weight: 500; color: #1f2a37; padding: 8px 10px; border: 1px solid #c9d3de; border-radius: 10px; background: #fff; }
+.sp-form .sp-save { background: #2f9e44; border-color: #2b8a3e; } .sp-hist { font-family: Inter, system-ui, sans-serif; } .sp-hist td { padding: 5px 8px; border-bottom: 1px solid #e3e8ee; } .sp-void td { color: #adb5bd; text-decoration: line-through; }
 .sinv-app .sa-yrtxt { font-size: 18px; font-weight: 900; line-height: 1.1; } .sinv-app.sa-year.sa-haslogo { gap: 6px; }
 /* the list filters in colour: Needs a look red, Matches PO and Checked green, Credits & returns blue */
 .sinv-bar [data-sinv-f] { border: 1.5px solid transparent !important; font-weight: 700; }
@@ -13685,7 +13692,7 @@ function sinvStChips(D) {   // a supplier's statements as app tiles: All time / 
   const lgo = SINV.logos?.get(SINV.sup), lgIc = d => lgo ? `<img class="sa-logo" alt="" src="${lgo}">` : d;
   let html = `<section class="sinv-panel"><div class="sp-h">Statements · ${esc(sinvShort(st[0].supplier))}</div>
     <div class="sinv-apps">${tile('data-sinv-pk="all"', mode === "all", lgIc("▦"), "All invoices", st.length, lgo ? "sa-haslogo" : "")}${tile('data-sinv-pk="year"', mode === "year", lgIc("📅"), "By year", years.length, lgo ? "sa-haslogo" : "")}
-      ${D.can_edit ? tile(`data-stv-new="${SINV.sup}"`, false, "⬆", "Load a file from your computer", "", "sa-act") + tile(`data-sinv-dropin="${SINV.sup}"`, false, "⬇", "Drag a file here", "", "sa-act") : ""}</div>`;
+      ${D.can_edit ? tile(`data-stv-new="${SINV.sup}"`, false, "⬆", "Load a file from your computer", "", "sa-act") + tile(`data-sinv-dropin="${SINV.sup}"`, false, "⬇", "Drag a file here", "", "sa-act") : ""}${ME.role === "owner" || can("supplier.pay") ? tile(`data-sinv-pay="${SINV.sup}"`, false, "$", "Make a payment", "", "sa-pay") : ""}</div>`;
   if (mode === "year") {
     html += `<div class="sp-sub">Year</div><div class="sinv-apps">${years.map(y => tile(`data-sinv-yr="${y}"`, yr === y, lgo ? lgIc("") : `<span class="sa-yr">${y}</span>`, lgo ? `<span class="sa-yrtxt">${y}</span><small>${sumY(y) === 1 ? "1 statement" : sumY(y) + " statements"}</small>` : sumY(y) === 1 ? "1 statement" : sumY(y) + " statements", "", lgo ? "sa-year sa-haslogo" : "sa-year")).join("")}</div>`;
     if (yr) { const ms = st.filter(s => s.date.startsWith(yr)).sort((a, b) => a.date.localeCompare(b.date));
@@ -13868,6 +13875,41 @@ document.addEventListener("drop", e => { const b = e.target.closest?.("[data-sin
   const files = [...(e.dataTransfer?.files || [])]; if (!files.length) { const m = b.querySelector(".sd-msg"); if (m) m.innerHTML = `<span class="st-bad">Nothing came through. Save the attachment from the email first, then drag the file here (dragging the email itself doesn't work).</span>`; return; }
   sinvAttachFiles(Number(b.dataset.sinvDrop), files); });
 document.addEventListener("change", e => { const i = e.target.closest?.("[data-sinv-dropfile]"); if (i) sinvAttachFiles(Number(i.dataset.sinvDropfile), [...i.files]); });
+// Make a payment to a supplier: how much, when, how (the ways of paying are learned: a new one is in the drop-down next time), a reference
+async function openSupPay(sup, name) {
+  const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open"); $("#inv-cancelbtn")?.classList.add("hidden"); $("#inv-emailbtn")?.classList.add("hidden");
+  $("#inv-paper").innerHTML = `<div class="stv"><div class="quiet">Opening…</div></div>`;
+  const [m, h] = await Promise.all([db.rpc("supplier_pay_methods_list"), db.rpc("supplier_payments_list", { p_supplier: sup })]);
+  if (m.error) { $("#inv-paper").innerHTML = `<div class="stv"><div class="staff-msg err">${esc(rpcErr(m.error))}</div></div>`; return; }
+  const M = m.data || [], H = h.data || [], today = ymd(new Date()), lg = SINV.logos?.get(sup);
+  $("#inv-paper").innerHTML = `<div class="stv sup-pay"><div class="sp-head">${lg ? `<img class="stv-logo-img" alt="" src="${lg}">` : ""}<h2>Make a payment to ${esc(name)}</h2></div>
+    <form class="sp-form" id="sp-form" autocomplete="off">
+      <label>How much<input name="amount" type="number" step="0.01" min="0" required placeholder="0.00" autofocus></label>
+      <label>Paid on<input name="paid_on" type="date" value="${today}" required></label>
+      <label>How it was paid<select name="method_pick">${M.map(x => `<option>${esc(x)}</option>`).join("")}<option value="__new">+ A new way…</option></select></label>
+      <label class="sp-new hidden">New way of paying<input name="method_new" placeholder="e.g. Wire transfer, Visa ending 4421"></label>
+      <label>Cheque # or reference<input name="reference" placeholder="optional"></label>
+      <label class="sp-wide">Note<input name="note" placeholder="optional, e.g. for the August statement"></label>
+      <div class="row sp-wide"><button class="btn sp-save" type="submit">Save the payment</button><span class="msg" role="status"></span></div></form>
+    <h3>Payments to ${esc(name)}</h3>
+    ${H.length ? `<table class="stv-t sp-hist"><thead><tr><th>Paid on</th><th class="r">Amount</th><th>How</th><th>Reference</th><th>Note</th><th>By</th><th></th></tr></thead><tbody>
+      ${H.map(x => `<tr class="${x.voided ? "sp-void" : ""}"><td>${esc(fmtDate(x.paid_on))}</td><td class="r num">${money(x.amount)}</td><td>${esc(x.method)}</td><td>${esc(x.reference || "")}</td><td>${esc(x.note || "")}</td>
+        <td>${esc(x.by || "")}</td><td>${x.voided ? "Cancelled" : `<button class="link danger" type="button" data-sp-void="${x.id}">Cancel</button>`}</td></tr>`).join("")}</tbody></table>` : `<p class="quiet">No payments recorded yet.</p>`}</div>`;
+  const f = $("#sp-form"), pick = f.method_pick, nw = f.querySelector(".sp-new");
+  pick.addEventListener("change", () => { nw.classList.toggle("hidden", pick.value !== "__new"); if (pick.value === "__new") f.method_new.focus(); });
+  if (!M.length) { pick.value = "__new"; nw.classList.remove("hidden"); }
+  f.addEventListener("submit", async e => { e.preventDefault(); const msg = f.querySelector(".msg"), method = pick.value === "__new" ? f.method_new.value.trim() : pick.value;
+    if (!method) { msg.className = "msg err"; msg.textContent = "Put in how it was paid."; return; }
+    const amt = Number(f.amount.value); if (!amt) { msg.className = "msg err"; msg.textContent = "Put in how much."; return; }
+    if (await askChoice("Save this payment?", `${money(amt)} to ${esc(name)} on ${esc(fmtDate(f.paid_on.value))}, paid by <b>${esc(method)}</b>${f.reference.value.trim() ? " (" + esc(f.reference.value.trim()) + ")" : ""}.`, [["yes", "Save it", true], ["", "Not yet"]]) !== "yes") return;
+    f.querySelector(".sp-save").disabled = true;
+    const { error } = await db.rpc("supplier_payment_add", { p: { supplier_id: sup, amount: amt, paid_on: f.paid_on.value, method, reference: f.reference.value, note: f.note.value } });
+    if (error) { f.querySelector(".sp-save").disabled = false; msg.className = "msg err"; msg.textContent = "Not saved: " + rpcErr(error); return; }
+    alertMsg("Payment saved."); openSupPay(sup, name); });
+  $("#inv-paper").querySelectorAll("[data-sp-void]").forEach(b => b.addEventListener("click", async () => {
+    if (await askChoice("Cancel this payment?", "It stays in the list marked Cancelled.", [["yes", "Cancel it", true], ["", "Keep it"]]) !== "yes") return;
+    const { error } = await db.rpc("supplier_payment_void", { p_id: Number(b.dataset.spVoid) }); if (error) return alertMsg("Not cancelled: " + rpcErr(error)); openSupPay(sup, name); }));
+}
 // a supplier's invoices dropped in from the email (one PDF per invoice): each is read, matched to the invoice we already have
 // (by its number) or made new, and its pages kept
 const DROPIN = { sup: null, name: "", items: [], known: null };
@@ -14164,6 +14206,7 @@ function wireSupInv() {
   document.querySelectorAll("[data-lg-del]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.lgDel);
     if (await askChoice("Delete this logo?", "The button shows the supplier's name again.", [["yes", "Delete it", true], ["", "Keep it"]]) !== "yes") return;
     const { error } = await db.rpc("supplier_logo_set", { p_supplier: id, p_image: null }); if (error) return alertMsg("Not deleted: " + rpcErr(error)); SINV.logos.delete(id); redo(); }));
+  document.querySelectorAll("[data-sinv-pay]").forEach(b => b.addEventListener("click", () => openSupPay(Number(b.dataset.sinvPay), sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === Number(b.dataset.sinvPay))?.supplier || "the supplier"))));
   document.querySelectorAll("[data-sinv-dropin]").forEach(b => b.addEventListener("click", () => openDropInvoices(Number(b.dataset.sinvDropin), sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === Number(b.dataset.sinvDropin))?.supplier || "the supplier"))));
   document.querySelectorAll("[data-stv-new]").forEach(b => b.addEventListener("click", () => openNewStatement(Number(b.dataset.stvNew), sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === Number(b.dataset.stvNew))?.supplier || "the supplier"))));
   document.querySelectorAll("[data-sinv-pk]").forEach(b => b.addEventListener("click", () => { SINV.pick = b.dataset.sinvPk; SINV.open = null;
