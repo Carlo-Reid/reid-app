@@ -9,7 +9,7 @@ CREATE OR REPLACE FUNCTION public._svc_cats(p text) RETURNS text[] LANGUAGE sql 
     CASE WHEN p ~* 'boiler' THEN 'boiler' END,
     CASE WHEN p ~* 'a/c|\mac\M|air\s*cond|cooling|heat\s*pump' THEN 'ac' END,
     CASE WHEN p ~* 'furnace' THEN 'furnace' END,
-    CASE WHEN p ~* 'hrv|erv' THEN 'hrv' END,
+    CASE WHEN p ~* '\mhrv\M|\merv\M|hrv/erv' THEN 'hrv' END,
     CASE WHEN p ~* 'water\s*heater|hot\s*water|\mhwt\M|tankless' THEN 'water' END,
     CASE WHEN p ~* 'humidifier' THEN 'humid' END,
     CASE WHEN p ~* 'generator' THEN 'gen' END,
@@ -31,7 +31,8 @@ BEGIN
         CASE WHEN EXISTS (SELECT 1 FROM membership_visits mv WHERE mv.membership_id = m.id AND mv.job_id = j.id)
                OR EXISTS (SELECT 1 FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id WHERE i.job_id = j.id AND il.membership_id = m.id) THEN 'plan'
              WHEN cardinality(v_cats) > 0 AND public._svc_cats(coalesce(jt.name, '')) && v_cats THEN 'type'
-             WHEN v_code IS NOT NULL AND lower(coalesce(j.summary, '') || ' ' || coalesce(j.description, '')) ~ ('\m' || v_code || '\M') THEN 'notes' END AS how
+             WHEN v_code IS NOT NULL AND lower(coalesce(j.summary, '') || ' ' || coalesce(j.description, '')) ~ ('\m' || v_code || '\M') THEN 'notes'
+             WHEN cardinality(v_cats) > 0 AND public._svc_cats(coalesce(j.summary, '')) && v_cats THEN 'notes' END AS how
       FROM jobs j LEFT JOIN job_types jt ON jt.id = j.job_type_id
       WHERE j.location_id = p_location AND j.status <> 'cancelled')
     SELECT * INTO v_last FROM c WHERE how IS NOT NULL AND (status = 'completed' OR done_on IS NOT NULL) AND done_on IS NOT NULL ORDER BY done_on DESC LIMIT 1;
