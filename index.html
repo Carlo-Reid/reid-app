@@ -358,6 +358,11 @@
   .eq-retire { background: #fff7e6; border-color: #e8b04a; color: #8a5a00; } .eq-retire:hover { background: #e8b04a; color: #fff; }
   .file > section.block { margin-top: 30px; padding-top: 22px; border-top: 3px solid var(--line, #d3dde8); position: relative; }   /* a clear line between the customer page's sections */
   .file > section.block::after { content: ""; position: absolute; top: -3px; left: 0; width: 64px; height: 3px; background: var(--blue, #1c5d99); border-radius: 0 0 3px 3px; }
+  .file .sec1a .sec1a-plans .last-maint { padding: 8px 12px 10px; border-top: 1px solid var(--line); text-align: left; font-size: calc(13px * var(--fs, 1)); }
+  .last-maint .lm-h { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--steel); margin-bottom: 2px; }
+  .last-maint .lm-d b { color: var(--ink); } .last-maint .lm-d span, .last-maint .lm-t { color: var(--steel); font-size: calc(12px * var(--fs, 1)); }
+  .last-maint .lm-ask { margin-top: 4px; font-weight: 700; color: #a15c00; } .last-maint .lm-ok { margin-top: 4px; font-weight: 700; color: var(--green, #2b8a3e); }
+  .last-maint.lm-due { background: #fff8e6; }
   .gd-mine.gm-calm .gm-time { color: #2c5a7f; } .gd-mine.gm-calm .gm-day { color: #1f2a37; }
   .gd-mine .gm-head { font-size: calc(17px * var(--fs, 1)); color: #a63c00; margin-bottom: 6px; }
   .gd-mine .gm-visit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; padding: 8px 12px; border-radius: 10px; background: #fff; border-left: 6px solid #f76707; }
@@ -6311,7 +6316,7 @@ function renderFile() {
       </div>
       <div class="balance ${owed > 0.004 ? "due" : ""}">
         ${zoneBox(l)}
-        <div class="sec1a-plans">${planBadge(plans, l)}</div>
+        <div class="sec1a-plans">${planBadge(plans, l)}${lastMaintHtml(l)}</div>
         <div class="quiet">${owed > 0.004 ? "Owes" : "Balance"}</div>
         <div class="amt num">${money(owed)}</div>
       </div>
@@ -6648,6 +6653,23 @@ function buildFileNav() {
   markFileNav();
 }
 var SHUT_SECS = ["Plans", "Marketing"], SHUT_OPEN = { cust: null, open: new Set() };
+// Section 1, Plans box: the last maintenance we have on record at this address (so we can offer the next one)
+const isMaintJob = j => /maintenance|clean\s*&\s*check|tune[- ]?up/i.test(j.job_types?.name || "") && !/duct|carpet|coil/i.test(j.job_types?.name || "");
+function lastMaintHtml(l) {
+  if (!l) return "";
+  const done = (current?.jobs || []).filter(j => j.location_id === l.id && isMaintJob(j) && (j.status === "completed" || j.completed_at)).map(j => {
+    const vd = (j.visits || []).filter(v => v.status === "completed").map(v => v.scheduled_date).filter(Boolean).sort().pop();
+    return { j, d: (j.completed_at || "").slice(0, 10) || vd || "" }; }).filter(x => x.d).sort((a, b) => b.d.localeCompare(a.d));
+  const booked = (current?.jobs || []).filter(j => j.location_id === l.id && isMaintJob(j) && !["completed", "cancelled"].includes(j.status) && !j.completed_at)
+    .flatMap(j => (j.visits || []).filter(v => !["completed", "cancelled"].includes(v.status) && v.scheduled_date >= ymd(new Date())).map(v => v.scheduled_date)).sort()[0];
+  const ago = d => { const m = Math.max(0, Math.round((Date.now() - Date.parse(d + "T12:00:00")) / 2629800000)); return m < 1 ? "this month" : m < 12 ? m + " month" + (m === 1 ? "" : "s") + " ago" : (() => { const y = Math.floor(m / 12), r = m % 12; return y + " yr" + (r ? " " + r + " mo" : "") + " ago"; })(); };
+  const last = done[0], months = last ? (Date.now() - Date.parse(last.d + "T12:00:00")) / 2629800000 : null;
+  const due = !booked && (!last || months >= 11);
+  return `<div class="last-maint ${due ? "lm-due" : ""}"><div class="lm-h">🔧 Last maintenance</div>
+    ${last ? `<div class="lm-d"><b>${esc(fmtDate(last.d))}</b> <span>${esc(ago(last.d))}</span></div><div class="lm-t">${esc(last.j.job_types?.name || "Maintenance")} · job ${esc(last.j.job_number)}</div>`
+      : `<div class="lm-d"><b>None on record</b></div>`}
+    ${booked ? `<div class="lm-ok">✓ Next one booked ${esc(fmtDate(booked))}</div>` : due ? `<div class="lm-ask">${last ? "Due: ask if they'd like it done." : "Ask if they'd like a maintenance."}</div>` : ""}</div>`;
+}
 function markFileNav() {
   const nav = document.querySelector(".file-nav"); if (!nav) return;
   const main = $("#main"), mainTop = main.getBoundingClientRect().top;
