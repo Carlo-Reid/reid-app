@@ -1219,6 +1219,7 @@
   .brand .signout { font-size: calc(13.5px * var(--fs, 1)); }
   /* the page links, laid out like the "On this file" list on the right */
   .side-nav { margin-top: 12px; }
+  .result .rm-c.rm-years { background: #2b8a3e; color: #fff; font-weight: 800; font-size: 13px; padding: 2px 10px; }
   .cust-years { display: inline-block; margin: 4px 0 2px 6px; padding: 4px 14px; border-radius: 999px; background: #2b8a3e; color: #fff; font-weight: 800;
     font-size: calc(17px * var(--fs, 1)); letter-spacing: .01em; white-space: nowrap; box-shadow: 0 2px 6px rgba(43,138,62,.35); vertical-align: middle; }
   .nav-find { position: relative; margin: 0 8px 8px; }
@@ -5883,11 +5884,13 @@ async function resEnrich(box) {
   const ids = [...new Set([...box.querySelectorAll(".result[data-id]")].map(b => Number(b.dataset.id)))].filter(Boolean); if (!ids.length) return;
   const need = ids.filter(id => !RES_INFO.has(id)).slice(0, 80);
   if (need.length) {
-    const [cu, eq] = await Promise.all([
+    const [cu, eq, since] = await Promise.all([
       db.from("customers").select("id, locations(id, street, unit, city, postal_code, neighbourhood_id, community_id, latitude, longitude, border_zone, active), customer_contacts(kind, value, is_primary, location_id), memberships(status, end_date, location_id, plan_types(name))").in("id", need),
-      db.from("equipment").select("installed_by_company, status, locations!inner(customer_id)").in("locations.customer_id", need).eq("installed_by_company", true)]);
+      db.from("equipment").select("installed_by_company, status, locations!inner(customer_id)").in("locations.customer_id", need).eq("installed_by_company", true),
+      Promise.resolve(db.rpc("customer_since", { p_ids: need })).catch(() => ({}))]);
     const inst = new Set((eq.data || []).filter(e => e.status === "active").map(e => e.locations?.customer_id));
-    (cu.data || []).forEach(c => RES_INFO.set(c.id, { c, inst: inst.has(c.id) }));
+    const sinceOf = new Map((since?.data || []).map(x => [Number(x.customer_id), x.since]));
+    (cu.data || []).forEach(c => RES_INFO.set(c.id, { c, inst: inst.has(c.id), since: sinceOf.get(c.id) || null }));
     need.forEach(id => { if (!RES_INFO.has(id)) RES_INFO.set(id, null); });
   }
   const ready = MAPH.list && MAPZ.zones && MAPT.list && MAPC.list;
@@ -5897,7 +5900,9 @@ async function resEnrich(box) {
     const ph = (c.customer_contacts || []).filter(k => k.kind !== "email").sort((a, x) => x.is_primary - a.is_primary)[0];
     const today = new Date().toISOString().slice(0, 10), plans = (c.memberships || []).filter(m => m.status === "active" && (!m.end_date || m.end_date >= today));
     let z = null; if (l && MAPH.list && MAPZ.zones && MAPT.list && MAPC.list) try { z = zoneOf2(l); } catch {}
-    const chips = [l?.unit ? `<span class="rm-c">Unit ${esc(l.unit)}</span>` : "", ph && !b.querySelector(".why, .sub")?.textContent.includes(phoneFmt(ph.value)) ? `<span class="rm-c">📞 ${esc(phoneFmt(ph.value))}</span>` : "",
+    const yrs = I.since ? custYears(String(I.since).slice(0, 10)) : null;
+    const chips = [yrs != null ? `<span class="rm-c rm-years" title="A customer since ${esc(fmtDate(String(I.since).slice(0, 10)))}">${yrs < 1 ? "Under 1 year" : yrs === 1 ? "1 year" : yrs + " years"} with us</span>` : "",
+      l?.unit ? `<span class="rm-c">Unit ${esc(l.unit)}</span>` : "", ph && !b.querySelector(".why, .sub")?.textContent.includes(phoneFmt(ph.value)) ? `<span class="rm-c">📞 ${esc(phoneFmt(ph.value))}</span>` : "",
       z ? `<span class="rm-c rm-zone"><span class="dm-dot" style="background:${esc(z.color || MAP_GREY)}"></span>${esc(z.name)}</span>` : "",
       plans.length ? `<span class="rm-c rm-plan" title="${esc(plans.map(m => m.plan_types?.name || "Plan").join("\n"))}">★ ${plans.length === 1 ? esc(String(plans[0].plan_types?.name || "Plan").replace(/^\w+\s*-\s*/, "")) : plans.length + " plans"}</span>` : `<span class="rm-c rm-none">No plan</span>`,
       I.inst ? `<span class="rm-c rm-inst">✓ We installed their equipment</span>` : "", L.length > 1 ? `<span class="rm-c">${L.length} addresses</span>` : ""].filter(Boolean).join("");
