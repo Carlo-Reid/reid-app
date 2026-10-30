@@ -91,7 +91,7 @@ BEGIN
       AND CASE v_ch WHEN 'email' THEN em.customer_id IS NOT NULL AND c.marketing_unsubscribed_at IS NULL
                     WHEN 'text' THEN ph.customer_id IS NOT NULL AND c.marketing_unsubscribed_at IS NULL
                     WHEN 'call' THEN ph.customer_id IS NOT NULL
-                    WHEN 'mail' THEN ad.customer_id IS NOT NULL
+                    WHEN 'mail' THEN ad.customer_id IS NOT NULL AND coalesce(c.marketing_opt_in, true)   -- "Do not mail" in ServiceTitan
                     ELSE false END
       AND (v_ch <> 'call' OR NOT EXISTS (SELECT 1 FROM marketing_touches t WHERE t.customer_id = c.id AND t.outcome = 'dont_call'))   -- "Don't call again"
       AND (v_ch <> 'text' OR NOT EXISTS (SELECT 1 FROM marketing_touches t WHERE t.customer_id = c.id AND t.outcome = 'stop'))       -- replied STOP

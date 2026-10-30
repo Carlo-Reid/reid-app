@@ -6098,7 +6098,7 @@ function mktNew(tkey) {
     : t.body;
   MKT.cur = { id: null, name: t.name + " – " + new Date().toLocaleDateString("en-CA", { month: "short", year: "numeric" }), kind: t.kind, subject: ch === "text" || ch === "call" ? topic : t.subject, body,
               audience: { recent_only: true, ...t.audience, channel: ch, ...(ch === "mail" ? { format: "letter" } : {}) }, status: "draft", sent: 0, failed: 0 };
-  MKT.aud = null; MKT.prog = null; MKT.msg = ""; MKT.work = null;
+  MKT.aud = null; MKT.prog = null; MKT.msg = ""; MKT.work = null; MKT.opt = null;
   renderMarketing(); mktCount();
 }
 function renderMarketing() {
@@ -6124,13 +6124,16 @@ function renderMarketing() {
           <div class="mkt-tpls">${MKT_TEMPLATES.map(t => `<button class="btn quiet-btn" type="button" data-mkt-new="${t.key}">${esc(t.key === "blank" ? "Blank " + CH[3] : t.name)}</button>`).join("")}</div></section>
         ${drafts.length ? `<section class="cl-tools"><strong>Drafts</strong><div class="mkt-rows">${drafts.map(row).join("")}</div></section>` : ""}
         <section class="cl-tools"><strong>Sent</strong><div class="mkt-rows">${sent.map(row).join("") || `<span class="quiet">Nothing sent yet.</span>`}</div></section>
+        <section class="cl-tools"><strong>Turned off in ServiceTitan</strong>
+          <p class="quiet" style="margin:0">Customers marked Do not mail, or with marketing emails or texts turned off, in the old system.</p>
+          <div><button class="btn quiet-btn" type="button" id="mkt-opt-open">${MKT.opt ? "Showing the list" : "See the list"}</button></div></section>
         ${MKT.ch === "email" || MKT.ch === "mail" ? `<section class="cl-tools"><strong>${MKT.ch === "mail" ? "Return address (top of every letter)" : "Bottom of every email"}</strong>
           <p class="quiet" style="margin:0">Canada's anti-spam law needs your business name, <b>mailing address</b> and a phone, email or website on every marketing email.</p>
           ${L.footer_saved ? "" : `<p class="mkt-warn">Add your mailing address and phone here, then Save, before sending.</p>`}
           <textarea id="mkt-footer" rows="5">${esc(L.footer || "")}</textarea>
           <div><button class="btn" type="button" id="mkt-footer-save">Save</button> <span class="quiet">${L.unsubscribed} customer${L.unsubscribed === 1 ? " has" : "s have"} unsubscribed</span></div></section>` : ""}
       </div>
-      <div class="mkt-main">${c ? mktEditor(c, ro) : `<div class="empty mkt-empty"><div><h2>Pick a ready-made ${CH[3]} on the left</h2>or open a draft or a finished one to see it.</div></div>`}</div>
+      <div class="mkt-main">${MKT.opt ? mktOptHtml() : c ? mktEditor(c, ro) : `<div class="empty mkt-empty"><div><h2>Pick a ready-made ${CH[3]} on the left</h2>or open a draft or a finished one to see it.</div></div>`}</div>
     </div></article>`;
   $("#main").scrollTop = top;
   wireMarketing();
@@ -6293,6 +6296,35 @@ async function mktCsv() {
     : [["Name", "First name", "Phone", "Message"], ...people.map(p => [p.name, mktFirstName(p), p.phone, mktText(c, p)])];
   mktDownload(`${c.name.replace(/[^\w -]+/g, "").trim() || "list"}.csv`, "﻿" + rows.map(r => r.map(mktCsvCell).join(",")).join("\r\n"), "text/csv");
 }
+// the customers who turned marketing off in ServiceTitan
+const MKT_OPT_F = [["all", "Everyone on the list"], ["no_mail", "Do not mail"], ["emails_off", "Marketing emails off"], ["texts_off", "Texts off"]];
+function mktOptRows() {
+  const O = MKT.opt, q = (O.q || "").trim().toLowerCase();
+  return (O.rows || []).filter(r => (O.f === "all" || r[O.f]) && (!q || [r.name, r.number, r.street, r.city, r.emails_off, r.texts_off].join(" ").toLowerCase().includes(q)));
+}
+function mktOptList() {
+  const O = MKT.opt; if (O.loading) return `<div class="loading">Getting the list…</div>`; if (O.err) return `<div class="staff-msg err">${esc(O.err)}</div>`;
+  const rows = mktOptRows();
+  return `<div class="quiet" style="margin:4px 0 8px">${rows.length.toLocaleString()} customer${rows.length === 1 ? "" : "s"}${rows.length > 500 ? " (showing the first 500; search to narrow it down)" : ""}</div>
+    ${rows.length ? `<table class="calls-table mkt-wt"><thead><tr><th>Customer</th><th>Turned off</th><th>Also</th></tr></thead><tbody>${rows.slice(0, 500).map(r => `<tr>
+      <td><a href="#customer=${r.id}"><b>${esc(r.name)}</b></a><div class="quiet">${esc(["#" + r.number, [r.street, r.city].filter(Boolean).join(", ")].filter(Boolean).join(" · "))}</div></td>
+      <td>${r.no_mail ? `<div><span class="ow-tag odd">Do not mail</span></div>` : ""}${r.emails_off ? `<div><span class="ow-tag odd">Marketing emails off</span> <span class="quiet">${esc(r.emails_off)}</span></div>` : ""}${r.texts_off ? `<div><span class="ow-tag odd">Texts off</span> <span class="quiet">${esc(r.texts_off)}</span></div>` : ""}</td>
+      <td class="quiet">${[!r.active ? "Inactive customer" : "", r.unsub ? "Unsubscribed here too" : "", r.dnc ? "Do not contact" : ""].filter(Boolean).join(" · ")}</td></tr>`).join("")}</tbody></table>` : `<div class="quiet">No one.</div>`}`;
+}
+function mktOptHtml() {
+  const O = MKT.opt, all = O.rows || [], n = k => k === "all" ? all.length : all.filter(r => r[k]).length;
+  return `<section class="cl-tools mkt-opt" data-atag-fixed="MK Turned off list"><div class="ak-connrow"><strong>Turned off marketing in ServiceTitan</strong><button class="btn quiet-btn" type="button" id="mkt-opt-csv" ${all.length ? "" : "disabled"}>Download (CSV)</button><button class="btn quiet-btn" type="button" id="mkt-opt-close">Close</button></div>
+    <p class="quiet" style="margin:0">From the old system: <b>Do not mail</b> is on the customer; <b>marketing emails off</b> and <b>texts off</b> are on an email address or mobile number. These customers are already left out of campaigns of that kind here (mail, email or texting).</p>
+    <div class="sinv-apps" style="margin-top:10px">${MKT_OPT_F.map(([k, t]) => `<button type="button" class="sinv-app ${O.f === k ? "on" : ""}" data-mkt-opt-f="${k}" aria-pressed="${O.f === k}"><span class="sa-ic">${O.loading ? "…" : n(k).toLocaleString()}</span><span class="sa-tn">${t}</span></button>`).join("")}</div>
+    <input type="search" id="mkt-opt-q" placeholder="Search by name, customer #, address, email or phone" value="${esc(O.q || "")}" style="width:100%;max-width:460px;margin-top:10px">
+    <div id="mkt-opt-list">${mktOptList()}</div></section>`;
+}
+async function mktOptLoad() {
+  MKT.opt = { loading: true, f: MKT.opt?.f || "all", q: MKT.opt?.q || "" }; MKT.cur = null; MKT.work = null; renderMarketing();
+  const { data, error } = await db.rpc("marketing_st_optouts");
+  if (!MKT.opt) return;
+  MKT.opt = { ...MKT.opt, loading: false, rows: data || [], err: error ? rpcErr(error) : "" }; renderMarketing();
+}
 function mktRead() {
   const f = $("#mkt-form"), c = MKT.cur; if (!f || !c || c.status === "sent") return c;
   const num = v => { const n = parseInt(String(v || "").replace(/\D/g, ""), 10); return isFinite(n) && n > 0 ? n : null; };
@@ -6436,8 +6468,15 @@ function wireMarketing() {
   document.querySelectorAll("[data-mkt-new]").forEach(b => b.addEventListener("click", () => { if (!MKT.sending) mktNew(b.dataset.mktNew); }));
   document.querySelectorAll("[data-mkt-open]").forEach(b => b.addEventListener("click", () => {
     if (MKT.sending) return; const x = MKT.list.campaigns.find(c => c.id === Number(b.dataset.mktOpen));
-    MKT.cur = { ...x, audience: { ...(x.audience || {}) } }; MKT.aud = null; MKT.prog = null; MKT.msg = ""; MKT.work = null; MKT.ch = mktCh(x); renderMarketing(); mktCount(); }));
-  document.querySelectorAll("[data-mkt-ch]").forEach(b => b.addEventListener("click", () => { if (MKT.sending || MKT.ch === b.dataset.mktCh) return;
+    MKT.cur = { ...x, audience: { ...(x.audience || {}) } }; MKT.aud = null; MKT.prog = null; MKT.msg = ""; MKT.work = null; MKT.ch = mktCh(x); MKT.opt = null; renderMarketing(); mktCount(); }));
+  $("#mkt-opt-open")?.addEventListener("click", () => { if (!MKT.sending) mktOptLoad(); });
+  $("#mkt-opt-close")?.addEventListener("click", () => { MKT.opt = null; renderMarketing(); });
+  document.querySelectorAll("[data-mkt-opt-f]").forEach(b => b.addEventListener("click", () => { MKT.opt.f = b.dataset.mktOptF; renderMarketing(); }));
+  $("#mkt-opt-q")?.addEventListener("input", e => { MKT.opt.q = e.target.value; $("#mkt-opt-list").innerHTML = mktOptList(); });
+  $("#mkt-opt-csv")?.addEventListener("click", () => { const rows = mktOptRows();
+    mktDownload("turned-off-marketing-servicetitan.csv", "\ufeff" + [["Customer #", "Name", "Street", "City", "Do not mail", "Marketing emails off", "Texts off", "Inactive", "Unsubscribed here", "Do not contact"],
+      ...rows.map(r => [r.number, r.name, r.street, r.city, r.no_mail ? "Yes" : "", r.emails_off || "", r.texts_off || "", r.active ? "" : "Yes", r.unsub ? "Yes" : "", r.dnc ? "Yes" : ""])].map(r => r.map(mktCsvCell).join(",")).join("\r\n"), "text/csv"); });
+  document.querySelectorAll("[data-mkt-ch]").forEach(b => b.addEventListener("click", () => { if (MKT.sending || (MKT.ch === b.dataset.mktCh && !MKT.opt)) return; MKT.opt = null;
     MKT.ch = b.dataset.mktCh; MKT.cur = null; MKT.aud = null; MKT.prog = null; MKT.msg = ""; MKT.work = null; renderMarketing(); }));
   $("#mkt-footer-save")?.addEventListener("click", async () => {
     const { error } = await db.rpc("save_marketing_footer", { p: $("#mkt-footer").value });
