@@ -4980,6 +4980,8 @@ html body[data-page="calls"] #main article.calls .cl-mt[aria-expanded="true"] { 
 html body[data-page="calls"] #main article.calls .cl-mt .cl-mt-car { position: absolute; right: 10px; top: 6px; font-style: normal; font-size: 11px; color: #5b6b78; }
 html body[data-page="calls"] #main article.calls .cl-mt-list { margin: 10px 0 4px; background: #fff; border: 1px solid #dbe3ec; border-radius: 16px; padding: 8px 10px; max-height: 420px; overflow: auto; }
 html body[data-page="calls"] #main article.calls .cl-mt-lh { display: flex; align-items: baseline; gap: 10px; padding: 2px 4px 6px; } html body[data-page="calls"] #main article.calls .cl-mt-lh .link { margin-left: auto; }
+/* Drop invoices in: room for a number like 40241429-00 */
+.dropin-t input[name=number] { width: 130px; min-width: 130px; } .dropin-t input[name=total] { width: 100px; }
 /* Marketing: Email / Mail / Texting / Phone calls tabs, and the working lists */
 article.mkt .mkt-chtabs { margin: 4px 0 10px; } article.mkt .mkt-chtabs .sinv-app { position: relative; } article.mkt .mkt-chtabs small { position: absolute; top: 6px; right: 9px; font-size: 11px; font-weight: 800; color: #5b6b78; }
 article.mkt .mkt-chtabs .sinv-app.on small { color: #fff; }
@@ -14331,13 +14333,27 @@ async function openSupPay(sup, name) {
 }
 // a supplier's invoices dropped in from the email (one PDF per invoice): each is read, matched to the invoice we already have
 // (by its number) or made new, and its pages kept
-const DROPIN = { sup: null, name: "", items: [], known: null };
+const DROPIN = { sup: null, name: "", items: [], known: null, kn: {} };
+// what we already have for a supplier (to match a dropped invoice to ours by its number)
+async function dropInKnown(sup) {
+  if (!DROPIN.kn[sup]) { const { data } = await db.rpc("supplier_invoices_list", { p_supplier: sup, p_statement: 0 }); DROPIN.kn[sup] = { sup, rows: data?.rows || [], lines: data?.statement_lines || [] }; }
+  return DROPIN.kn[sup];
+}
+const dropInSupName = id => sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === id)?.supplier || "") || "that supplier";
+// a date like 23/10/26: day first when the first number can't be a month, month first when the second can't be; otherwise the reading closest to today (not in the future)
+function dropInDate(text) {
+  const m = String(text).match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})\b/); if (!m) return "";
+  const a = Number(m[1]), b = Number(m[2]), y = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+  const mk = (mo, d) => mo >= 1 && mo <= 12 && d >= 1 && d <= 31 ? `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}` : null;
+  const md = mk(a, b), dm = mk(b, a), today = ymd(new Date());
+  if (!md) return dm || ""; if (!dm || md === dm) return md;
+  const ok = [md, dm].filter(d => d <= today).sort().reverse(); return ok[0] || md;
+}
 async function openDropInvoices(sup, name) {
   DROPIN.sup = sup; DROPIN.name = name; DROPIN.items = [];
   const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open"); $("#inv-cancelbtn")?.classList.add("hidden"); $("#inv-emailbtn")?.classList.add("hidden");
   drawDropIn();
-  if (!DROPIN.known || DROPIN.known.sup !== sup) { const { data } = await db.rpc("supplier_invoices_list", { p_supplier: sup, p_statement: 0 });
-    DROPIN.known = { sup, rows: data?.rows || [], lines: (data?.statement_lines || []) }; }
+  DROPIN.known = await dropInKnown(sup);
 }
 function drawDropIn() {
   const I = DROPIN.items;
@@ -14349,19 +14365,27 @@ function drawDropIn() {
       ${I.map((x, i) => `<tr data-di="${i}"><td>${esc(x.file)}<div class="quiet">${x.pages ? x.pages.length + (x.pages.length === 1 ? " page" : " pages") : ""}</div></td>
         ${x.busy ? `<td colspan="5" class="quiet">${esc(x.busy)}</td><td></td>` : x.done ? `<td>${esc(x.number)}</td><td>${esc(stDate(x.date))}</td><td>${esc(x.po || "")}</td><td class="r">${x.total != null ? money(x.total) : ""}</td><td class="st-ok">✓ ${esc(x.done)}</td><td></td>`
         : `<td><input name="number" value="${esc(x.number || "")}"></td><td><input name="date" type="date" value="${esc(x.date || "")}"></td><td><input name="po" value="${esc(x.po || "")}"></td>
-        <td class="r"><input name="total" type="number" step="0.01" value="${x.total ?? ""}"></td><td>${x.match ? `<span class="st-ok">Adds the copy to our invoice ${esc(x.match.number)}</span>` : x.number ? `<span class="st-look">New invoice${x.onSt ? " (it's on a statement)" : ""}</span>` : `<span class="st-bad">Put in the invoice number</span>`}${x.err ? `<div class="st-bad">${esc(x.err)}</div>` : ""}</td>
+        <td class="r"><input name="total" type="number" step="0.01" value="${x.total ?? ""}"></td><td>${x.other && !x.sup ? `<div class="st-bad">This looks like ${esc(dropInSupName(x.other))}'s, not ${esc(DROPIN.name)}'s. <button class="link" type="button" data-di-sup="${i}">Save it under ${esc(dropInSupName(x.other))}</button></div>` : ""}
+          ${x.sup && x.sup !== DROPIN.sup ? `<div class="st-look">Goes under ${esc(dropInSupName(x.sup))} <button class="link" type="button" data-di-sup0="${i}">undo</button></div>` : ""}
+          ${x.match ? `<span class="st-ok">Adds the copy to our invoice ${esc(x.match.number)}</span>` : x.number ? `<span class="st-look">New ${x.credit ? "credit note" : "invoice"}${x.onSt ? " (it's on a statement)" : ""}</span>` : `<span class="st-bad">Type the invoice number in the box on the left of this row</span>`}${x.credit && !x.match ? `<div class="quiet">Credit: the total is saved as a minus.</div>` : ""}${x.err ? `<div class="st-bad">${esc(x.err)}</div>` : ""}</td>
         <td><button class="link danger" type="button" data-di-x="${i}">✕</button></td>`}</tr>`).join("")}</tbody></table>
       ${I.some(x => !x.done && !x.busy) ? `<div class="row"><button class="btn" type="button" data-di-save>Save ${I.filter(x => !x.done && !x.busy).length === 1 ? "it" : "them all"}</button></div>` : ""}` : ""}</div>`;
   const P = $("#inv-paper");
   P.querySelector("[data-dropin-file]")?.addEventListener("change", e => dropInFiles([...e.target.files]));
   P.querySelectorAll("tr[data-di] input").forEach(inp => inp.addEventListener("change", () => { const x = DROPIN.items[Number(inp.closest("tr").dataset.di)]; x[inp.name] = inp.type === "number" ? (inp.value === "" ? null : Number(inp.value)) : inp.value.trim(); dropInMatch(x); drawDropIn(); }));
   P.querySelectorAll("[data-di-x]").forEach(b => b.addEventListener("click", () => { DROPIN.items.splice(Number(b.dataset.diX), 1); drawDropIn(); }));
+  P.querySelectorAll("[data-di-sup]").forEach(b => b.addEventListener("click", async () => { const x = DROPIN.items[Number(b.dataset.diSup)]; x.sup = x.other; await dropInKnown(x.sup); dropInMatch(x); drawDropIn(); }));
+  P.querySelectorAll("[data-di-sup0]").forEach(b => b.addEventListener("click", () => { const x = DROPIN.items[Number(b.dataset.diSup0)]; x.sup = null; dropInMatch(x); drawDropIn(); }));
+  // type in a box: keep it as you type (the row redraws when you leave the box)
+  P.querySelectorAll("tr[data-di] input").forEach(inp => inp.addEventListener("input", () => { const x = DROPIN.items[Number(inp.closest("tr").dataset.di)]; x[inp.name] = inp.type === "number" ? (inp.value === "" ? null : Number(inp.value)) : inp.value.trim(); }));
+  // pressing Save straight after typing a number: keep the box from losing focus first (that redraws the rows and the click was lost)
+  P.querySelector("[data-di-save]")?.addEventListener("mousedown", e => e.preventDefault());
   P.querySelector("[data-di-save]")?.addEventListener("click", dropInSave);
 }
 function dropInMatch(x) {
-  const norm = t => String(t || "").replace(/\W/g, "").toUpperCase(), K = DROPIN.known?.rows || [];
+  const kn = DROPIN.kn[x.sup || DROPIN.sup] || DROPIN.known, norm = t => String(t || "").replace(/\W/g, "").toUpperCase(), K = kn?.rows || [];
   x.match = x.number ? K.find(r => norm(r.number) === norm(x.number)) : null;
-  x.onSt = !!(x.number && (DROPIN.known?.lines || []).some(l => norm(l.reference) === norm(x.number)));
+  x.onSt = !!(x.number && (kn?.lines || []).some(l => norm(l.reference) === norm(x.number)));
 }
 async function dropInFiles(files) {
   if (!files.length) return;
@@ -14383,11 +14407,19 @@ async function dropInFiles(files) {
         const T = text.toUpperCase(), flat = T.replace(/\W/g, ""), n = t => t == null ? null : Number(String(t).replace(/[, ]/g, ""));
         const hit = (DROPIN.known?.rows || []).find(r => r.number && String(r.number).length >= 5 && flat.includes(String(r.number).replace(/\W/g, "").toUpperCase()))
           || (DROPIN.known?.lines || []).map(l => ({ number: l.reference })).find(l => l.number && String(l.number).length >= 5 && flat.includes(String(l.number).replace(/\W/g, "").toUpperCase()));
-        x.number = hit?.number || (T.match(/INVOICE\s*(?:NO\.?|#|NUMBER)?\s*[:#.]?\s*([A-Z]{0,3}\d{4,})/) || T.match(/\b([A-Z]\d{6})\b/) || [])[1] || "";
-        const d = text.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/); x.date = d ? `${d[3].length === 2 ? "20" + d[3] : d[3]}-${d[1].padStart(2, "0")}-${d[2].padStart(2, "0")}` : "";
+        x.number = hit?.number || (T.match(/\b(\d{7,9}-\d{2})\b/) || T.match(/(?:INVOICE|CREDIT[ \t]*(?:NOTE|MEMO)?|ORDER)[ \t]*(?:NO\.?|#|NUMBER)?[ \t]*[:#.]?[ \t]*([A-Z]{0,3}\d{4,}(?:-\d{2})?)\b/) || T.match(/\b([A-Z]\d{6})\b/) || [])[1] || "";
+        x.date = dropInDate(text);
         x.po = (text.match(/(?:P\.?\s?O\.?|PURCHASE\s+ORDER|CUSTOMER\s+ORDER|COMMANDE)\s*(?:#|NO\.?|NUMBER|NUM\.?)?\s*[:#.]?\s*([A-Z]{0,3}\d[\w-]{2,})/i) || [])[1] || "";
-        const tots = [...T.matchAll(/TOTAL\D{0,15}([\d,]+\.\d{2})/g)].map(m => n(m[1])); x.total = tots.length ? tots[tots.length - 1] : null;
-        x.subtotal = n((T.match(/SUB\s*-?\s*TOTAL\D{0,12}([\d,]+\.\d{2})/) || [])[1]); x.hst = n((T.match(/(?:H\.?S\.?T|TVH)\D{0,12}([\d,]+\.\d{2})/) || [])[1]);
+        const tm = [...T.matchAll(/TOTAL[^\d\n]{0,60}([\d,]+\.\d{2})[ \t]*(-)?/g)], last = tm[tm.length - 1];
+        x.credit = /CREDIT\s*-?\s*DO NOT PAY|CREDIT\s*(?:NOTE|MEMO)|RETURN MERCHANDISE/.test(T) || !!last?.[2];
+        x.total = last ? n(last[1]) * (x.credit ? -1 : 1) : null;
+        // dropped under the wrong supplier? (e.g. a Master credit dropped on Boone)
+        { const word = id => (sinvShort((SINV.data?.statements || []).find(y => y.supplier_id === id)?.supplier || "").split(/\s+/).filter(w => !/^(the|les?|la|a)$/i.test(w))[0] || "").toUpperCase();
+          const ids = [...new Set((SINV.data?.statements || []).map(y => y.supplier_id))], has = w => w.length >= 3 && new RegExp("\\b" + w.replace(/\W/g, "") + "\\b").test(T);
+          const other = ids.find(id => id !== DROPIN.sup && has(word(id)));
+          x.other = other && !has(word(DROPIN.sup)) ? other : null; }
+        x.subtotal = n((T.match(/SUB\s*-?\s*TOTAL[^\d\n]{0,60}([\d,]+\.\d{2})/) || [])[1]); x.hst = n((T.match(/(?:H\.?S\.?T|TVH)[^\d\n]{0,60}([\d,]+\.\d{2})/) || [])[1]);
+        if (x.credit) { if (x.subtotal) x.subtotal = -Math.abs(x.subtotal); if (x.hst) x.hst = -Math.abs(x.hst); }
         x.busy = null; dropInMatch(x); drawDropIn();
       } catch (e) { x.busy = null; x.err = e.message || String(e); drawDropIn(); }
     }
@@ -14395,13 +14427,18 @@ async function dropInFiles(files) {
   } catch (e) { items.forEach(x => { x.busy = null; x.err = e.message || String(e); }); drawDropIn(); }
 }
 async function dropInSave() {
+  DROPIN.items.forEach(x => { if (!x.done && !x.busy) dropInMatch(x); });
   for (const x of DROPIN.items.filter(x => !x.done && !x.busy)) {
     if (!x.number || !x.pages?.length) { x.err = !x.number ? "Put in the invoice number" : "No pages read"; continue; }
-    const p = { supplier_id: DROPIN.sup, number: x.number, date: x.date || null, total: x.total, po_text: x.po, subtotal: x.subtotal, hst: x.hst, pages: x.pages, file: x.file };
+    const p = { supplier_id: x.sup || DROPIN.sup, number: x.number, date: x.date || null, total: x.total, po_text: x.po, subtotal: x.subtotal, hst: x.hst, pages: x.pages, file: x.file };
     const { error } = x.match ? await db.rpc("supplier_invoice_attach", { p_invoice: x.match.id, p }) : await db.rpc("supplier_invoice_add", { p });
     if (error) x.err = "Not saved: " + rpcErr(error); else { x.err = null; x.done = x.match ? "Copy added to our invoice" : "Added"; }
   }
-  DROPIN.known = null; SINV.det.clear(); drawDropIn(); openSupInv("Invoices loaded."); 
+  DROPIN.kn = {}; DROPIN.known = await dropInKnown(DROPIN.sup); SINV.det.clear();
+  const left = DROPIN.items.filter(x => !x.done);
+  if (left.length) { drawDropIn(); return; }   // something wasn't saved: stay here and show why
+  const moved = DROPIN.items.filter(x => x.sup && x.sup !== DROPIN.sup).map(x => `${x.number} went under ${dropInSupName(x.sup)}`);
+  openSupInv(`Saved: ${DROPIN.items.map(x => x.number).join(", ")}.${moved.length ? " " + moved.join("; ") + "." : ""}`);
 }
 ["dragover", "drop"].forEach(t => document.addEventListener(t, e => { if (document.body.dataset.page === "supplier-invoices" && [...(e.dataTransfer?.types || [])].includes("Files") && !e.target.closest?.("[data-dropin], [data-sinv-drop], [data-sinv-dropin]")) e.preventDefault(); }));   // a file dropped next to the box doesn't open in the browser
 // a file dragged straight onto the "Drag a file here" tile goes in the same way
