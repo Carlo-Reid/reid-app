@@ -4997,6 +4997,10 @@ article.staff .st-pos.open > .st-head, article.staff .st-card.open > .st-head { 
 article.staff .st-pos.open > .st-head .st-chips, article.staff .st-card.open > .st-head .st-chips { flex-direction: row; gap: 10px; }
 article.staff .st-pos.open > .st-head .st-ic, article.staff .st-card.open > .st-head .st-ic { width: 36px; height: 36px; font-size: 14px; border-radius: 10px; }
 article.staff .st-card.inactive > .st-head { opacity: .6; }
+article.staff .st-head img.st-photo { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; box-shadow: 0 2px 6px rgba(16, 24, 40, .2); }
+article.staff .st-card.open > .st-head img.st-photo { width: 36px; height: 36px; }
+article.staff .st-head.over { outline: 3px dashed #1f5fa8; outline-offset: 3px; }
+article.staff .st-photo-ed { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } article.staff .st-photo-ed img.st-photo { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; }
 article.staff .st-tk .st-tk-row { cursor: default; } article.staff .st-tk .st-tk-row select { width: 100%; max-width: 170px; font-size: 12.5px; }
 /* Drop invoices in: room for a number like 40241429-00 */
 .stv[data-stv-drop].over { outline: 3px dashed #1f5fa8; outline-offset: 6px; }
@@ -22648,6 +22652,24 @@ function renderSettings(slots, note) {
 }
 
 /* ---------------- staff and permissions ---------------- */
+// a staff picture: cut to a square from the middle, 256 × 256, then saved
+async function staffPhotoSave(uid, f) {
+  const msg = t => { const m = $("#staff-msg"); if (m) { m.className = "staff-msg " + (/^Not|isn't/.test(t) ? "err" : "ok"); m.textContent = t; } };
+  if (!f || !/^image\//.test(f.type)) return msg("That isn't a picture.");
+  const img = await createImageBitmap(f), side = Math.min(img.width, img.height), c = document.createElement("canvas"); c.width = c.height = 256;
+  c.getContext("2d").drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 256, 256);
+  const url = c.toDataURL("image/jpeg", 0.85), { error } = await db.rpc("staff_photo_set", { p_user: uid, p_image: url.split(",")[1], p_mime: "image/jpeg" });
+  if (error) return msg("Not saved: " + rpcErr(error));
+  STAFF_PHOTOS.set(uid, url); await openStaff(); msg("Picture saved.");
+}
+document.addEventListener("dragover", e => { const b = e.target.closest?.("[data-st-photo-drop]"); if (!b || ![...(e.dataTransfer?.types || [])].includes("Files")) return; e.preventDefault(); b.classList.add("over"); });
+document.addEventListener("dragleave", e => { const b = e.target.closest?.("[data-st-photo-drop]"); if (b && !b.contains(e.relatedTarget)) b.classList.remove("over"); });
+document.addEventListener("drop", e => { const b = e.target.closest?.("[data-st-photo-drop]"); if (!b) return; e.preventDefault(); b.classList.remove("over"); staffPhotoSave(Number(b.dataset.stPhotoDrop), e.dataTransfer?.files?.[0]); });
+document.addEventListener("change", e => { const i = e.target.closest?.("[data-st-photo-file]"); if (i) staffPhotoSave(Number(i.dataset.stPhotoFile), i.files[0]); });
+document.addEventListener("click", async e => { const b = e.target.closest?.("[data-st-photo-del]"); if (!b) return;
+  if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Delete the picture"; return; }
+  const { error } = await db.rpc("staff_photo_set", { p_user: Number(b.dataset.stPhotoDel), p_image: null }); if (error) return alertMsg("Not deleted: " + rpcErr(error));
+  STAFF_PHOTOS.delete(Number(b.dataset.stPhotoDel)); openStaff(); });
 const ROLES = [["owner", "Owner"], ["admin", "Admin"], ["office", "Office"], ["dispatcher", "Dispatcher"], ["accounting", "Accounting"],
                ["warehouse", "Warehouse"], ["technician", "Technician"], ["sales", "Sales"], ["read_only", "View only"]];
 $("#staff-link").addEventListener("click", openStaff);
@@ -22659,7 +22681,8 @@ async function openStaff() {
   const userQuery = (removedFilter) => { let q = db.from("app_users").select("id, login_email, role, active, employee_id, " + (STAFF_POSCOL ? "position_id, " : "") + "employees(first_name, last_name), user_permissions!user_permissions_app_user_id_fkey(permission_code)");
     if (removedFilter) q = q.is("deleted_at", null);
     return q.order("active", { ascending: false }).order("login_email"); };
-  let [users, perms, pos] = await Promise.all([userQuery(true), db.from("permissions").select("*").order("sort_order"), db.rpc("staff_positions_list")]);
+  let [users, perms, pos, ph] = await Promise.all([userQuery(true), db.from("permissions").select("*").order("sort_order"), db.rpc("staff_positions_list"), db.rpc("staff_photos_list")]);
+  STAFF_PHOTOS = new Map((ph?.data || []).map(x => [Number(x.user_id), `data:${x.mime || "image/jpeg"};base64,${x.image}`]));
   if (users.error && STAFF_POSCOL) { STAFF_POSCOL = false; users = await userQuery(true); }   // setup 99n not run yet
   if (users.error) users = await userQuery(false);   // setup step 07 not run yet
   STAFF_POS = pos.error ? null : pos.data || [];
@@ -22679,6 +22702,7 @@ async function openStaff() {
 }
 
 let STAFF_TRAIN = new Map();   // owners only: sales people on "Training Sales" (they never see this name)
+let STAFF_PHOTOS = new Map();   // app user id -> picture (data url)
 let STAFF_PENDING = [], STAFF_RESETS = [], STAFF_LOGINS = null, STAFF_PBCATS = new Map(), STAFF_BOOK = new Map(), STAFF_POS = null, STAFF_POSCOL = true;
 const STAFF_OPEN = new Set(); let STAFF_POS_EDIT = null;
 // Staff page: limit a person's price book to the categories ticked (none ticked = all)
@@ -22807,8 +22831,8 @@ function renderStaff(users, perms, note) {
         const posName = (STAFF_POS || []).find(p => p.id === u.position_id)?.name, roleName = (ROLES.find(r => r[0] === u.role) || [, u.role])[1];
         const cats = [...new Set(perms.map(p => p.category))];
         return `<div class="st-card ${u.active ? "" : "inactive"} ${open ? "open" : ""}" data-user="${u.id}" data-email="${esc(u.login_email)}" data-first="${esc(u.employees?.first_name || "")}" data-last="${esc(u.employees?.last_name || "")}">
-          <button class="st-head" type="button" data-st-toggle aria-expanded="${open}"><span class="st-arrow">${open ? "▾" : "▸"}</span>
-            <span class="st-ic" aria-hidden="true">${esc(String((name || u.login_email) || "?").trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase())}</span><b>${esc(name || u.login_email)}</b>
+          <button class="st-head" type="button" data-st-toggle data-st-photo-drop="${u.id}" aria-expanded="${open}"><span class="st-arrow">${open ? "▾" : "▸"}</span>
+            ${STAFF_PHOTOS.has(u.id) ? `<img class="st-photo" alt="" src="${STAFF_PHOTOS.get(u.id)}">` : ""}<span class="st-ic ${STAFF_PHOTOS.has(u.id) ? "hidden" : ""}" aria-hidden="true">${esc(String((name || u.login_email) || "?").trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase())}</span><b>${esc(name || u.login_email)}</b>
             <span class="st-chips">${posName ? `<span class="chip small">${esc(posName)}</span>` : ""}<span class="quiet">${esc(roleName)}</span>${u.active ? "" : `<span class="chip small st-off">Not active</span>`}
               <span class="quiet">${u.role === "owner" ? "can do everything" : `${granted.size} of ${perms.length} ticked`}</span></span></button>
           <div class="st-body" ${open ? "" : "hidden"}>
@@ -22824,6 +22848,8 @@ function renderStaff(users, perms, note) {
                 ${u.employee_id && !BOOK.techs.some(t => t.id === u.employee_id) ? `<option value="keep" selected>Not a tech</option>` : `<option value="">Not a tech</option>`}
                 ${BOOK.techs.map(t => `<option value="${t.id}" ${t.id === u.employee_id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>` : ""}
               ${u.role === "sales" ? `<div class="st-sf-wrap"><span class="cl-label">Sales call for</span><div class="st-sf" data-sf-user="${u.id}">Loading…</div></div>` : ""}
+              <div class="st-photo-row"><span class="cl-label">Picture</span><div class="st-photo-ed">${STAFF_PHOTOS.has(u.id) ? `<img class="st-photo" alt="Picture of ${esc(name || u.login_email)}" src="${STAFF_PHOTOS.get(u.id)}">` : `<span class="quiet">None yet. Drop a picture on their button, or</span>`}
+                ${highLocked ? "" : `<label class="link">${STAFF_PHOTOS.has(u.id) ? "Change it" : "pick one"}<input type="file" accept="image/*" hidden data-st-photo-file="${u.id}"></label>${STAFF_PHOTOS.has(u.id) ? ` <button class="link danger" type="button" data-st-photo-del="${u.id}">Delete</button>` : ""}`}</div></div>
               <label class="gl-act"><input type="checkbox" data-field="active" ${u.active ? "checked" : ""} ${highLocked ? "disabled" : ""}> Active</label>
               ${ME.role === "owner" && u.role !== "owner" ? `<label class="gl-act" title="Only owners see this. The person isn't told; their app just shows the training view.">
                 <input type="checkbox" data-staff-train ${STAFF_TRAIN.has(u.id) ? "checked" : ""}> Training Sales <span class="quiet">(owners only${STAFF_TRAIN.get(u.id)?.by ? ` · on by ${esc(STAFF_TRAIN.get(u.id).by)}` : ""})</span></label>` : ""}
