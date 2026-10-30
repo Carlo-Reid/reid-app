@@ -1,4 +1,4 @@
--- Receivables: an invoice for work that isn't done yet (the job still has a booked visit) isn't due yet.
+-- Receivables: an invoice for work that isn't done yet (the job still has a visit booked for today or later) isn't due yet.
 -- open_balances gives: job_done, done_on (when the work was finished), booked_for (the booked visit's day) and booked_on (when it was booked).
 DROP FUNCTION IF EXISTS public.open_balances(text, text);
 CREATE OR REPLACE FUNCTION public.open_balances(p_show text DEFAULT 'todo', p_kind text DEFAULT 'all')
@@ -22,7 +22,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   LEFT JOIN locations l ON l.id = i.location_id
   LEFT JOIN jobs j ON j.id = i.job_id
   LEFT JOIN job_types t ON t.id = j.job_type_id
-  LEFT JOIN LATERAL (SELECT v.scheduled_date, v.created_at FROM visits v WHERE v.job_id = j.id AND coalesce(v.status, '') NOT IN ('completed', 'cancelled')
+  LEFT JOIN LATERAL (SELECT v.scheduled_date, v.created_at FROM visits v WHERE v.job_id = j.id AND coalesce(v.status, '') NOT IN ('completed', 'cancelled') AND v.scheduled_date >= current_date
                      ORDER BY v.scheduled_date LIMIT 1) nv ON true
   WHERE (public.has_permission('invoices.adjust') OR public.current_staff_role() IN ('owner', 'admin', 'accounting'))
     AND i.balance_due > 0.004 AND i.status NOT IN ('void', 'draft')
