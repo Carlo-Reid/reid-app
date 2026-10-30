@@ -15,7 +15,7 @@ BEGIN
   INSERT INTO estimates (estimate_number, job_id, project_id, customer_id, location_id, business_unit_id, partner_id, use_partner_branding, sold_by_employee_id,
                          created_via, recipient_type, recipient_partner_contact_id, recipient_email, status, version_of)
   VALUES (v_base || '-v' || greatest(v_n, 2), e.job_id, e.project_id, e.customer_id, e.location_id, e.business_unit_id, e.partner_id, e.use_partner_branding,
-          coalesce(e.sold_by_employee_id, public._my_employee()), 'version', e.recipient_type, e.recipient_partner_contact_id, e.recipient_email, 'draft', e.id)
+          coalesce(e.sold_by_employee_id, public._my_employee()), e.created_via, e.recipient_type, e.recipient_partner_contact_id, e.recipient_email, 'draft', e.id)
   RETURNING id INTO v_id;
   FOR o IN SELECT * FROM estimate_options WHERE estimate_id = p_id ORDER BY sequence, id LOOP
     INSERT INTO estimate_options (estimate_id, sequence, name, description, is_recommended) VALUES (v_id, o.sequence, o.name, o.description, o.is_recommended) RETURNING id INTO v_opt;
