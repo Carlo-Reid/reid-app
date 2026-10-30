@@ -93,6 +93,8 @@ BEGIN
                     WHEN 'call' THEN ph.customer_id IS NOT NULL
                     WHEN 'mail' THEN ad.customer_id IS NOT NULL
                     ELSE false END
+      AND (v_ch <> 'call' OR NOT EXISTS (SELECT 1 FROM marketing_touches t WHERE t.customer_id = c.id AND t.outcome = 'dont_call'))   -- "Don't call again"
+      AND (v_ch <> 'text' OR NOT EXISTS (SELECT 1 FROM marketing_touches t WHERE t.customer_id = c.id AND t.outcome = 'stop'))       -- replied STOP
       AND CASE v_ckind WHEN 'season' THEN c.mkt_seasonal WHEN 'plan' THEN c.mkt_plans WHEN 'promo' THEN c.mkt_promos ELSE true END
       AND (c.mkt_min_days IS NULL OR NOT EXISTS (SELECT 1 FROM recent r WHERE r.customer_id = c.id AND r.at > now() - make_interval(days => c.mkt_min_days)))
       AND (NOT v_recent OR lj.at > now() - interval '2 years' OR mem.customer_id IS NOT NULL)

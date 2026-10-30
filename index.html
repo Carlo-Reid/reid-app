@@ -4980,6 +4980,15 @@ html body[data-page="calls"] #main article.calls .cl-mt[aria-expanded="true"] { 
 html body[data-page="calls"] #main article.calls .cl-mt .cl-mt-car { position: absolute; right: 10px; top: 6px; font-style: normal; font-size: 11px; color: #5b6b78; }
 html body[data-page="calls"] #main article.calls .cl-mt-list { margin: 10px 0 4px; background: #fff; border: 1px solid #dbe3ec; border-radius: 16px; padding: 8px 10px; max-height: 420px; overflow: auto; }
 html body[data-page="calls"] #main article.calls .cl-mt-lh { display: flex; align-items: baseline; gap: 10px; padding: 2px 4px 6px; } html body[data-page="calls"] #main article.calls .cl-mt-lh .link { margin-left: auto; }
+/* Marketing: Email / Mail / Texting / Phone calls tabs, and the working lists */
+article.mkt .mkt-chtabs { margin: 4px 0 10px; } article.mkt .mkt-chtabs .sinv-app { position: relative; } article.mkt .mkt-chtabs small { position: absolute; top: 6px; right: 9px; font-size: 11px; font-weight: 800; color: #5b6b78; }
+article.mkt .mkt-chtabs .sinv-app.on small { color: #fff; }
+article.mkt .mkt-paper .mkt-ret { font-size: 11px; color: #5b6b78; white-space: normal; } article.mkt .mkt-paper .mkt-to { margin: 10px 0 14px; font-size: 13px; line-height: 1.4; }
+article.mkt .mkt-paper.mkt-post { max-width: 480px; aspect-ratio: 6 / 4; overflow: auto; } article.mkt .mkt-paper.mkt-sms { max-width: 360px; border-radius: 18px; background: #e9f2ff; }
+article.mkt .mkt-work { margin-top: 10px; } article.mkt .mkt-tally { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 8px; }
+article.mkt .mkt-wt td { vertical-align: top; } article.mkt .mkt-wt td.num { white-space: nowrap; } article.mkt .mkt-acts input { width: 100%; max-width: 320px; margin-bottom: 4px; } article.mkt .mkt-acts .btn { padding: 3px 9px; font-size: 12px; margin: 0 4px 4px 0; }
+article.mkt .mkt-o-booked { border-color: #2e7d32 !important; color: #2e7d32 !important; } article.mkt .mkt-o-dont_call, article.mkt .mkt-o-not_interested { color: #b23a2e !important; }
+article.mkt tr.mkt-t-booked td:first-child { box-shadow: inset 4px 0 0 #2e7d32; } article.mkt tr.mkt-t-dont_call td:first-child, article.mkt tr.mkt-t-not_interested td:first-child, article.mkt tr.mkt-t-stop td:first-child { box-shadow: inset 4px 0 0 #b23a2e; }
 </style>
 </head>
 <body>
@@ -5999,12 +6008,16 @@ function wireCm() {
 /* ---------------- marketing emails ---------------- */
 // Pick customers (plans, renewals, equipment, seasons, city), write or pick a ready-made email, test it, send it.
 // Each email goes through send-email (lands on the customer's file) and carries an unsubscribe link.
-const MKT = { list: null, cur: null, aud: null, sending: false, stop: false, prog: null, msg: "" };
+const MKT = { list: null, cur: null, aud: null, sending: false, stop: false, prog: null, msg: "", ch: "email", work: null, plansAll: null };
 const MKT_KINDS = [["season", "Season"], ["plan", "Plan"], ["promo", "Promotion"]];
 const MKT_EQUIP = [["", "All customers"], ["furnace", "Furnace / boiler"], ["ac", "Air conditioner"], ["heat_pump", "Heat pump"], ["humidifier", "Humidifier"], ["water_heater", "Water heater"]];
 const MKT_YEARS = n => [["", "Any"]].concat([1, 2, 3, 4, 5].map(y => [String(y), `Over ${y} year${y > 1 ? "s" : ""} ago`]), [["never", n]]);
 const MKT_INST = [["", "Any"], ["yes", "We installed for them"], ["no", "Service only (never installed)"]];
-const MKT_WHO = [["all", "Everyone"], ["members", "Plan members"], ["non_members", "Customers without a plan"], ["renewal", "Plans renewing soon"]];
+const MKT_WHO = [["all", "Everyone"], ["members", "Plan members"], ["non_members", "Customers without a plan"], ["renewal", "Plans renewing soon"], ["past", "Past plan members (plan ended)"]];
+// the four kinds of campaign, each with its own tab on the Marketing page (kept in the campaign's audience.channel)
+const MKT_CH = [["email", "✉️", "Email", "email", "emails"], ["mail", "📮", "Mail: postcards & letters", "mailing", "mailings"], ["text", "💬", "Texting", "text", "texts"], ["call", "📞", "Phone calls", "call list", "call lists"]];
+const MKT_CALL_OUT = [["no_answer", "No answer"], ["left_msg", "Left a message"], ["call_back", "Call back"], ["booked", "Booked"], ["not_interested", "Not interested"], ["dont_call", "Don't call again"]];
+const mktCh = c => (c?.audience?.channel) || "email";
 const MKT_TEMPLATES = [
   { key: "spring", icon: "🌷", kind: "season", name: "Spring AC tune-up", audience: { kind: "all", equipment: "ac" },
     subject: "Time for your air conditioner tune-up, {first_name}",
@@ -6077,36 +6090,47 @@ async function openMarketing(msg) {
 }
 function mktNew(tkey) {
   const t = MKT_TEMPLATES.find(x => x.key === tkey) || MKT_TEMPLATES[MKT_TEMPLATES.length - 1];
-  MKT.cur = { id: null, name: t.name + " – " + new Date().toLocaleDateString("en-CA", { month: "short", year: "numeric" }), kind: t.kind, subject: t.subject, body: t.body,
-              audience: { recent_only: true, ...t.audience }, status: "draft", sent: 0, failed: 0 };
-  MKT.aud = null; MKT.prog = null; MKT.msg = "";
+  const ch = MKT.ch, topic = String(t.subject || "").replace(/,? ?\{first_name\}\??/g, "").trim();
+  const body = ch === "text" ? (t.key === "blank" ? "Hi {first_name}, it's Reid Heating & Cooling. " : `Hi {first_name}, it's Reid Heating & Cooling. ${topic}${/[?.!]$/.test(topic) ? "" : "."} Reply here or call us to book.`)
+    : ch === "call" ? `Hi, is this {first_name}? This is {my_name} from Reid Heating & Cooling.\n\nI'm calling about: ${topic || "[what the call is about]"}\n\n` + String(t.body || "").replace(/^Hi \{first_name\},\n\n/, "").replace(/\n\nThank you,[\s\S]*$/, "").replace(/reply to this email or /gi, "")
+      + "\n\nIf they say yes: book it, then press Booked.\nIf they're not interested: thank them, and press Not interested."
+    : ch === "mail" ? String(t.body || "").replace(/Just reply to this email or give us a call/gi, "Just give us a call").replace(/reply to this email or /gi, "")
+    : t.body;
+  MKT.cur = { id: null, name: t.name + " – " + new Date().toLocaleDateString("en-CA", { month: "short", year: "numeric" }), kind: t.kind, subject: ch === "text" || ch === "call" ? topic : t.subject, body,
+              audience: { recent_only: true, ...t.audience, channel: ch, ...(ch === "mail" ? { format: "letter" } : {}) }, status: "draft", sent: 0, failed: 0 };
+  MKT.aud = null; MKT.prog = null; MKT.msg = ""; MKT.work = null;
   renderMarketing(); mktCount();
 }
 function renderMarketing() {
   const L = MKT.list, c = MKT.cur, top = $("#main").scrollTop;
-  const sent = L.campaigns.filter(x => x.status !== "draft"), drafts = L.campaigns.filter(x => x.status === "draft");
+  const CH = MKT_CH.find(x => x[0] === MKT.ch) || MKT_CH[0], mine = L.campaigns.filter(x => mktCh(x) === MKT.ch);
+  const sent = mine.filter(x => x.status !== "draft"), drafts = mine.filter(x => x.status === "draft");
   const row = x => `<button class="mkt-row ${c && c.id === x.id ? "cur" : ""}" type="button" data-mkt-open="${x.id}">
       <span><b>${esc(x.name)}</b><span class="quiet">${esc(mktAudLabel(x.audience || {}))}</span></span>
-      <span class="mkt-row-r">${x.status === "draft" ? `<span class="status s-off">Draft</span>` : x.status === "sending" ? `<span class="status s-warn">Part sent</span>` : `<span class="status s-done">Sent</span>`}
+      <span class="mkt-row-r">${x.status === "draft" ? `<span class="status s-off">Draft</span>` : x.status === "sending" ? `<span class="status s-warn">Part sent</span>` : `<span class="status s-done">${MKT.ch === "email" ? "Sent" : "Finished"}</span>`}
         <span class="quiet">${x.sent ? `${x.sent} sent${x.failed ? `, ${x.failed} failed` : ""} · ` : ""}${fmtDate(x.sent_at || x.created_at)}</span></span></button>`;
   const ro = c && c.status === "sent";
   $("#main").innerHTML = `<article class="staff mkt">
     <div class="pos-head"><h1>Marketing</h1></div>
-    <p class="lead">Send an email to a group of customers: plan members, plans renewing soon, homes with a certain kind of equipment, people due for service, a city. Every email has an unsubscribe link and lands on each customer's file.</p>
+    <div class="sinv-apps mkt-chtabs" role="group" aria-label="Kind of campaign">${MKT_CH.map(([k, ic, t]) => `<button type="button" class="sinv-app ${MKT.ch === k ? "on" : ""}" data-mkt-ch="${k}" aria-pressed="${MKT.ch === k}"><span class="sa-ic">${ic}</span><span class="sa-tn">${t}</span><small>${L.campaigns.filter(x => mktCh(x) === k).length || ""}</small></button>`).join("")}</div>
+    <p class="lead">${{ email: "Send an email to a group of customers: plan members, plans renewing soon, past plan members, homes with a certain kind of equipment, people due for service, a city. Every email has an unsubscribe link and lands on each customer's file.",
+      mail: "Mail postcards or letters to the same groups. Print the letters or postcards and the address labels here, or download the list for a print shop, then mark them as mailed.",
+      text: "Text the same groups. Customers need a mobile number that allows texts. Every text ends with \"Reply STOP to stop texts\".",
+      call: "Make a call list from the same groups, with a script. Mark how each call went (No answer, Booked …) so anyone can pick up where you left off." }[MKT.ch]}</p>
     ${MKT.msg ? `<div class="staff-msg ${/^Not|Couldn|^Stopped|failed/.test(MKT.msg) ? "err" : "ok"}" role="status">${esc(MKT.msg)}</div>` : ""}
     <div class="mkt-cols">
       <div class="mkt-side">
-        <section class="cl-tools"><strong>New email</strong>
-          <div class="mkt-tpls">${MKT_TEMPLATES.map(t => `<button class="btn quiet-btn" type="button" data-mkt-new="${t.key}">${esc(t.name)}</button>`).join("")}</div></section>
+        <section class="cl-tools"><strong>New ${CH[3]}</strong>
+          <div class="mkt-tpls">${MKT_TEMPLATES.map(t => `<button class="btn quiet-btn" type="button" data-mkt-new="${t.key}">${esc(t.key === "blank" ? "Blank " + CH[3] : t.name)}</button>`).join("")}</div></section>
         ${drafts.length ? `<section class="cl-tools"><strong>Drafts</strong><div class="mkt-rows">${drafts.map(row).join("")}</div></section>` : ""}
         <section class="cl-tools"><strong>Sent</strong><div class="mkt-rows">${sent.map(row).join("") || `<span class="quiet">Nothing sent yet.</span>`}</div></section>
-        <section class="cl-tools"><strong>Bottom of every email</strong>
+        ${MKT.ch === "email" || MKT.ch === "mail" ? `<section class="cl-tools"><strong>${MKT.ch === "mail" ? "Return address (top of every letter)" : "Bottom of every email"}</strong>
           <p class="quiet" style="margin:0">Canada's anti-spam law needs your business name, <b>mailing address</b> and a phone, email or website on every marketing email.</p>
           ${L.footer_saved ? "" : `<p class="mkt-warn">Add your mailing address and phone here, then Save, before sending.</p>`}
           <textarea id="mkt-footer" rows="5">${esc(L.footer || "")}</textarea>
-          <div><button class="btn" type="button" id="mkt-footer-save">Save</button> <span class="quiet">${L.unsubscribed} customer${L.unsubscribed === 1 ? " has" : "s have"} unsubscribed</span></div></section>
+          <div><button class="btn" type="button" id="mkt-footer-save">Save</button> <span class="quiet">${L.unsubscribed} customer${L.unsubscribed === 1 ? " has" : "s have"} unsubscribed</span></div></section>` : ""}
       </div>
-      <div class="mkt-main">${c ? mktEditor(c, ro) : `<div class="empty mkt-empty"><div><h2>Pick a ready-made email on the left</h2>or open a draft or a sent email to see it.</div></div>`}</div>
+      <div class="mkt-main">${c ? mktEditor(c, ro) : `<div class="empty mkt-empty"><div><h2>Pick a ready-made ${CH[3]} on the left</h2>or open a draft or a finished one to see it.</div></div>`}</div>
     </div></article>`;
   $("#main").scrollTop = top;
   wireMarketing();
@@ -6114,7 +6138,8 @@ function renderMarketing() {
 function mktEditor(c, ro) {
   const a = c.audience || {}, aud = MKT.aud, p = aud?.people?.[0];
   const dis = ro || MKT.sending ? "disabled" : "";
-  const plans = MKT.list.plan_types || [], pick = new Set((a.plan_types || []).map(String));
+  const ch = a.channel || "email", CH = MKT_CH.find(x => x[0] === ch) || MKT_CH[0];
+  const plans = a.kind === "past" ? (MKT.plansAll || []) : (MKT.list.plan_types || []), pick = new Set((a.plan_types || []).map(String));
   return `<form id="mkt-form" class="mkt-form">
     <section class="cl-tools">
       <div class="pf-set mkt-set">
@@ -6134,14 +6159,16 @@ function mktEditor(c, ro) {
         <label>Last duct cleaning<select name="duct" ${dis}>${MKT_YEARS("Never had duct cleaning").map(([k, t]) => `<option value="${k}" ${k === (a.duct || "") ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       </div>
       ${a.recent_only !== false && (Number(a.cleaning) >= 2 || Number(a.duct) >= 2) ? `<p class="cm-note" style="margin:0">Heads up: with "Only customers we've worked for in the last 2 years" ticked, this only finds people who had some other job lately or have a plan. Customers we haven't worked for in over 2 years need to have agreed to emails some other way.</p>` : ""}
-      ${a.kind === "members" || a.kind === "renewal" ? `<details class="mkt-plans" ${pick.size ? "open" : ""}><summary>Only these plans <span class="quiet">(${pick.size ? pick.size + " picked" : "none picked = every plan"})</span></summary>
-        <div class="mkt-plan-list">${plans.map(t => `<label class="pb-check"><input type="checkbox" data-mkt-plan="${t.id}" ${pick.has(String(t.id)) ? "checked" : ""} ${dis}> ${esc(t.name)} <span class="quiet">${t.members}</span></label>`).join("")}</div></details>` : ""}
+      ${a.kind === "members" || a.kind === "renewal" || a.kind === "past" ? `<details class="mkt-plans" ${pick.size || a.kind === "past" ? "open" : ""}><summary>Only these plans <span class="quiet">(${pick.size ? pick.size + " picked" : "none picked = every plan"})</span></summary>
+        <div class="mkt-plan-list">${a.kind === "past" && !MKT.plansAll ? `<span class="quiet">Loading every plan, old ones too…</span>` : plans.map(t => `<label class="pb-check"><input type="checkbox" data-mkt-plan="${t.id}" ${pick.has(String(t.id)) ? "checked" : ""} ${dis}> ${esc(t.name)}${a.kind === "past" && t.active === false ? ` <span class="ow-tag">no longer sold</span>` : ""} <span class="quiet">${a.kind === "past" ? `${t.past} past` : t.members}</span></label>`).join("")}</div></details>` : ""}
       <label class="pb-check"><input type="checkbox" name="recent_only" ${a.recent_only === false ? "" : "checked"} ${dis}> Only customers we've worked for in the last 2 years, or plan members</label>
-      <p class="quiet" style="margin:0">Under Canada's anti-spam law, a job in the last 2 years or an active plan counts as permission to email them. Only untick this if the older customers agreed to get emails some other way. Customers who unsubscribed, are marked do not contact, or turned off marketing emails are always left out. (Not legal advice.)</p>
-      <div class="mkt-count" id="mkt-count">${aud ? `<b>${aud.count.toLocaleString()}</b> customer${aud.count === 1 ? "" : "s"} will get this email` : `<span class="quiet">Counting…</span>`}
-        ${aud && aud.people.length ? `<details><summary>See who</summary><div class="mkt-who">${aud.people.slice(0, 50).map(x => `<div><a href="#customer=${x.id}">${esc(x.name)}</a> <span class="quiet">${esc(x.email)}${x.plan ? " · " + esc(x.plan) : ""}${x.city ? " · " + esc(x.city) : ""}${a.cleaning && x.last_clean ? " · cleaned " + fmtDate(x.last_clean) : ""}${a.duct && x.last_duct ? " · ducts " + fmtDate(x.last_duct) : ""}</span></div>`).join("")}${aud.count > 50 ? `<div class="quiet">and ${(aud.count - 50).toLocaleString()} more</div>` : ""}</div></details>` : ""}</div>
+      ${ch === "call" ? `<p class="quiet" style="margin:0">Phone calls: customers who bought from you in the last 18 months can be called even if they're on the National Do Not Call List. Anyone marked "Don't call again" or do not contact is never on the list.</p>` : ""}
+      ${ch === "mail" ? `<p class="quiet" style="margin:0">Mail goes to each customer's home address. Customers marked do not contact are left off.</p>` : ""}
+      <p class="quiet ${ch === "email" || ch === "text" ? "" : "hidden"}" style="margin:0">Under Canada's anti-spam law, a job in the last 2 years or an active plan counts as permission to email them. Only untick this if the older customers agreed to get emails some other way. Customers who unsubscribed, are marked do not contact, or turned off marketing emails are always left out. (Not legal advice.)</p>
+      <div class="mkt-count" id="mkt-count">${aud ? `<b>${aud.count.toLocaleString()}</b> customer${aud.count === 1 ? "" : "s"} ${{ email: "will get this email", mail: `will get this ${a.format === "postcard" ? "postcard" : "letter"}`, text: "will get this text", call: "on this call list" }[ch]}` : `<span class="quiet">Counting…</span>`}
+        ${aud && aud.people.length ? `<details><summary>See who</summary><div class="mkt-who">${aud.people.slice(0, 50).map(x => `<div><a href="#customer=${x.id}">${esc(x.name)}</a> <span class="quiet">${esc(ch === "email" ? x.email : ch === "mail" ? [x.street, x.mail_city].filter(Boolean).join(", ") : x.phone || "")}${x.plan ? " · " + esc(x.plan) : ""}${x.city ? " · " + esc(x.city) : ""}${a.cleaning && x.last_clean ? " · cleaned " + fmtDate(x.last_clean) : ""}${a.duct && x.last_duct ? " · ducts " + fmtDate(x.last_duct) : ""}</span></div>`).join("")}${aud.count > 50 ? `<div class="quiet">and ${(aud.count - 50).toLocaleString()} more</div>` : ""}</div></details>` : ""}</div>
     </section>
-    <section class="cl-tools"><strong>The email</strong>
+    ${ch !== "email" ? mktOtherParts(c, ro, dis) : `    <section class="cl-tools"><strong>The email</strong>
       <label class="mkt-lbl">Subject<input name="subject" value="${esc(c.subject)}" maxlength="200" ${dis}></label>
       <label class="mkt-lbl">Message<textarea name="body" rows="14" ${dis}>${esc(c.body)}</textarea></label>
       <div class="mkt-fields quiet">Fill-ins (each customer gets their own): ${MKT_FIELDS.map(([f, t]) => ro ? `<code>${f}</code> ${t}` : `<button class="link" type="button" data-mkt-field="${f}" title="Put ${t} in the message">${f}</button> ${t}`).join(" · ")}</div>
@@ -6162,17 +6189,121 @@ function mktEditor(c, ro) {
       ${MKT.prog ? `<div class="mkt-prog"><div class="mkt-bar"><span style="width:${Math.round(100 * MKT.prog.done / Math.max(MKT.prog.total, 1))}%"></span></div>
         <div>${MKT.prog.done} of ${MKT.prog.total} done · ${MKT.prog.ok} sent${MKT.prog.bad ? ` · ${MKT.prog.bad} failed` : ""}${MKT.prog.last ? ` · <span class="quiet">${esc(MKT.prog.last)}</span>` : ""}</div></div>` : ""}
       ${c.sent && !ro && !MKT.sending ? `<div class="quiet">Already sent to ${c.sent}${c.failed ? `, ${c.failed} failed (Keep sending tries them again)` : ""}. <button class="link" type="button" id="mkt-done">Mark as finished</button></div>` : ""}
-    </section></form>`;
+    </section>`}</form>`;
+}
+// ---------- Mail, Texting and Phone call campaigns: the message part and the working list ----------
+const mktText = (c, p) => mktFill(c.body, p).replace(/\s+$/, "") + "\nReply STOP to stop texts.";
+const mktAddr = p => [esc(p.name || ""), esc([p.street, p.unit ? "Unit " + p.unit : ""].filter(Boolean).join(", ")), esc([[p.mail_city, p.province].filter(Boolean).join(" "), p.postal].filter(Boolean).join("  "))].filter(Boolean).join("<br>");
+function mktOtherParts(c, ro, dis) {
+  const a = c.audience || {}, ch = a.channel, p = MKT.aud?.people?.[0], post = a.format === "postcard";
+  const fields = `<div class="mkt-fields quiet">Fill-ins (each customer gets their own): ${MKT_FIELDS.map(([f, t]) => ro ? `<code>${f}</code> ${t}` : `<button class="link" type="button" data-mkt-field="${f}" title="Put ${t} in the message">${f}</button> ${t}`).join(" · ")}</div>`;
+  let part;
+  if (ch === "mail") part = `<section class="cl-tools"><strong>The ${post ? "postcard" : "letter"}</strong>
+      <div class="pf-set mkt-set"><label>Send as<select name="format" ${dis}><option value="letter" ${post ? "" : "selected"}>Letter (8½ × 11, for a window envelope)</option><option value="postcard" ${post ? "selected" : ""}>Postcard (6 × 4, message on one side, address on the other)</option></select></label></div>
+      <label class="mkt-lbl">Heading (optional)<input name="subject" value="${esc(c.subject)}" maxlength="200" ${dis}></label>
+      <label class="mkt-lbl">Message<textarea name="body" rows="${post ? 8 : 14}" ${dis}>${esc(c.body)}</textarea></label>${fields}
+      ${p ? `<details class="mkt-prev" open><summary>Preview as ${esc(p.name)}</summary><div class="mkt-paper ${post ? "mkt-post" : ""}">${post ? "" : `<div class="mkt-ret">${esc(MKT.list?.footer || "Reid Heating & Cooling").replace(/\n/g, "<br>")}</div><div class="mkt-to">${mktAddr(p)}</div>`}
+        ${c.subject ? `<div class="mkt-subj">${esc(mktFill(c.subject, p))}</div>` : ""}<pre>${esc(mktFill(c.body, p))}</pre></div></details>` : ""}</section>`;
+  else if (ch === "text") { const n = p ? mktText(c, p).length : 0;
+    part = `<section class="cl-tools"><strong>The text</strong><input type="hidden" name="subject" value="${esc(c.subject)}">
+      <label class="mkt-lbl">Message<textarea name="body" rows="5" ${dis}>${esc(c.body)}</textarea></label>${fields}
+      <div class="quiet">"Reply STOP to stop texts." is added to the end of every text.${p ? ` As ${esc(p.name)} it's ${n} characters (${Math.ceil(n / 153) > 1 ? Math.ceil(n / 153) + " texts long" : "1 text"}).` : ""}</div>
+      ${p ? `<details class="mkt-prev" open><summary>Preview as ${esc(p.name)}</summary><div class="mkt-paper mkt-sms"><pre>${esc(mktText(c, p))}</pre></div></details>` : ""}</section>`; }
+  else part = `<section class="cl-tools"><strong>The call</strong>
+      <label class="mkt-lbl">What the call is about (only you see this)<input name="subject" value="${esc(c.subject)}" maxlength="200" ${dis}></label>
+      <label class="mkt-lbl">What to say (the script)<textarea name="body" rows="12" ${dis}>${esc(c.body)}</textarea></label>${fields}</section>`;
+  const W = MKT.work, workBtn = { mail: "", text: "Open the texting list", call: "Open the call list" }[ch];
+  return part + `<section class="cl-tools mkt-send">
+      <div class="ak-connrow">
+        ${ro ? `<button class="btn" type="button" id="mkt-copy">Use this again</button>` : `<button class="btn" type="submit" ${dis}>Save draft</button>`}
+        ${ch === "mail" ? `<button class="btn" type="button" id="mkt-print-mail" ${!MKT.aud?.count ? "disabled" : ""}>Print the ${post ? "postcards" : "letters"}</button>
+          <button class="btn quiet-btn" type="button" id="mkt-print-labels" ${!MKT.aud?.count ? "disabled" : ""}>Print address labels</button>
+          <button class="btn quiet-btn" type="button" id="mkt-csv" ${!MKT.aud?.count ? "disabled" : ""}>Download the list (for a print shop)</button>`
+        : `<button class="btn" type="button" id="mkt-open-list" ${!MKT.aud?.count ? "disabled" : ""}>${W ? "Refresh the list" : workBtn}</button>`}
+        ${ch === "text" ? `<button class="btn quiet-btn" type="button" id="mkt-csv" ${!MKT.aud?.count ? "disabled" : ""}>Download for Podium (names, numbers, texts)</button>` : ""}
+        <button class="btn quiet-btn" type="button" id="mkt-close">Close</button>
+        ${!ro && c.id ? `<button class="link" type="button" id="mkt-done">Mark as finished</button>` : ""}
+        ${!ro && c.id && !c.sent ? `<button class="link danger" type="button" id="mkt-del">Delete draft</button>` : ""}
+      </div>
+      ${ch === "mail" ? `<label class="pb-check"><input type="checkbox" data-mkt-onlynew ${MKT.onlyNew === false ? "" : "checked"}> Leave out customers already mailed for this one</label>
+        <div class="ak-connrow">${W ? `<span><b>${W.touched.toLocaleString()}</b> mailed so far</span>` : ""}<button class="btn quiet-btn" type="button" id="mkt-mailed" ${!MKT.aud?.count ? "disabled" : ""}>Mark them all as mailed</button></div>
+        <p class="quiet" style="margin:0">Print, put them in the mail, then press Mark them all as mailed so the next print leaves them out.</p>`
+      : ch === "text" ? `<p class="quiet" style="margin:0">Sending texts straight from here needs Podium (or another texting service) connected. Until then: open the list and text from your phone or computer, or download the list and upload it to Podium. Mark each one as texted.</p>` : ""}
+      ${W && ch !== "mail" ? mktWorkList(c) : ""}
+    </section>`;
+}
+function mktWorkList(c) {
+  const W = MKT.work, ch = c.audience.channel, done = new Set(ch === "call" ? ["booked", "not_interested", "dont_call"] : ["texted", "stop"]);
+  const label = o => (MKT_CALL_OUT.find(x => x[0] === o) || [0, { texted: "Texted", stop: "Replied STOP", mailed: "Mailed" }[o] || o])[1];
+  const tally = {}; W.people.forEach(p => { const t = W.touch.get(p.id); const k = t ? t.outcome : "none"; tally[k] = (tally[k] || 0) + 1; });
+  const list = W.people.filter(p => !(MKT.hideDone !== false && done.has(W.touch.get(p.id)?.outcome)));
+  const row = p => { const t = W.touch.get(p.id), tel = String(p.phone || "").replace(/[^\d+]/g, "");
+    return `<tr class="${t ? "mkt-t-" + t.outcome : ""}"><td><a href="#customer=${p.id}"><b>${esc(p.name)}</b></a><div class="quiet">${esc([p.city, p.plan, p.last_service ? "last service " + fmtDate(p.last_service) : ""].filter(Boolean).join(" · "))}</div></td>
+      <td class="num"><a href="${ch === "call" ? "tel:" + tel : "sms:" + tel + "?&body=" + encodeURIComponent(mktText(c, p))}">${esc(p.phone || "")}</a></td>
+      <td>${t ? `<span class="ow-tag">${esc(label(t.outcome))}</span><div class="quiet">${esc([t.by, t.at ? new Date(t.at).toLocaleString("en-CA", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "", t.tries > 1 ? t.tries + " tries" : ""].filter(Boolean).join(" · "))}</div>${t.note ? `<div>${esc(t.note)}</div>` : ""}` : `<span class="quiet">Not yet</span>`}</td>
+      <td class="mkt-acts">${ch === "call" ? `<input type="text" placeholder="Note (optional)" data-mkt-note="${p.id}" aria-label="Note for ${esc(p.name)}">
+        <div>${MKT_CALL_OUT.map(([k, x]) => `<button type="button" class="btn quiet-btn mkt-o-${k}" data-mkt-touch="${p.id}" data-out="${k}">${x}</button>`).join("")}</div>`
+        : `<button type="button" class="btn quiet-btn" data-mkt-copytext="${p.id}">Copy the text</button><button type="button" class="btn quiet-btn" data-mkt-touch="${p.id}" data-out="texted">Mark as texted</button><button type="button" class="btn quiet-btn mkt-o-dont_call" data-mkt-touch="${p.id}" data-out="stop">Replied STOP</button>`}</td></tr>`; };
+  return `<div class="mkt-work" data-atag-fixed="MK List">
+    <div class="mkt-tally">${W.people.length.toLocaleString()} on the list${Object.entries(tally).map(([k, n]) => ` · <b>${n.toLocaleString()}</b> ${k === "none" ? "not done yet" : esc(label(k).toLowerCase())}`).join("")}
+      <label class="pb-check"><input type="checkbox" data-mkt-hidedone ${MKT.hideDone === false ? "" : "checked"}> Hide finished ones (${ch === "call" ? "Booked, Not interested, Don't call again" : "texted"})</label></div>
+    ${list.length ? `<table class="calls-table mkt-wt"><thead><tr><th>Customer</th><th>${ch === "call" ? "Call" : "Text"}</th><th>Last result</th><th></th></tr></thead><tbody>${list.slice(0, 300).map(row).join("")}</tbody></table>
+      ${list.length > 300 ? `<div class="quiet">Showing the first 300 of ${list.length.toLocaleString()}. Finish some and they drop off the list.</div>` : ""}` : `<div class="quiet" style="padding:10px 0">All done on this list.</div>`}</div>`;
+}
+async function mktLoadWork() {
+  const c = mktRead(); if (!c.id && !(await mktSave())) return;
+  MKT.msg = ""; const ch = c.audience.channel;
+  const [aud, t] = await Promise.all([db.rpc("marketing_audience", { a: c.audience, p_limit: 20000 }), db.rpc("marketing_touch_list", { p_campaign: c.id })]);
+  if (aud.error || t.error) { MKT.msg = "Couldn't get the list: " + rpcErr(aud.error || t.error); return renderMarketing(); }
+  const touch = new Map((t.data || []).map(x => [Number(x.customer_id), x]));
+  MKT.work = { people: aud.data.people, touch, touched: (t.data || []).filter(x => ch !== "mail" || x.outcome === "mailed").length };
+  mktRefresh();
+}
+function mktDownload(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type })), a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+const mktCsvCell = v => { const x = String(v ?? ""); return /[",\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x; };
+async function mktMailPeople() {   // everyone to mail now (leaving out the ones already mailed, unless that's unticked)
+  await mktLoadWork(); const W = MKT.work; if (!W) return [];
+  return MKT.onlyNew === false ? W.people : W.people.filter(p => W.touch.get(p.id)?.outcome !== "mailed");
+}
+async function mktPrintMail(labels) {
+  const win = window.open("", "_blank"); if (!win) { MKT.msg = "Your browser blocked the print window. Allow pop-ups for this site, then try again."; return renderMarketing(); }
+  win.document.write("<p style='font:16px Arial;padding:20px'>Getting the list…</p>");
+  const c = MKT.cur, post = c.audience.format === "postcard", people = await mktMailPeople();
+  if (!people.length) { win.document.body.innerHTML = "<p style='font:16px Arial;padding:20px'>Everyone on this list has already been mailed.</p>"; return; }
+  const ret = esc(MKT.list?.footer || "Reid Heating & Cooling").replace(/\n/g, "<br>"), today = new Date().toLocaleDateString("en-CA", { year: "numeric", month: "long", day: "numeric" });
+  const page = labels ? `<style>@page{size:letter;margin:0.5in 0.19in 0}body{margin:0;font:11pt Arial}.sheet{display:grid;grid-template-columns:repeat(3,2.625in);grid-auto-rows:1in;column-gap:0.125in}
+      .l{padding:0.1in 0.15in;overflow:hidden;line-height:1.25}</style><div class="sheet">${people.map(p => `<div class="l">${mktAddr(p)}</div>`).join("")}</div>`
+    : post ? `<style>@page{size:6in 4in;margin:0}body{margin:0;font:11pt Georgia}.pc{width:6in;height:4in;box-sizing:border-box;padding:0.35in;page-break-after:always;position:relative;overflow:hidden}
+      .pc h2{font:bold 14pt Arial;margin:0 0 6px}.pc pre{white-space:pre-wrap;font:inherit;margin:0}.ret{position:absolute;left:0.35in;top:0.3in;font:8pt Arial;line-height:1.3}
+      .to{position:absolute;left:3.1in;top:1.7in;font:11pt Arial;line-height:1.35}.stamp{position:absolute;right:0.3in;top:0.3in;width:0.8in;height:0.95in;border:1px dashed #999;font:7pt Arial;color:#999;display:grid;place-items:center}</style>
+      ${people.map(p => `<div class="pc">${c.subject ? `<h2>${esc(mktFill(c.subject, p))}</h2>` : ""}<pre>${esc(mktFill(c.body, p))}</pre></div><div class="pc"><div class="ret">${ret}</div><div class="stamp">STAMP</div><div class="to">${mktAddr(p)}</div></div>`).join("")}`
+    : `<style>@page{size:letter;margin:0.6in 0.75in}body{margin:0;font:12pt Georgia}.lt{page-break-after:always;position:relative;min-height:9.5in}.ret{font:9.5pt Arial;line-height:1.35}
+      .to{position:absolute;top:1.55in;left:0.15in;font:11.5pt Arial;line-height:1.4}.date{margin-top:2.6in}.lt h2{font:bold 14pt Arial;margin:18px 0 0}.lt pre{white-space:pre-wrap;font:inherit;line-height:1.5;margin:16px 0 0}</style>
+      ${people.map(p => `<div class="lt"><div class="ret">${ret}</div><div class="to">${mktAddr(p)}</div><div class="date">${today}</div>${c.subject ? `<h2>${esc(mktFill(c.subject, p))}</h2>` : ""}<pre>${esc(mktFill(c.body, p))}</pre></div>`).join("")}`;
+  win.document.open(); win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(c.name)}</title></head><body>${page}<script>setTimeout(()=>print(),400)<\/script></body></html>`); win.document.close();
+}
+async function mktCsv() {
+  const c = mktRead(), ch = c.audience.channel;
+  const people = ch === "mail" ? await mktMailPeople() : (await mktLoadWork(), (MKT.work?.people || []).filter(p => !["texted", "stop"].includes(MKT.work.touch.get(p.id)?.outcome)));
+  if (!people.length) return;
+  const rows = ch === "mail" ? [["Name", "Street", "Unit", "City", "Province", "Postal code"], ...people.map(p => [p.name, p.street, p.unit, p.mail_city, p.province, p.postal])]
+    : [["Name", "First name", "Phone", "Message"], ...people.map(p => [p.name, mktFirstName(p), p.phone, mktText(c, p)])];
+  mktDownload(`${c.name.replace(/[^\w -]+/g, "").trim() || "list"}.csv`, "﻿" + rows.map(r => r.map(mktCsvCell).join(",")).join("\r\n"), "text/csv");
 }
 function mktRead() {
   const f = $("#mkt-form"), c = MKT.cur; if (!f || !c || c.status === "sent") return c;
   const num = v => { const n = parseInt(String(v || "").replace(/\D/g, ""), 10); return isFinite(n) && n > 0 ? n : null; };
-  c.name = f.name.value; c.kind = f.kind.value; c.subject = f.subject.value; c.body = f.body.value;
+  const ch0 = c.audience?.channel || "email", fmt0 = c.audience?.format;
+  c.name = f.name.value; c.kind = f.kind.value; c.subject = f.subject?.value ?? c.subject; c.body = f.body?.value ?? c.body;
   c.audience = { kind: f.who.value, equipment: f.equipment.value || null, recent_only: f.recent_only.checked, city: f.city.value.trim() || null,
     not_serviced_months: num(f.not_serviced_months.value), min_age_years: f.equipment.value ? num(f.min_age_years.value) : null,
     renew_days: f.who.value === "renewal" ? (num(f.renew_days.value) || 45) : null,
     installed: f.installed.value || null, cleaning: f.cleaning.value || null, duct: f.duct.value || null,
-    plan_types: ["members", "renewal"].includes(f.who.value) ? [...f.querySelectorAll("[data-mkt-plan]:checked")].map(x => Number(x.dataset.mktPlan)) : [] };
+    plan_types: ["members", "renewal", "past"].includes(f.who.value) ? [...f.querySelectorAll("[data-mkt-plan]:checked")].map(x => Number(x.dataset.mktPlan)) : [],
+    channel: ch0, format: ch0 === "mail" ? (f.format?.value || fmt0 || "letter") : null };
   c.audience.campaign_kind = c.kind;   // customers who turned this kind off on their file are left out
   Object.keys(c.audience).forEach(k => c.audience[k] == null && delete c.audience[k]);
   MKT.max = num(f.max?.value) || 250;
@@ -6180,6 +6311,7 @@ function mktRead() {
 }
 async function mktCount() {
   const seq = MKT.countSeq = (MKT.countSeq || 0) + 1, c = MKT.cur;
+  if (c?.audience?.kind === "past" && !MKT.plansAll) db.rpc("marketing_plan_types_all").then(({ data }) => { MKT.plansAll = data || []; mktRefresh(); });
   const { data, error } = await db.rpc("marketing_audience", { a: c.audience || {}, p_limit: 60 });
   if (seq !== MKT.countSeq || MKT.cur !== c) return;
   MKT.aud = error ? { count: 0, people: [], err: rpcErr(error) } : data;
@@ -6250,17 +6382,43 @@ function wireMktEditor() {
   const later = () => { clearTimeout(t); t = setTimeout(() => { mktRead(); mktRefresh(); }, 350); };
   f.addEventListener("submit", async e => { e.preventDefault(); if (await mktSave()) openMarketing("Draft saved."); });
   f.addEventListener("input", e => {
+    if (e.target.closest(".mkt-work")) return;
     if (["subject", "body"].includes(e.target.name)) return later();
     if (e.target.name === "max" || e.target.name === "name") return mktRead();
     mktRead(); clearTimeout(MKT.ct); MKT.ct = setTimeout(mktCount, 400);
   });
-  f.addEventListener("change", e => { if (["who", "equipment", "recent_only", "kind", "installed", "cleaning", "duct"].includes(e.target.name) || e.target.dataset.mktPlan) { mktRead(); MKT.aud = null; mktRefresh(); mktCount(); } });
+  f.addEventListener("change", e => {
+    if (e.target.matches("[data-mkt-onlynew]")) { MKT.onlyNew = e.target.checked; return; }
+    if (e.target.matches("[data-mkt-hidedone]")) { MKT.hideDone = e.target.checked; return mktRefresh(); }
+    if (e.target.closest(".mkt-work")) return;
+    if (e.target.name === "format") { mktRead(); return mktRefresh(); }
+    if (["who", "equipment", "recent_only", "kind", "installed", "cleaning", "duct"].includes(e.target.name) || e.target.dataset.mktPlan) { mktRead(); MKT.aud = null; MKT.work = null; mktRefresh(); mktCount(); } });
+  $("#mkt-open-list")?.addEventListener("click", e => { e.target.disabled = true; e.target.textContent = "Getting the list…"; mktLoadWork(); });
+  $("#mkt-print-mail")?.addEventListener("click", () => mktPrintMail(false));
+  $("#mkt-print-labels")?.addEventListener("click", () => mktPrintMail(true));
+  $("#mkt-csv")?.addEventListener("click", () => mktCsv());
+  $("#mkt-mailed")?.addEventListener("click", async e => {
+    const people = await mktMailPeople(); if (!people.length) { MKT.msg = "Everyone on this list is already marked as mailed."; return renderMarketing(); }
+    if (e.target.dataset.sure !== "1") { e.target.dataset.sure = "1"; e.target.textContent = `Sure? Mark ${people.length.toLocaleString()} as mailed`; return; }
+    const { error } = await db.rpc("marketing_touch_many", { p_campaign: MKT.cur.id, p_customers: people.map(p => p.id), p_channel: "mail", p_outcome: "mailed" });
+    MKT.msg = error ? "Not saved: " + rpcErr(error) : `${people.length.toLocaleString()} marked as mailed.`; renderMarketingMsg(); mktLoadWork(); });
+  f.querySelector(".mkt-work")?.addEventListener("click", async e => {
+    const cp = e.target.closest("[data-mkt-copytext]");
+    if (cp) { const p = MKT.work.people.find(x => x.id === Number(cp.dataset.mktCopytext)); const ok = await copyText(mktText(MKT.cur, p)); cp.textContent = ok ? "Copied ✓" : "Couldn't copy"; return; }
+    const b = e.target.closest("[data-mkt-touch]"); if (!b) return;
+    const id = Number(b.dataset.mktTouch), note = f.querySelector(`[data-mkt-note="${id}"]`)?.value || null;
+    b.disabled = true;
+    const { error } = await db.rpc("marketing_touch", { p_campaign: MKT.cur.id, p_customer: id, p_channel: MKT.cur.audience.channel, p_outcome: b.dataset.out, p_note: note });
+    if (error) { b.disabled = false; MKT.msg = "Not saved: " + rpcErr(error); return renderMarketingMsg(); }
+    const old = MKT.work.touch.get(id);
+    MKT.work.touch.set(id, { customer_id: id, outcome: b.dataset.out, note, at: new Date().toISOString(), by: ONLINE.find(u => u.is_me)?.name || "", tries: (old?.tries || 0) + 1 });
+    mktRefresh(); });
   f.querySelectorAll("[data-mkt-field]").forEach(b => b.addEventListener("click", () => {
     const ta = f.body, at = ta.selectionStart ?? ta.value.length;
     ta.value = ta.value.slice(0, at) + b.dataset.mktField + ta.value.slice(ta.selectionEnd ?? at);
     ta.focus(); ta.setSelectionRange(at + b.dataset.mktField.length, at + b.dataset.mktField.length); mktRead(); later(); }));
   $("#mkt-test")?.addEventListener("click", () => mktSend(true));
-  $("#mkt-close")?.addEventListener("click", () => { MKT.cur = null; MKT.aud = null; MKT.prog = null; MKT.msg = ""; renderMarketing(); });
+  $("#mkt-close")?.addEventListener("click", () => { MKT.cur = null; MKT.aud = null; MKT.prog = null; MKT.msg = ""; MKT.work = null; renderMarketing(); });
   $("#mkt-send")?.addEventListener("click", async e => {
     const n = Math.min(MKT.aud?.count || 0, MKT.max || 250);
     if (e.target.dataset.sure !== "1") { e.target.dataset.sure = "1"; e.target.textContent = `Sure? Send to ${n.toLocaleString()} customer${n === 1 ? "" : "s"} now`; return; }
@@ -6272,13 +6430,15 @@ function wireMktEditor() {
   $("#mkt-done")?.addEventListener("click", async () => { await db.rpc("save_marketing_campaign", { p_id: MKT.cur.id, p: { status: "sent" } }); openMarketing("Marked as finished."); });
   $("#mkt-copy")?.addEventListener("click", () => { const o = MKT.cur;
     MKT.cur = { id: null, name: o.name + " (again)", kind: o.kind, subject: o.subject, body: o.body, audience: { ...o.audience }, status: "draft", sent: 0, failed: 0 };
-    MKT.aud = null; MKT.prog = null; MKT.msg = ""; renderMarketing(); mktCount(); });
+    MKT.aud = null; MKT.prog = null; MKT.msg = ""; MKT.work = null; renderMarketing(); mktCount(); });
 }
 function wireMarketing() {
   document.querySelectorAll("[data-mkt-new]").forEach(b => b.addEventListener("click", () => { if (!MKT.sending) mktNew(b.dataset.mktNew); }));
   document.querySelectorAll("[data-mkt-open]").forEach(b => b.addEventListener("click", () => {
     if (MKT.sending) return; const x = MKT.list.campaigns.find(c => c.id === Number(b.dataset.mktOpen));
-    MKT.cur = { ...x, audience: { ...(x.audience || {}) } }; MKT.aud = null; MKT.prog = null; MKT.msg = ""; renderMarketing(); mktCount(); }));
+    MKT.cur = { ...x, audience: { ...(x.audience || {}) } }; MKT.aud = null; MKT.prog = null; MKT.msg = ""; MKT.work = null; MKT.ch = mktCh(x); renderMarketing(); mktCount(); }));
+  document.querySelectorAll("[data-mkt-ch]").forEach(b => b.addEventListener("click", () => { if (MKT.sending || MKT.ch === b.dataset.mktCh) return;
+    MKT.ch = b.dataset.mktCh; MKT.cur = null; MKT.aud = null; MKT.prog = null; MKT.msg = ""; MKT.work = null; renderMarketing(); }));
   $("#mkt-footer-save")?.addEventListener("click", async () => {
     const { error } = await db.rpc("save_marketing_footer", { p: $("#mkt-footer").value });
     openMarketing(error ? "Not saved: " + rpcErr(error) : "Saved. This goes at the bottom of every marketing email."); });
