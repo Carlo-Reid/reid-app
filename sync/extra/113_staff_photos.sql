@@ -6,7 +6,8 @@ ALTER TABLE public.staff_photos ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION public.staff_photos_list() RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $$
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE
-    coalesce((SELECT jsonb_agg(jsonb_build_object('user_id', app_user_id, 'image', image, 'mime', mime)) FROM staff_photos), '[]'::jsonb) END $$;
+    coalesce((SELECT jsonb_agg(jsonb_build_object('user_id', p.app_user_id, 'employee_id', u.employee_id, 'image', p.image, 'mime', p.mime))
+              FROM staff_photos p LEFT JOIN app_users u ON u.id = p.app_user_id), '[]'::jsonb) END $$;
 
 -- p_image: the picture as base64 (no "data:" part); null deletes it
 CREATE OR REPLACE FUNCTION public.staff_photo_set(p_user bigint, p_image text, p_mime text DEFAULT 'image/jpeg') RETURNS void
