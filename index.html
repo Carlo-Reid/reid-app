@@ -14341,7 +14341,15 @@ async function dropInKnown(sup) {
   if (!DROPIN.kn[sup]) { const { data } = await db.rpc("supplier_invoices_list", { p_supplier: sup, p_statement: 0 }); DROPIN.kn[sup] = { sup, rows: data?.rows || [], lines: data?.statement_lines || [] }; }
   return DROPIN.kn[sup];
 }
-const dropInSupName = id => sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === id)?.supplier || "") || "that supplier";
+// which supplier a read file belongs to, when it isn't the one it was dropped on (its name is on the page and the current one's isn't)
+function sinvWhichSup(text, cur) {
+  const T = String(text || "").toUpperCase(), st = SINV.data?.statements || [];
+  const word = id => (sinvShort(st.find(y => y.supplier_id === id)?.supplier || "").split(/\s+/).filter(w => !/^(the|les?|la|a)$/i.test(w))[0] || "").toUpperCase().replace(/\W/g, "");
+  const has = w => w.length >= 3 && new RegExp("\\b" + w + "\\b").test(T);
+  if (has(word(cur))) return null;
+  return [...new Set(st.map(y => y.supplier_id))].find(id => id !== cur && has(word(id))) || null;
+}
+const dropInSupName = id => sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === id)?.supplier || "").replace(/^the\s+/i, "") || "that supplier";
 // a date like 23/10/26: day first when the first number can't be a month, month first when the second can't be; otherwise the reading closest to today (not in the future)
 function dropInDate(text) {
   const m = String(text).match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})\b/); if (!m) return "";
@@ -14368,7 +14376,7 @@ function drawDropIn() {
         ${x.busy ? `<td colspan="5" class="quiet">${esc(x.busy)}</td><td></td>` : x.done ? `<td>${esc(x.number)}</td><td>${esc(stDate(x.date))}</td><td>${esc(x.po || "")}</td><td class="r">${x.total != null ? money(x.total) : ""}</td><td class="st-ok">✓ ${esc(x.done)}</td><td></td>`
         : `<td><input name="number" value="${esc(x.number || "")}" ${x.number ? "" : `class="di-need" placeholder="Type it here" aria-label="Invoice number (type it in)"`}></td><td><input name="date" type="date" value="${esc(x.date || "")}"></td><td><input name="po" value="${esc(x.po || "")}"></td>
         <td class="r"><input name="total" type="number" step="0.01" value="${x.total ?? ""}"></td><td>${x.other && !x.sup ? `<div class="st-bad">This looks like ${esc(dropInSupName(x.other))}'s, not ${esc(DROPIN.name)}'s. <button class="link" type="button" data-di-sup="${i}">Save it under ${esc(dropInSupName(x.other))}</button></div>` : ""}
-          ${x.sup && x.sup !== DROPIN.sup ? `<div class="st-look">Goes under ${esc(dropInSupName(x.sup))} <button class="link" type="button" data-di-sup0="${i}">undo</button></div>` : ""}
+          ${x.sup && x.sup !== DROPIN.sup ? `<div class="st-look">Moved to <b>${esc(dropInSupName(x.sup))}</b>: it's ${esc(dropInSupName(x.sup))}'s, not ${esc(DROPIN.name)}'s. <button class="link" type="button" data-di-sup0="${i}">Keep it under ${esc(DROPIN.name)}</button></div>` : ""}
           ${x.match ? `<span class="st-ok">Adds the copy to our invoice ${esc(x.match.number)}</span>` : x.number ? `<span class="st-look">New ${x.credit ? "credit note" : "invoice"}${x.onSt ? " (it's on a statement)" : ""}</span>` : `<span class="st-bad">Type the invoice number in the box on the left of this row</span>`}${x.credit && !x.match ? `<div class="quiet">Credit: the total is saved as a minus.</div>` : ""}${x.err ? `<div class="st-bad">${esc(x.err)}</div>` : ""}</td>
         <td><button class="link danger" type="button" data-di-x="${i}">✕</button></td>`}</tr>`).join("")}</tbody></table>
       ${I.some(x => !x.done && !x.busy) ? `<div class="row"><button class="btn" type="button" data-di-save>Save ${I.filter(x => !x.done && !x.busy).length === 1 ? "it" : "them all"}</button></div>` : ""}` : ""}</div>`;
@@ -14417,10 +14425,8 @@ async function dropInFiles(files) {
         x.credit = /CREDIT\s*-?\s*DO NOT PAY|CREDIT\s*(?:NOTE|MEMO)|RETURN MERCHANDISE/.test(T) || !!last?.[2];
         x.total = last ? n(last[1]) * (x.credit ? -1 : 1) : null;
         // dropped under the wrong supplier? (e.g. a Master credit dropped on Boone)
-        { const word = id => (sinvShort((SINV.data?.statements || []).find(y => y.supplier_id === id)?.supplier || "").split(/\s+/).filter(w => !/^(the|les?|la|a)$/i.test(w))[0] || "").toUpperCase();
-          const ids = [...new Set((SINV.data?.statements || []).map(y => y.supplier_id))], has = w => w.length >= 3 && new RegExp("\\b" + w.replace(/\W/g, "") + "\\b").test(T);
-          const other = ids.find(id => id !== DROPIN.sup && has(word(id)));
-          x.other = other && !has(word(DROPIN.sup)) ? other : null; }
+        x.other = sinvWhichSup(T, DROPIN.sup);
+        if (x.other) { x.sup = x.other; await dropInKnown(x.sup); }   // dropped on the wrong supplier: it goes to the right one by itself
         x.subtotal = n((T.match(/SUB\s*-?\s*TOTAL[^\d\n]{0,60}([\d,]+\.\d{2})/) || [])[1]); x.hst = n((T.match(/(?:H\.?S\.?T|TVH)[^\d\n]{0,60}([\d,]+\.\d{2})/) || [])[1]);
         if (x.credit) { if (x.subtotal) x.subtotal = -Math.abs(x.subtotal); if (x.hst) x.hst = -Math.abs(x.hst); }
         x.busy = null; dropInMatch(x); drawDropIn();
@@ -14441,6 +14447,9 @@ async function dropInSave() {
   const left = DROPIN.items.filter(x => !x.done);
   if (left.length) { drawDropIn(); return; }   // something wasn't saved: stay here and show why
   const moved = DROPIN.items.filter(x => x.sup && x.sup !== DROPIN.sup).map(x => `${x.number} went under ${dropInSupName(x.sup)}`);
+  const sups = [...new Set(DROPIN.items.map(x => x.sup || DROPIN.sup))];
+  closeInvoice();   // all saved: close the window
+  if (sups.length === 1 && sups[0] !== DROPIN.sup) { SINV.sup = sups[0]; SINV.st = 0; SINV.open = null; SINV.pick = "all"; SINV.year = null; sinvSaveTab(); }   // all of them were another supplier's: show that supplier
   openSupInv(`Saved: ${DROPIN.items.map(x => x.number).join(", ")}.${moved.length ? " " + moved.join("; ") + "." : ""}`);
 }
 ["dragover", "drop"].forEach(t => document.addEventListener(t, e => { if (document.body.dataset.page === "supplier-invoices" && [...(e.dataTransfer?.types || [])].includes("Files") && !e.target.closest?.("[data-dropin], [data-sinv-drop], [data-sinv-dropin], [data-stv-new], [data-stv-drop]")) e.preventDefault(); }));   // a file dropped next to the box doesn't open in the browser
@@ -14575,12 +14584,15 @@ async function stReadFiles(files, S) {
     const worker = await window.Tesseract.createWorker("eng"); const texts = [];
     for (let i = 0; i < canvases.length; i++) { say(`Reading page ${i + 1} of ${canvases.length}… (about 10 seconds a page)`); const { data } = await worker.recognize(canvases[i]); texts.push(data.text); }
     await worker.terminate();
+    if (!STV.id) { const other = sinvWhichSup(texts.join("\n"), STV.sup);   // a statement dropped on the wrong supplier goes to the right one
+      if (other) { const was = S.supplier; STV.sup = S.supplier_id = other; S.supplier = dropInSupName(other); STV.moved = `This is ${S.supplier}'s statement, not ${was}'s, so it's loading under ${S.supplier}.`;
+        const h = document.querySelector("#inv-paper .stv h2"); if (h) h.textContent = `Load ${S.supplier}'s statement`; } else STV.moved = null; }
     const known = [...(STV.D?.statement_lines || []).map(l => l.reference), ...(SINV.data?.rows || []).filter(r => r.supplier_id === STV.sup).map(r => r.number), ...(SINV.data?.statement_lines || []).map(l => l.reference)];
     const R = stParse(texts, known); R.file = files.map(f => f.name).join(" + "); R.pages = canvases.length; STV.read = R;
     if (!STV.id) { // a new one: is that month already in the app?
       const all = (SINV.data?.statements || []).filter(s => s.supplier_id === STV.sup), hit = R.date && all.find(s => s.date === R.date);
       if (hit) { STV.id = hit.id; const { data } = await db.rpc("supplier_invoices_list", { p_supplier: STV.sup, p_statement: hit.id }); STV.D = data; return drawSupStatement(); }
-      box.innerHTML = stReviewHtml(R, S, null); stWireReview(S); return; }
+      box.innerHTML = (STV.moved ? `<div class="staff-msg ok">${esc(STV.moved)}</div>` : "") + stReviewHtml(R, S, null); stWireReview(S); return; }
     drawSupStatement();
   } catch (e) { box.innerHTML = `<div class="staff-msg err">Couldn't read it: ${esc(e.message || String(e))}</div>`; }
 }
@@ -14657,7 +14669,7 @@ async function stSave(S) {
   if (k !== "yes") return;
   const { data, error } = await db.rpc("supplier_statement_save", { p: { supplier_id: STV.sup, statement_date: date, account: S.account || "", total: R.total, aging: R.aging, file_name: R.file, pages: R.pages, lines: R.lines } });
   if (error) return alertMsg("Not saved: " + rpcErr(error));
-  alertMsg("Statement saved."); SINV.data = null; await openSupInv(); openSupStatement(data, STV.sup);
+  alertMsg("Statement saved."); SINV.data = null; if (SINV.sup != null && SINV.sup !== STV.sup) { SINV.sup = STV.sup; SINV.st = 0; sinvSaveTab(); } closeInvoice(); await openSupInv();   // saved: close the window
 }
 function wireSupInv() {
   const redo = () => { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; };
