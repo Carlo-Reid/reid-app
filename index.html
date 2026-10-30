@@ -4982,6 +4982,8 @@ html body[data-page="calls"] #main article.calls .cl-mt-list { margin: 10px 0 4p
 html body[data-page="calls"] #main article.calls .cl-mt-lh { display: flex; align-items: baseline; gap: 10px; padding: 2px 4px 6px; } html body[data-page="calls"] #main article.calls .cl-mt-lh .link { margin-left: auto; }
 /* Drop invoices in: room for a number like 40241429-00 */
 .stv[data-stv-drop].over { outline: 3px dashed #1f5fa8; outline-offset: 6px; }
+.mc-techs { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; } .mc-techs .chip.on { background: #1f5fa8; border-color: #1f5fa8; color: #fff; }
+.mc-tech-h { font-size: 16px; margin: 14px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); } .mc-tech-h:first-of-type { border-top: 0; }
 .sinv-mkpo { margin: 6px 0 10px; padding: 12px 14px; border: 1px solid #f0c36d; background: #fffaf0; border-radius: 14px; } .sinv-mkpo input { width: 100%; } .sinv-mkpo td.r input { width: 90px; text-align: right; }
 .dropin-t input.di-need { border: 2px solid #c62828 !important; background: #fff4f4 !important; }
 .dropin-t input[name=number] { width: 130px; min-width: 130px; } .dropin-t input[name=total] { width: 100px; }
@@ -12527,7 +12529,13 @@ async function openMyCalls(date) {
 }
 async function loadMyCalls(quiet) {
   const d = MC.date;
-  const { data, error } = await db.rpc("my_day", { p_date: d, p_employee_id: MC.emp });
+  let data, error;
+  if (MC.all && BOOK) {   // every tech's calls for the day, grouped under each tech
+    const techs = (BOOK.techs || []).filter(t => t.recent), res = await Promise.all(techs.map(t => db.rpc("my_day", { p_date: d, p_employee_id: t.id })));
+    error = res.find(r => r.error)?.error;
+    const groups = techs.map((t, i) => ({ id: t.id, name: t.name, calls: res[i].data?.calls || [] })), seen = new Set();
+    data = { employee_id: "all", name: "", groups, calls: groups.flatMap(g => g.calls).filter(c => !seen.has(c.visit_id) && seen.add(c.visit_id)) };
+  } else ({ data, error } = await db.rpc("my_day", { p_date: d, p_employee_id: MC.emp }));
   if (MC.date !== d || !document.querySelector(".mycalls, .loading")) return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the calls</h2>${esc(rpcErr(error))}</div></div>`; return; }
   const sig = JSON.stringify(data);
@@ -12543,17 +12551,20 @@ function renderMyCalls() {
   const top = $("#main").scrollTop;
   $("#main").innerHTML = `<article class="mycalls">
     <div class="mc-bar">
-      <h1>${D.employee_id && MC.emp && MC.emp !== ME.emp ? esc(D.name) + "'s calls" : "Tech Calls"}</h1>
+      <h1>${MC.all ? "Every tech's calls" : D.employee_id && MC.emp && MC.emp !== ME.emp ? esc(D.name) + "'s calls" : "Tech Calls"}</h1>
       <div class="mc-day">
         <button class="btn quiet-btn" type="button" data-mday="-1" aria-label="Day before">‹</button>
         <strong>${isToday ? "Today" : esc(new Date(MC.date + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }))}</strong>
         <button class="btn quiet-btn" type="button" data-mday="1" aria-label="Next day">›</button>
         ${isToday ? "" : `<button class="chip small" type="button" data-mtoday>Today</button>`}
       </div>
-      ${office ? `<label class="calls-tech">Tech <select id="mc-emp"><option value="">${ME.emp ? "Me" : "Pick a tech…"}</option>
-        ${(BOOK.techs || []).filter(t => t.recent && t.id !== ME.emp).map(t => `<option value="${t.id}" ${t.id === MC.emp ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>` : ""}
     </div>
-    ${!D.employee_id ? `<div class="empty-small">${office ? "Pick a tech to see their calls." : "Your login isn't linked to your name on the schedule yet. Ask Carlo to pick it for you on the Staff page."}</div>`
+      ${office ? `<div class="mc-techs" role="group" aria-label="Whose calls">
+        <button type="button" class="chip ${MC.all ? "on" : ""}" data-mc-emp="all" aria-pressed="${!!MC.all}">All techs</button>
+        ${ME.emp ? `<button type="button" class="chip ${!MC.all && (!MC.emp || MC.emp === ME.emp) ? "on" : ""}" data-mc-emp="" aria-pressed="${!MC.all && (!MC.emp || MC.emp === ME.emp)}">Me</button>` : ""}
+        ${(BOOK.techs || []).filter(t => t.recent && t.id !== ME.emp).map(t => `<button type="button" class="chip ${!MC.all && t.id === MC.emp ? "on" : ""}" data-mc-emp="${t.id}" aria-pressed="${!MC.all && t.id === MC.emp}">${esc(t.name)}</button>`).join("")}</div>` : ""}
+    ${MC.all ? (D.groups || []).map(g => `<h2 class="mc-tech-h">${esc(g.name)} <span class="quiet">${g.calls.length ? callsWord(g.calls.length) : "no calls"}</span></h2>${g.calls.map(mcCard).join("")}`).join("") || `<div class="empty-small">No techs on the schedule.</div>`
+      : !D.employee_id ? `<div class="empty-small">${office ? "Pick a tech to see their calls." : "Your login isn't linked to your name on the schedule yet. Ask Carlo to pick it for you on the Staff page."}</div>`
       : !calls.length ? `<div class="empty-small">No calls ${isToday ? "today" : "this day"}.</div>`
       : `<div class="mc-sum quiet">${callsWord(calls.length)}${left.length && left.length < calls.length ? ` · ${left.length} to go` : !left.length ? " · all done" : ""}</div>
          ${calls.map(mcCard).join("")}`}
@@ -12561,7 +12572,8 @@ function renderMyCalls() {
   $("#main").scrollTop = top;
   document.querySelectorAll("[data-mday]").forEach(b => b.addEventListener("click", () => { MC.date = ymd(addDays(new Date(MC.date + "T12:00:00"), Number(b.dataset.mday))); MC.open = null; loadMyCalls(); }));
   $("[data-mtoday]")?.addEventListener("click", () => { MC.date = ymd(new Date()); MC.open = null; loadMyCalls(); });
-  $("#mc-emp")?.addEventListener("change", e => { MC.emp = Number(e.target.value) || null; MC.open = null; loadMyCalls(); });
+  document.querySelectorAll("[data-mc-emp]").forEach(b => b.addEventListener("click", () => { const v = b.dataset.mcEmp;
+    MC.all = v === "all"; MC.emp = MC.all ? MC.emp : Number(v) || null; MC.open = null; MC.sig = null; $("#main").innerHTML = `<div class="loading">Loading the calls…</div>`; loadMyCalls(); }));
   document.querySelectorAll("[data-mc-toggle]").forEach(h => h.addEventListener("click", e => {
     if (e.target.closest("a, button:not([data-mc-toggle])")) return;
     const id = Number(h.dataset.mcToggle); MC.open = MC.open === id ? null : id; renderMyCalls();
