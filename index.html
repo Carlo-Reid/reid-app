@@ -5039,6 +5039,7 @@ article.staff .st-tk .st-tk-row { cursor: default; } article.staff .st-tk-off { 
 .sp-h .sp-slips { float: right; text-transform: none; letter-spacing: 0; font-size: 13px; }
 #viewas-bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 2147483100; display: flex; gap: 14px; align-items: center; padding: 10px 14px 10px 18px;
   background: #7a1f5c; color: #fff; border-radius: 999px; box-shadow: 0 8px 24px rgba(0,0,0,.3); font-size: 14px; max-width: calc(100vw - 24px); }
+.st-viewas-box { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .st-viewas-box > .quiet { flex-basis: 100%; }
 #viewas-bar .btn { background: #fff !important; color: #7a1f5c !important; border: 0 !important; white-space: nowrap; }
 body.viewing-as #app { box-shadow: inset 0 0 0 4px #7a1f5c; }
 .mc-techs { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin: 4px 0 8px; } .mc-techs .sinv-app { width: auto; min-height: 96px; padding: 10px 6px; } .mc-techs .sa-ic { font-size: 15px; font-weight: 800; }
@@ -5229,6 +5230,36 @@ function viewAsApply() {
   bar.querySelector("#viewas-back").addEventListener("click", viewAsStop);
   window.sideApply?.();
 }
+// "Sign in as …" (Carlo only): really signs in as them through the login-as function; "Back to me" puts Carlo's own sign-in back
+async function loginAsStart(uid, name) {
+  const k = await askChoice(`Sign in as ${esc(name)}?`, `The app reloads signed in as <b>${esc(name)}</b>: everything is exactly what they see and can do, and anything you save is saved <b>as them</b>. Press <b>Back to me</b> at the bottom of the screen to come back.`, [["yes", `Sign in as ${esc(name)}`, true], ["", "Not now"]]);
+  if (k !== "yes") return;
+  const { data: { session } } = await db.auth.getSession(); if (!session) return alertMsg("Sign in first.");
+  const { data, error } = await db.functions.invoke("login-as", { body: { app_user_id: uid } });
+  if (error || !data?.token_hash) { let t = error?.message || "Couldn't sign in as them"; try { const j = await error.context.json(); if (j?.error) t = j.error; } catch {}
+    if (/Failed to send a request|not found|404/i.test(t)) t = "The login-as function isn't set up in Supabase yet."; return alertMsg("Not signed in as them: " + t); }
+  try { localStorage.setItem("reid.realSession", JSON.stringify({ access_token: session.access_token, refresh_token: session.refresh_token, email: session.user?.email, as: name })); } catch {}
+  const r = await db.auth.verifyOtp({ token_hash: data.token_hash, type: "magiclink" });
+  if (r.error) { await db.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }).catch(() => {}); try { localStorage.removeItem("reid.realSession"); } catch {} return alertMsg("Not signed in as them: " + r.error.message); }
+  location.hash = ""; location.reload();
+}
+async function loginAsBack() {
+  let real = null; try { real = JSON.parse(localStorage.getItem("reid.realSession") || "null"); } catch {}
+  try { localStorage.removeItem("reid.realSession"); } catch {}
+  const r = real ? await db.auth.setSession({ access_token: real.access_token, refresh_token: real.refresh_token }) : { error: true };
+  if (r.error) { await db.auth.signOut({ scope: "local" }).catch(() => {}); }
+  location.hash = "#staff"; location.reload();
+}
+function loginAsBar() {   // while signed in as someone else: the bar to come back
+  let real = null; try { real = JSON.parse(localStorage.getItem("reid.realSession") || "null"); } catch {}
+  if (!real) return;
+  if (String(real.email || "").toLowerCase() === String(ME.email || "").toLowerCase()) { try { localStorage.removeItem("reid.realSession"); } catch {} return; }
+  let bar = document.getElementById("viewas-bar");
+  if (!bar) { bar = document.createElement("div"); bar.id = "viewas-bar"; bar.setAttribute("role", "status"); document.body.appendChild(bar); }
+  document.body.classList.add("viewing-as");
+  bar.innerHTML = `<span>🔑 You're signed in as <b>${esc(real.as || ME.email)}</b>. Anything you save is saved as them.</span><button type="button" class="btn" id="viewas-back">Back to me</button>`;
+  bar.querySelector("#viewas-back").addEventListener("click", loginAsBack);
+}
 function viewAsStart(v) { try { sessionStorage.setItem("reid.viewAs", JSON.stringify(v)); } catch {} location.hash = ""; location.reload(); }
 function viewAsStop() { try { sessionStorage.removeItem("reid.viewAs"); } catch {} location.hash = "#staff"; location.reload(); }
 const can = code => ME.perms.has(code);
@@ -5260,6 +5291,7 @@ async function showApp() {
   } catch { ME.email = ""; }
   ME.perms = new Set(perms.data || []);
   viewAsApply();   // Carlo only: the app the way someone else sees it
+  loginAsBar();    // Carlo signed in as someone else: the way back
   $("#staff-link").classList.toggle("hidden", !(ME.perms.has("staff.manage") || ME.role === "owner"));   // Staff · Log-ins (also on the Settings page)
   $("#logins-link").classList.toggle("hidden", !(ME.perms.has("staff.manage") || ME.role === "owner"));
   $("#security-link").classList.toggle("hidden", !(ME.role === "owner" || can("security.view")));
@@ -22991,7 +23023,9 @@ function renderStaff(users, perms, note) {
                     const status = STAFF_LOGINS == null ? "" : L ? `<span class="login-ok" title="${L.last_sign_in_at ? "Last signed in " + esc(new Date(L.last_sign_in_at).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })) : "Hasn't signed in yet"}">✓ Can sign in</span>` : `<span class="login-none">No login yet</span>`;
                     return `<div class="login-cell">${status}${highLocked ? "" : ` <button class="link" type="button" data-set-pw>${STAFF_LOGINS && !L ? "Create login" : "Set password"}</button>`}</div>`; })()}</div>
                   <label class="gl-act"><input type="checkbox" data-field="active" ${u.active ? "checked" : ""} ${highLocked ? "disabled" : ""}> Active <span class="quiet">(untick when they leave)</span></label>
-                  ${isViewAsOwner() && !ME.viewAs && u.login_email.toLowerCase() !== (ME.realEmail || ME.email) ? `<div><button class="btn st-viewas" type="button" data-viewas="${u.id}">👁 Open the app as ${esc(name ? name.split(" ")[0] : u.login_email)}</button><div class="quiet" style="font-size:12px;margin-top:4px">See their pages and buttons the way they do. Back to me is at the bottom of the screen.</div></div>` : ""}
+                  ${isViewAsOwner() && !ME.viewAs && u.login_email.toLowerCase() !== (ME.realEmail || ME.email) ? `<div class="st-viewas-box"><button class="btn st-viewas" type="button" data-loginas="${u.id}" data-name="${esc(name || u.login_email)}">🔑 Sign in as ${esc(name ? name.split(" ")[0] : u.login_email)}</button>
+                    <button class="btn quiet-btn st-viewas" type="button" data-viewas="${u.id}">👁 Just look as ${esc(name ? name.split(" ")[0] : u.login_email)}</button>
+                    <div class="quiet" style="font-size:12px;margin-top:4px"><b>Sign in as</b>: really signed in as them; what you save is saved as them. <b>Just look</b>: their screens, but you stay you. Back to me is at the bottom of the screen.</div></div>` : ""}
                 </div>
               </div></section>
             <section class="st-pnl"><h4>Their job</h4>
@@ -23051,6 +23085,7 @@ function renderStaff(users, perms, note) {
     tr.querySelector("[data-st-toggle]").addEventListener("click", () => { const b = tr.querySelector(".st-body"), open = b.hidden;
       b.hidden = !open; tr.classList.toggle("open", open); open ? STAFF_OPEN.add(id) : STAFF_OPEN.delete(id);
       const h = tr.querySelector("[data-st-toggle]"); h.setAttribute("aria-expanded", open); h.querySelector(".st-arrow").textContent = open ? "▾" : "▸"; });
+    tr.querySelector("[data-loginas]")?.addEventListener("click", e => loginAsStart(id, e.currentTarget.dataset.name));
     tr.querySelector("[data-viewas]")?.addEventListener("click", () => {
       const u = users.find(x => x.id === id); if (!u) return;
       viewAsStart({ uid: u.id, name: (u.employees ? `${u.employees.first_name} ${u.employees.last_name}`.trim() : "") || u.login_email, email: u.login_email, role: u.role,
