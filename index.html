@@ -1237,6 +1237,9 @@
   .tp-note { margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; background: #fff4e6; border: 1px solid #f0c27b; font-size: 14px; line-height: 1.5; }
   .tp-two { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 4px 0; }
   .vtp-t td { vertical-align: top; } .vtp-what { max-width: 260px; } .vtp-acts { white-space: nowrap; } .vtp-hand { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .num-head { margin-top: 18px; } #f-num { width: 100%; box-sizing: border-box; }
+  .num-hit .num-k { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; color: var(--blue, #1864ab); margin-right: 4px; }
+  .num-hit.num-exact { border-left: 4px solid var(--green, #2b8a3e); }
   .cust-years { display: inline-block; margin: 4px 0 2px 6px; padding: 4px 14px; border-radius: 999px; background: #2b8a3e; color: #fff; font-weight: 800;
     font-size: calc(17px * var(--fs, 1)); letter-spacing: .01em; white-space: nowrap; box-shadow: 0 2px 6px rgba(43,138,62,.35); vertical-align: middle; }
   .nav-find { position: relative; margin: 0 8px 8px; }
@@ -5201,6 +5204,9 @@ article.mkt tr.mkt-t-booked td:first-child { box-shadow: inset 4px 0 0 #2e7d32; 
         <input id="f-model" name="reid-find-m" type="text" placeholder="Model number" autocomplete="reid-find-m" data-lpignore="true" data-1p-ignore aria-label="Search by equipment model number">
       </div>
       <div id="results" role="list"></div>
+      <div class="fields-head num-head">Find any number <span class="quiet">invoice, proposal, job, visit, PO, supplier invoice or quote, payment, plan, serial…</span></div>
+      <input id="f-num" name="reid-find-num" type="search" placeholder="Type any document number" autocomplete="off" data-lpignore="true" data-1p-ignore aria-label="Find anything by its number">
+      <div id="num-results" role="list"></div>
     </div>
   </section>
   <main id="main"></main>
@@ -5831,6 +5837,37 @@ document.getElementById("help-btn")?.addEventListener("click", e => { e.stopProp
 }, true));
 document.addEventListener("keydown", e => { if (!HELP_ON || e.key !== "Escape") return; const p = document.querySelector(".help-pop"); p ? p.remove() : setHelp(false); }, true);
 
+// ===== Find any number (bottom of the customer lookup): everything with that number, to open it
+const NUM_KIND = { invoice: ["Invoice", "🧾"], estimate: ["Proposal", "📝"], job: ["Job", "🛠"], customer: ["Customer", "👤"], payment: ["Payment", "💳"], po: ["PO", "📦"],
+  equipment: ["Equipment", "⚙"], sinv: ["Supplier invoice", "🏷"], mail: ["Supplier file", "📄"] };
+let NUM_SEQ = 0, NUM_ROWS = [];
+document.addEventListener("input", e => { if (e.target.id !== "f-num") return; clearTimeout(e.target._t); e.target._t = setTimeout(() => numFind(e.target.value), 300); });
+async function numFind(v) {
+  const box = $("#num-results"), q = String(v || "").trim(), seq = ++NUM_SEQ; if (!box) return;
+  if (q.replace(/[^A-Za-z0-9]/g, "").length < 3) { box.innerHTML = q ? `<div class="hint quiet" style="padding:6px 10px">Type at least 3 characters.</div>` : ""; return; }
+  box.innerHTML = `<div class="hint quiet" style="padding:6px 10px">Looking…</div>`;
+  const { data, error } = await db.rpc("find_number", { p_q: q }); if (seq !== NUM_SEQ) return;
+  if (error) { box.innerHTML = `<div class="error" style="padding:10px">${esc(/PGRST202|could not find/i.test(error.message || "") ? "Almost ready: try again in a few minutes." : rpcErr(error))}</div>`; return; }
+  NUM_ROWS = data || [];
+  box.innerHTML = !NUM_ROWS.length ? `<div class="hint quiet" style="padding:6px 10px">Nothing has that number.</div>`
+    : `<div class="hint quiet" style="padding:4px 10px 6px">${NUM_ROWS.length} found${NUM_ROWS.length >= 40 ? " (the first 40: type more of the number)" : ""}</div>` + NUM_ROWS.map((r, k) => `<button class="result num-hit ${r.exact ? "num-exact" : ""}" role="listitem" type="button" data-num="${k}">
+      <div class="name"><span class="num-k">${NUM_KIND[r.kind]?.[1] || "•"} ${esc(NUM_KIND[r.kind]?.[0] || r.kind)}</span> ${esc(r.label || "")}${r.amount != null ? ` <span class="quiet">${money(r.amount)}</span>` : ""}</div>
+      <div class="sub">${esc([r.customer, r.why, r.date ? fmtDate(String(r.date).slice(0, 10)) : ""].filter(Boolean).join(" · "))}</div></button>`).join("");
+}
+document.addEventListener("click", async e => { const b = e.target.closest("[data-num]"); if (!b) return; const r = NUM_ROWS[Number(b.dataset.num)]; if (!r) return;
+  const num = String(r.label || "").replace(/^\S+(\s+invoice|\s+line)?\s+/i, "");
+  switch (r.kind) {
+    case "invoice": case "payment": return r.id ? openInvoice(r.id) : r.customer_id && openCustomer(r.customer_id);
+    case "estimate": return openEstimate(r.id);
+    case "po": POP.q = num; POP.range = "all"; return openPOs();
+    case "sinv": SINV.q = num; SINV.open = r.id; return openSupInv();
+    case "mail": { const w = window.open("", "_blank"), f = await db.rpc("supplier_mail_file", { p_id: r.id });
+      if (!f.data) { w?.close(); return alertMsg("Couldn't open the file."); }
+      const bin = atob(f.data.b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([u], { type: f.data.mime || "application/octet-stream" }));
+      if (/pdf|image/i.test(f.data.mime || "") || /\.(pdf|png|jpe?g)$/i.test(f.data.name || "")) { if (w) w.location = url; } else { w?.close(); const a = document.createElement("a"); a.href = url; a.download = f.data.name || "file"; a.click(); } return; }
+    default: return r.customer_id ? openCustomerTab(r.customer_id) : null;
+  } });
 // how long someone has been a customer: from the earliest of when they were added, their first job and their first invoice
 function custSince(c, jobs, invoices) {
   const ds = [c?.created_at, ...(jobs || []).map(j => j.created_at), ...(jobs || []).flatMap(j => (j.visits || []).map(v => v.scheduled_date)), ...(invoices || []).map(i => i.invoice_date)]
@@ -7747,13 +7784,19 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") plClose(); }
 
 /* ---------------- "there is a new update" button ---------------- */
 const MY_VERSION = document.querySelector('meta[name="app-version"]')?.content || "dev";
+// any change to the published page counts (the version stamp isn't always changed): the first check remembers what's
+// published now, and a different page later means there's an update
+let UPD_BASE = null;
+const updHash = t => { let h = 0; for (let k = 0; k < t.length; k++) h = (h * 31 + t.charCodeAt(k)) | 0; return t.length + ":" + h; };
 async function checkForUpdate() {
-  if (location.protocol === "file:" || MY_VERSION === "dev") return;
+  if (location.protocol === "file:") return;
   try {
     const r = await fetch(location.pathname + "?v=" + Date.now(), { cache: "no-store" });
     if (!r.ok) return;
-    const m = (await r.text()).match(/<meta name="app-version" content="([^"]+)"/);
-    if (m && m[1] !== MY_VERSION && !$("#update-box").classList.contains("ready")) {
+    const t = await r.text(), m = t.match(/<meta name="app-version" content="([^"]+)"/), h = updHash(t);
+    if (!t.includes("checkForUpdate")) return;   // not the app (an error page)
+    if (UPD_BASE == null) { UPD_BASE = h; if (!(m && MY_VERSION !== "dev" && m[1] !== MY_VERSION)) return; }
+    if ((h !== UPD_BASE || (m && MY_VERSION !== "dev" && m[1] !== MY_VERSION)) && !$("#update-box").classList.contains("ready")) {
       $("#update-box").classList.add("ready");
       $("#update-title").textContent = "There is a new update";
       $("#update-text").textContent = "Press the button to load it.";
