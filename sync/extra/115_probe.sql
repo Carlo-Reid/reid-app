@@ -1,2 +1,0 @@
-DO $$ BEGIN RAISE EXCEPTION 'PROBE %', (SELECT coalesce(string_agg(format('inv=%s potext=[%s] poid=%s sup=%s', supplier_invoice_number, po_text, purchase_order_id, supplier_id), ' ; '), 'NONE') FROM supplier_invoices WHERE supplier_invoice_number LIKE '%41262538%')
-  || ' || bad po_text count: ' || (SELECT count(*) FROM supplier_invoices i WHERE i.po_text IS NOT NULL AND public._sinv_po(i) IS NULL AND EXISTS (SELECT 1 FROM purchase_orders po WHERE po.po_number = regexp_replace(i.po_text, '\D', '', 'g') AND length(regexp_replace(i.po_text, '\D', '', 'g')) >= 6)); END $$;
