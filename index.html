@@ -5037,6 +5037,10 @@ article.staff .st-tk .st-tk-row { cursor: default; } article.staff .st-tk-off { 
 .slips #slips-q { width: 100%; max-width: 520px; padding: 8px 12px; } .slips-t .slip-row { cursor: pointer; } .slips-t .slip-row:hover td { background: #eef4fb; } .slips-t .slip-row.open td { background: #e3edf8; }
 .slip-imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin: 6px 0; } .slip-imgs img { width: 100%; border: 1px solid #dbe3ec; border-radius: 6px; }
 .sp-h .sp-slips { float: right; text-transform: none; letter-spacing: 0; font-size: 13px; }
+#viewas-bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 2147483100; display: flex; gap: 14px; align-items: center; padding: 10px 14px 10px 18px;
+  background: #7a1f5c; color: #fff; border-radius: 999px; box-shadow: 0 8px 24px rgba(0,0,0,.3); font-size: 14px; max-width: calc(100vw - 24px); }
+#viewas-bar .btn { background: #fff !important; color: #7a1f5c !important; border: 0 !important; white-space: nowrap; }
+body.viewing-as #app { box-shadow: inset 0 0 0 4px #7a1f5c; }
 .mc-techs { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin: 4px 0 8px; } .mc-techs .sinv-app { width: auto; min-height: 96px; padding: 10px 6px; } .mc-techs .sa-ic { font-size: 15px; font-weight: 800; }
 .mc-tech-h { font-size: 16px; margin: 14px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); } .mc-tech-h:first-of-type { border-top: 0; }
 .sinv-mkpo { margin: 6px 0 10px; padding: 12px 14px; border: 1px solid #f0c36d; background: #fffaf0; border-radius: 14px; } .sinv-mkpo input { width: 100%; } .sinv-mkpo td.r input { width: 90px; text-align: right; }
@@ -5208,6 +5212,25 @@ const STATUS = {
 const badge = s => { const [t, c] = STATUS[s] || [s, "s-off"]; return `<span class="status ${c}">${esc(t)}</span>`; };
 
 const ME = { role: null, perms: new Set(), email: "" };
+// "Open the app as …" (owner Carlo only): the app shows that person's pages, buttons and Tech Calls, so you can see and test what they see.
+// It doesn't sign in as them: anything saved is saved as Carlo, and the server still answers as Carlo.
+const VIEWAS_OWNER = ["carlo@homeservicegroup.ca"];
+const isViewAsOwner = () => (ME.realRole || ME.role) === "owner" && (VIEWAS_OWNER.includes(String(ME.realEmail || ME.email || "").toLowerCase())
+  || /^carlo\b/i.test(String((typeof ONLINE !== "undefined" && ONLINE.find?.(u => u.is_me)?.name) || "")));
+function viewAsApply() {
+  let v = null; try { v = JSON.parse(sessionStorage.getItem("reid.viewAs") || "null"); } catch {}
+  if (!v || !isViewAsOwner()) { if (v) try { sessionStorage.removeItem("reid.viewAs"); } catch {} return; }
+  ME.realRole = ME.role; ME.realEmail = ME.email; ME.realPerms = ME.perms; ME.viewAs = v;
+  ME.role = v.role; ME.perms = new Set(v.role === "owner" ? [...ME.realPerms] : v.perms || []);
+  document.body.dataset.role = ME.role || ""; document.body.classList.add("viewing-as");
+  let bar = document.getElementById("viewas-bar");
+  if (!bar) { bar = document.createElement("div"); bar.id = "viewas-bar"; bar.setAttribute("role", "status"); document.body.appendChild(bar); }
+  bar.innerHTML = `<span>👁 You're seeing the app as <b>${esc(v.name)}</b> (${esc((ROLES.find(r => r[0] === v.role) || [, v.role])[1])}). Anything you save is saved as you.</span><button type="button" class="btn" id="viewas-back">Back to me</button>`;
+  bar.querySelector("#viewas-back").addEventListener("click", viewAsStop);
+  window.sideApply?.();
+}
+function viewAsStart(v) { try { sessionStorage.setItem("reid.viewAs", JSON.stringify(v)); } catch {} location.hash = ""; location.reload(); }
+function viewAsStop() { try { sessionStorage.removeItem("reid.viewAs"); } catch {} location.hash = "#staff"; location.reload(); }
 const can = code => ME.perms.has(code);
 const seeCost = () => can("costs.view");
 
@@ -5236,6 +5259,7 @@ async function showApp() {
     ME.email = (ME.email || "").toLowerCase();
   } catch { ME.email = ""; }
   ME.perms = new Set(perms.data || []);
+  viewAsApply();   // Carlo only: the app the way someone else sees it
   $("#staff-link").classList.toggle("hidden", !(ME.perms.has("staff.manage") || ME.role === "owner"));   // Staff · Log-ins (also on the Settings page)
   $("#logins-link").classList.toggle("hidden", !(ME.perms.has("staff.manage") || ME.role === "owner"));
   $("#security-link").classList.toggle("hidden", !(ME.role === "owner" || can("security.view")));
@@ -5247,6 +5271,7 @@ async function showApp() {
   $("#calls-link").classList.toggle("hidden", !ME.role);
   const emp = ME.role ? emp0 : { data: null };
   ME.emp = emp.error ? null : emp.data;
+  if (ME.viewAs) ME.emp = ME.viewAs.emp || null;
   ME.booking = !emp.error;   // setup file 25 has been run
   $("#owing-link").classList.toggle("hidden", !can("invoices.adjust"));
   $("#stock-link").classList.toggle("hidden", !ME.role);
@@ -22966,6 +22991,7 @@ function renderStaff(users, perms, note) {
                     const status = STAFF_LOGINS == null ? "" : L ? `<span class="login-ok" title="${L.last_sign_in_at ? "Last signed in " + esc(new Date(L.last_sign_in_at).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })) : "Hasn't signed in yet"}">✓ Can sign in</span>` : `<span class="login-none">No login yet</span>`;
                     return `<div class="login-cell">${status}${highLocked ? "" : ` <button class="link" type="button" data-set-pw>${STAFF_LOGINS && !L ? "Create login" : "Set password"}</button>`}</div>`; })()}</div>
                   <label class="gl-act"><input type="checkbox" data-field="active" ${u.active ? "checked" : ""} ${highLocked ? "disabled" : ""}> Active <span class="quiet">(untick when they leave)</span></label>
+                  ${isViewAsOwner() && !ME.viewAs && u.login_email.toLowerCase() !== (ME.realEmail || ME.email) ? `<div><button class="btn st-viewas" type="button" data-viewas="${u.id}">👁 Open the app as ${esc(name ? name.split(" ")[0] : u.login_email)}</button><div class="quiet" style="font-size:12px;margin-top:4px">See their pages and buttons the way they do. Back to me is at the bottom of the screen.</div></div>` : ""}
                 </div>
               </div></section>
             <section class="st-pnl"><h4>Their job</h4>
@@ -23025,6 +23051,10 @@ function renderStaff(users, perms, note) {
     tr.querySelector("[data-st-toggle]").addEventListener("click", () => { const b = tr.querySelector(".st-body"), open = b.hidden;
       b.hidden = !open; tr.classList.toggle("open", open); open ? STAFF_OPEN.add(id) : STAFF_OPEN.delete(id);
       const h = tr.querySelector("[data-st-toggle]"); h.setAttribute("aria-expanded", open); h.querySelector(".st-arrow").textContent = open ? "▾" : "▸"; });
+    tr.querySelector("[data-viewas]")?.addEventListener("click", () => {
+      const u = users.find(x => x.id === id); if (!u) return;
+      viewAsStart({ uid: u.id, name: (u.employees ? `${u.employees.first_name} ${u.employees.last_name}`.trim() : "") || u.login_email, email: u.login_email, role: u.role,
+        perms: (u.user_permissions || []).map(x => x.permission_code), emp: u.employee_id || null }); });
     tr.querySelector("[data-staff-pos-clear]")?.addEventListener("click", e => { e.preventDefault(); const sel = tr.querySelector("[data-staff-pos]"); if (!sel) return; sel.value = ""; sel.dispatchEvent(new Event("change")); });
     tr.querySelector("[data-staff-pos]")?.addEventListener("change", async e => { const v = e.target.value, pname = e.target.selectedOptions[0].textContent;
       const { error } = await db.rpc("set_user_position", { p_user: id, p_position: v ? Number(v) : null });
