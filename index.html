@@ -5042,6 +5042,7 @@ article.staff .st-tk .st-tk-row { cursor: default; } article.staff .st-tk-off { 
 .st-viewas-box { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .st-viewas-box > .quiet { flex-basis: 100%; }
 #viewas-bar .btn { background: #fff !important; color: #7a1f5c !important; border: 0 !important; white-space: nowrap; }
 body.viewing-as #app { box-shadow: inset 0 0 0 4px #7a1f5c; }
+.ow-notdue { margin-top: 4px; font-size: 12.5px; line-height: 1.35; }
 .mc-techs { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin: 4px 0 8px; } .mc-techs .sinv-app { width: auto; min-height: 96px; padding: 10px 6px; } .mc-techs .sa-ic { font-size: 15px; font-weight: 800; }
 .mc-tech-h { font-size: 16px; margin: 14px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); } .mc-tech-h:first-of-type { border-top: 0; }
 .sinv-mkpo { margin: 6px 0 10px; padding: 12px 14px; border: 1px solid #f0c36d; background: #fffaf0; border-radius: 14px; } .sinv-mkpo input { width: 100%; } .sinv-mkpo td.r input { width: 90px; text-align: right; }
@@ -12939,11 +12940,16 @@ function owSetPaid(data, error, bk, pt) {
 const owInPeriod = rows => { const r = owRange(); rows = rows.filter(owPick); if (!r) return rows; const a = ymd(r[0]), b = ymd(r[1]); return rows.filter(x => x.invoice_date >= a && x.invoice_date <= b); };
 const OW_SORT = [["date_desc", "Newest first"], ["date_asc", "Oldest first"], ["amt_desc", "Biggest amount"], ["amt_asc", "Smallest amount"], ["cust", "Customer A–Z"], ["city", "City"]];
 const OW_GROUP = [["none", "No groups"], ["age", "How old"], ["month", "Month"], ["year", "Year"], ["customer", "Customer"], ["job", "Job type"], ["city", "City"], ["tag", "Kind (needs a look, plan sale, monthly)"]];
-const owAgeDays = r => Math.floor((Date.now() - new Date(r.invoice_date + "T12:00:00")) / 86400000);
+// how old an invoice is for "How old": from when the work was finished (if that was after the invoice), and not at all while the work is still booked
+const owNotDue = r => r && r.job_done === false && !!r.booked_for;
+const owAgeDays = r => { if (owNotDue(r)) return null; const from = r.done_on && r.done_on > r.invoice_date ? r.done_on : r.invoice_date; return Math.floor((Date.now() - new Date(from + "T12:00:00")) / 86400000); };
+const owShortDay = d => d ? new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }) : "";
+const owNotDueHtml = r => owNotDue(r) ? `<div class="ow-notdue"><span class="ow-tag ow-booktag">Not due yet</span> Work booked for <b>${esc(owShortDay(r.booked_for))}</b>${r.booked_on ? ` <span class="quiet">(booked ${esc(fmtDate(r.booked_on))})</span>` : ""}. Due once the work is done.</div>`
+  : r && r.done_on && r.done_on > r.invoice_date ? `<div class="quiet">Work done ${esc(fmtDate(r.done_on))}: counted from then</div>` : "";
 const OW_AGES = [[30, "Under 30 days"], [60, "30 to 60 days"], [90, "60 to 90 days"], [365, "90 days to a year"], [730, "1 to 2 years"], [Infinity, "Over 2 years"]];
 function owGroupOf(r) {
   switch (OW.group) {
-    case "age": { const d = owAgeDays(r); const i = OW_AGES.findIndex(([n]) => d < n); return [String(i).padStart(2, "0"), OW_AGES[i][1]]; }
+    case "age": { const d = owAgeDays(r); if (d == null) return ["-1", "Not due yet: work still booked"]; const i = OW_AGES.findIndex(([n]) => d < n); return [String(i).padStart(2, "0"), OW_AGES[i][1]]; }
     case "month": return [r.invoice_date.slice(0, 7), new Date(r.invoice_date + "T12:00:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" })];
     case "year": return [r.invoice_date.slice(0, 4), r.invoice_date.slice(0, 4)];
     case "customer": return [(r.customer_name || "").toLowerCase() + r.customer_id, r.customer_name];
@@ -13003,7 +13009,7 @@ const owScopeName = sc => OWL_NAMES[sc] || (sc === "ptn:none" ? "No partner (all
   : (OW_AGE.find(a => a[0] === sc) ? "Not paid · " + OW_AGE.find(a => a[0] === sc)[4] : "Invoices"));
 function owAgeRows(sc) {
   const a = OW_AGE.find(x => x[0] === sc); if (!a) return [];
-  return ["todo", "checked"].flatMap(k => (OW.all?.[k] || []).filter(owPick).map(r => ({ ...r, _show: k }))).filter(r => { const d = owAgeDays(r); return d >= a[2] && d < a[3]; });
+  return ["todo", "checked"].flatMap(k => (OW.all?.[k] || []).filter(owPick).map(r => ({ ...r, _show: k }))).filter(r => { const d = owAgeDays(r); return d != null && d >= a[2] && d < a[3]; });
 }
 // "ptn:none": every invoice for the dates that isn't a partner's (not paid + paid)
 function owNoPartnerRows() {
@@ -13376,7 +13382,7 @@ function renderOwing(msg) {
         <td class="num">${fmtDate(r.invoice_date)}</td>
         <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button>`}
           ${r.over_total ? `<div><span class="ow-tag odd" title="ServiceTitan shows ${esc(money(r.paid))} paid on this invoice, so it shows more owing than the invoice total. Usually a refund or a reversed payment.">Owing more than total</span></div>` : ""}
-          ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}${owNotesHtml(r)}</td>
+          ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}${owNotDueHtml(r)}${owNotesHtml(r)}</td>
         <td><button class="link" type="button" data-ow-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${esc(r.job_type || "")}</td>
         <td class="r num">${scope !== "owing" ? (owBalScope(scope) ? `<strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>` : `<strong>${money(r.total)}</strong>`) : `<strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>${r.over_total ? `<div class="ow-odd-note">paid ${money(r.paid)}</div>` : ""}`}</td>
