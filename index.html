@@ -5027,7 +5027,7 @@ article.staff .st-card.open > .st-head img.st-photo { width: 36px; height: 36px;
 article.staff .st-head.over { outline: 3px dashed #1f5fa8; outline-offset: 3px; }
 article.staff .st-photo-ed { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } article.staff .st-photo-ed img.st-photo { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; }
 article.staff .st-tk .st-tk-photo { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; box-shadow: 0 2px 6px rgba(16, 24, 40, .2); }
-article.staff .st-tk .st-tk-row { cursor: default; } article.staff .st-tk .st-tk-row select { width: 100%; max-width: 170px; font-size: 12.5px; }
+article.staff .st-tk .st-tk-row { cursor: default; } article.staff .st-tk-off { font-size: 12px; } article.staff .st-tk-offlist { margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; } article.staff .st-tk .st-tk-row select { width: 100%; max-width: 170px; font-size: 12.5px; }
 /* Drop invoices in: room for a number like 40241429-00 */
 .stv[data-stv-drop].over { outline: 3px dashed #1f5fa8; outline-offset: 6px; }
 .tl-row > header:has(.tl-photo) { display: grid !important; grid-template-columns: auto minmax(0, 1fr); column-gap: 7px; align-content: center; align-items: center; } .tl-row > header .tl-photo { grid-row: 1 / span 4; margin: 0; width: 28px; height: 28px; }
@@ -22846,14 +22846,22 @@ async function stSales() {
 }
 async function stTechs() {
   const box = document.getElementById("st-techs"); if (!box) return;
-  const list = (await loadTechKinds(true)).filter(t => t.recent || t.kind);
+  const all = await loadTechKinds(true), list = all.filter(t => !t.not_tech && (t.recent || t.kind)), off = all.filter(t => t.not_tech);
   if (!document.getElementById("st-techs")) return;
   const ed = can("staff.manage") || ME.role === "owner";
   box.innerHTML = `<h2>Technicians <span class="count">${list.length}</span></h2>
     <p class="quiet">Pick what each tech mainly does: Maintenance, Service, Installs or Security. A Service tech also shows when you look for Maintenance. On a customer's page, "Calls nearby" can then suggest only the right kind of tech.</p>
     ${list.length ? `<div class="st-tk">${list.map(t => `<label class="st-tk-row">${empPhoto(t.id, "st-tk-photo")}<span class="st-ic ${EMP_PHOTOS?.has(Number(t.id)) ? "hidden" : ""}" aria-hidden="true">${esc(String(t.name || "?").trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase())}</span><span>${esc(t.name)}</span><select data-tkind="${t.id}" ${ed ? "" : "disabled"}>
-      <option value="">Not set</option>${TECH_KINDS.map(([k, n]) => `<option value="${k}" ${t.kind === k ? "selected" : ""}>${k === "service" ? "Service (and Maintenance)" : n}</option>`).join("")}</select></label>`).join("")}</div>`
-      : `<p class="quiet">No technicians found.</p>`}`;
+      <option value="">Not set</option>${TECH_KINDS.map(([k, n]) => `<option value="${k}" ${t.kind === k ? "selected" : ""}>${k === "service" ? "Service (and Maintenance)" : n}</option>`).join("")}</select>
+      ${ed ? `<button class="link danger st-tk-off" type="button" data-not-tech="${t.id}" title="Take ${esc(t.name)} off the Technicians list">Not a tech</button>` : ""}</label>`).join("")}</div>`
+      : `<p class="quiet">No technicians found.</p>`}
+    ${off.length ? `<p class="st-tk-offlist"><span class="quiet">Taken off this list:</span> ${off.map(t => `<span class="chip small">${esc(t.name)}${ed ? ` <button class="link" type="button" data-tech-back="${t.id}">Put back</button>` : ""}</span>`).join(" ")}</p>` : ""}`;
+  box.querySelectorAll("[data-not-tech], [data-tech-back]").forEach(b => b.addEventListener("click", async () => {
+    const on = !!b.dataset.notTech, id = Number(b.dataset.notTech || b.dataset.techBack), nm = all.find(t => t.id === id)?.name || "them";
+    if (on && b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = `Sure? Take ${nm} off`; return; }
+    const { error } = await db.rpc("set_not_tech", { p_employee: id, p_on: on });
+    const m = $("#staff-msg"); if (m) { m.className = "staff-msg " + (error ? "err" : "ok"); m.textContent = error ? "Not saved: " + (/function|schema|PGRST202/i.test(error.message || "") ? "this turns on after the next update." : rpcErr(error)) : on ? `${nm} is off the Technicians list. ServiceTitan won't put them back.` : `${nm} is back on the Technicians list.`; }
+    if (!error) stTechs(); }));
   box.querySelectorAll("[data-tkind]").forEach(sel => sel.addEventListener("change", async () => {
     const { error } = await db.rpc("set_tech_kind", { p_employee: Number(sel.dataset.tkind), p_kind: sel.value || null });
     const m = $("#staff-msg"); if (m) { m.className = "staff-msg " + (error ? "err" : "ok"); m.textContent = error ? "Not saved: " + (/function|schema|PGRST202/i.test(error.message || "") ? "this turns on after tonight's update." : rpcErr(error)) : "Saved."; }
@@ -22909,7 +22917,7 @@ function renderStaff(users, perms, note) {
             <section class="st-pnl"><h4>Their job</h4>
               <div class="st-job">
                 <label>Role<select data-field="role" ${highLocked ? "disabled" : ""}>${roleOptions(u.role)}</select></label>
-                ${STAFF_POS ? `<label>Position <span class="quiet">(sets their ticks)</span><select data-staff-pos ${highLocked || u.role === "owner" ? "disabled" : ""}><option value="">No position</option>${STAFF_POS.map(p => `<option value="${p.id}" ${p.id === u.position_id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>` : ""}
+                ${STAFF_POS ? `<label>Position <span class="quiet">(sets their ticks)</span>${u.position_id && !highLocked && u.role !== "owner" ? ` <button class="link danger" type="button" data-staff-pos-clear title="Take them off this position (their ticks stay the same)">Take off this position</button>` : ""}<select data-staff-pos ${highLocked || u.role === "owner" ? "disabled" : ""}><option value="">No position</option>${STAFF_POS.map(p => `<option value="${p.id}" ${p.id === u.position_id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>` : ""}
                 ${BOOK ? `<label title="Which name on the schedule is this person? Their calls show on Tech Calls.">On the schedule as<select data-staff-tech ${highLocked ? "disabled" : ""}>
                   ${u.employee_id && !BOOK.techs.some(t => t.id === u.employee_id) ? `<option value="keep" selected>Not a tech</option>` : `<option value="">Not a tech</option>`}
                   ${BOOK.techs.map(t => `<option value="${t.id}" ${t.id === u.employee_id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>` : ""}
@@ -22963,6 +22971,7 @@ function renderStaff(users, perms, note) {
     tr.querySelector("[data-st-toggle]").addEventListener("click", () => { const b = tr.querySelector(".st-body"), open = b.hidden;
       b.hidden = !open; tr.classList.toggle("open", open); open ? STAFF_OPEN.add(id) : STAFF_OPEN.delete(id);
       const h = tr.querySelector("[data-st-toggle]"); h.setAttribute("aria-expanded", open); h.querySelector(".st-arrow").textContent = open ? "▾" : "▸"; });
+    tr.querySelector("[data-staff-pos-clear]")?.addEventListener("click", e => { e.preventDefault(); const sel = tr.querySelector("[data-staff-pos]"); if (!sel) return; sel.value = ""; sel.dispatchEvent(new Event("change")); });
     tr.querySelector("[data-staff-pos]")?.addEventListener("change", async e => { const v = e.target.value, pname = e.target.selectedOptions[0].textContent;
       const { error } = await db.rpc("set_user_position", { p_user: id, p_position: v ? Number(v) : null });
       if (error) { await openStaff(); say("Not saved: " + rpcErr(error), true); return; }
