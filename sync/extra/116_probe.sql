@@ -1,2 +1,0 @@
-DO $$ BEGIN RAISE EXCEPTION 'PROBE inv41262538 po=% | still unmatched with a real PO: %', (SELECT po.po_number FROM supplier_invoices i JOIN purchase_orders po ON po.id = public._sinv_po(i) WHERE i.supplier_invoice_number = '41262538-00' LIMIT 1),
-  (SELECT count(*) FROM supplier_invoices i WHERE i.po_text IS NOT NULL AND public._sinv_po(i) IS NULL AND EXISTS (SELECT 1 FROM purchase_orders po WHERE po.po_number = regexp_replace(i.po_text, '\D', '', 'g') AND length(regexp_replace(i.po_text, '\D', '', 'g')) >= 6)); END $$;
