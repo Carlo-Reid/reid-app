@@ -1,3 +1,0 @@
-DO $$ BEGIN RAISE EXCEPTION 'PROBE notes-packing: % | notes-slip-sample: % | other unlinked by sup: %', (SELECT count(*) FROM supplier_invoices WHERE read_notes ILIKE '%packing%' OR handwriting ILIKE '%packing%'),
-  (SELECT left(string_agg(left(read_notes, 60), ' ## '), 120) FROM (SELECT read_notes FROM supplier_invoices WHERE read_notes ILIKE '%packing%' LIMIT 2) x),
-  (SELECT string_agg(s.supplier_id || ':' || n, ',') FROM (SELECT st.supplier_id, count(*) n FROM supplier_doc_pages d JOIN supplier_statements st ON st.id = d.statement_id WHERE d.kind = 'other' AND d.supplier_invoice_id IS NULL GROUP BY 1) s); END $$;
