@@ -1,4 +1,0 @@
-DO $$ BEGIN RAISE EXCEPTION 'PROBE %', (SELECT coalesce(string_agg(format('inv=%s date=%s job=%s jst=%s jdone=%s visits=%s', i.invoice_number, i.invoice_date, j.job_number, j.status, j.completed_at,
-  (SELECT string_agg(v.scheduled_date || ':' || v.status || ':' || v.created_at::date, ',') FROM visits v WHERE v.job_id = j.id)), ' ; '), 'NONE')
-  FROM invoices i LEFT JOIN jobs j ON j.id = i.job_id WHERE i.invoice_number = '116879068')
-  || ' || not due now: ' || (SELECT count(*) FROM invoices i JOIN jobs j ON j.id = i.job_id WHERE i.balance_due > 0.004 AND i.status NOT IN ('void','draft') AND j.completed_at IS NULL AND coalesce(j.status,'') NOT IN ('completed','cancelled') AND EXISTS (SELECT 1 FROM visits v WHERE v.job_id = j.id AND coalesce(v.status,'') NOT IN ('completed','cancelled'))); END $$;
