@@ -1,0 +1,1 @@
+DO $$ BEGIN RAISE EXCEPTION 'PROBE %', (SELECT coalesce(string_agg(format('id=%s email=[%s] role=%s active=%s del=%s auth=%s', id, login_email, role, active, deleted_at, (SELECT count(*) FROM auth.users a WHERE lower(a.email) = lower(btrim(u.login_email)))), ' ; '), 'NONE') FROM app_users u WHERE login_email ILIKE '%carlo%'); END $$;
