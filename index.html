@@ -1220,6 +1220,14 @@
   /* the page links, laid out like the "On this file" list on the right */
   .side-nav { margin-top: 12px; }
   .result .rm-c.rm-years { background: #2b8a3e; color: #fff; font-weight: 800; font-size: 13px; padding: 2px 10px; }
+  .qt-drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 110px; border: 2px dashed var(--line); border-radius: 12px; cursor: pointer; margin: 12px 0; padding: 14px; text-align: center; background: var(--paper-2, #f7f9fb); }
+  .qt-drop.on, .qt-drop:hover, .qt-drop:focus-visible { border-color: var(--blue, #1864ab); background: var(--blue-wash, #eef4fb); }
+  .qt-head { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; } .qt-head label { display: flex; flex-direction: column; font-weight: 700; gap: 3px; }
+  .qt-t input.qt-in { width: 100%; box-sizing: border-box; } .qt-t .qt-desc { min-width: 240px; } .qt-t .qt-cost { width: 90px; text-align: right; }
+  .qt-t tr.qt-done td { background: #ebfbee; } .qt-ok { color: var(--green, #2b8a3e); } .qt-acts { white-space: nowrap; }
+  .qt-form { border: 1px solid var(--blue, #1864ab); border-radius: 10px; padding: 12px 14px; background: var(--paper, #fff); max-width: 720px; }
+  .qt-form h3 { margin: 0 0 8px; } .qt-q { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; } .qt-q input, .qt-q select { max-width: 100%; }
+  .qt-two { display: flex; gap: 14px; flex-wrap: wrap; } .qt-two > * { flex: 1 1 200px; } .qt-chk { flex-direction: row; align-items: center; gap: 6px; } .qt-btns { display: flex; gap: 10px; align-items: center; }
   .cust-years { display: inline-block; margin: 4px 0 2px 6px; padding: 4px 14px; border-radius: 999px; background: #2b8a3e; color: #fff; font-weight: 800;
     font-size: calc(17px * var(--fs, 1)); letter-spacing: .01em; white-space: nowrap; box-shadow: 0 2px 6px rgba(43,138,62,.35); vertical-align: middle; }
   .nav-find { position: relative; margin: 0 8px 8px; }
@@ -5408,6 +5416,7 @@ async function showApp() {
   if (location.hash === "#price-books" && ME.role) return openPriceBooks();
   if (location.hash === "#pictures" && ME.role) return openPictureLibrary();
   if (location.hash === "#logos" && ME.role) return openLogos();
+  if (location.hash === "#quotes" && ME.role) return openQuotes();
   if (location.hash === "#price-formulas" && ME.role) return openFormulas();
   if (location.hash === "#price-control" && ME.role) return openPriceControl();
   if (/^#pricing(=\d+)?$/.test(location.hash) && ME.role) return openPricing(Number(location.hash.split("=")[1]) || null);
@@ -6824,6 +6833,7 @@ function routeTo(h) {
   if (h === "#price-books") return openPriceBooks();
   if (h === "#pictures") return openPictureLibrary();
   if (h === "#logos") return openLogos();
+  if (h === "#quotes") return openQuotes();
   if (h === "#price-formulas") return openFormulas();
   if (h === "#price-control") return openPriceControl();
   if (/^#pricing(=\d+)?$/.test(h)) return openPricing(Number(h.split("=")[1]) || null);
@@ -22644,17 +22654,187 @@ function openPbTools() {
     ...(can("pricebook.edit") && can("staff.manage") ? [["books", "Price books", "Separate price lists (for example for a partner) and who uses them."]] : []),
     ["print", "Print book", "A printable copy of the price book, by category."],
     ["kits", "Add-on kits", "Groups of parts that get added together with an item."],
-    ["logos", "Logos", "Logos you can put anywhere on an equipment picture. Upload new ones here."]];
+    ["logos", "Logos", "Logos you can put anywhere on an equipment picture. Upload new ones here."],
+    ...(can("pricebook.edit") && seeCost() ? [["quotes", "Supplier quotes", "Drop a supplier's quote: its lines are checked against the price book, and new ones can be added as a part, material, equipment or security."]] : [])];
   $("#main").innerHTML = `<article class="staff pbt"><h1>Price book tools</h1><p class="lead">Tools for setting up the price book.</p>
     <div class="pbt-grid">${T.map(([k, t, d]) => `<button type="button" class="pbt-card" data-set-pb="${k}"><b>${esc(t)}</b><span>${esc(d)}</span></button>`).join("")}</div>
     <section class="block pbx" id="pbx-box"></section></article>`;
   pbxBox();
 }
+// ===== Supplier quotes (Price book tools): drop a quote, read its lines, add new ones to the price book (asking what's needed) =====
+const QT = { file: null, lines: [], sup: "", ref: "", date: "", busy: false, msg: "", open: null, cats: null };
+const QT_TYPES = [["service", "Part"], ["material", "Material"], ["equipment", "Equipment"], ["security", "Security"]];
+const qtGuessType = (d, cost) => /furnace|air condition|\bac\b|condens(er|ing unit)|heat pump|air handler|boiler|water heater|tankless|\btank\b|coil|mini.?split|ductless|hrv|erv|humidifier|fireplace/i.test(d || "") || Number(cost) >= 600 ? "equipment"
+  : /camera|alarm|security|keypad|motion|door contact|nvr|dvr/i.test(d || "") ? "security" : /motor|board|igniter|ignitor|sensor|valve|capacitor|contactor|switch|relay|inducer|blower|transformer|thermocouple|flame/i.test(d || "") ? "service" : "material";
+async function openQuotes(msg) {
+  setPage("quotes", "pbtools", "Supplier quotes");
+  if (!(can("pricebook.edit") && seeCost())) { $("#main").innerHTML = `<div class="empty"><div><h2>Supplier quotes</h2>Ask Carlo for "Edit the price book" and "See what parts and equipment cost".</div></div>`; return; }
+  if (msg) QT.msg = msg;
+  await loadSuppliers();
+  if (!QT.cats) { const { data } = await db.rpc("pb_categories"); const all = (data || []).filter(c => c.active !== false), by = new Map(all.map(c => [c.id, c]));
+    const path = c => { const p = []; let x = c, n = 0; while (x && n++ < 6) { p.unshift(String(x.name).trim()); x = by.get(x.parent_id); } return p.join(" › "); };
+    QT.cats = all.map(c => ({ id: c.id, name: path(c) })).sort((a, b) => a.name.localeCompare(b.name)); }
+  qtRender();
+}
+function qtRender() {
+  const sups = (SUPPLIERS || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const L = QT.lines;
+  $("#main").innerHTML = `<article class="staff qt"><h1>Supplier quotes</h1>
+    <p class="lead">Drop a supplier's quote here: a PDF (scanned is fine), a photo, Excel or Word. Each line it finds is checked against the price book. New ones you can add, and it asks what it needs to know.</p>
+    <label class="qt-drop" id="qt-drop" tabindex="0"><input type="file" id="qt-file" accept=".pdf,.xlsx,.xls,.xlsm,.csv,.docx,image/*" hidden>
+      <b>${QT.busy ? esc(QT.busy) : QT.file ? "Drop another quote, or click to pick one" : "Drop the quote here, or click to pick it"}</b>${QT.file ? `<span class="quiet">Now: ${esc(QT.file)}</span>` : ""}</label>
+    ${QT.msg ? `<div class="staff-msg ${/^Not|Couldn/.test(QT.msg) ? "err" : "ok"}" role="status">${esc(QT.msg)}</div>` : ""}
+    ${QT.file && !QT.busy ? `<div class="qt-head">
+      <label>Supplier <select id="qt-sup"><option value="">Pick the supplier…</option>${sups.map(s => `<option value="${s.id}" ${String(s.id) === String(QT.sup) ? "selected" : ""}>${esc(String(s.name).trim())}</option>`).join("")}</select></label>
+      <label>Quote # <input id="qt-ref" value="${esc(QT.ref)}" placeholder="the supplier's quote number"></label>
+      <label>Date <input id="qt-date" type="date" value="${esc(QT.date)}"></label></div>
+    <table class="calls-table qt-t"><thead><tr><th>Their code</th><th>What it is</th><th class="r">Cost each</th><th>In our price book?</th><th></th></tr></thead><tbody>
+    ${L.map((l, i) => `<tr data-qt="${i}" class="${l.done ? "qt-done" : ""}">
+      <td><input class="qt-in" data-f="code" value="${esc(l.code)}" aria-label="Their code"></td>
+      <td><input class="qt-in qt-desc" data-f="desc" value="${esc(l.desc)}" aria-label="What it is"></td>
+      <td class="r"><input class="qt-in qt-cost" data-f="cost" inputmode="decimal" value="${l.cost != null ? l.cost : ""}" aria-label="Cost each"></td>
+      <td>${l.done ? `<b class="qt-ok">✓ ${esc(l.done)}</b>` : l.item ? `<button class="link" type="button" data-qt-item="${l.item.id}">${esc(pbName(l.item.name))}</button><div class="quiet">${esc(l.item.sku || "")} · our cost now ${money(l.item.unit_cost)}</div>` : l.checked ? `<span class="quiet">Not in it yet</span>` : `<span class="quiet">checking…</span>`}</td>
+      <td class="qt-acts">${l.done ? (l.newId ? `<button class="link" type="button" data-qt-item="${l.newId}">Open it</button>` : "") : l.item ? `<button class="btn quiet-btn" type="button" data-qt-cost="${i}" title="Sends the quoted cost to the approvals on Auto Update">Send the new cost to approve</button>`
+        : `<button class="btn" type="button" data-qt-add="${i}">+ Add to price book</button>`} <button class="link danger" type="button" data-qt-del="${i}" title="Take this line off">✕</button></td></tr>
+      ${QT.open === i ? `<tr class="qt-form-row"><td colspan="5">${qtFormHtml(l, i)}</td></tr>` : ""}`).join("")}
+    </tbody></table>
+    <p><button class="link" type="button" id="qt-addline">+ Add a line it missed</button> <span class="quiet">· Fix anything it read wrong right in the table.</span></p>` : ""}
+  </article>`;
+  qtWire();
+}
+function qtFormHtml(l, i) {
+  const f = l.form || (l.form = { type: "", cat: "", name: l.desc || "", sku: l.code || "", cost: l.cost ?? "", price: "", mfr: "", model: "", hours: "", taxable: true, hint: qtGuessType(l.desc, l.cost) });
+  const typeName = k => (QT_TYPES.find(t => t[0] === k) || [])[1] || "";
+  return `<form class="qt-form" data-qt-form="${i}"><h3>Add "${esc((l.desc || l.code || "this line").slice(0, 60))}" to the price book</h3>
+    <div class="qt-q"><b>1. What is it?</b> <span class="quiet">(looks like ${esc(typeName(f.hint))})</span><div class="seg">${QT_TYPES.map(([k, t]) => `<button type="button" data-qt-type="${k}" aria-pressed="${f.type === k}">${t}</button>`).join("")}</div></div>
+    <label class="qt-q"><b>2. Which category?</b><select name="cat"><option value="">Pick a category…</option>${(QT.cats || []).map(c => `<option value="${c.id}" ${String(c.id) === String(f.cat) ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+    <label class="qt-q"><b>3. Name</b> <span class="quiet">as it shows in the price book</span><input name="name" value="${esc(f.name)}" maxlength="200"></label>
+    <label class="qt-q"><b>4. Our code</b> <span class="quiet">the supplier's code is fine</span><input name="sku" value="${esc(f.sku)}" maxlength="80"></label>
+    ${f.type === "equipment" ? `<div class="qt-two"><label class="qt-q"><b>Manufacturer</b><input name="mfr" value="${esc(f.mfr)}" placeholder="e.g. Lennox"></label><label class="qt-q"><b>Model</b><input name="model" value="${esc(f.model || l.code || "")}"></label></div>` : ""}
+    <div class="qt-two"><label class="qt-q"><b>5. Our cost</b><input name="cost" inputmode="decimal" value="${esc(String(f.cost))}"></label>
+      <label class="qt-q"><b>6. Selling price</b> <span class="quiet" data-qt-rule>${f.rule != null ? `pricing rules say ${money(f.rule)}` : f.type ? "" : "pick what it is to get the suggested price"}</span><input name="price" inputmode="decimal" value="${esc(String(f.price))}"></label></div>
+    <div class="qt-two"><label class="qt-q">Labour hours <span class="quiet">(optional)</span><input name="hours" inputmode="decimal" value="${esc(String(f.hours))}"></label>
+      <label class="qt-q qt-chk"><input type="checkbox" name="taxable" ${f.taxable ? "checked" : ""}> Charge HST on it</label></div>
+    <div class="qt-btns"><button class="btn" type="submit">Add it</button> <button class="link" type="button" data-qt-cancel>Cancel</button> <span class="staff-msg" data-qt-msg role="status"></span></div></form>`;
+}
+function qtWire() {
+  const drop = $("#qt-drop"), inp = $("#qt-file");
+  if (drop) { ["dragover", "dragenter"].forEach(k => drop.addEventListener(k, e => { e.preventDefault(); drop.classList.add("on"); }));
+    ["dragleave", "drop"].forEach(k => drop.addEventListener(k, () => drop.classList.remove("on")));
+    drop.addEventListener("drop", e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) qtLoad(f); });
+    drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inp.click(); } });
+    inp.addEventListener("change", () => { if (inp.files[0]) qtLoad(inp.files[0]); }); }
+  $("#qt-sup")?.addEventListener("change", e => { QT.sup = e.target.value; qtCheck(true); });
+  $("#qt-ref")?.addEventListener("input", e => { QT.ref = e.target.value; });
+  $("#qt-date")?.addEventListener("change", e => { QT.date = e.target.value; });
+  document.querySelectorAll(".qt-t [data-qt] .qt-in").forEach(x => x.addEventListener("change", () => { const i = Number(x.closest("[data-qt]").dataset.qt), l = QT.lines[i];
+    const v = x.value.trim(); if (x.dataset.f === "cost") l.cost = v === "" ? null : Number(v.replace(/[$,\s]/g, "")); else l[x.dataset.f] = v;
+    if (x.dataset.f === "code") { l.item = null; l.checked = false; qtCheck(); } }));
+  document.querySelectorAll("[data-qt-del]").forEach(b => b.addEventListener("click", () => { QT.lines.splice(Number(b.dataset.qtDel), 1); QT.open = null; qtRender(); }));
+  document.querySelectorAll("[data-qt-item]").forEach(b => b.addEventListener("click", () => openPbItemPage(Number(b.dataset.qtItem))));
+  document.querySelectorAll("[data-qt-add]").forEach(b => b.addEventListener("click", () => { QT.open = QT.open === Number(b.dataset.qtAdd) ? null : Number(b.dataset.qtAdd); qtRender(); }));
+  $("#qt-addline")?.addEventListener("click", () => { QT.lines.push({ code: "", desc: "", cost: null, checked: true }); qtRender(); });
+  document.querySelectorAll("[data-qt-cost]").forEach(b => b.addEventListener("click", async () => { const i = Number(b.dataset.qtCost), l = QT.lines[i], s = qtSupName();
+    if (!s) { alertMsg("Pick the supplier first."); return; } if (!(Number(l.cost) >= 0) || l.cost == null) { alertMsg("Type the cost each first."); return; }
+    b.disabled = true; const { data, error } = await db.rpc("import_supplier_lines", { p_supplier: s, p_ref: "quote " + (QT.ref || QT.file || ""), p_date: QT.date || ymd(new Date()), p_lines: [{ code: l.code, item_sku: l.item.sku, description: l.desc, cost: Number(l.cost), new_ok: false }] });
+    if (error) { b.disabled = false; alertMsg("Not sent: " + rpcErr(error)); return; }
+    const c = data?.counts || {}; l.done = c.added ? "New cost waiting for your OK on Auto Update" : c.same ? "Same cost as now" : "Sent"; await loadPbUpdates().catch(() => {}); auBadge?.(); qtRender(); }));
+  const form = document.querySelector("[data-qt-form]"); if (form) qtWireForm(form);
+}
+const qtSupName = () => { const s = (SUPPLIERS || []).find(x => String(x.id) === String(QT.sup)); return s ? String(s.name).trim() : ""; };
+function qtWireForm(form) {
+  const i = Number(form.dataset.qtForm), l = QT.lines[i], f = l.form, msg = form.querySelector("[data-qt-msg]");
+  const keep = () => { ["cat", "name", "sku", "cost", "price", "mfr", "model", "hours"].forEach(k => { if (form[k]) f[k] = form[k].value; }); f.taxable = form.taxable.checked; };
+  const rule = async () => { const c = Number(String(form.cost.value).replace(/[$,\s]/g, "")); if (!f.type || !(c > 0)) return;
+    const { data } = await db.rpc("pb_rule_price_for", { p_type: f.type, p_cost: c }); f.rule = data == null ? null : Number(data);
+    const t = form.querySelector("[data-qt-rule]"); if (t) t.textContent = f.rule != null ? `pricing rules say ${money(f.rule)}` : "no pricing rule for this type and cost: type the price";
+    if (f.rule != null && (!form.price.value.trim() || form.price.dataset.auto === "1")) { form.price.value = f.rule.toFixed(2); form.price.dataset.auto = "1"; } };
+  form.querySelectorAll("[data-qt-type]").forEach(b => b.addEventListener("click", async () => { keep(); f.type = b.dataset.qtType; if (f.type !== "equipment") { f.mfr = f.mfr || ""; } qtRender(); const nf = document.querySelector("[data-qt-form]"); if (nf) { nf.price.dataset.auto = f.price && f.price !== String(f.rule?.toFixed?.(2)) ? "" : "1"; } }));
+  if (f.type && f.rule == null) rule(); else if (f.price === "" && f.rule != null) { form.price.value = f.rule.toFixed(2); form.price.dataset.auto = "1"; }
+  form.cost.addEventListener("change", rule); form.price.addEventListener("input", () => { form.price.dataset.auto = ""; });
+  form.querySelector("[data-qt-cancel]").addEventListener("click", () => { keep(); QT.open = null; qtRender(); });
+  form.addEventListener("submit", async e => { e.preventDefault(); keep();
+    const say = (t, err) => { msg.className = "staff-msg " + (err ? "err" : ""); msg.textContent = t; };
+    const num = v => Number(String(v).replace(/[$,\s]/g, ""));
+    // the required questions
+    if (!f.type) return say("1. Pick what it is: Part, Material, Equipment or Security.", true);
+    if (!f.cat) return say("2. Pick the category it goes in.", true);
+    if (!f.name.trim()) return say("3. Give it a name.", true);
+    if (!f.sku.trim()) return say("4. Give it a code.", true);
+    if (f.type === "equipment" && (!f.mfr.trim() || !f.model.trim())) return say("Equipment needs the manufacturer and the model.", true);
+    if (f.cost === "" || !(num(f.cost) >= 0)) return say("5. Type our cost as a number.", true);
+    if (f.price === "" || !(num(f.price) >= 0)) return say("6. Type the selling price as a number.", true);
+    if (f.hours !== "" && !(num(f.hours) >= 0)) return say("Labour hours should be a number.", true);
+    if (!QT.sup) return say("Pick the supplier at the top first.", true);
+    // already there? (same name or code)
+    const look = async q => (await db.rpc("pb_list", { p_search: q, p_type: "all", p_active: null, p_category: null, p_flag: null, p_limit: 25 })).data || [];
+    const hits = [...(await look(f.name.trim())), ...(await look(f.sku.trim()))];
+    const dup = hits.find(x => x.name.trim().toLowerCase() === f.name.trim().toLowerCase() || String(x.sku || "").trim().toLowerCase() === f.sku.trim().toLowerCase());
+    if (dup) { const k = await askChoice("It's already in the price book", `<b>${esc(pbName(dup.name))}</b> (${esc(dup.sku || "")}) · ${money(dup.unit_price)}${dup.active ? "" : " · retired"}`,
+        [["use", "Use that one", true], ["save", "Add a new one anyway"], ["", "Cancel"]]);
+      if (!k) return say("");
+      if (k === "use") { l.item = dup; QT.open = null; qtRender(); return; } }
+    say("Adding…");
+    const pl = { name: f.name.trim(), sku: f.sku.trim(), item_type: f.type, description: f.name.trim(), unit_price: String(num(f.price)), unit_cost: String(num(f.cost)), member_price: "",
+      unit_of_measure: "each", est_labour_hours: f.hours === "" ? "" : String(num(f.hours)), manufacturer: f.type === "equipment" ? f.mfr.trim() : "", model: f.type === "equipment" ? f.model.trim() : "",
+      preferred_supplier_id: String(QT.sup), taxable: !!f.taxable };
+    const { data: id, error } = await db.rpc("save_pb_item", { p_id: null, p: pl });
+    if (error) return say("Not added: " + rpcErr(error), true);
+    const e1 = (await db.rpc("set_pb_item_categories", { p_item: id, p_ids: [Number(f.cat)] })).error;
+    const e2 = (await db.rpc("save_pb_item_suppliers", { p_item: id, p: [{ supplier_id: Number(QT.sup), sku: l.code || f.sku.trim(), cost: String(num(f.cost)), lead: "", note: QT.ref ? "Quote " + QT.ref : "From a quote", preferred: true }] })).error;
+    l.done = `Added as ${QT_TYPES.find(t => t[0] === f.type)[1].toLowerCase()}${e1 || e2 ? " (but " + rpcErr(e1 || e2) + ")" : ""}`; l.newId = id; QT.open = null; PB.rows = null;
+    QT.msg = `Added ${pl.name} to the price book.`; qtRender(); });
+}
+async function qtLoad(file) {
+  QT.file = file.name; QT.lines = []; QT.open = null; QT.msg = ""; QT.ref = ""; QT.date = ""; QT.busy = "Reading the quote…"; qtRender();
+  try {
+    let lines = [], rows = [], cells = false;
+    const isImg = /^image\//.test(file.type);
+    if (!isImg) { const doc = await invoiceRows(file, file.name); lines = doc.lines || []; rows = doc.rows || []; cells = doc.kind === "sheet" || doc.kind === "word"; }
+    if (isImg || (/pdf/i.test(file.type) || /\.pdf$/i.test(file.name)) && lines.filter(x => x !== "\f" && String(x).trim()).length < 3) {   // a scan or a photo: read the words off the picture
+      QT.busy = "Getting the reader ready…"; qtRender();
+      await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"); await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      const cv = [];
+      if (isImg) { const img = await createImageBitmap(file), c = document.createElement("canvas"); c.width = img.width; c.height = img.height; c.getContext("2d").drawImage(img, 0, 0); cv.push(c); }
+      else { const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+        for (let n = 1; n <= Math.min(pdf.numPages, 8); n++) { const pg = await pdf.getPage(n), vp = pg.getViewport({ scale: 3 }), c = document.createElement("canvas"); c.width = vp.width; c.height = vp.height;
+          const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: g, viewport: vp }).promise; cv.push(c); } }
+      const worker = await window.Tesseract.createWorker("eng"); await worker.setParameters({ tessedit_pageseg_mode: "6" }).catch(() => {}); let text = "";
+      for (let k = 0; k < cv.length; k++) { QT.busy = `Reading page ${k + 1} of ${cv.length}…`; qtRender(); text += "\n" + (await worker.recognize(cv[k])).data.text; }
+      await worker.terminate();
+      lines = text.split(/\n/).map(x => x.replace(/\s+/g, " ").trim()).filter(Boolean); rows = lines.map(x => x.split(" ")); cells = false;
+    }
+    const all = lines.join(" ");
+    let sup = supplierBySign(all);
+    if (!sup) sup = (await db.rpc("supplier_guess", { p_text: lines.slice(0, 25).join(" ") })).data || null;
+    const s = sup && (SUPPLIERS || []).find(x => String(x.name).trim().toLowerCase().startsWith(String(sup).toLowerCase()));
+    QT.sup = s ? s.id : ""; const rd = invoiceRefDate(lines); QT.ref = (all.match(/\b(?:quote|quotation|soumission)\s*(?:#|no\.?|number)?\s*[:#]?\s*([A-Z0-9][\w-]{2,})/i) || [])[1] || rd.ref || ""; QT.date = rd.date || ymd(new Date());
+    // the lines: matched to our items when the supplier is known, plus every line with a code, a quantity and a price
+    const g = await parseGenericInvoice(rows, sup || "?", cells).catch(() => ({ lines: [], unknown: [] }));
+    const out = [];
+    for (const m of g.lines || []) out.push({ code: m.code, desc: m.description || "", cost: m.cost, itemSku: m.item_sku });
+    for (const u of g.unknown || []) if (!out.some(x => x.code === u.code)) out.push({ code: u.code, desc: u.description || "", cost: u.cost });
+    QT.lines = out; QT.busy = false;
+    QT.msg = out.length ? `Found ${out.length} line${out.length === 1 ? "" : "s"}${sup ? ` from ${sup}` : ""}. Check them, then add the new ones.` : "Couldn't find lines with a code and a price on it. Add them with \"+ Add a line it missed\".";
+    qtRender(); qtCheck(true);
+  } catch (e) { QT.busy = false; QT.msg = "Couldn't read it: " + (e.message || e); qtRender(); }
+}
+// is each line already in the price book? (by our code, the supplier's code or the model)
+async function qtCheck(all) {
+  const todo = QT.lines.filter(l => !l.done && (all || !l.checked) && (l.code || l.itemSku));
+  for (const l of todo) {
+    const q = l.itemSku || l.code; const { data } = await db.rpc("pb_list", { p_search: q, p_type: "all", p_active: null, p_category: null, p_flag: null, p_limit: 10 });
+    const k = String(q).toUpperCase().replace(/[^A-Z0-9]/g, "");
+    l.item = (data || []).find(x => [x.sku, x.model, x.model_number].some(v => v && String(v).toUpperCase().replace(/[^A-Z0-9]/g, "") === k)) || null; l.checked = true;
+  }
+  if (document.querySelector(".qt")) qtRender();
+}
 // the tool buttons (Price book tools tab)
 document.addEventListener("click", async e => { const b = e.target.closest("[data-set-pb]"); if (!b) return; e.preventDefault();
   const k = b.dataset.setPb;
   if (k === "formulas") return openFormulas(); if (k === "pics") return openPictureLibrary(); if (k === "books") return openPriceBooks();
-  if (k === "logos") return openLogos(); if (k === "print") return openPrintBook(); if (k === "kits") return openAddonKits(); if (k === "control") return openPriceControl(); if (k === "pricing") return openPricing(); if (k === "commission") return openCommissions();
+  if (k === "quotes") return openQuotes(); if (k === "logos") return openLogos(); if (k === "print") return openPrintBook(); if (k === "kits") return openAddonKits(); if (k === "control") return openPriceControl(); if (k === "pricing") return openPricing(); if (k === "commission") return openCommissions();
   if (k === "pricing-rules") return openPricing(null, null, "material");   // the price book page with the markup & member prices panel open
 });
 // Settings (owners): while testing, proposals and invoices go to these instead of the customer. Empty the email to go live.
