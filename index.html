@@ -5042,6 +5042,12 @@ article.staff .st-tk .st-tk-row { cursor: default; } article.staff .st-tk-off { 
 .st-viewas-box { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .st-viewas-box > .quiet { flex-basis: 100%; }
 #viewas-bar .btn { background: #fff !important; color: #7a1f5c !important; border: 0 !important; white-space: nowrap; }
 body.viewing-as #app { box-shadow: inset 0 0 0 4px #7a1f5c; }
+.inv-cost.ie-cost[data-inv^="est"] { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); column-gap: 16px; align-content: start; }
+.inv-cost.ie-cost[data-inv^="est"] > * { grid-column: 1 / -1; grid-row: auto; margin-bottom: 8px; }
+.inv-cost.ie-cost[data-inv^="est"] > [data-ec] { grid-column: auto; }
+.ec-ver { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); } .ec-ver .quiet { margin-top: 4px; font-size: 13px; }
+.ec-sold .ec-card { box-shadow: 0 0 0 2px var(--green, #2b8a3e); }
+#inv-cost [data-ec] { margin-bottom: 12px; }
 .po-files { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 12px; } .po-files-h { margin: 14px 0 4px; }
 .po-file { width: 96px; height: 96px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 6px; cursor: pointer;
   border: 1px solid var(--line); border-radius: 10px; background: var(--blue-wash, #eef4fb); color: inherit; font: inherit; }
@@ -9071,6 +9077,17 @@ async function openSalesCall(jobId, msg) {
 
 // ----- the estimate: price book items in up to 3 options (good / better / best); the customer picks one -----
 const EST = { id: null, x: null, opts: [], msg: "" };
+// a proposal's options and lines the way the editor (and its costing) holds them
+const estOptsOf = data => (data.estimate_options || []).sort((a, b) => a.sequence - b.sequence).map(o => ({ id: o.id, name: o.name, recommended: o.is_recommended,
+    lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price), skip: (l.kit_skip || []).map(Number), disc: Number(l.unit_price) < 0 && !l.line_kind, ldesc: l.long_desc || "", kind: l.line_kind || null, expires: l.offer_expires_at || null })) }));
+// change a proposal as a new version: a copy opens as a draft, the original stays as it was
+async function estNewVersion(id, btn) {
+  if (btn) btn.disabled = true;
+  const { data, error } = await db.rpc("est_new_version", { p_id: id });
+  if (error) { if (btn) btn.disabled = false; alertMsg("Couldn't make the new version: " + (/function|schema|PGRST202/i.test(error.message || "") ? "almost ready, try again in a few minutes." : rpcErr(error))); return; }
+  closeInvoice(); SALES.rows = null;
+  await openEstEdit(data, "This is a new version. Change it and save; the original proposal is kept as it was.");
+}
 async function openEstEdit(id, msg) {
   setPage("est=" + id, "sales", "Proposal");
   EST.id = id; EST.msg = msg || "";
@@ -9085,8 +9102,7 @@ async function openEstEdit(id, msg) {
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the proposal</h2>${esc(error ? rpcErr(error) : "It's not there any more.")}</div></div>`; return; }
   EST.x = data;
   EST.ij = data.status === "accepted" && !data.cancelled_at ? ((await db.rpc("est_install_job", { p_id: id })).data || null) : null;   // the install job the sale made
-  EST.opts = (data.estimate_options || []).sort((a, b) => a.sequence - b.sequence).map(o => ({ id: o.id, name: o.name, recommended: o.is_recommended,
-    lines: (o.estimate_lines || []).filter(l => !l.parent_line_id).sort((a, b) => a.sequence - b.sequence).map(l => ({ item_id: l.item_id, description: l.description, qty: Number(l.quantity), price: Number(l.unit_price), skip: (l.kit_skip || []).map(Number), disc: Number(l.unit_price) < 0 && !l.line_kind, ldesc: l.long_desc || "", kind: l.line_kind || null, expires: l.offer_expires_at || null })) }));
+  EST.opts = estOptsOf(data);
   if (!EST.opts.length) EST.opts = [{ name: "Option 1", recommended: true, lines: [] }];
   EST.dirty = false;
   EST.costErr = "";
@@ -9603,11 +9619,12 @@ function renderEstEdit() {
       <span class="est-tb-gap"></span><span class="est-tb-btns">
       ${ME.guided ? `<button class="btn est-close-file" type="button" id="est-closefile" title="Close this proposal and go back">✕ Close</button>` : ""}
       <button class="btn est-send-btn" type="button" id="est-send" title="Email or text it to the customer: a link, or a link and the PDF">Email / Text</button>
-      ${closed ? `<button class="btn quiet-btn" type="button" id="est-preview">Print preview</button>
+      ${closed ? `<button class="btn" type="button" id="est-newver" title="Make a copy to change and save. This proposal stays exactly as it is.">✎ Edit as a new version</button><button class="btn quiet-btn" type="button" id="est-preview">Print preview</button>
       ${x.status === "accepted" && !x.cancelled_at ? `<button class="btn" type="button" id="est-walk" title="Book a visit to walk the site before the install (on install job ${esc(EST.ij?.number || "")})">${EST.ij?.walk ? "Walk booked " + esc(fmtDate(EST.ij.walk.date)) : "Book a walk"}</button>
         <button class="btn" type="button" id="est-inv">${EST.ij?.invoice_id ? "Open the invoice" : "Create the invoice"}</button>
         ${EST.ij?.st || x.st_id ? `<span class="quiet est-st-note" title="ServiceTitan is still the master copy for this sale">Sold in ServiceTitan: undo it there until the live date</span>` : `<button class="btn quiet-btn" type="button" id="est-unsell" title="Closed by mistake? Put it back to not sold">↩ Un-sell</button>`}` : ""}` : `
       <button class="btn" type="button" id="est-save">Save</button>
+      ${x.status !== "draft" ? `<button class="btn quiet-btn" type="button" id="est-newver" title="Make a copy to change and save. This proposal stays exactly as the customer got it.">✎ New version</button>` : ""}
       <button class="btn quiet-btn" type="button" id="est-preview" title="See it the way the customer gets it, then print it or come back and change it">Print preview</button>
       <button class="btn est-close-btn" type="button" id="est-close">✓ Proposal Accepted…</button>
       <button class="btn quiet-btn" type="button" id="est-lost">Not sold…</button>
@@ -9632,7 +9649,8 @@ function renderEstEdit() {
           ${x.expires_on ? `<tr><td>Valid until</td><td>${fmtDate(x.expires_on)}</td></tr>` : ""}${x.jobs?.job_number ? `<tr><td>Job #</td><td>${esc(x.jobs.job_number)}</td></tr>` : ""}
           <tr><td>Status</td><td>${x.cancelled_at ? "Cancelled" : esc(STATUS[x.status] || x.status)}</td></tr></table></div>
       </div>
-      ${closed ? `<p class="es-hint">This proposal is ${x.cancelled_at ? "cancelled" : x.status === "accepted" ? "sold" : "closed"}, so it can't be changed.</p>`
+      ${x.version_of ? `<p class="es-hint no-print">A new version of an earlier proposal: <button class="link" type="button" data-estimate="${x.version_of}">open the earlier one</button>.</p>` : ""}
+      ${closed ? `<p class="es-hint">This proposal is ${x.cancelled_at ? "cancelled" : x.status === "accepted" ? "sold" : "closed"}, so it stays as it is. To change it, press <b>✎ Edit as a new version</b>: a copy opens to change and save.</p>`
         : ME.guided ? "" : `<p class="es-hint no-print">Add parts and equipment from the price book to each option. Up to 3 options (for example Good, Better, Best); the customer picks one.</p>`}
       <div class="est-opts">${EST.opts.map((o, i) => `<section class="est-opt ${o.recommended ? "rec" : ""}" data-oi="${i}">${estCanCost() || !closed ? `<div class="ec-float" data-ec="${i}"><div class="ec-stick">${closed ? "" : estToolsHtml(o, i)}${estCanCost() ? `<div class="ec-costwrap">${estCostCard(o, i)}</div>` : ""}</div></div>` : ""}
         <div class="est-oh"><span class="es-on">Option ${i + 1}</span><input class="est-oname" data-oname="${i}" value="${esc(o.name)}" maxlength="60" ${closed ? "disabled" : ""} aria-label="Option name">
@@ -9854,6 +9872,7 @@ function wireEstEdit() {
     EST.opts[0].lines = EST.opts[0].lines.filter(l => !String(l.description || "").startsWith(HOLD_BONUS)); EST.dirty = true;
     if (await save(false)) openEstEdit(EST.id, "The book-today deal is off and the rebate is back to normal."); });
   $("#est-save")?.addEventListener("click", async () => { if (await save(false)) openEstEdit(EST.id, "Saved."); });
+  $("#est-newver")?.addEventListener("click", async e => { if ($("#est-save") && EST.dirty && !(await save(false))) return; estNewVersion(EST.id, e.target); });
   $("#est-send")?.addEventListener("click", async () => { if (!$("#est-save") || !EST.dirty || await save(false)) { EST_SEND_NOW = true; openEstimate(EST.id); } });
   $("#est-preview")?.addEventListener("click", async () => { if (!$("#est-save") || !EST.dirty || await save(false)) { if ($("#est-save")) say("Saved."); openEstimate(EST.id); } });
   $("#est-cancel")?.addEventListener("click", async () => {
@@ -23497,6 +23516,9 @@ async function openEstimate(id) {
           return `Option ${n + 1}: ${o.name || ""}${x.accepted_option_id === o.id ? " (accepted)" : ""}\n` + ls.map(k => `  ${k.description}  x${Number(k.quantity)}  ${money(k.line_total)}`).join("\n") + `\n  Subtotal ${money(sub)}`; }).join("\n\n");
     const ok = await copyText(text); $("#inv-copy").textContent = ok ? "Copied ✓" : "Couldn't copy"; setTimeout(() => $("#inv-copy").textContent = "Copy", 1600);
   };
+  { const cb = $("#inv-costbtn"); cb.classList.toggle("hidden", !estCanCost());
+    cb.onclick = () => { INV_COST_OPEN = !INV_COST_OPEN; try { sessionStorage.setItem("invCostOpen", INV_COST_OPEN ? "1" : "0"); } catch (e) {} showEstCosting(x); };
+    showEstCosting(x); }
 }
 /* ---------- email an invoice: text in the email + PDF attached; opened / viewed tracking ---------- */
 let INV_EMAIL_OPEN = false;
@@ -23855,7 +23877,25 @@ document.addEventListener("keydown", e => {
 });
 let COMPANY = null;
 const PAY_NAMES = { cash: "Cash", cheque: "Cheque", card: "Card", credit: "Credit card", e_transfer: "e-Transfer", eft: "EFT", autopay: "Auto-pay", financing: "Financing" };
-function closeInvoice() { $("#inv-cancelbtn")?.classList.add("hidden"); $("#inv-view").classList.add("hidden"); document.body.classList.remove("inv-open"); document.getElementById("est-page-foot")?.remove(); }
+// job costing on the proposal viewer: the same costing as the proposal editor, for every option
+let EST_STASH = null;   // the editor's proposal, kept while another proposal's costing borrows EST
+async function showEstCosting(x) {
+  const box = $("#inv-cost"), view = $("#inv-view"), cb = $("#inv-costbtn"), shown = INV_COST_OPEN && estCanCost();
+  box.classList.toggle("hidden", !shown); view.classList.toggle("with-cost", shown); cb.textContent = shown ? "Hide job costing" : "Job costing";
+  box.dataset.inv = "est" + x.id;
+  if (!shown) return;
+  if (EST.id !== x.id) { if (!EST_STASH && EST.id) EST_STASH = { id: EST.id, opts: EST.opts, costErr: EST.costErr }; EST.id = x.id; EST.opts = estOptsOf(x); }
+  EST.costErr = ""; ECOMM.est = x.id; ECOMM.emp = x.sold_by_employee_id || null;
+  box.innerHTML = `<h2>Job costing</h2><div class="quiet">Working out the costs…</div>`;
+  await estCosting(EST.opts.flatMap(o => o.lines.map(l => l.item_id))).catch(() => {});
+  if (box.dataset.inv !== "est" + x.id) return;
+  box.innerHTML = `<h2>Job costing</h2><p class="quiet" style="margin-top:0">Today's costs from the price book${x.status === "accepted" ? ", for the sold option and the others" : ""}. Only people who see costs see this.</p>
+    ${EST.opts.map((o, i) => `<div data-ec="${i}"${x.accepted_option_id && o.id === x.accepted_option_id ? ` class="ec-sold"` : ""}><div class="ec-costwrap">${estCostCard(o, i)}</div></div>`).join("") || `<p class="quiet">No options on this proposal.</p>`}
+    <div class="ec-ver"><button class="btn" type="button" id="est-v-newver">✎ Edit as a new version</button><div class="quiet">A copy opens to change and save. This proposal stays as it is.</div></div>`;
+  $("#est-v-newver")?.addEventListener("click", e => estNewVersion(x.id, e.target));
+  estCommFill();
+}
+function closeInvoice() { if (EST_STASH) { Object.assign(EST, EST_STASH); EST_STASH = null; } $("#inv-cancelbtn")?.classList.add("hidden"); $("#inv-view").classList.add("hidden"); document.body.classList.remove("inv-open"); document.getElementById("est-page-foot")?.remove(); }
 document.addEventListener("keydown", e => { if (e.key === "Escape" && document.body.classList.contains("inv-open") && !document.querySelector(".ask-back, .askc-back")) closeInvoice(); });
 let INV_COST_OPEN = false;
 try { INV_COST_OPEN = sessionStorage.getItem("invCostOpen") === "1"; } catch (e) {}
