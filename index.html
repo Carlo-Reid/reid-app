@@ -1232,6 +1232,11 @@
   .mv-hits { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; max-width: 460px; } .mv-hit { text-align: left; border: 0; background: transparent; padding: 6px 8px; border-radius: 6px; cursor: pointer; font: inherit; color: inherit; }
   .mv-hit:hover { background: var(--blue-wash, #eef4fb); } .notes-old-h { padding: 8px 10px; margin-bottom: 6px; border-radius: 8px; background: var(--amber-wash, #fff4e6); font-size: 13.5px; }
   .note-tab-old { font-weight: 700; }
+  .tp-tag { font-size: 11.5px; font-weight: 700; color: #7a4a00; margin-top: 2px; white-space: normal; } .tp-tag.tp-tank { color: #8a3b12; }
+  tr.inv-paired td { background: #fff9ec; }
+  .tp-note { margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; background: #fff4e6; border: 1px solid #f0c27b; font-size: 14px; line-height: 1.5; }
+  .tp-two { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 4px 0; }
+  .vtp-t td { vertical-align: top; } .vtp-what { max-width: 260px; } .vtp-acts { white-space: nowrap; } .vtp-hand { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .cust-years { display: inline-block; margin: 4px 0 2px 6px; padding: 4px 14px; border-radius: 999px; background: #2b8a3e; color: #fff; font-weight: 800;
     font-size: calc(17px * var(--fs, 1)); letter-spacing: .01em; white-space: nowrap; box-shadow: 0 2px 6px rgba(43,138,62,.35); vertical-align: middle; }
   .nav-find { position: relative; margin: 0 8px 8px; }
@@ -6920,8 +6925,10 @@ async function openCustomer(id) {
   const noteFilter = [`and(entity_type.eq.customer,entity_id.eq.${id})`]
     .concat(locIds.length ? [`and(entity_type.eq.location,entity_id.in.(${locIds.join(",")}))`] : []).join(",");
   const jobIds = (jobs.data || []).map(j => j.id);
-  const [allNotes, move] = await Promise.all([fetchNotes(noteFilter, jobIds), custMoveLoad(c).catch(() => null)]);
-  current = { c, noteFilter, jobIds, notes: allNotes, move, emails, dupes: await dupeHint, plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
+  const invIds = (invoices.data || []).map(i => i.id);
+  const [allNotes, move, tp] = await Promise.all([fetchNotes(noteFilter, jobIds), custMoveLoad(c).catch(() => null),
+    invIds.length ? Promise.resolve(db.rpc("invoice_tank_pairs", { p_invoices: invIds })).catch(() => ({})) : Promise.resolve({})]);
+  current = { c, noteFilter, jobIds, notes: allNotes, move, tankPairs: tp?.data || [], emails, dupes: await dupeHint, plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
               estimates: estimates.data || [], equipment: eq.data || [],
               loc: (c.locations || []).find(l => l.active)?.id ?? locIds[0] };
   if (MV_TAB) { current.notesTab = MV_TAB; MV_TAB = null; }
@@ -17168,6 +17175,7 @@ async function loadPartners() {
   if (PP.stores.find(x => x.id === PP.store)?.pay_method === "discount_fee") await db.rpc("store_copies_sync", { p_partner: PP.store });   // the store's copies (-C) follow every change
   const [l, pays, sps] = await Promise.all([db.rpc("partner_ledger", { p_partner: PP.store, p_show: PP.show, p_from: null, p_to: null }), db.rpc("partner_payments", { p_partner: PP.store }),
     vis ? db.rpc("partner_supplier_pays", { p_partner: PP.store, p_show: PP.spAll ? "all" : "open" }) : null,
+    vis ? Promise.all([loadSuppliers(), db.rpc("vista_tank_pairs", { p_partner: PP.store, p_show: PP.tpShow || "suggested" })]).then(([, r]) => r).then(r => { PP.tps = r.error ? null : r.data || []; }).catch(() => { PP.tps = null; }) : null,
     PP.view === "jobs" ? loadPartnerJobs() : null]);
   PP.sps = sps && !sps.error ? sps.data || [] : null;
   if (l.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the list</h2>${esc(rpcErr(l.error))}</div></div>`; return; }
@@ -17175,6 +17183,45 @@ async function loadPartners() {
   PP.picked = new Set([...PP.picked].filter(id => PP.rows.some(r => r.invoice_id === id)));
   renderPartners();
 }
+// Old jobs billed as two invoices: labour (the partner pays us) and the tank (the partner pays our supplier). Tie each pair.
+function vtpHtml(st, edit) {
+  const L = PP.tps || [], nm = esc(st.name), sups = (SUPPLIERS || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const usual = PP.vtSup || (PP.sps || []).map(x => (SUPPLIERS || []).find(s => s.name === x.supplier)?.id).find(Boolean) || (sups.find(s => /boone/i.test(s.name)) || {}).id || "";
+  const supSel = (cls, v) => `<select class="${cls}" aria-label="Supplier ${nm} pays">${sups.map(s => `<option value="${s.id}" ${String(s.id) === String(v) ? "selected" : ""}>${esc(String(s.name).trim())}</option>`).join("")}</select>`;
+  const inv = (x, lab) => x?.id ? `<button class="link" type="button" data-invoice="${x.id}">#${esc(x.number)}</button> <b>${money(x.total)}</b>${Number(x.balance) > 0.004 ? ` <span class="warn">${money(x.balance)} open</span>` : ` <span class="quiet">paid</span>`}<div class="quiet vtp-what">${esc(String(x.what || "").slice(0, 70))}</div>` : `<span class="quiet">${lab}</span>`;
+  return `<section class="block pp-pays vtp"><h2>Tank and labour invoices <span class="count">${L.length}</span></h2>
+    <p class="quiet">Older ${nm} jobs were billed as two invoices: the labour (${nm} pays us) and the tank (${nm} pays our supplier). Tie each pair: the tank then shows under "Tanks ${nm} pays our suppliers for" to keep track of, it isn't counted as owed to us, and both invoices show each other.</p>
+    <div class="seg" role="group">${[["suggested", "Looks like a pair"], ["tied", "Tied"], ["all", "All"]].map(([k, t]) => `<button type="button" data-vtp-show="${k}" aria-pressed="${(PP.tpShow || "suggested") === k}">${t}</button>`).join("")}</div>
+    ${L.length ? `<table class="calls-table vtp-t"><thead><tr><th>Customer</th><th>Labour: ${nm} pays us</th><th>Tank: ${nm} pays the supplier</th><th>Supplier</th><th></th></tr></thead><tbody>
+      ${L.map((r, k) => `<tr data-vtp="${k}"><td><button class="link" type="button" data-pp-cust="${r.customer_id}">${esc(r.customer || "")}</button><div class="quiet">${esc(r.street || "")}${r.job_number ? " · job " + esc(r.job_number) : ""}</div></td>
+        <td>${inv(r.labour, "—")}</td><td>${inv(r.tank, "—")}</td>
+        <td>${r.kind === "tied" ? `<b>${esc(r.supplier || "")}</b><div class="quiet">${esc(SP_SHORT[r.status] || r.status || "")}</div>` : edit ? supSel("vtp-sup", usual) : ""}</td>
+        <td class="vtp-acts">${!edit ? "" : r.kind === "tied" ? `<button class="link" type="button" data-vtp-untie="${k}">Untie</button>`
+          : `<button class="btn" type="button" data-vtp-tie="${k}">✓ Tie them</button> <button class="link" type="button" data-vtp-no="${k}" title="Not a tank and labour pair: stop suggesting it">Not a pair</button>`}</td></tr>`).join("")}</tbody></table>`
+      : `<p class="quiet">${(PP.tpShow || "suggested") === "suggested" ? "No more pairs to look at." : "None tied yet."}</p>`}
+    ${edit ? `<form class="vtp-hand" id="vtp-hand"><b>Tie two invoices by hand:</b> <input name="lab" placeholder="Labour invoice #" size="12"> <input name="tank" placeholder="Tank invoice #" size="12"> ${supSel("vtp-hsup", usual)} <button class="btn quiet-btn" type="submit">Tie them</button></form>` : ""}
+  </section>`;
+}
+document.addEventListener("click", async e => {
+  const sh = e.target.closest("[data-vtp-show]"); if (sh) { PP.tpShow = sh.dataset.vtpShow; return loadPartners(); }
+  const b = e.target.closest("[data-vtp-tie], [data-vtp-no], [data-vtp-untie]"); if (!b) return;
+  const k = Number(b.dataset.vtpTie ?? b.dataset.vtpNo ?? b.dataset.vtpUntie), r = (PP.tps || [])[k]; if (!r) return;
+  const tr = b.closest("tr"), sup = Number(tr.querySelector(".vtp-sup")?.value) || null;
+  const action = b.dataset.vtpTie != null ? "tie" : b.dataset.vtpNo != null ? "not_pair" : "untie";
+  if (action === "tie" && !sup) return alertMsg("Pick the supplier first.");
+  if (action === "tie") PP.vtSup = sup;
+  b.disabled = true;
+  const { error } = await db.rpc("vista_tank_tie", { p_tank: r.tank.id, p_labour: r.labour?.id || null, p_supplier: sup, p_amount: null, p_action: action });
+  if (error) { b.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
+  keepSpot(".vtp h2", $("#main"), () => loadPartners());
+});
+document.addEventListener("submit", async e => { if (e.target.id !== "vtp-hand") return; e.preventDefault(); const f = e.target;
+  const num = v => v.trim().replace(/^#/, ""), [a, b2] = [num(f.lab.value), num(f.tank.value)]; if (!a || !b2) return alertMsg("Type both invoice numbers.");
+  const { data } = await db.from("invoices").select("id, invoice_number").in("invoice_number", [a, b2]);
+  const lab = (data || []).find(x => x.invoice_number === a), tank = (data || []).find(x => x.invoice_number === b2);
+  if (!lab || !tank) return alertMsg(`Couldn't find invoice ${!lab ? a : b2}.`);
+  const { error } = await db.rpc("vista_tank_tie", { p_tank: tank.id, p_labour: lab.id, p_supplier: Number(f.querySelector(".vtp-hsup").value), p_amount: null, p_action: "tie" });
+  if (error) return alertMsg("Not tied: " + rpcErr(error)); PP.tpShow = "tied"; loadPartners(); });
 // the Costco way: X% off our price, HST on what's left, less Y% of our price (+ $ per invoice)
 function ppEx(st, sale = 5490, hst = 13) { const r2 = v => Math.round(v * 100) / 100, disc = r2(sale * Number(st.discount_pct ?? 11) / 100), after = r2(sale - disc), tax = r2(after * hst / 100),
   fee = r2(Math.round(sale * Number(st.fee_pct ?? 10) / 100) + Number(st.fee_flat || 0)); return { disc, after, tax, fee, pays: r2(after + tax - fee) }; }
@@ -17277,6 +17324,7 @@ function renderPartners(msg) {
         <td class="r num"><strong class="${Number(r.still_due) > 0 ? "pp-due" : ""}">${money(r.still_due)}</strong></td>
         ${vis ? "" : `<td>${edit ? `<input class="pp-in pp-ref" data-pp-ref value="${esc(r.reference || "")}" placeholder="add" aria-label="${esc(st.name)} number">` : esc(r.reference || "")}</td>`}
       </tr>`; }).join("")}</tbody></table></div>` : `<div class="quiet" style="padding:24px 0">${PP.show === "waiting" ? `${esc(st.name)} doesn't owe anything right now.` : "Nothing here."}</div>`}
+    ${vis && PP.tps ? vtpHtml(st, edit) : ""}
     ${vis && PP.sps ? `<section class="block pp-pays pp-sps"><h2>Tanks ${esc(st.name)} pays our suppliers for <span class="count">${PP.sps.length}</span></h2>
       <div class="seg" role="group"><button type="button" data-pp-spall="0" aria-pressed="${!PP.spAll}">Not on the statement yet</button><button type="button" data-pp-spall="1" aria-pressed="${!!PP.spAll}">All</button></div>
       ${PP.sps.length ? `<table class="calls-table"><thead><tr><th>Invoice</th><th>Customer</th><th>Supplier</th><th class="r">Amount</th><th>Where it's at</th></tr></thead><tbody>
@@ -24370,6 +24418,7 @@ async function openInvoice(id, keep) {
   const cb = $("#inv-costbtn"); cb.classList.toggle("hidden", !can("jobs.costing"));
   cb.onclick = () => { INV_COST_OPEN = !INV_COST_OPEN; try { sessionStorage.setItem("invCostOpen", INV_COST_OPEN ? "1" : "0"); } catch (e) {} showInvoiceCosting(i); };
   showInvoiceCosting(i);
+  invTankPairNote(i);
   if (INV_EMAIL_CUR !== i.id) { INV_EMAIL_OPEN = false; INV_EMAIL_DRAFT = {}; } INV_EMAIL_CUR = i.id;
   { const sg = $("#inv-copyseg"); if (sg) { sg.classList.add("hidden"); sg.querySelectorAll("button").forEach(b => { b.onclick = null; b.setAttribute("aria-pressed", "false"); }); } }
   if (i.paid_at_store || i.store_copy_of) db.rpc("store_payments", { p_invoice: i.id }).then(({ data }) => {   // the store's payments, with its numbers
@@ -24820,9 +24869,24 @@ document.addEventListener("click", async e => {
   if (current?.c?.id && document.body.dataset.page === "customer") openCustomer(current.c.id);
 }, true);
 document.addEventListener("input", e => { if (e.target.id === "inv-cancel-why") window.__invWhy = e.target.value; if (e.target.id === "sret-ra") window.__ra = e.target.value; });
+// Vista tank + labour pairs: the tank invoice (partner pays our supplier) and the labour invoice it goes with
+const tankPairOf = id => (current?.tankPairs || []).find(p => p.tank_id === id || p.labour_id === id) || null;
+const SP_SHORT = { submitted: "waiting", paid_to_supplier: "paid", confirmed_on_statement: "on the statement" };
+function tankPairTag(id) { const p = tankPairOf(id); if (!p) return "";
+  return p.tank_id === id ? `<div class="tp-tag tp-tank" title="${esc(p.partner)} pays ${esc(p.supplier)} ${money(p.amount)} for the tank (${esc(SP_SHORT[p.status] || p.status)})">🔗 Tank: ${esc(p.partner.split(/\s+/)[0])} pays ${esc(p.supplier)} · with labour #${esc(p.labour_number || "")}</div>`
+    : `<div class="tp-tag" title="The tank on this job is billed separately: invoice ${esc(p.tank_number)}, ${money(p.tank_total)}">🔗 Labour · tank on #${esc(p.tank_number)} (${money(p.tank_total)})</div>`; }
+async function invTankPairNote(i) {
+  const { data } = await Promise.resolve(db.rpc("invoice_tank_pairs", { p_invoices: [i.id] })).catch(() => ({}));
+  const p = (data || [])[0], paper = $("#inv-paper"); paper?.querySelector(".tp-note")?.remove(); if (!p || !paper) return;
+  const tank = p.tank_id === i.id, other = tank ? p.labour_id : p.tank_id;
+  paper.insertAdjacentHTML("afterbegin", `<div class="tp-note no-print">🔗 <b>${tank ? "This is the tank invoice" : "This is the labour invoice"}</b> for this ${esc(p.partner)} job.
+    <div class="tp-two"><span>Labour (${esc(p.partner)} pays us): <button class="link" type="button" data-invoice="${p.labour_id}">#${esc(p.labour_number || "")}</button> ${money(p.labour_total)}${Number(p.labour_balance) > 0.004 ? ` · <b>${money(p.labour_balance)} still owing</b>` : " · paid"}</span>
+      <span>Tank (${esc(p.partner)} pays ${esc(p.supplier)}): <button class="link" type="button" data-invoice="${p.tank_id}">#${esc(p.tank_number)}</button> ${money(p.amount)} · ${esc(SP_SHORT[p.status] || p.status)}${p.paid_on ? " " + esc(fmtDate(p.paid_on)) : ""}</span></div>
+    <span class="quiet">Together: ${money(Number(p.labour_total || 0) + Number(p.tank_total || 0))}.${other ? "" : ""}</span></div>`);
+}
 function invoicesHtml(list) {
   return `<div class="scroll-box" tabindex="0" aria-label="Invoices"><table><thead><tr><th>Date</th><th>Invoice</th><th class="r">Total</th><th class="r">Owing</th><th>Status</th><th class="no-print"></th></tr></thead><tbody>
-    ${list.map((i, n) => `<tr class="inv-row" tabindex="0" data-invoice="${i.id}" title="Open invoice"><td class="num">${fmtDate(i.invoice_date)}</td><td class="num"><span class="inv-link">${esc(i.invoice_number)}</span></td>
+    ${list.map((i, n) => `<tr class="inv-row ${tankPairOf(i.id) ? "inv-paired" : ""}" tabindex="0" data-invoice="${i.id}" title="Open invoice"><td class="num">${fmtDate(i.invoice_date)}</td><td class="num"><span class="inv-link">${esc(i.invoice_number)}</span>${tankPairTag(i.id)}</td>
       <td class="r num">${money(i.total)}</td><td class="r num">${i.paid_at_store ? `<span class="quiet">Paid at the store</span>` : i.balance_due > 0.004 ? (i.not_owed_reason ? `<span class="not-owed" title="${esc(i.not_owed_reason)}">Not owed</span>` : money(i.balance_due)) : ""}</td><td>${badge(i.status)}</td><td class="no-print">${invCanCancel(i) ? `<button class="row-del" type="button" data-inv-cancel="${i.id}" data-inv-num="${esc(i.invoice_number || "")}" title="Made by mistake: cancel this invoice"><span aria-hidden="true">✕</span> Cancel</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} invoices.</div>` : ""}`;
 }
