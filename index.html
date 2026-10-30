@@ -1228,6 +1228,10 @@
   .qt-form { border: 1px solid var(--blue, #1864ab); border-radius: 10px; padding: 12px 14px; background: var(--paper, #fff); max-width: 720px; }
   .qt-form h3 { margin: 0 0 8px; } .qt-q { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; } .qt-q input, .qt-q select { max-width: 100%; }
   .qt-two { display: flex; gap: 14px; flex-wrap: wrap; } .qt-two > * { flex: 1 1 200px; } .qt-chk { flex-direction: row; align-items: center; gap: 6px; } .qt-btns { display: flex; gap: 10px; align-items: center; }
+  .mv-line { margin: 4px 0; font-size: 14px; } .mv-find { margin-top: 6px; } .mv-find input { width: 100%; max-width: 360px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
+  .mv-hits { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; max-width: 460px; } .mv-hit { text-align: left; border: 0; background: transparent; padding: 6px 8px; border-radius: 6px; cursor: pointer; font: inherit; color: inherit; }
+  .mv-hit:hover { background: var(--blue-wash, #eef4fb); } .notes-old-h { padding: 8px 10px; margin-bottom: 6px; border-radius: 8px; background: var(--amber-wash, #fff4e6); font-size: 13.5px; }
+  .note-tab-old { font-weight: 700; }
   .cust-years { display: inline-block; margin: 4px 0 2px 6px; padding: 4px 14px; border-radius: 999px; background: #2b8a3e; color: #fff; font-weight: 800;
     font-size: calc(17px * var(--fs, 1)); letter-spacing: .01em; white-space: nowrap; box-shadow: 0 2px 6px rgba(43,138,62,.35); vertical-align: middle; }
   .nav-find { position: relative; margin: 0 8px 8px; }
@@ -6916,8 +6920,8 @@ async function openCustomer(id) {
   const noteFilter = [`and(entity_type.eq.customer,entity_id.eq.${id})`]
     .concat(locIds.length ? [`and(entity_type.eq.location,entity_id.in.(${locIds.join(",")}))`] : []).join(",");
   const jobIds = (jobs.data || []).map(j => j.id);
-  const allNotes = await fetchNotes(noteFilter, jobIds);
-  current = { c, noteFilter, jobIds, notes: allNotes, emails, dupes: await dupeHint, plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
+  const [allNotes, move] = await Promise.all([fetchNotes(noteFilter, jobIds), custMoveLoad(c).catch(() => null)]);
+  current = { c, noteFilter, jobIds, notes: allNotes, move, emails, dupes: await dupeHint, plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
               estimates: estimates.data || [], equipment: eq.data || [],
               loc: (c.locations || []).find(l => l.active)?.id ?? locIds[0] };
   renderFile();
@@ -6927,6 +6931,42 @@ async function openCustomer(id) {
   if (!FU.off) loadFollowKeys();   // make sure finished tasks are gone from Section 1A
 }
 
+// ===== A customer who moved: the new file links to their old file (its notes show in their own tab, the years carry on)
+async function custMoveLoad(c) {
+  const [to, since, old] = await Promise.all([
+    db.from("customers").select("id, display_name, moved_on").eq("moved_from_customer_id", c.id).limit(10),
+    db.rpc("customer_since", { p_ids: [c.id] }),
+    c.moved_from_customer_id ? db.from("customers").select("id, display_name, customer_number, locations(id, street, city, active)").eq("id", c.moved_from_customer_id).single() : Promise.resolve({ data: null })]);
+  let notes = [];
+  if (old.data) { const o = old.data, lids = (o.locations || []).map(l => l.id);
+    const oj = await db.from("jobs").select("id, job_number, job_types(name)").eq("customer_id", o.id).limit(300);
+    const f = [`and(entity_type.eq.customer,entity_id.eq.${o.id})`].concat(lids.length ? [`and(entity_type.eq.location,entity_id.in.(${lids.join(",")}))`] : []).join(",");
+    notes = await fetchNotes(f, (oj.data || []).map(j => j.id)).catch(() => []);
+    old.data.jobs = oj.data || []; }
+  return { from: old.data || null, to: to.data || [], since: since.data?.[0]?.since ? String(since.data[0].since).slice(0, 10) : null, notes };
+}
+function custMoveHtml(c) {
+  const M = current.move || {}, ed = can("customers.edit") || ME.role === "owner";
+  const addr = o => { const l = (o.locations || []).find(x => x.active) || (o.locations || [])[0]; return l ? [l.street, l.city].filter(Boolean).join(", ") : ""; };
+  return `${M.from ? `<div class="mv-line">🏠 Moved here from <button class="link" type="button" data-mv-open="${M.from.id}">${esc(M.from.display_name)}${addr(M.from) ? ", " + esc(addr(M.from)) : ""}</button>${c.moved_on ? ` <span class="quiet">(${esc(fmtDate(c.moved_on))})</span>` : ""}${ed ? ` <button class="link quiet" type="button" data-mv-unlink>undo</button>` : ""}</div>` : ""}
+    ${(M.to || []).map(t => `<div class="mv-line">🚚 Moved to <button class="link" type="button" data-mv-open="${t.id}">${esc(t.display_name)}</button>${t.moved_on ? ` <span class="quiet">(${esc(fmtDate(t.moved_on))})</span>` : ""}</div>`).join("")}
+    ${ed && !M.from ? `<div class="mv-line no-print"><button class="link" type="button" data-mv-start title="This customer moved here from another home: link their old file so its notes and their years with us come along">🏠 Moved from another home?</button><div class="mv-find hidden"><input type="search" placeholder="Their old file: name, phone or old address" aria-label="Find their old file"><div class="mv-hits"></div></div></div>` : ""}`;
+}
+document.addEventListener("click", async e => {
+  const o = e.target.closest("[data-mv-open]"); if (o) return openCustomer(Number(o.dataset.mvOpen));
+  if (e.target.closest("[data-mv-start]")) { const box = e.target.closest(".mv-line").querySelector(".mv-find"); box.classList.toggle("hidden"); box.querySelector("input").focus(); return; }
+  if (e.target.closest("[data-mv-unlink]")) { if (!(await askChoice("Undo the move link?", "Their old file stays as it is. This file stops showing its notes and counting its years.", [["yes", "Undo it", true], ["", "Cancel"]]))) return;
+    const { error } = await db.rpc("customer_move_link", { p_new: current.c.id, p_old: null }); if (error) return alertMsg("Not saved: " + rpcErr(error)); return openCustomer(current.c.id); }
+  const h = e.target.closest("[data-mv-pick]"); if (h) { const id = Number(h.dataset.mvPick), nm = h.dataset.name;
+    if (!(await askChoice("Link their old file?", `<b>${esc(nm)}</b> moved here. Their old file's notes show in a <b>From old home</b> tab, and their years with us count from when they first became a customer there.`, [["yes", "Yes, link it", true], ["", "Cancel"]]))) return;
+    const { error } = await db.rpc("customer_move_link", { p_new: current.c.id, p_old: id }); if (error) return alertMsg("Not linked: " + rpcErr(error));
+    current.notesTab = "old"; return openCustomer(current.c.id); }
+});
+document.addEventListener("input", e => { const inp = e.target.closest(".mv-find input"); if (!inp) return; clearTimeout(inp._t);
+  inp._t = setTimeout(async () => { const q = inp.value.trim(), out = inp.parentElement.querySelector(".mv-hits"); if (q.length < 2) { out.innerHTML = ""; return; }
+    const digits = q.replace(/\D/g, ""), args = digits.length >= 7 && digits.length === q.replace(/[\s()-]/g, "").length ? { p_phone: digits } : /\d/.test(q) && /[a-z]/i.test(q) ? { p_address: q } : { p_name: q };
+    const { data } = await db.rpc("search_customers", { ...args, p_limit: 8 }); if (inp.value.trim() !== q) return;
+    out.innerHTML = (data || []).filter(r => r.customer_id !== current.c.id).map(r => `<button type="button" class="mv-hit" data-mv-pick="${r.customer_id}" data-name="${esc(r.display_name)}"><b>${esc(r.display_name)}</b> <span class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</span></button>`).join("") || `<span class="quiet">No one found. Try fewer words.</span>`; }, 250); });
 const NOTE_BASE = "id, entity_type, entity_id, body, pinned, created_at, app_users(login_email, employees(first_name, last_name))";
 let NOTE_EXTRA = ", source, pin_order, author_name";
 async function fetchNotes(noteFilter, jobIds) {
@@ -7081,10 +7121,12 @@ function renderFile() {
   const jobById = Object.fromEntries(jobs.map(j => [j.id, j]));
   const jobNotesHere = notes.filter(n => n.entity_type === "job" && jobById[n.entity_id] && (!l || jobById[n.entity_id].location_id === l.id))
     .sort(noteSort);
+  const oldNotes = (current.move?.notes || []).slice().sort(noteSort), oldJobs = Object.fromEntries((current.move?.from?.jobs || []).map(j => [j.id, j]));
+  if (current.notesTab === "old" && !current.move?.from) current.notesTab = null;
   const tab = current.notesTab || (locNotes.length ? "location" : custNotes.length ? "customer" : jobNotesHere.length ? "job" : podNotes.length ? "podium" : "location");
   const keep = noteRangeKeep();
   const mailList = current.emails || [];
-  const allShown = { location: locNotes, customer: custNotes, vista: vistaNotes, job: jobNotesHere, podium: podNotes, emails: mailList }[tab];
+  const allShown = { location: locNotes, customer: custNotes, vista: vistaNotes, job: jobNotesHere, podium: podNotes, emails: mailList, old: oldNotes }[tab];
   const shown = allShown.filter(keep), hiddenOld = allShown.length - shown.length;
   current.notesTab = tab;
 
@@ -7096,8 +7138,9 @@ function renderFile() {
             <span class="ob-l">Balance owing${invoices.filter(owingInv).length > 1 ? ` · ${invoices.filter(owingInv).length} invoices` : ""}</span><span class="ob-a num">${money(owed)}</span><span class="ob-go">Click to see ›</span></button>`
           : `<div class="owing-none">✓ No balance owing</div>`}
         <h1>${esc(c.display_name)}${c.pap_list ? `<span class="pap-tag" title="Pays by pre-authorized payment (PAP)">PAP · ${esc(papName(c.pap_list))}</span>` : ""}${can("customers.edit") ? `<button class="pencil" type="button" data-edit-cust title="Edit this customer's name, phones, emails and addresses" aria-label="Edit customer"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z M14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>` : ""}</h1>
-        <div class="meta">Customer ${esc(c.customer_number)}${c.customer_type === "commercial" ? ", commercial" : ""}${(() => { const d = custSince(c, jobs, invoices); if (!d) return ""; const y = custYears(d);
-          return `, since ${monthYear(d)} <span class="cust-years" title="A customer since ${esc(fmtDate(d))} (their first job, invoice or when they were added, whichever came first)">${y < 1 ? "under 1 year with us" : y === 1 ? "1 year with us" : y + " years with us"}</span>`; })()}</div>
+        <div class="meta">Customer ${esc(c.customer_number)}${c.customer_type === "commercial" ? ", commercial" : ""}${(() => { const d = [custSince(c, jobs, invoices), current.move?.since].filter(Boolean).sort()[0]; if (!d) return ""; const y = custYears(d);
+          return `, since ${monthYear(d)} <span class="cust-years" title="A customer since ${esc(fmtDate(d))} (their first job, invoice or when they were added, whichever came first${current.move?.from ? ", counting their old home" : ""})">${y < 1 ? "under 1 year with us" : y === 1 ? "1 year with us" : y + " years with us"}</span>`; })()}</div>
+        ${custMoveHtml(c)}
     <div class="s1-addr">
       <div class="s1-addr-h">Service address${locs.length > 1 ? ` <span class="count">${locs.length} locations</span>` : ""}</div>
       ${locs.length > 1 ? `<div class="${locs.length > 12 ? "scroll-box locs-box" : ""}" tabindex="${locs.length > 12 ? 0 : -1}" aria-label="Locations"><div class="locs">${locs.map(x => `<button class="loc-tab" aria-pressed="${x.id === l.id}" data-loc="${x.id}">${esc(x.street || x.name || "Location")}${x.active ? "" : " (old)"}</button>`).join("")}</div></div>` : ""}
@@ -7139,20 +7182,23 @@ function renderFile() {
         <button class="note-tab" role="tab" data-tab="job" aria-selected="${tab === "job"}">Job notes <span class="count">${jobNotesHere.filter(keep).length}</span></button>
         <button class="note-tab" role="tab" data-tab="podium" aria-selected="${tab === "podium"}">Podium <span class="count">${podNotes.filter(keep).length}</span></button>
         <button class="note-tab" role="tab" data-tab="emails" aria-selected="${tab === "emails"}">Emails <span class="count">${mailList.filter(keep).length}</span></button>
+        ${current.move?.from ? `<button class="note-tab note-tab-old" role="tab" data-tab="old" aria-selected="${tab === "old"}" title="Notes from ${esc(current.move.from.display_name)}'s old home">🏠 From old home <span class="count">${oldNotes.filter(keep).length}</span></button>` : ""}
         <span class="note-range" role="group" aria-label="Show notes from">${noteRangeButtons()}</span>
       </div>
-      <div class="notes-list" role="tabpanel" tabindex="0" aria-label="${{ location: "Location notes", customer: "Customer notes", vista: "Vista notes", job: "Job notes", podium: "Podium messages", emails: "Emails sent" }[tab]}">
-        ${shown.length && tab === "emails" ? shown.map(emailHtml).join("") : shown.length ? (() => { const rank = {}; return shown.map(n => {
+      <div class="notes-list" role="tabpanel" tabindex="0" aria-label="${{ old: "Notes from their old home", location: "Location notes", customer: "Customer notes", vista: "Vista notes", job: "Job notes", podium: "Podium messages", emails: "Emails sent" }[tab]}">
+        ${tab === "old" ? `<div class="notes-old-h">From ${esc(current.move.from.display_name)}'s file at their old home. They stay on that file too. <button class="link" type="button" data-mv-open="${current.move.from.id}">Open the old file</button></div>` : ""}
+        ${shown.length && tab === "old" ? shown.map(n => noteHtml(n, false, n.entity_type === "job" ? oldJobs[n.entity_id] : null, undefined)).join("")
+          : shown.length && tab === "emails" ? shown.map(emailHtml).join("") : shown.length ? (() => { const rank = {}; return shown.map(n => {
             const key = n.entity_type + n.entity_id; const r = n.pinned ? (rank[key] = (rank[key] ?? -1) + 1) : null;
             const pinCount = n.pinned ? shown.filter(x => x.pinned && x.entity_type === n.entity_type && x.entity_id === n.entity_id).length : 0;
             return noteHtml(n, false, tab === "job" ? jobById[n.entity_id] : null, r, pinCount); }).join(""); })()
-          : `<div class="notes-empty">${hiddenOld ? `No notes in this time range.` : { location: "No notes for this address.", customer: "No notes on this customer.", vista: "No Vista notes yet. Notes written here can go into Vista's files from the Partners page.", job: "No job notes at this address.", podium: "No Podium messages for this customer.", emails: "No emails sent from the system yet. Click a customer's email address to write one." }[tab]}</div>`}
+          : `<div class="notes-empty">${hiddenOld ? `No notes in this time range.` : { old: "No notes on their old file.", location: "No notes for this address.", customer: "No notes on this customer.", vista: "No Vista notes yet. Notes written here can go into Vista's files from the Partners page.", job: "No job notes at this address.", podium: "No Podium messages for this customer.", emails: "No emails sent from the system yet. Click a customer's email address to write one." }[tab]}</div>`}
       </div>
       <div class="note-range-foot"><span class="note-range" role="group" aria-label="Show notes from">${noteRangeButtons()}</span></div>
       ${shown.length > 4 || hiddenOld ? `<div class="notes-foot">${shown.length > 4 ? `Scroll inside the box to see all ${shown.length} notes.` : ""}
         ${hiddenOld ? ` ${hiddenOld} older ${hiddenOld === 1 ? "note is" : "notes are"} hidden. <button class="link" type="button" data-range="all">Show all</button>` : ""}</div>` : ""}
       ${tab === "podium" ? `<div class="notes-foot">Texts, calls and review requests that Podium logged in ServiceTitan.</div>` : ""}
-      ${can("notes.add") && tab !== "podium" && tab !== "emails" ? `<form class="note-add" id="note-add">
+      ${can("notes.add") && tab !== "podium" && tab !== "emails" && tab !== "old" ? `<form class="note-add" id="note-add">
         <label for="note-text" class="${tab === "job" ? "" : ""}">${{ location: "Add a note for this address", customer: "Add a note to this customer", vista: "Add a Vista note", job: "Add a note to a job" }[tab]}</label>
         <textarea id="note-text" maxlength="10000" placeholder="${{ location: "Gate code, where the furnace is, parking, pets…", customer: "Billing preferences, how they like to be contacted…", vista: "What to tell Vista: what was found, what was done, what's next…", job: "What was done, what to check next visit…" }[tab] || ""}"></textarea>
         <div class="row">
