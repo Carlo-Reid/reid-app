@@ -78,19 +78,59 @@ def ocr_pdf(data):
         subprocess.run(["pdftoppm", "-r", "300", "-gray", "-png", "-l", "8", src, os.path.join(d, "p")], capture_output=True, timeout=180)
         pages = []
         for f in sorted(x for x in os.listdir(d) if x.startswith("p") and x.endswith(".png")):
-            r = subprocess.run(["tesseract", os.path.join(d, f), "stdout", "--psm", "6"], capture_output=True, timeout=180)
-            pages.append(r.stdout.decode("utf-8", "replace"))
-        return "\n\f\n".join(pages)
+            pages.append(ocr_page(os.path.join(d, f)))
+        return "\n\f\n".join(pages) + "\n" + OCR_MARK
+
+
+OCR_MARK = "[read v2]"   # pages read the way below (turned the right way up first)
+WORDS = re.compile(r"\b(invoice|order|total|qty|quantity|ship|sold|date|price|amount|customer|terms|description|phone|tax|hst|gst|unit|each|subtotal|picking|packing|account|branch)\b", re.I)
+
+
+def ocr_score(t):
+    """How much a page reads like a real page: known invoice words and plain long words, minus junk."""
+    words = re.findall(r"[A-Za-z]{4,}", t)
+    return len(WORDS.findall(t)) * 5 + len(words) - len(re.findall(r"[^\w\s.,:;/$#()&%'\"-]", t))
+
+
+def ocr_page(img):
+    """The words on one page. A page scanned sideways or upside down is turned the right way first."""
+    read = lambda f: subprocess.run(["tesseract", f, "stdout", "--psm", "6"], capture_output=True, timeout=180).stdout.decode("utf-8", "replace")
+    first = read(img)
+    if ocr_score(first) >= 60:
+        return first
+    try:
+        from PIL import Image
+    except ImportError:
+        return first
+    best, best_score = first, ocr_score(first)
+    # tesseract can say which way is up; otherwise try each turn
+    turns = [90, 180, 270]
+    osd = subprocess.run(["tesseract", img, "stdout", "--psm", "0"], capture_output=True, timeout=120).stdout.decode("utf-8", "replace")
+    m = re.search(r"Rotate:\s*(\d+)", osd)
+    if m and int(m.group(1)) in turns:
+        turns.remove(int(m.group(1))); turns.insert(0, int(m.group(1)))
+    for deg in turns:
+        out = img[:-4] + f"_r{deg}.png"
+        Image.open(img).rotate(-deg, expand=True).save(out)
+        t = read(out)
+        if ocr_score(t) > best_score:
+            best, best_score = t, ocr_score(t)
+        if best_score >= 60:
+            break
+    return best
 
 
 def read_scans(cur):
     """Scanned PDFs (no words inside) get their words read, then the app reads them again."""
+    # new scans, and scans read before pages were turned the right way up that came out as junk
     cur.execute("""SELECT id, data FROM supplier_mail
-                   WHERE ocr_text IS NULL AND data IS NOT NULL AND status IN ('new', 'unread', 'error', 'needs_supplier')
+                   WHERE (ocr_text IS NULL OR (status IN ('needs_supplier', 'unread', 'error') AND position(%s IN ocr_text) = 0
+                          AND ocr_text !~* '(invoice|order|total|qty|ship|sold|date|price|amount)'))
+                     AND data IS NOT NULL AND status IN ('new', 'unread', 'error', 'needs_supplier')
                      AND (lower(coalesce(file_name, '')) LIKE '%%.pdf' OR mime ILIKE '%%pdf%%')
                      AND position('\\x2f466f6e74'::bytea IN data) = 0
                      AND coalesce(received_at, created_at) > now() - interval '60 days'
-                   ORDER BY id LIMIT 20""")
+                   ORDER BY id LIMIT 20""", (OCR_MARK,))
     n = 0
     for mid, data in cur.fetchall():
         text = ocr_pdf(bytes(data))
