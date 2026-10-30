@@ -4982,6 +4982,7 @@ html body[data-page="calls"] #main article.calls .cl-mt-list { margin: 10px 0 4p
 html body[data-page="calls"] #main article.calls .cl-mt-lh { display: flex; align-items: baseline; gap: 10px; padding: 2px 4px 6px; } html body[data-page="calls"] #main article.calls .cl-mt-lh .link { margin-left: auto; }
 /* Drop invoices in: room for a number like 40241429-00 */
 .stv[data-stv-drop].over { outline: 3px dashed #1f5fa8; outline-offset: 6px; }
+.sinv-mkpo { margin: 6px 0 10px; padding: 12px 14px; border: 1px solid #f0c36d; background: #fffaf0; border-radius: 14px; } .sinv-mkpo input { width: 100%; } .sinv-mkpo td.r input { width: 90px; text-align: right; }
 .dropin-t input.di-need { border: 2px solid #c62828 !important; background: #fff4f4 !important; }
 .dropin-t input[name=number] { width: 130px; min-width: 130px; } .dropin-t input[name=total] { width: 100px; }
 /* Marketing: Email / Mail / Texting / Phone calls tabs, and the working lists */
@@ -13980,7 +13981,7 @@ function sinvState(r) {
   else if (r.doc_type === "charge") [k, label] = ["charge", "Service charge"];
   else if (r.doc_type === "return") [k, label] = ["credit", "Return ticket"];
   else if (!r.po_text && !r.pages) [k, label] = ["nocopy", `The invoice from ${sinvShort(r.supplier) || "the supplier"} hasn't been loaded in our system, but it's on the statement`];
-  else if (!r.po_text) [k, label] = ["nopo", "We did not create a PO for this"];
+  else if (!r.po_text && !r.po_id) [k, label] = ["nopo", "We did not create a PO for this"];
   else if (!r.po_id) [k, label] = ["notfound", `PO ${r.po_text} is printed on it, but it isn't in our system`];
   else if (r.doc_type === "credit") [k, label] = ["credit", "Credit"];
   else if (po == null || !Number(r.po_lines)) [k, label] = ["differs", "PO has no amounts"];
@@ -14236,7 +14237,7 @@ function sinvDetail(r, edit) {
     <div class="sinv-cols"><section><h3>On the ${what} ${esc(r.number)}</h3>${r.po_id && L.length ? `<p class="quiet">Its lines are lined up with the PO's above.</p>` : lt(L, true)}
       <p class="quiet">${L.some(x => x.net_amount == null) ? "Packing slips show no dollar amounts: grey amounts are worked out from the price and discount. " : ""}${r.subtotal != null ? `Subtotal ${money(r.subtotal)}${r.hst != null ? ` · HST ${money(r.hst)}` : ""} · ` : ""}Total on the statement ${money(r.total)}</p>
       ${r.handwriting ? `<p><b>Handwritten:</b> ${esc(r.handwriting)}</p>` : ""}${r.read_notes ? `<p class="quiet"><b>Reading the scan:</b> ${esc(r.read_notes)}</p>` : ""}</section>
-    <section><h3>${r.po_number ? `On PO ${esc(r.po_number)}` : "PO"}</h3>${r.po_id ? (L.length ? "" : lt(P, false)) + `<p class="quiet">PO total before tax ${money(r.po_amount || 0)}${r.po_status ? ` · ${esc(r.po_status)}` : ""}</p>` : `<p class="quiet">${r.po_text ? `No PO ${esc(r.po_text)} in the app.` : "No PO number on it."}</p>`}
+    <section><h3>${r.po_number ? `On PO ${esc(r.po_number)}` : "PO"}</h3>${r.po_id ? (L.length ? "" : lt(P, false)) + `<p class="quiet">PO total before tax ${money(r.po_amount || 0)}${r.po_status ? ` · ${esc(r.po_status)}` : ""}</p>` : (edit && !r.po_text ? sinvMakePoHtml(r, d) : "") + `<p class="quiet">${r.po_text ? `No PO ${esc(r.po_text)} in the app.` : "No PO number on it."}</p>`}
       ${edit ? `<div class="sinv-acts"><label>Match to PO <input id="sinv-po-${r.id}" placeholder="PO number" value="${esc(r.po_by_hand ? r.po_number : "")}"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button>${r.po_by_hand ? `<button class="link" type="button" data-sinv-unpo="${r.id}">Use the printed PO</button>` : ""}
         <label>Note <input id="sinv-note-${r.id}" value="${esc(r.match_note || "")}" placeholder="e.g. split over 2 invoices"></label><button class="btn quiet-btn" type="button" data-sinv-note="${r.id}">Save note</button>
         ${r.match_state === "ok" ? `<button class="btn quiet-btn" type="button" data-sinv-ok="${r.id}" data-v="">Undo checked</button>` : `<button class="btn" type="button" data-sinv-ok="${r.id}" data-v="ok">✓ Mark checked</button>`}
@@ -14336,6 +14337,38 @@ async function openSupPay(sup, name) {
 // a supplier's invoices dropped in from the email (one PDF per invoice): each is read, matched to the invoice we already have
 // (by its number) or made new, and its pages kept
 const DROPIN = { sup: null, name: "", items: [], known: null, kn: {} };
+// the item lines off an invoice's text: "1  02435322000  1  0  UN  1564.34  63.75  567.07-", with the description on the next line
+function sinvParseLines(text, credit) {
+  const L = String(text || "").split(/\n/), out = [], n = t => Number(String(t).replace(/,/g, ""));
+  const RX = /^\s*(\d{1,3})\s+([A-Z0-9][A-Z0-9\-\/.]{3,})\s+(\d+(?:\.\d+)?)\s+(?:(\d+(?:\.\d+)?)\s+)?(?:[A-Z]{1,3}\s+)?([\d,]+\.\d{2,4})\s+(?:(\d{1,2}(?:\.\d+)?)\s+)?([\d,]+\.\d{2})\s*(-)?\s*$/i;
+  for (let i = 0; i < L.length; i++) {
+    const m = L[i].match(RX); if (!m) continue;
+    let desc = ""; for (let j = i + 1; j < Math.min(L.length, i + 3); j++) { const t = L[j].trim(); if (!t) continue; if (!RX.test(L[j]) && !/^(SUB\s*-?\s*)?TOTAL|G\.?S\.?T|H\.?S\.?T/i.test(t)) desc = t; break; }
+    const neg = credit || !!m[8];
+    out.push({ code: m[2], description: desc, shipped: n(m[3]), backorder: m[4] ? n(m[4]) || null : null, unit_price: n(m[5]), discount: m[6] ? n(m[6]) : null, net_amount: (neg ? -1 : 1) * n(m[7]) });
+  }
+  return out;
+}
+// a PO made from an invoice's lines, for approving: [{ description, quantity, unit_cost }]
+function sinvPoDraft(r, L) {
+  const credit = r.doc_type === "credit" || Number(r.total) < 0;
+  if (L.length) return L.map(x => { const q = Number(x.shipped ?? x.ordered ?? 1) || 1;
+    const amt = x.net_amount != null ? Number(x.net_amount) : Number(x.unit_price || 0) * q * (1 - Number(x.discount || 0) / 100);
+    return { description: [x.code, x.description].filter(Boolean).join(" · "), quantity: q, unit_cost: Math.round(amt / q * 100) / 100 * (credit && amt > 0 ? -1 : 1) }; });
+  return [{ description: `${credit ? "Credit" : "Invoice"} ${r.number}`, quantity: 1, unit_cost: Math.round(sinvBefore(r) * 100) / 100 }];
+}
+function sinvMakePoHtml(r, d) {
+  const L = d.lines || [], what = r.doc_type === "credit" || Number(r.total) < 0 ? "credit" : "invoice";
+  SINV.mkpo ||= new Map(); if (!SINV.mkpo.has(r.id)) SINV.mkpo.set(r.id, sinvPoDraft(r, L));
+  const D = SINV.mkpo.get(r.id), tot = Math.round(D.reduce((a, x) => a + Number(x.quantity || 0) * Number(x.unit_cost || 0), 0) * 100) / 100, before = Math.round(sinvBefore(r) * 100) / 100;
+  return `<div class="sinv-mkpo" data-mkpo="${r.id}"><b>We didn't make a PO for this ${what}, so here's one made from it.</b> <span class="quiet">Check the lines, change anything that's wrong, then approve it.</span>
+    <table class="sinv-lt"><thead><tr><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th><th></th></tr></thead><tbody>
+    ${D.map((x, i) => `<tr data-mkl="${i}"><td><input name="description" value="${esc(x.description || "")}"></td><td class="r"><input name="quantity" type="number" step="any" value="${x.quantity}"></td>
+      <td class="r"><input name="unit_cost" type="number" step="0.01" value="${x.unit_cost}"></td><td class="r num">${money(Number(x.quantity || 0) * Number(x.unit_cost || 0))}</td><td><button class="link danger" type="button" data-mkl-x="${i}" aria-label="Take this line off">✕</button></td></tr>`).join("")}</tbody></table>
+    <p><button class="link" type="button" data-mkpo-add="${r.id}">+ Add a line</button>${!L.length && (d.pages || []).length ? ` · <button class="link" type="button" data-mkpo-scan="${r.id}">Read the lines off the scan</button>` : ""} <span class="quiet" data-mkpo-msg></span></p>
+    <p>PO total before tax <b>${money(tot)}</b> · the ${what} before tax <b>${money(before)}</b> ${Math.abs(tot - before) <= 1 ? `<span class="st-ok">✓ they match</span>` : `<span class="st-bad">${money(Math.abs(tot - before))} apart</span>`}</p>
+    <div class="row"><button class="btn" type="button" data-mkpo-ok="${r.id}">✓ Approve and make the PO</button></div></div>`;
+}
 // what we already have for a supplier (to match a dropped invoice to ours by its number)
 async function dropInKnown(sup) {
   if (!DROPIN.kn[sup]) { const { data } = await db.rpc("supplier_invoices_list", { p_supplier: sup, p_statement: 0 }); DROPIN.kn[sup] = { sup, rows: data?.rows || [], lines: data?.statement_lines || [] }; }
@@ -14429,6 +14462,7 @@ async function dropInFiles(files) {
         if (x.other) { x.sup = x.other; await dropInKnown(x.sup); }   // dropped on the wrong supplier: it goes to the right one by itself
         x.subtotal = n((T.match(/SUB\s*-?\s*TOTAL[^\d\n]{0,60}([\d,]+\.\d{2})/) || [])[1]); x.hst = n((T.match(/(?:H\.?S\.?T|TVH)[^\d\n]{0,60}([\d,]+\.\d{2})/) || [])[1]);
         if (x.credit) { if (x.subtotal) x.subtotal = -Math.abs(x.subtotal); if (x.hst) x.hst = -Math.abs(x.hst); }
+        x.lines = sinvParseLines(text, x.credit);
         x.busy = null; dropInMatch(x); drawDropIn();
       } catch (e) { x.busy = null; x.err = e.message || String(e); drawDropIn(); }
     }
@@ -14439,7 +14473,7 @@ async function dropInSave() {
   DROPIN.items.forEach(x => { if (!x.done && !x.busy) dropInMatch(x); });
   for (const x of DROPIN.items.filter(x => !x.done && !x.busy)) {
     if (!x.number || !x.pages?.length) { x.err = !x.number ? "Not saved yet: the reader couldn't find the invoice number. Look at the PDF, type its invoice (or credit / order) number in the red box under Invoice #, then press Save again." : "No pages read"; continue; }
-    const p = { supplier_id: x.sup || DROPIN.sup, number: x.number, date: x.date || null, total: x.total, po_text: x.po, subtotal: x.subtotal, hst: x.hst, pages: x.pages, file: x.file };
+    const p = { supplier_id: x.sup || DROPIN.sup, number: x.number, date: x.date || null, total: x.total, po_text: x.po, subtotal: x.subtotal, hst: x.hst, pages: x.pages, file: x.file, lines: x.lines || [] };
     const { error } = x.match ? await db.rpc("supplier_invoice_attach", { p_invoice: x.match.id, p }) : await db.rpc("supplier_invoice_add", { p });
     if (error) x.err = "Not saved: " + rpcErr(error); else { x.err = null; x.done = x.match ? "Copy added to our invoice" : "Added"; }
   }
@@ -14708,6 +14742,30 @@ function wireSupInv() {
   document.querySelectorAll("[data-sinv-unpo]").forEach(b => b.addEventListener("click", () => save(Number(b.dataset.sinvUnpo), { po_number: "" }, "Back to the PO printed on it.")));
   document.querySelectorAll("[data-sinv-note]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.sinvNote); save(id, { match_note: $("#sinv-note-" + id).value }, "Note saved."); }));
   document.querySelectorAll("[data-sinv-ok]").forEach(b => b.addEventListener("click", () => save(Number(b.dataset.sinvOk), { match_state: b.dataset.v }, b.dataset.v ? "Marked checked." : "Not checked any more.")));
+  // the PO made from an invoice: change its lines, then approve it
+  document.querySelectorAll("[data-mkpo]").forEach(box => { const id = Number(box.dataset.mkpo), D = () => SINV.mkpo.get(id);
+    box.querySelectorAll("tr[data-mkl] input").forEach(inp => inp.addEventListener("change", () => { const x = D()[Number(inp.closest("tr").dataset.mkl)]; x[inp.name] = inp.type === "number" ? Number(inp.value || 0) : inp.value; redo(); }));
+    box.querySelectorAll("[data-mkl-x]").forEach(b => b.addEventListener("click", () => { D().splice(Number(b.dataset.mklX), 1); redo(); }));
+    box.querySelector("[data-mkpo-add]")?.addEventListener("click", () => { D().push({ description: "", quantity: 1, unit_cost: 0 }); redo(); });
+    box.querySelector("[data-mkpo-scan]")?.addEventListener("click", async e => { const msg = box.querySelector("[data-mkpo-msg]"), r = (SINV.data?.rows || []).find(x => x.id === id), d = SINV.det.get(id);
+      try { e.target.disabled = true; msg.textContent = "Reading the scan… (about 10 seconds a page)";
+        await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); const w = await window.Tesseract.createWorker("eng"); let text = "";
+        for (const p of d.pages || []) { if (!SINV.img.has(p.id)) { const q = await db.rpc("supplier_doc_page", { p_id: p.id }); if (q.data) SINV.img.set(p.id, "data:image/jpeg;base64," + q.data); }
+          if (SINV.img.has(p.id)) text += "\n" + (await w.recognize(SINV.img.get(p.id))).data.text; }
+        await w.terminate();
+        const L = sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0);
+        if (!L.length) { msg.textContent = "Couldn't pick out the lines. Type them in above."; e.target.disabled = false; return; }
+        SINV.mkpo.set(id, sinvPoDraft(r, L)); redo();
+      } catch (er) { msg.textContent = "Couldn't read it: " + (er.message || er); e.target.disabled = false; } });
+    box.querySelector("[data-mkpo-ok]")?.addEventListener("click", async e => {
+      const lines = D().filter(x => String(x.description || "").trim() || Number(x.unit_cost)); if (!lines.length) return alertMsg("Add at least one line first.");
+      const r = (SINV.data?.rows || []).find(x => x.id === id), tot = lines.reduce((a, x) => a + Number(x.quantity || 0) * Number(x.unit_cost || 0), 0);
+      const k = await askChoice("Approve this PO?", `A PO for <b>${esc(sinvShort(r?.supplier) || "the supplier")}</b> with ${lines.length} ${lines.length === 1 ? "line" : "lines"}, <b>${money(tot)}</b> before tax, is made and tied to ${esc(r?.number || "this invoice")}. It's recorded as approved by you.`, [["yes", "Approve it", true], ["", "Not yet"]]);
+      if (k !== "yes") return;
+      e.target.disabled = true;
+      const { data, error } = await db.rpc("supplier_invoice_make_po", { p_invoice: id, p_lines: lines, p_what: null });
+      if (error) { e.target.disabled = false; return alertMsg("PO not made: " + rpcErr(error)); }
+      SINV.mkpo.delete(id); SINV.det.delete(id); SINV.data = null; await openSupInv(`PO ${data?.po_number || ""} made and tied to ${r?.number || "the invoice"}.`); }); });
   const apply = async (id, changes, check, msg, why) => { const { data, error } = await db.rpc("po_lines_apply", { p_invoice: id, p_changes: changes, p_check: !!check, p_reason: why || null });
     if (error) { alertMsg("Not saved: " + rpcErr(error)); return false; } SINV.det.delete(id); await openSupInv(msg); return true; };
   document.querySelectorAll("[data-sinv-acc]").forEach(b => b.addEventListener("click", () => { const c = SINV.acc?.get(b.dataset.sinvAcc); if (c) apply(SINV.open, [c], false, "PO changed. It's recorded under Changes to this PO."); }));
