@@ -5042,9 +5042,10 @@ article.staff .st-tk .st-tk-row { cursor: default; } article.staff .st-tk-off { 
 .st-viewas-box { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .st-viewas-box > .quiet { flex-basis: 100%; }
 #viewas-bar .btn { background: #fff !important; color: #7a1f5c !important; border: 0 !important; white-space: nowrap; }
 body.viewing-as #app { box-shadow: inset 0 0 0 4px #7a1f5c; }
-.inv-cost.ie-cost[data-inv^="est"] { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); column-gap: 16px; align-content: start; }
-.inv-cost.ie-cost[data-inv^="est"] > * { grid-column: 1 / -1; grid-row: auto; margin-bottom: 8px; }
-.inv-cost.ie-cost[data-inv^="est"] > [data-ec] { grid-column: auto; }
+.inv-cost.ie-cost[data-inv^="est"] { display: block !important; }
+@media (min-width: 1101px) { .inv-cost.ie-cost[data-inv^="est"] { width: min(480px, 40vw); } .inv-view.with-cost:has(#inv-cost[data-inv^="est"]) { padding-right: calc(min(480px, 40vw) + 40px); } }
+.inv-cost.ie-cost[data-inv^="est"] > * { margin-bottom: 10px; }
+.ec-opts { display: flex; flex-wrap: wrap; gap: 6px; } .ec-actual { margin: 8px 0; } .ec-goal { margin: 8px 0; }
 .ec-ver { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); } .ec-ver .quiet { margin-top: 4px; font-size: 13px; }
 .ec-sold .ec-card { box-shadow: 0 0 0 2px var(--green, #2b8a3e); }
 #inv-cost [data-ec] { margin-bottom: 12px; }
@@ -23879,7 +23880,45 @@ document.addEventListener("keydown", e => {
 });
 let COMPANY = null;
 const PAY_NAMES = { cash: "Cash", cheque: "Cheque", card: "Card", credit: "Credit card", e_transfer: "e-Transfer", eft: "EFT", autopay: "Auto-pay", financing: "Financing" };
-// job costing on the proposal viewer: the same costing as the proposal editor, for every option
+// a proposal option's job costing laid out like the invoice's: profit and margin, where the money goes, then sale down to profit
+function estCostFull(o, i, x) {
+  const pct = v => (Math.round(v * 10) / 10) + "%";
+  const price = o.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
+  const cs = o.lines.map(estLineCost), mat = cs.reduce((s, c) => s + c.mat, 0), eqp = cs.reduce((s, c) => s + (c.eq || 0), 0), bigs = cs.flatMap(c => c.bigs || []);
+  const lab = cs.reduce((s, c) => s + c.lab, 0), hrs = cs.reduce((s, c) => s + c.hrs, 0), war = cs.reduce((s, c) => s + (c.war || 0), 0), off = cs.reduce((s, c) => s + (c.off || 0), 0);
+  const veh = o.lines.some(l => l.item_id) ? Number(COMPANY?.vehicle_cost_default) || 0 : 0;
+  const cm = ME.role === "owner" ? estCommCalc(o) : null, comm = cm ? cm.total : 0, cr = cm && cm.sale > 0 ? cm.total / cm.sale : 0;
+  const fixed = mat + lab + war + off + veh, cost = fixed + comm, profit = price - cost, margin = price > 0 ? profit / price * 100 : 0;
+  const goal = estMargin(), at = 1 - goal - cr > 0.01 ? fixed / (1 - goal - cr) : fixed / (1 - goal), maxDisc = price - at;
+  const lvl = margin >= 40 ? "good" : margin >= 25 ? "ok" : "low";
+  const segs = [["Equipment", eqp, "#5B4A8A"], ["Parts", mat - eqp, "#8A6A3B"], ["Labour", lab, "#3D7AB8"], ["Warranty", war, "#C2185B"], ["Office", off, "#B07A2E"], ["Vehicle", veh, "#2A9D8F"],
+                ["Commission", comm, "#7A5BB0"], ["Profit", Math.max(profit, 0), "#2E7D4F"]].filter(v => v[1] > 0.004);
+  const base = segs.reduce((a, v) => a + v[1], 0) || 1;
+  const own = o.lines.filter(l => !l.item_id && !l.disc && l.kind !== "note" && (Number(l.qty) || 0) * (Number(l.price) || 0)).length;
+  const sold = x && x.accepted_option_id && o.id === x.accepted_option_id;
+  return `<div class="ie-cost-top ${lvl}"><div><span>Profit</span><strong>${money(profit)}</strong></div><div style="text-align:right"><span>Margin</span><strong>${pct(margin)}</strong></div></div>
+    <div class="quiet" style="margin-top:-6px">Margin is profit ÷ the sale before HST. Green is 40% or more, orange 25 to 40%, red under 25%.</div>
+    <div class="ie-cost-bar" role="img" aria-label="Where the money goes">${segs.map(v => `<i style="width:${v[1] / base * 100}%;background:${v[2]}" title="${esc(v[0])} ${money(v[1])}"></i>`).join("")}</div>
+    <div class="ie-cost-key">${segs.map(v => `<span><b style="background:${v[2]}"></b>${esc(v[0])} ${pct(v[1] / base * 100)}</span>`).join("")}</div>
+    ${sold && EST_V_IJ?.invoice_id ? `<p class="ec-actual"><b>Sold.</b> What the install really cost (parts used, the techs' time): <button class="link" type="button" data-est-actual="${EST_V_IJ.invoice_id}">open the install invoice's job costing ›</button></p>`
+      : `<p class="quiet ec-actual">${x && x.status === "accepted" ? "Sold: the real costs show on the install invoice's job costing once it's made." : "Expected costs from the price book. Once it's sold and installed, the install invoice's job costing shows what it really cost."}</p>`}
+    <table>
+      <tr><td>Sale (before HST)</td><td class="r">${money(price)}</td></tr>
+      ${bigs.length ? bigs.map(b => `<tr><td>Equipment: ${esc(pbName(String(b.name).split("\n")[0]))}<br><span class="quiet">${b.what === "unit" ? "the unit" : esc(b.what)}</span></td><td class="r">−${money(b.cost)}</td></tr>`).join("")
+        : eqp ? `<tr><td>Equipment</td><td class="r">−${money(eqp)}</td></tr>` : ""}
+      <tr><td>Parts and materials<br><span class="quiet">install parts and the kits on these items</span>${own ? `<br><span class="warn">${own} line${own === 1 ? "" : "s"} typed in by hand: no cost known</span>` : ""}</td><td class="r">−${money(mat - eqp)}</td></tr>
+      <tr><td>Labour${hrs ? ` ${+hrs.toFixed(1)} tech-hours × ${money(lab / hrs)}/hr` : ""}<br><span class="quiet">${hrs ? "the price book's hours for these items (Labour cost box on each item's page)" : lab ? "from the pricing formula" : "no labour hours in the price book for these items"}</span></td><td class="r">−${money(lab)}</td></tr>
+      ${war ? `<tr><td>Warranty</td><td class="r">−${money(war)}</td></tr>` : ""}
+      ${off ? `<tr><td>Office<br><span class="quiet">overhead from the pricing formula, same as the item page</span></td><td class="r">−${money(off)}</td></tr>` : ""}
+      <tr><td>Vehicle<br><span class="quiet">the usual amount for a job</span></td><td class="r">−${money(veh)}</td></tr>
+      ${ME.role === "owner" ? `<tr><td>Commission<br><span class="quiet">${cm ? (cm.name ? esc(cm.name) + " · " : "") + (cm.any ? "by type of work (Commissions page)" : "no rate set") : "loading…"}</span></td><td class="r">−${money(comm)}</td></tr>` : ""}
+      <tr class="tot"><td>Profit</td><td class="r">${money(profit)}</td></tr>
+    </table>
+    ${price > 0 ? `<p class="ec-goal">${margin >= goal * 100 - 0.05 ? `Max discount <b>${money(Math.max(0, maxDisc))}</b> (${(Math.max(0, maxDisc) / price * 100).toFixed(1)}%) and still keep ${Math.round(goal * 1000) / 10}%.`
+      : `Below ${Math.round(goal * 1000) / 10}%: raise the price by <b>${money(at - price)}</b> to get there (${money(at)} before HST).`}</p>` : ""}`;
+}
+let EST_V_IJ = null, EST_V_OPT = null;
+// job costing on the proposal viewer, laid out like the invoice's
 let EST_STASH = null;   // the editor's proposal, kept while another proposal's costing borrows EST
 async function showEstCosting(x) {
   const box = $("#inv-cost"), view = $("#inv-view"), cb = $("#inv-costbtn"), shown = INV_COST_OPEN && estCanCost();
@@ -23891,9 +23930,24 @@ async function showEstCosting(x) {
   box.innerHTML = `<h2>Job costing</h2><div class="quiet">Working out the costs…</div>`;
   await estCosting(EST.opts.flatMap(o => o.lines.map(l => l.item_id))).catch(() => {});
   if (box.dataset.inv !== "est" + x.id) return;
-  box.innerHTML = `<h2>Job costing</h2><p class="quiet" style="margin-top:0">Today's costs from the price book${x.status === "accepted" ? ", for the sold option and the others" : ""}. Only people who see costs see this.</p>
-    ${EST.opts.map((o, i) => `<div data-ec="${i}"${x.accepted_option_id && o.id === x.accepted_option_id ? ` class="ec-sold"` : ""}><div class="ec-costwrap">${estCostCard(o, i)}</div></div>`).join("") || `<p class="quiet">No options on this proposal.</p>`}`;
-  estCommFill();
+  if (x.status === "accepted" && !x.cancelled_at) EST_V_IJ = (await Promise.resolve(db.rpc("est_install_job", { p_id: x.id })).catch(() => ({})))?.data || null; else EST_V_IJ = null;
+  if (EST_V_OPT == null || !EST.opts[EST_V_OPT] || box.dataset.optFor !== String(x.id)) {
+    const k = EST.opts.findIndex(o => x.accepted_option_id ? o.id === x.accepted_option_id : o.recommended); EST_V_OPT = k >= 0 ? k : 0; box.dataset.optFor = x.id; }
+  const draw = () => {
+    if (box.dataset.inv !== "est" + x.id) return;
+    const o = EST.opts[EST_V_OPT];
+    box.innerHTML = `<h2>Job costing</h2>
+      ${EST.opts.length > 1 ? `<div class="ec-opts" role="group" aria-label="Option">${EST.opts.map((q, k) => `<button class="chip small" type="button" data-ecv-opt="${k}" aria-pressed="${k === EST_V_OPT}">${esc(q.name || "Option " + (k + 1))}${x.accepted_option_id && q.id === x.accepted_option_id ? " ✓ sold" : ""}</button>`).join("")}</div>` : ""}
+      ${o ? estCostFull(o, EST_V_OPT, x) : `<p class="quiet">No options on this proposal.</p>`}`;
+    box.querySelectorAll("[data-ecv-opt]").forEach(b => b.addEventListener("click", () => { EST_V_OPT = Number(b.dataset.ecvOpt); draw(); }));
+    box.querySelector("[data-est-actual]")?.addEventListener("click", e => { INV_COST_OPEN = true; openInvoice(Number(e.target.dataset.estActual)); });
+  };
+  draw();
+  // owners: the commission rates, then draw again with them
+  if (ME.role === "owner") { if (!ECOMM.people) { const r = await db.rpc("comm_setup_get"); ECOMM.people = r.error ? [] : r.data?.people || []; }
+    const want = [...new Set(EST.opts.flatMap(o => o.lines.map(l => Number(l.item_id)).filter(Boolean)))].filter(id => !ECOMM.items.has(id));
+    if (want.length) { const r = await db.rpc("comm_for_items", { p_ids: want }); (r.data || []).forEach(q => ECOMM.items.set(Number(q.item_id), q)); want.forEach(id => { if (!ECOMM.items.has(id)) ECOMM.items.set(id, null); }); }
+    draw(); }
 }
 function closeInvoice() { $("#inv-newver")?.classList.add("hidden"); if (EST_STASH) { Object.assign(EST, EST_STASH); EST_STASH = null; } $("#inv-cancelbtn")?.classList.add("hidden"); $("#inv-view").classList.add("hidden"); document.body.classList.remove("inv-open"); document.getElementById("est-page-foot")?.remove(); }
 document.addEventListener("keydown", e => { if (e.key === "Escape" && document.body.classList.contains("inv-open") && !document.querySelector(".ask-back, .askc-back")) closeInvoice(); });
