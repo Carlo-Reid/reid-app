@@ -1,3 +1,0 @@
-DO $$ BEGIN RAISE EXCEPTION 'PROBE % || COLS % || CHK %', (SELECT pg_get_function_identity_arguments('public.new_stock_po'::regproc) || ' -> ' || pg_get_function_result('public.new_stock_po'::regproc) || ' :: ' || regexp_replace(left(pg_get_functiondef('public.new_stock_po'::regproc), 2500), '\s+', ' ', 'g')),
-  (SELECT string_agg(column_name || ':' || data_type || coalesce(':' || column_default, '') || ':' || is_nullable, ', ' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'purchase_orders'),
-  (SELECT string_agg(pg_get_constraintdef(c.oid), ' ; ') FROM pg_constraint c WHERE c.conrelid = 'public.purchase_orders'::regclass AND c.contype = 'c'); END $$;
