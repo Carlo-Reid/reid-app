@@ -1,1 +1,0 @@
-DO $$ BEGIN RAISE EXCEPTION 'PROBE not due now: % | sum: %', (SELECT count(*) FROM open_balances('all', 'all') WHERE NOT job_done), (SELECT sum(balance) FROM open_balances('all', 'all') WHERE NOT job_done); END $$;
