@@ -1241,6 +1241,8 @@
   .bank-tabs { margin: 12px 0; }
   .bank-led tr.bank-tied td { background: #fbfdf9; } .bank-inv { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; width: 100%; text-align: left; font: inherit; font-size: 13px; padding: 5px 9px; margin: 3px 0; border: 1px solid #cfd8e3; border-left: 4px solid #1b4f8a; border-radius: 8px; background: #fff; cursor: pointer; color: #14202e; }
   .bank-inv:hover { background: #eef4fb; border-color: #1b4f8a; } .bank-inv b { color: #1b4f8a; } .bank-inv span { color: #5b6b80; font-size: 12px; flex: 1 1 auto; } .bank-inv em { font-style: normal; font-weight: 800; }
+  .bank-ytd { display: flex; flex-direction: column; padding: 5px 9px; border: 1px solid #e5c9a6; border-left: 4px solid #9a5a00; border-radius: 8px; background: #fff9f0; font-size: 13px; } .bank-ytd b { color: #7a4600; } .bank-ytd span { font-size: 12px; color: #6b5a44; }
+  .bank-xfer { border-left-color: #563191; } .bank-xfer b { color: #563191; }
   .bank-invs summary { cursor: pointer; padding: 5px 9px; border: 1px solid #cfd8e3; border-radius: 8px; background: #f3f6fa; font-size: 13px; list-style: none; } .bank-invs summary::before { content: "▸ "; color: #1b4f8a; } .bank-invs[open] summary::before { content: "▾ "; }
   .bank-invs[open] summary { margin-bottom: 4px; } .bank-led td:last-child, .bank-t td.bank-invcol { min-width: 280px; }
   .bank-accts { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 6px; } .bank-acct { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 200px; padding: 10px 16px; font: inherit; font-size: 16px; font-weight: 800; color: #1b4f8a; background: #fff; border: 2px solid #b9cde6; border-radius: 12px; cursor: pointer; }
@@ -18869,10 +18871,17 @@ async function bankLoad(more) {
   BANK.rows = more ? BANK.rows.concat(data.rows || []) : data.rows || []; BANK.data = data;
 }
 const bankMoney = n => Number(n) ? money(n) : "";
-async function bankMatchAll(say) { for (const [id, n] of BANK_PARTNERS) { say?.(`Matching ${n}'s deposits…`); const { data } = await db.rpc("bank_partner_match", { p_partner: id }); if (data) BANK.match[id] = data; } }
+async function bankMatchAll(say) { say?.("Pairing transfers with Savings…"); await db.rpc("bank_transfer_match"); for (const [id, n] of BANK_PARTNERS) { say?.(`Matching ${n}'s deposits…`); const { data } = await db.rpc("bank_partner_match", { p_partner: id }); if (data) BANK.match[id] = data; } }
 const bankInv = i => `<button class="bank-inv" type="button" data-invoice="${i.id}" title="Open invoice ${esc(i.number)}"><b>#${esc(i.number)}</b><span>${esc(fmtDate(i.date))}${i.who ? " · " + esc(i.who) : ""}${i.street ? " · " + esc(i.street) : ""}</span><em>${money(i.amount)}</em></button>`;
+const bankXfer = r => { const t = r.transfer; if (!t) return ""; const an = (BANK_ACCTS.find(a => a[0] === t.account) || [, t.account])[1];
+  return `<button class="bank-inv bank-xfer" type="button" data-bank-xfer="${esc(t.account)}|${esc(t.date)}|${Number(t.amount)}" title="Show it in ${esc(an)}"><b>⇄ ${t.to ? "To" : "From"} ${esc(an)}</b><span>${esc(fmtDate(t.date))}</span><em>${money(t.amount)}</em></button>`; };
+const bankYtd = r => { const y = r.ytd; if (!y) return ""; const done = Math.abs(Number(y.total) - Number(y.year_total)) < 0.01;
+  return `<div class="bank-ytd" title="${esc(r.description)}: ${y.n} payment${y.n === 1 ? "" : "s"} in ${y.year} so far"><b>${y.year} so far: ${money(y.total)}</b><span>${y.n} payment${y.n === 1 ? "" : "s"}${done ? "" : ` · ${money(y.year_total)} for all of ${y.year}`}</span></div>`; };
 const bankInvCell = r => { const I = r.invoices || [], tot = I.reduce((a, i) => a + Number(i.amount || 0), 0);
-  return !I.length ? `<span class="quiet">—</span>` : I.length === 1 ? bankInv(I[0]) : `<details class="bank-invs"><summary><b>${I.length} invoices</b> · ${money(tot)}${Math.abs(tot - Number(r.in || r.out)) > 0.01 ? ` <span class="warn" title="The invoices add up to a different amount than the bank line">≠ ${money(Number(r.in || r.out))}</span>` : " ✓"}</summary>${I.map(bankInv).join("")}</details>`; };
+  if (r.ytd) return bankYtd(r) + (I.length ? bankInvCellI(r, I, tot) : "");
+  if (r.transfer) return bankXfer(r) + (I.length ? bankInvCellI(r, I, tot) : "");
+  return bankInvCellI(r, I, tot); };
+const bankInvCellI = (r, I, tot) => { return !I.length ? `<span class="quiet">—</span>` : I.length === 1 ? bankInv(I[0]) : `<details class="bank-invs"><summary><b>${I.length} invoices</b> · ${money(tot)}${Math.abs(tot - Number(r.in || r.out)) > 0.01 ? ` <span class="warn" title="The invoices add up to a different amount than the bank line">≠ ${money(Number(r.in || r.out))}</span>` : " ✓"}</summary>${I.map(bankInv).join("")}</details>`; };
 function bankLedHtml() {
   const L = BANK.led || {}, rows = BANK.ledRows || [];
   const inv = i => `<button class="bank-inv" type="button" data-invoice="${i.id}" title="Open invoice ${esc(i.number)}"><b>#${esc(i.number)}</b><span>${esc(fmtDate(i.date))}${i.who ? " · " + esc(i.who) : ""}${i.street ? " · " + esc(i.street) : ""}</span><em>${money(i.amount)}</em></button>`;
@@ -18882,11 +18891,11 @@ function bankLedHtml() {
       <div class="seg" role="group"><button type="button" data-bank-linked="1" aria-pressed="${BANK.ledLinked}">Only lines tied to invoices or transfers</button><button type="button" data-bank-linked="0" aria-pressed="${!BANK.ledLinked}">Every line</button></div>
       <button class="btn quiet-btn" type="button" data-bank-rematch title="Match every partner's deposits again (after new payments or a new bank file)">↻ Match again</button></div>
     <p class="bank-tot"><b>${Number(L.count || 0).toLocaleString()}</b> lines · <span class="bank-in">in ${money(L.in || 0)}</span> · <span class="bank-out">out ${money(L.out || 0)}</span> · ${Number(L.linked || 0).toLocaleString()} bank lines tied to ${Number(L.links || 0).toLocaleString()} invoice payments in this account</p>
-    ${rows.length ? `<div class="table-wrap"><table class="calls-table bank-t bank-led"><thead><tr><th>Date</th><th>Description</th><th class="r">Out</th><th class="r">In</th><th class="r">Balance</th><th>Invoices</th></tr></thead><tbody>
+    ${rows.length ? `<div class="table-wrap"><table class="calls-table bank-t bank-led"><thead><tr><th>Date</th><th>Description</th><th class="r">Out</th><th class="r">In</th><th class="r">Balance</th><th>Invoices / transfer</th></tr></thead><tbody>
       ${rows.map(r => { const I = r.invoices || [], tot = I.reduce((a, i) => a + Number(i.amount || 0), 0);
-        return `<tr class="${I.length ? "bank-tied" : ""}"><td class="nowrap">${esc(fmtDate(r.date))}</td><td>${esc(r.description || "(no description)")}${r.note ? `<div class="quiet">📝 ${esc(r.note)}</div>` : ""}</td>
+        return `<tr class="${I.length || r.transfer ? "bank-tied" : ""}"><td class="nowrap">${esc(fmtDate(r.date))}</td><td>${esc(r.description || "(no description)")}${r.note ? `<div class="quiet">📝 ${esc(r.note)}</div>` : ""}</td>
         <td class="r bank-out">${bankMoney(r.out)}</td><td class="r bank-in">${bankMoney(r.in)}</td><td class="r quiet">${r.balance != null ? money(r.balance) : ""}</td>
-        <td>${!I.length ? `<span class="quiet">—</span>` : I.length === 1 ? inv(I[0]) : `<details class="bank-invs"><summary><b>${I.length} invoices</b> · ${money(tot)}${Math.abs(tot - Number(r.in || r.out)) > 0.01 ? ` <span class="warn" title="The invoices add up to a different amount than the bank line">≠ ${money(Number(r.in || r.out))}</span>` : " ✓"}</summary>${I.map(inv).join("")}</details>`}</td></tr>`; }).join("")}</tbody></table></div>
+        <td>${bankInvCell(r)}</td></tr>`; }).join("")}</tbody></table></div>
       ${rows.length < Number(L.count || 0) ? `<p><button class="btn quiet-btn" type="button" data-bank-ledmore>Show more (${(Number(L.count) - rows.length).toLocaleString()} left)</button></p>` : ""}` : `<p class="quiet">${BANK.ledLinked ? "No bank lines are tied to invoices yet" + (BANK.acct === "main" ? "" : " in this account (partner deposits are in the main account)") + "." : "Nothing matches."}</p>`}`;
 }
 function renderBank(msg) {
@@ -18912,7 +18921,7 @@ function bankListHtml() {
     <div class="bank-cats"><button type="button" class="bank-cat" data-bank-cat="" aria-pressed="${!BANK.cat}"><b>Everything</b><span>${cats.reduce((a, c) => a + c.n, 0).toLocaleString()}</span></button>${cats.map(c =>
       `<button type="button" class="bank-cat" data-bank-cat="${esc(c.cat)}" aria-pressed="${BANK.cat === c.cat}"><b>${esc(c.cat)}</b><span>${Number(c.n).toLocaleString()}${Number(c.in) ? ` · in ${money(c.in)}` : ""}${Number(c.out) ? ` · out ${money(c.out)}` : ""}</span></button>`).join("")}</div>
     <p class="bank-tot"><b>${Number(D.count || 0).toLocaleString()}</b> transactions · <span class="bank-in">in ${money(D.in || 0)}</span> · <span class="bank-out">out ${money(D.out || 0)}</span> · net <b>${money(Number(D.in || 0) - Number(D.out || 0))}</b></p>
-    ${BANK.rows.length ? `<div class="table-wrap"><table class="calls-table bank-t"><thead><tr><th>Date</th><th>Description</th><th>Kind</th><th class="r">Out</th><th class="r">In</th><th class="r">Balance</th><th>Note</th><th>Invoices</th></tr></thead><tbody>
+    ${BANK.rows.length ? `<div class="table-wrap"><table class="calls-table bank-t"><thead><tr><th>Date</th><th>Description</th><th>Kind</th><th class="r">Out</th><th class="r">In</th><th class="r">Balance</th><th>Note</th><th>Invoices / transfer</th></tr></thead><tbody>
       ${BANK.rows.map(r => `<tr><td class="nowrap">${esc(fmtDate(r.date))}</td><td>${esc(r.description || "(no description)")}${r.code ? ` <span class="quiet">${esc(r.code)}</span>` : ""}</td><td><span class="bank-k">${esc(r.cat)}</span></td>
         <td class="r bank-out">${bankMoney(r.out)}</td><td class="r bank-in">${bankMoney(r.in)}</td><td class="r quiet">${r.balance != null ? money(r.balance) : ""}</td>
         <td><input class="bank-note" data-bank-note="${r.id}" value="${esc(r.note || "")}" placeholder="Add a note"></td><td class="bank-invcol">${bankInvCell(r)}</td></tr>`).join("")}</tbody></table></div>
@@ -18968,6 +18977,8 @@ function wireBank() {
   m.querySelectorAll("[data-bank-ptn]").forEach(b => b.addEventListener("click", () => { BANK.partner = Number(b.dataset.bankPtn); bankSave(); renderBank(); redo(); }));
   m.querySelectorAll("[data-bank-inv]").forEach(b => b.addEventListener("click", async () => { const { data } = await db.from("invoices").select("id").eq("invoice_number", b.dataset.bankInv).limit(1); if (data?.[0]) openInvoice(data[0].id); }));
   m.querySelectorAll("[data-invoice]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.invoice))));
+  m.querySelectorAll("[data-bank-xfer]").forEach(b => b.addEventListener("click", async () => { const [a, d, amt] = b.dataset.bankXfer.split("|");
+    Object.assign(BANK, { acct: a, data: null, sum: null, rows: [], ledRows: [], cat: "", dir: "", year: null, offset: 0, from: d, to: d }); if (BANK.tab === "ledger") BANK.ledQ = amt; else { BANK.tab = "list"; BANK.q = amt; } bankSave(); await bankLoad(); renderBank(); }));
   m.querySelectorAll("[data-bank-linked]").forEach(b => b.addEventListener("click", () => { BANK.ledLinked = b.dataset.bankLinked === "1"; redo(); }));
   m.querySelector("[data-bank-ledmore]")?.addEventListener("click", () => { BANK.offset = BANK.ledRows.length; redo(true); });
   m.querySelector("[data-bank-rematch]")?.addEventListener("click", async e => { const b = e.currentTarget; b.disabled = true; BANK.match = {}; await bankMatchAll(t => { b.textContent = t; }); await bankLoad(); renderBank("Matched every partner's deposits again."); });
