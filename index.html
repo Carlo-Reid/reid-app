@@ -14532,7 +14532,7 @@ function sinvCompare(r, L, P, what) {
 }
 function sinvDetail(r, edit) {
   const d = SINV.det.get(r.id); if (!d) { sinvLoadDet(r.id); return `<p class="quiet">Loading…</p>`; }
-  const L = d.lines || [], P = d.po_lines || [];
+  const L = sinvDedupLines(d.lines || [], sinvBefore(r)), P = d.po_lines || [];   // a line read twice off the scan counts once
   const lt = (rows, inv) => rows.length ? `<table class="sinv-lt"><thead><tr><th>${inv ? "Code" : "Code"}</th><th>What</th><th class="r">Qty</th><th class="r">Each</th>${inv ? `<th class="r">Disc.</th>` : ""}<th class="r">Amount</th></tr></thead><tbody>
     ${rows.map(x => inv ? `<tr><td>${esc(x.code || "")}</td><td>${esc(x.description || "")}</td><td class="r">${x.shipped ?? x.ordered ?? ""}${x.backorder ? ` <span class="quiet">(${x.backorder} back-ordered)</span>` : ""}</td><td class="r">${x.unit_price != null ? money(x.unit_price) : ""}</td><td class="r">${esc(x.discount ?? "")}${x.discount ? "%" : ""}</td><td class="r">${x.net_amount != null && !isNaN(Number(x.net_amount)) ? money(x.net_amount) : `<span class="quiet">${x.unit_price != null && x.shipped != null ? money(Math.round(Number(x.unit_price) * (1 - (Number(x.discount) || 0) / 100) * Number(x.shipped) * 100) / 100) : ""}</span>`}</td></tr>`
       : `<tr><td>${esc(x.sku || "")}</td><td>${esc(x.description || "")}</td><td class="r">${x.quantity}</td><td class="r">${money(x.unit_cost)}</td><td class="r">${money(x.line_total)}</td></tr>`).join("")}</tbody></table>` : `<p class="quiet">${inv ? "No lines read from the copy." : "No PO lines."}</p>`;
@@ -14655,8 +14655,18 @@ function sinvParseLines(text, credit) {
   return out;
 }
 // a PO made from an invoice's lines, for approving: [{ description, quantity, unit_cost }]
+// the same line read twice (an invoice scanned with its copy, or its packing slip) is only counted once,
+// when that brings the lines closer to the invoice's own total before tax
+function sinvDedupLines(L, before) {
+  const amt = x => x.net_amount != null ? Number(x.net_amount) : Number(x.unit_price || 0) * Number(x.shipped ?? x.ordered ?? 1) * (1 - Number(x.discount || 0) / 100);
+  const seen = new Set(), U = L.filter(x => { const k = [x.code, x.description, x.shipped ?? x.ordered, x.unit_price, x.net_amount].join("|"); if (seen.has(k)) return false; seen.add(k); return true; });
+  if (U.length === L.length || before == null) return L;
+  const sum = A => A.reduce((t, x) => t + amt(x), 0);
+  return Math.abs(sum(U) - before) < Math.abs(sum(L) - before) ? U : L;
+}
 function sinvPoDraft(r, L) {
   const credit = r.doc_type === "credit" || Number(r.total) < 0;
+  L = sinvDedupLines(L, sinvBefore(r));
   if (L.length) return L.map(x => { const q = Number(x.shipped ?? x.ordered ?? 1) || 1;
     const amt = x.net_amount != null ? Number(x.net_amount) : Number(x.unit_price || 0) * q * (1 - Number(x.discount || 0) / 100);
     return { description: [x.code, x.description].filter(Boolean).join(" · "), quantity: q, unit_cost: Math.round(amt / q * 100) / 100 * (credit && amt > 0 ? -1 : 1) }; });
@@ -14860,7 +14870,7 @@ async function dropInFiles(files) {
         if (x.other) { x.sup = x.other; await dropInKnown(x.sup); }   // dropped on the wrong supplier: it goes to the right one by itself
         x.subtotal = n((T.match(/SUB\s*-?\s*TOTAL[^\d\n]{0,60}([\d,]+\.\d{2})/) || [])[1]); x.hst = n((T.match(/(?:H\.?S\.?T|TVH)[^\d\n]{0,60}([\d,]+\.\d{2})/) || [])[1]);
         if (x.credit) { if (x.subtotal) x.subtotal = -Math.abs(x.subtotal); if (x.hst) x.hst = -Math.abs(x.hst); }
-        x.lines = sinvParseLines(text, x.credit);
+        x.lines = sinvDedupLines(sinvParseLines(text, x.credit), x.subtotal ?? (x.total != null ? Math.round(x.total / 1.13 * 100) / 100 : null));
         x.busy = null; dropInMatch(x); drawDropIn();
       } catch (e) { x.busy = null; x.err = e.message || String(e); drawDropIn(); }
     }
