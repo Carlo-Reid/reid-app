@@ -5095,6 +5095,11 @@ body.viewing-as #app { box-shadow: inset 0 0 0 4px #7a1f5c; }
 .mkpo-pop .mkpo-cols { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; align-items: start; } .mkpo-pop .sinv-mkpo { margin: 0; }
 .mkpo-pop .mkpo-scan img { width: 100%; border: 1px solid #dbe3ec; border-radius: 6px; } .mkpo-pop .mkpo-scan h3 { margin: 0 0 6px; font-size: 15px; }
 @media (max-width: 900px) { .mkpo-pop .mkpo-cols { grid-template-columns: 1fr; } }
+.po-page .po-page-top { margin-bottom: 8px; } .po-page .po-page-h { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; margin-bottom: 12px; } .po-page .po-page-h h1 { margin: 0; }
+.po-page .po-lbl { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; } .po-page .po-lbl input, .po-page .po-lbl textarea { width: 100%; }
+.po-page .pop-lines { width: 100%; } .po-page .pop-lines td:first-child { width: 55%; } .po-page .pop-lines td:first-child input { width: 100%; } .po-page .pop-lines td.r input { width: 90px; text-align: right; }
+.po-page .pop-save { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 14px 0 30px; } .po-page .pop-save input { min-width: 260px; }
+.po-page .pop-changes { margin-top: 8px; } .po-page .pop-changes li { margin: 3px 0; }
 .mc-techs { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin: 4px 0 8px; } .mc-techs .sinv-app { width: auto; min-height: 96px; padding: 10px 6px; } .mc-techs .sa-ic { font-size: 15px; font-weight: 800; }
 .mc-tech-h { font-size: 16px; margin: 14px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); } .mc-tech-h:first-of-type { border-top: 0; }
 .sinv-mkpo { margin: 6px 0 10px; padding: 12px 14px; border: 1px solid #f0c36d; background: #fffaf0; border-radius: 14px; } .sinv-mkpo input { width: 100%; } .sinv-mkpo td.r input { width: 90px; text-align: right; }
@@ -5423,6 +5428,7 @@ async function showApp() {
   if (location.hash === "#receivables-list" && ME.role) return openOwList();
   if (location.hash === "#receivables-cleanup" && can("invoices.adjust")) return openCleanup();
   if (location.hash === "#pos" && ME.role) return openPOs();
+  if (/^#po=\d+$/.test(location.hash) && ME.role) return openPOPage(Number(location.hash.slice(4)));
   if (location.hash === "#supplier-invoices" && ME.role) return openSupInv();
   if (location.hash === "#installs" && ME.role) return openInstalls();
   if (location.hash === "#not-installed" && ME.role) return openNotInstalled();
@@ -6871,6 +6877,7 @@ function routeTo(h) {
   if (h === "#receivables-cleanup") return openCleanup();
   if (h === "#partner-notes") return openNfPick();
   if (h === "#pos") return openPOs();
+  if (/^#po=\d+$/.test(h)) return openPOPage(Number(h.slice(4)));
   if (h === "#supplier-invoices") return openSupInv();
   if (h === "#installs") return openInstalls();
   if (h === "#not-installed") return openNotInstalled();
@@ -15284,7 +15291,7 @@ function renderPOs(msg) {
   document.querySelectorAll("[data-po-st]").forEach(b => b.addEventListener("click", () => { POP.status = b.dataset.poSt; savePop(); loadPOs(); }));
   $("#po-sort").addEventListener("change", e => { POP.sort = e.target.value; savePop(); renderPOs(); });
   $("#po-group").addEventListener("change", e => { POP.group = e.target.value; savePop(); renderPOs(); });
-  document.querySelectorAll(".po-row").forEach(tr => { tr.addEventListener("click", () => { POP.sel = Number(tr.dataset.po); document.querySelectorAll(".po-row.sel").forEach(x => x.classList.remove("sel")); tr.classList.add("sel"); showPO(POP.sel); });
+  document.querySelectorAll(".po-row").forEach(tr => { tr.addEventListener("click", () => { POP.sel = null; POP.back = $("#main").scrollTop; openPOPage(Number(tr.dataset.po)); });
     tr.addEventListener("keydown", e => { if (e.key === "Enter") tr.click(); }); });
   $("#po-sinv")?.addEventListener("click", () => openSupInv());
   $("#po-new")?.addEventListener("click", () => { POP.newOpen = !POP.newOpen; renderPOs(); document.querySelector(".po-new-box select")?.focus(); });
@@ -15307,6 +15314,78 @@ function renderPOs(msg) {
       r.description || "", r.tech || "", r.amount ?? "", (PO_STATUS[r.status] || [r.status])[0]].join("\t")).join("\n");
     const ok = await copyText(text); e.target.textContent = ok ? "Copied ✓ (pastes into Excel)" : "Couldn't copy"; setTimeout(() => e.target.textContent = "Copy list", 2000);
   });
+}
+// a PO on its own page: see everything and change it (status, supplier, what it's for, dates, supplier #, amount, and its lines)
+const POPG = { id: null, d: null, lines: [], msg: "" };
+async function openPOPage(id, msg) {
+  POPG.id = id; POPG.msg = msg || "";
+  setPage("po=" + id, "pos", "PO");
+  if (!document.querySelector(".po-page")) $("#main").innerHTML = `<div class="loading">Opening the PO…</div>`;
+  await loadSuppliers();
+  const { data, error } = await db.rpc("po_full_get", { p_id: id });
+  if (POPG.id !== id) return;
+  if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the PO</h2>${esc(/function|schema|PGRST202/i.test(error.message || "") ? "This page turns on after the next update." : rpcErr(error))}<p><button class="btn" type="button" id="pop-back0">Back to POs</button></p></div></div>`;
+    $("#pop-back0")?.addEventListener("click", () => openPOs()); return; }
+  POPG.d = data; POPG.lines = (data.lines || []).map(l => ({ ...l, _orig: { description: l.description, quantity: Number(l.quantity), unit_cost: Number(l.unit_cost) } }));
+  renderPOPage();
+}
+function renderPOPage() {
+  const d = POPG.d, ed = d.can_edit, dis = ed ? "" : "disabled", L = POPG.lines.filter(l => !l._del);
+  const tot = L.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unit_cost || 0), 0);
+  const changed = POPG.lines.some(l => l._del || !l.id || l.description !== l._orig?.description || Number(l.quantity) !== l._orig?.quantity || Number(l.unit_cost) !== l._orig?.unit_cost);
+  $("#main").innerHTML = `<article class="staff po-page">
+    <div class="po-page-top"><button class="btn quiet-btn" type="button" id="pop-back">‹ Back to POs</button></div>
+    <div class="po-page-h"><h1>PO ${esc(d.po_number)}</h1>${poBadge(d.status)}<span class="quiet">${d.from_st ? "from ServiceTitan" : "made in the app"} · ${esc(fmtDate((d.ordered_at || d.created_at || "").slice(0, 10)))}${d.tech ? " · " + esc(d.tech) : ""}</span></div>
+    ${POPG.msg ? `<div class="staff-msg ${/^Not/.test(POPG.msg) ? "err" : "ok"}" role="status">${esc(POPG.msg)}</div>` : ""}
+    <form id="pop-form" autocomplete="off">
+    <div class="st-panels">
+      <section class="st-pnl"><h4>The PO</h4><div class="st-job">
+        <label>Status<select name="h_status" ${dis}>${Object.entries(PO_STATUS).map(([k, [t]]) => `<option value="${k}" ${k === d.status ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+        <label>Supplier<select name="h_supplier_id" ${dis}>${(SUPPLIERS || []).some(x => x.id === d.supplier_id) ? "" : `<option value="${d.supplier_id}" selected>${esc(d.supplier || "")}</option>`}${(SUPPLIERS || []).map(x => `<option value="${x.id}" ${x.id === d.supplier_id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
+        <label>Needed by<input type="date" name="h_expected_on" value="${esc(d.expected_on || "")}" ${dis}></label>
+        <label>Supplier's invoice #<input name="h_supplier_reference" value="${esc(d.supplier_reference || "")}" ${dis}></label>
+        <label>What it came to (with tax)<input name="h_amount" inputmode="decimal" value="${d.amount != null ? Number(d.amount).toFixed(2) : ""}" placeholder="0.00" ${dis}></label>
+      </div></section>
+      <section class="st-pnl"><h4>What it's for</h4>
+        ${d.job_id ? `<p style="margin:0 0 8px"><b>${esc(d.customer_name || "")}</b> · Job ${esc(d.job_number || "")} <button class="link" type="button" id="pop-cust">Open the customer file</button></p>` : `<p class="quiet" style="margin:0 0 8px">${d.purpose === "truck_restock" ? "Truck stock" : d.purpose === "warehouse_restock" ? "Shop stock" : "Not for a job"}</p>`}
+        <label class="po-lbl">Description<input name="h_description" value="${esc(d.description || "")}" ${dis}></label>
+        <label class="po-lbl">Notes<textarea name="h_notes" rows="3" ${dis}>${esc(d.notes || "")}</textarea></label>
+        ${(d.invoices || []).length ? `<p class="quiet" style="margin:8px 0 0">Supplier invoices for it: ${d.invoices.map(i => `<button class="link" type="button" data-pop-inv="${i.id}">${esc(i.number)}</button> ${money(i.total)}`).join(" · ")}</p>` : ""}
+      </section>
+    </div>
+    <section class="st-pnl st-pnl-perms"><h4>Items <span class="quiet">${L.length} ${L.length === 1 ? "line" : "lines"} · ${money(tot)} before tax</span></h4>
+      <table class="sinv-lt pop-lines"><thead><tr><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th><th class="r">Received</th><th></th></tr></thead><tbody>
+      ${POPG.lines.map((l, i) => l._del ? "" : `<tr data-pl="${i}"><td><input name="description" value="${esc(l.description || "")}" ${dis}></td>
+        <td class="r"><input name="quantity" type="number" step="any" value="${l.quantity ?? ""}" ${dis}></td><td class="r"><input name="unit_cost" type="number" step="0.01" value="${l.unit_cost ?? ""}" ${dis}></td>
+        <td class="r num">${money(Number(l.quantity || 0) * Number(l.unit_cost || 0))}</td><td class="r num">${l.received ? Number(l.received) : ""}</td>
+        <td>${ed && !l.locked ? `<button class="link danger" type="button" data-pl-x="${i}" aria-label="Take this line off">✕</button>` : ""}</td></tr>`).join("")}</tbody></table>
+      ${ed ? `<p><button class="link" type="button" id="pop-add">+ Add a line</button></p>` : ""}
+      ${(d.changes || []).length ? `<details class="pop-changes"><summary>Changes to this PO (${d.changes.length})</summary><ul>${d.changes.map(c => `<li><b>${esc({ edit: "Changed", add: "Added", delete: "Took off" }[c.action] || c.action)}</b> ${esc((c.new || c.old || {}).description || "")}
+        ${c.action === "edit" ? `<span class="quiet">${c.old?.quantity} × ${money(c.old?.unit_cost)} → ${c.new?.quantity} × ${money(c.new?.unit_cost)}</span>` : c.new ? `<span class="quiet">${c.new.quantity} × ${money(c.new.unit_cost)}</span>` : ""}
+        <span class="quiet"> · ${esc(c.by || "")} ${esc(fmtDate((c.at || "").slice(0, 10)))}${c.reason ? " · " + esc(c.reason) : ""}</span></li>`).join("")}</ul></details>` : ""}
+    </section>
+    ${ed ? `<div class="pop-save"><label>Why <input name="why" placeholder="optional, e.g. price went up" ${changed ? "" : ""}></label><button class="btn" type="submit">Save the PO</button>
+      ${d.from_st ? `<span class="quiet">This PO came from ServiceTitan: its lines stay as you set them here, but ServiceTitan's nightly update can still change its status, supplier and dates while you use it.</span>` : ""}</div>` : `<p class="quiet">You can look at this PO. To change POs you need "Create POs" on the Staff page.</p>`}
+    </form></article>`;
+  $("#pop-back").addEventListener("click", async () => { await openPOs(); if (POP.back) $("#main").scrollTop = POP.back; });
+  $("#pop-cust")?.addEventListener("click", () => openCustomer(d.customer_id));
+  document.querySelectorAll("[data-pop-inv]").forEach(b => b.addEventListener("click", () => { SINV.open = Number(b.dataset.popInv); SINV.sup = d.supplier_id; SINV.st = 0; SINV.f = "all"; SINV.q = ""; sinvSaveTab(); openSupInv(); }));
+  const f = $("#pop-form");
+  f.querySelectorAll("tr[data-pl] input").forEach(inp => inp.addEventListener("change", () => { const l = POPG.lines[Number(inp.closest("tr").dataset.pl)]; l[inp.name] = inp.type === "number" ? (inp.value === "" ? null : Number(inp.value)) : inp.value; keep(); renderPOPage(); }));
+  f.querySelectorAll("[data-pl-x]").forEach(b => b.addEventListener("click", () => { const l = POPG.lines[Number(b.dataset.plX)]; if (l.id) l._del = true; else POPG.lines.splice(Number(b.dataset.plX), 1); keep(); renderPOPage(); }));
+  $("#pop-add")?.addEventListener("click", () => { POPG.lines.push({ description: "", quantity: 1, unit_cost: 0 }); keep(); renderPOPage(); f.querySelector(`tr[data-pl="${POPG.lines.length - 1}"] input`)?.focus(); });
+  // keep what was typed in the PO's own boxes when the lines redraw
+  function keep() { ["status", "supplier_id", "expected_on", "supplier_reference", "amount", "description", "notes"].forEach(k => { const el = f["h_" + k]; if (!el) return;
+    d[k] = k === "supplier_id" ? Number(el.value) : k === "amount" ? (el.value.trim() === "" ? null : Number(el.value.replace(/[$,\s]/g, "")) || null) : el.value; }); }
+  f.addEventListener("submit", async e => { e.preventDefault(); if (!ed) return;
+    const amt = f.h_amount.value.trim() === "" ? "" : Number(f.h_amount.value.replace(/[$,\s]/g, ""));
+    if (amt !== "" && !isFinite(amt)) { POPG.msg = "Not saved: type the amount as a number."; return renderPOPage(); }
+    const p = { status: f.h_status.value, supplier_id: f.h_supplier_id.value, expected_on: f.h_expected_on.value, supplier_reference: f.h_supplier_reference.value, amount: amt === "" ? "" : String(amt), description: f.h_description.value, notes: f.h_notes.value };
+    const lines = POPG.lines.map(l => l._del ? { id: l.id, delete: true } : { ...(l.id ? { id: l.id } : {}), description: l.description || "", quantity: Number(l.quantity || 0), unit_cost: Number(l.unit_cost || 0) });
+    const b = f.querySelector("button[type=submit]"); b.disabled = true; b.textContent = "Saving…";
+    const { error } = await db.rpc("po_full_save", { p_id: d.id, p, p_lines: lines, p_reason: f.why?.value.trim() || null });
+    if (error) { POPG.msg = "Not saved: " + rpcErr(error); return renderPOPage(); }
+    const top = $("#main").scrollTop; await openPOPage(d.id, "Saved PO " + d.po_number + "."); $("#main").scrollTop = top; });
 }
 async function showPO(id) {
   const p = $("#po-panel"); if (!p) return;
