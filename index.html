@@ -5104,6 +5104,14 @@ body.viewing-as #app { box-shadow: inset 0 0 0 4px #7a1f5c; }
 .sinv-page .sinv-page-h h1 { margin: 0; } .sinv-page .sinv-page-logo { max-height: 54px; max-width: 160px; object-fit: contain; } .sinv-page .sinv-page-st { margin-left: auto; font-size: 14px; }
 .sinv-page .sinv-page-body { background: #fff; border: 1px solid #dbe3ec; border-radius: 18px; padding: 16px 18px; } .sinv-page .sinv-page-body .sinv-cols { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
 .sinv-page .sinv-page-body table { width: 100%; } .sinv-page .sinv-scans figure { max-width: 900px; }
+/* the invoice side and the PO side look different */
+.sinv-ct th.ci, .sinv-ct td.ci { background: #eef5ff; } .sinv-ct th.cp, .sinv-ct td.cp { background: #f1faf0; }
+.sinv-ct tr.sinv-row-bad td.ci { background: #fde9ea; } .sinv-ct tr.sinv-row-bad td.cp { background: #fbeef0; }
+.sinv-ct th.ci-h { color: #1f5fa8 !important; font-size: 13px; text-transform: none; letter-spacing: 0; border-bottom: 3px solid #1f5fa8; }
+.sinv-ct th.cp-h { color: #2e7d32 !important; font-size: 13px; text-transform: none; letter-spacing: 0; border-bottom: 3px solid #2e7d32; }
+.sinv-ct .sinv-split { border-left: 3px solid #8aa0b8 !important; }
+.sinv-pairpick select { margin-top: 4px; max-width: 280px; font-size: 12px; } .sinv-addln { margin: 10px 0; } .sinv-addln-f { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.sinv-addln-f input[name=description] { min-width: 240px; } .sinv-addln-f input[name=qty] { width: 70px; } .sinv-addln-f input[name=each] { width: 150px; }
 .mc-techs { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin: 4px 0 8px; } .mc-techs .sinv-app { width: auto; min-height: 96px; padding: 10px 6px; } .mc-techs .sa-ic { font-size: 15px; font-weight: 800; }
 .mc-tech-h { font-size: 16px; margin: 14px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); } .mc-tech-h:first-of-type { border-top: 0; }
 .sinv-mkpo { margin: 6px 0 10px; padding: 12px 14px; border: 1px solid #f0c36d; background: #fffaf0; border-radius: 14px; } .sinv-mkpo input { width: 100%; } .sinv-mkpo td.r input { width: 90px; text-align: right; }
@@ -14479,32 +14487,39 @@ const SINV_AB = { COP: "COPPER", CU: "COPPER", CPLG: "COUPLING", CPL: "COUPLING"
 const sinvWords = t => new Set(String(t || "").toUpperCase().replace(/&DEG;|°/g, " ").replace(/(\d)\s*\/\s*(\d)/g, "$1/$2").replace(/(\d)"?\s*X\s*(\d)/g, "$1 $2").replace(/"/g, " ")
   .split(/[^A-Z0-9/.]+/).flatMap(w => (SINV_AB[w] || w).split(" ")).filter(w => (w.length > 1 && !["OF", "FOR", "OR", "THE", "AND", "WITH", "X", "C"].includes(w)) || /\d/.test(w)));
 function sinvSim(a, b) { const A = sinvWords(a), B = sinvWords(b); if (!A.size || !B.size) return 0; let n = 0; A.forEach(w => { if (B.has(w)) n++; }); return n / Math.min(A.size, B.size); }
-function sinvPair(L, P) {
+const sinvInvKey = (x, i) => "i:" + (x.code || x.description || i);
+function sinvPair(L, P, pairs) {
   const inv = L.map((x, i) => { const q = Number(x.shipped ?? x.ordered), up = x.unit_price != null ? Number(x.unit_price) : null, dsc = Number(x.discount) || 0;
     const each = up != null ? Math.round(up * (1 - dsc / 100) * 10000) / 10000 : null;
     const amt = x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : each != null && !isNaN(q) ? Math.round(each * q * 100) / 100 : null;
     return { i, x, q: isNaN(q) ? null : q, each, amt, code: sinvNorm(x.code), comp: up == null && x.net_amount == null }; });
-  const po = P.map((y, j) => ({ j, y, q: Number(y.quantity), each: Number(y.unit_cost), amt: Number(y.line_total), code: sinvNorm(y.sku) }));
-  const used = new Set(), pair = new Map();
+  const po = P.map((y, j) => ({ j, y, q: Number(y.quantity), each: Number(y.unit_cost), amt: Number(y.line_total), code: sinvNorm(y.sku), model: sinvNorm(y.model), desc: sinvNorm(y.description) }));
+  const used = new Set(), pair = new Map(), hand = new Set();
   const take = (a, b) => { pair.set(a.i, b.j); used.add(b.j); };
-  inv.forEach(a => { if (!a.code) return; const b = po.find(b => !used.has(b.j) && b.code && (b.code === a.code || (a.code.length > 4 && (b.code.endsWith(a.code) || a.code.endsWith(b.code))))); if (b) take(a, b); });
+  // paired by hand ("same part, labelled differently")
+  (pairs || []).forEach(h => { const a = inv.find(a => !pair.has(a.i) && sinvInvKey(a.x, a.i) === h.inv_key), b = po.find(b => !used.has(b.j) && b.y.id === h.po_line_id); if (a && b) { take(a, b); hand.add(a.i); } });
+  const same = (x, y) => x && y && (x === y || (x.length > 4 && y.length > 4 && (x.endsWith(y) || y.endsWith(x))));
+  inv.forEach(a => { if (!a.code || pair.has(a.i)) return;
+    const b = po.find(b => !used.has(b.j) && (same(a.code, b.code) || same(a.code, b.model) || (a.code.length >= 6 && b.desc.includes(a.code))));   // the PO's part code, its model number, or the code written in its description
+    if (b) take(a, b); });
   const cand = [];
   inv.forEach(a => { if (pair.has(a.i) || a.comp) return; po.forEach(b => { if (used.has(b.j)) return;
     const sim = sinvSim(a.x.description + " " + (a.x.code || ""), b.y.description + " " + (b.y.sku || "")), price = a.each != null && b.each > 0 && Math.abs(a.each - b.each) / b.each < 0.02;
     const score = sim + (price ? 0.6 : 0) + (a.q != null && a.q === b.q ? 0.15 : 0); if (sim >= 0.34 || price) cand.push({ a, b, score }); }); });
   cand.sort((u, v) => v.score - u.score).forEach(c => { if (!pair.has(c.a.i) && !used.has(c.b.j)) take(c.a, c.b); });
-  const rows = []; inv.forEach(a => rows.push({ a, b: pair.has(a.i) ? po[pair.get(a.i)] : null }));
+  const rows = []; inv.forEach(a => rows.push({ a, b: pair.has(a.i) ? po[pair.get(a.i)] : null, hand: hand.has(a.i) }));
   po.forEach(b => { if (used.has(b.j)) return; let k = rows.length; for (let t = rows.length - 1; t >= 0; t--) if (rows[t].b && rows[t].b.j < b.j) { k = t + 1; break; } else if (rows[t].b) k = t; rows.splice(Math.min(k, rows.length), 0, { a: null, b }); });
   return rows;
 }
 function sinvCompare(r, L, P, what) {
-  const rows = sinvPair(L, P), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol, split = Number(r.po_other_invoices) > 0,
+  const rows = sinvPair(L, P, (SINV.det.get(r.id) || {}).pairs), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol, split = Number(r.po_other_invoices) > 0,
     partial = r.subtotal == null && /continued/i.test(r.read_notes || "") && !/end of order/i.test(r.read_notes || "");
   const issues = []; let ia = 0, pa = 0;
   const bad = (ok, h) => ok ? h : `<span class="sinv-bad">${h}</span>`;
   const D = SINV.det.get(r.id) || {}, IGN = new Set(D.ignored || []), canFix = !!SINV.data?.can_edit; SINV.acc = new Map(); SINV.ret = new Map(); let nFix = 0, nIgn = 0;
   const RET = new Set((D.returns || []).filter(x => x.status !== "cancelled").flatMap(x => (x.lines || []).map(l => l.key)));
-  const body = rows.map(({ a, b }) => {
+  const freePo = rows.filter(x => x.b && !x.a).map(x => x.b), DL = (SINV.det.get(r.id) || {}).lines || [];
+  const body = rows.map(({ a, b, hand }) => {
     if (a?.amt != null) ia += a.amt; if (b) pa += b.amt || 0;
     let why = ""; const iss0 = issues.length, key = (a ? "i:" + (a.x.code || a.x.description || a.i) : "-") + "|" + (b ? "p:" + (b.y.id ?? b.j) : "-");
     if (a && !b && !a.comp) { why = `Not on the PO`; issues.push(`${a.x.code || a.x.description}: on the ${what} but not on the PO${a.amt != null ? ` (${money(a.amt)})` : ""}`); }
@@ -14517,11 +14532,13 @@ function sinvCompare(r, L, P, what) {
       if (!eOk) w.push(`${money(a.each)} each vs ${money(b.each)} (${a.each > b.each ? "+" : "−"}${money(Math.abs(a.each - b.each))})`);
       if (!mOk && (qOk && eOk)) w.push(`amount ${money(a.amt)} vs ${money(b.amt)}`);
       if (w.length) { why = w.join(" · "); issues.push(`${a.x.code || b.y.sku}: ${why}`); } }
-    const ac = a ? `<td>${esc(a.x.code || "")}</td><td>${esc(a.x.description || "")}${a.x.backorder ? ` <span class="quiet">(${a.x.backorder} back-ordered)</span>` : ""}</td><td class="r">${a.q == null ? "" : bad(qOk, a.q)}</td>
-        <td class="r">${a.each == null ? (a.comp ? `<span class="quiet">in kit</span>` : "") : bad(eOk, money(a.each))}${a.x.discount && a.x.unit_price != null ? `<div class="quiet sinv-sm">${money(a.x.unit_price)} −${esc(a.x.discount)}%</div>` : ""}</td>
-        <td class="r">${a.amt == null ? "" : bad(mOk, money(a.amt))}</td>` : `<td colspan="5" class="sinv-miss">—</td>`;
-    const pc = b ? `<td class="sinv-split">${esc(b.y.sku || "")}</td><td>${esc(b.y.description || "")}</td><td class="r">${bad(qOk, b.q)}</td><td class="r">${bad(eOk, money(b.each))}</td><td class="r">${bad(mOk, money(b.amt))}</td>`
-      : `<td colspan="5" class="sinv-miss sinv-split">—</td>`;
+    const ac = a ? `<td class="ci">${esc(a.x.code || "")}</td><td class="ci">${esc(a.x.description || "")}${a.x.backorder ? ` <span class="quiet">(${a.x.backorder} back-ordered)</span>` : ""}${a.x.by_hand ? ` <span class="ow-tag">typed in</span>${canFix ? ` <button class="link danger" type="button" data-sinv-lnx="${DL.indexOf(a.x)}" title="Take this typed-in line off">✕</button>` : ""}` : ""}
+        ${hand ? `<div class="quiet sinv-sm">paired by hand${canFix ? ` · <button class="link" type="button" data-sinv-unpair="${esc(sinvInvKey(a.x, a.i))}">undo</button>` : ""}</div>` : ""}
+        ${a && !b && !a.comp && canFix && freePo.length ? `<div class="sinv-pairpick"><select data-sinv-pair="${esc(sinvInvKey(a.x, a.i))}" aria-label="Same part as a PO line"><option value="">Same part as a PO line…</option>${freePo.map(f => `<option value="${f.y.id}">${esc([f.y.sku, f.y.model, f.y.description].filter(Boolean).join(" · ").slice(0, 80))} (${money(f.amt)})</option>`).join("")}</select></div>` : ""}</td><td class="r ci">${a.q == null ? "" : bad(qOk, a.q)}</td>
+        <td class="r ci">${a.each == null ? (a.comp ? `<span class="quiet">in kit</span>` : "") : bad(eOk, money(a.each))}${a.x.discount && a.x.unit_price != null ? `<div class="quiet sinv-sm">${money(a.x.unit_price)} −${esc(a.x.discount)}%</div>` : ""}</td>
+        <td class="r ci">${a.amt == null ? "" : bad(mOk, money(a.amt))}</td>` : `<td colspan="5" class="sinv-miss ci">—</td>`;
+    const pc = b ? `<td class="sinv-split cp">${esc(b.y.sku || "")}${b.y.model && sinvNorm(b.y.model) !== b.code ? `<div class="quiet sinv-sm">model ${esc(b.y.model)}</div>` : ""}</td><td class="cp">${esc(b.y.description || "")}</td><td class="r cp">${bad(qOk, b.q)}</td><td class="r cp">${bad(eOk, money(b.each))}</td><td class="r cp">${bad(mOk, money(b.amt))}</td>`
+      : `<td colspan="5" class="sinv-miss sinv-split cp">—</td>`;
     const soft = b && !a && (split || partial), retd = why && RET.has(key), ign = why && (IGN.has(key) || retd);
     if (ign) { issues.length = iss0; nIgn++; }
     if (why && !ign && canFix && a && !b && !a.comp) SINV.ret.set(key, { key, code: a.x.code || "", description: a.x.description || a.x.code || "Item", quantity: a.q != null ? Math.abs(a.q) : 1, unit_cost: a.each ?? (a.amt != null ? Math.abs(a.amt) : 0) });
@@ -14546,11 +14563,14 @@ function sinvCompare(r, L, P, what) {
         <button class="btn quiet-btn" type="button" data-sinv-addx="${r.id}">＋ Add ${SINV.ret.size === 1 ? "it" : "them all"} to the PO</button><button class="btn quiet-btn" type="button" data-sinv-retx="${r.id}">↩ Return ${SINV.ret.size === 1 ? "it" : "them all"}</button></div>` : ""}
       ${canFix && nFix ? `<div class="sinv-accall"><button class="btn" type="button" data-sinv-accall="${r.id}">✓ Accept the invoice's prices (${nFix} ${nFix === 1 ? "change" : "changes"} to the PO)</button><span class="quiet">Puts the invoice's quantities and prices on the PO, adds what it billed, and marks it checked. Every change is recorded.</span></div>` : ""}</div>`
       : `<div class="sinv-allok">✓ Every line ${split ? "on this " + what + " " : ""}matches the PO${nIgn ? ` (${nIgn} difference${nIgn === 1 ? "" : "s"} let go)` : ""}.</div>`}${tip ? `<p class="sinv-soft">${esc(tip)}</p>` : ""}
-    <div class="sinv-cmp-w"><table class="sinv-lt sinv-ct"><thead><tr><th colspan="5">On the ${what}</th><th colspan="5" class="sinv-split">On the PO</th><th></th></tr>
-      <tr><th>Code</th><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th><th class="sinv-split">Code</th><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th><th>Difference</th></tr></thead>
+    <div class="sinv-cmp-w"><table class="sinv-lt sinv-ct"><thead><tr><th colspan="5" class="ci ci-h">🧾 On ${esc(sinvShort(r.supplier) || "the supplier")}'s ${what}</th><th colspan="5" class="sinv-split cp cp-h">📋 On our PO ${esc(r.po_number || "")}</th><th></th></tr>
+      <tr><th class="ci">Code</th><th class="ci">What</th><th class="r ci">Qty</th><th class="r ci">Each</th><th class="r ci">Amount</th><th class="sinv-split cp">Code</th><th class="cp">What</th><th class="r cp">Qty</th><th class="r cp">Each</th><th class="r cp">Amount</th><th>Difference</th></tr></thead>
       <tbody>${body}</tbody>
-      <tfoot><tr><td colspan="4" class="r"><b>Before tax</b></td><td class="r"><b>${bad(Math.abs(Math.abs(sub) - poT) <= 0.02, money(sub))}</b></td><td colspan="4" class="r sinv-split"></td><td class="r"><b>${bad(Math.abs(Math.abs(sub) - poT) <= 0.02, money(poT))}</b></td><td></td></tr></tfoot></table></div>
-    <p class="quiet">"Each" on the ${what} is the price after Boone's discount. Lines are paired by part code, else by the closest description or the same price.</p></section>`;
+      <tfoot><tr><td colspan="4" class="r ci"><b>Before tax</b></td><td class="r ci"><b>${bad(Math.abs(Math.abs(sub) - poT) <= 0.02, money(sub))}</b></td><td colspan="4" class="r sinv-split cp"></td><td class="r cp"><b>${bad(Math.abs(Math.abs(sub) - poT) <= 0.02, money(poT))}</b></td><td></td></tr></tfoot></table></div>
+    ${canFix ? `<details class="sinv-addln" ${SINV.addLn === r.id ? "open" : ""}><summary>＋ Add a line to the ${what} <span class="quiet">(one the reader missed)</span></summary>
+      <form class="sinv-addln-f" data-sinv-addln="${r.id}" autocomplete="off"><input name="code" placeholder="Part code"><input name="description" placeholder="What it is" required><input name="qty" type="number" step="any" value="1" aria-label="Quantity">
+        <input name="each" type="number" step="0.01" placeholder="Each (after discount)" aria-label="Each"><button class="btn" type="submit">Add it</button></form></details>` : ""}
+    <p class="quiet">"Each" on the ${what} is the price after the supplier's discount. Lines are paired by part code (or the model number on the PO), else by the closest description or the same price. Not paired right? Use "Same part as a PO line…" on the ${what}'s line.</p></section>`;
 }
 function sinvDetail(r, edit) {
   const d = SINV.det.get(r.id); if (!d) { sinvLoadDet(r.id); return `<p class="quiet">Loading…</p>`; }
@@ -15183,6 +15203,18 @@ function wireSupInv() {
     if (error) { alertMsg("Not saved: " + rpcErr(error)); return false; } SINV.det.delete(id); await openSupInv(msg); return true; };
   document.querySelectorAll("[data-sinv-acc]").forEach(b => b.addEventListener("click", () => { const c = SINV.acc?.get(b.dataset.sinvAcc); if (c) apply(SINV.open, [c], false, "PO changed. It's recorded under Changes to this PO."); }));
   document.querySelectorAll("[data-sinv-ign]").forEach(b => b.addEventListener("click", () => apply(SINV.open, [{ ignore: b.dataset.sinvIgn }], false, "Left as it is (recorded).")));
+  // pair an invoice line with a PO line by hand / undo it; add a line the reader missed / take it off again
+  const sinvRe = async (msg, err) => { if (err) return alertMsg("Not saved: " + rpcErr(err)); const id = SINV.open; SINV.det.delete(id); await sinvLoadDet(id); const top = $("#main").scrollTop; renderSupInv(msg); $("#main").scrollTop = top; };
+  document.querySelectorAll("[data-sinv-pair]").forEach(sel => sel.addEventListener("change", async () => { if (!sel.value) return;
+    const { error } = await db.rpc("sinv_pair_set", { p_invoice: SINV.open, p_inv_key: sel.dataset.sinvPair, p_po_line: Number(sel.value) }); sinvRe("Paired with the PO line.", error); }));
+  document.querySelectorAll("[data-sinv-unpair]").forEach(b => b.addEventListener("click", async () => {
+    const { error } = await db.rpc("sinv_pair_set", { p_invoice: SINV.open, p_inv_key: b.dataset.sinvUnpair, p_po_line: null }); sinvRe("Pairing undone.", error); }));
+  document.querySelectorAll("[data-sinv-addln]").forEach(f => { f.closest("details")?.addEventListener("toggle", e => { SINV.addLn = e.target.open ? SINV.open : null; });
+    f.addEventListener("submit", async e => { e.preventDefault(); const q = Number(f.qty.value || 1), each = f.each.value === "" ? null : Number(f.each.value);
+      const line = { code: f.code.value.trim() || null, description: f.description.value.trim(), shipped: q, unit_price: each, net_amount: each != null ? Math.round(each * q * 100) / 100 : null };
+      const { error } = await db.rpc("sinv_line_add", { p_invoice: SINV.open, p_line: line, p_remove: null }); SINV.addLn = null; sinvRe("Line added to the invoice.", error); }); });
+  document.querySelectorAll("[data-sinv-lnx]").forEach(b => b.addEventListener("click", async () => {
+    const { error } = await db.rpc("sinv_line_add", { p_invoice: SINV.open, p_line: {}, p_remove: Number(b.dataset.sinvLnx) }); sinvRe("Typed-in line taken off.", error); }));
   document.querySelectorAll("[data-sinv-accall]").forEach(b => b.addEventListener("click", async () => { const ch = [...(SINV.acc?.values() || [])]; if (!ch.length) return;
     const k = await askChoice("Accept the invoice's prices?", `${ch.length} ${ch.length === 1 ? "change" : "changes"} go on the PO, and the invoice is marked checked. Each change is recorded under <b>Changes to this PO</b>.`, [["yes", "Accept them", true], ["", "Not now"]]);
     if (k === "yes") apply(Number(b.dataset.sinvAccall), ch, true, "PO updated from the invoice and marked checked."); }));
