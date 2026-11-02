@@ -13413,6 +13413,13 @@ function owAcctSplit(rows, scope, sel) {
   return { rows: sel ? rows.filter(r => keyOf(r) === sel) : rows, html, sel };
 }
 const OWL = { q: "", sort: "date_desc", picked: new Set(), to: "" };
+// "Paid" tags get the day it was paid (its last payment), looked up for the ones on screen
+const OW_PAIDON = new Map();
+async function owFillPaidOn(root) {
+  const tags = [...root.querySelectorAll("[data-ow-paidon]")], need = [...new Set(tags.map(t => Number(t.dataset.owPaidon)).filter(id => !OW_PAIDON.has(id)))];
+  if (need.length) { for (let i = 0; i < need.length; i += 1000) { const { data } = await db.rpc("invoice_paid_on", { p_ids: need.slice(i, i + 1000) }); need.slice(i, i + 1000).forEach(id => OW_PAIDON.set(id, (data || {})[id] || null)); } }
+  tags.forEach(t => { const d = OW_PAIDON.get(Number(t.dataset.owPaidon)); if (d) t.textContent = "Paid " + fmtDate(String(d).slice(0, 10)); });
+}
 async function openOwList(scope) {
   if (scope) OW.scope = scope;
   setPage("receivables-list", "owlist", owScopeName(OW.scope));
@@ -13463,11 +13470,12 @@ function renderOwList() {
         <td>${esc(r.job_type || "")}${r.job_partner ? `<div class="quiet">${esc(r.job_partner)} job</div>` : ""}</td>
         <td class="r num"><strong>${money(amt(r))}</strong>${scope === "owing" ? `<div class="quiet">of ${money(r.total)}</div>` : ""}</td>
         <td>${r._booked ? `<span class="ow-tag ow-booktag">${esc((r.job_status || "").replace("_", " "))}</span>${r.from_estimate ? ` <span class="quiet">from the proposal</span>` : ""}`
-          : r._paidOff ? `<span class="ow-tag ow-paidtag">Paid</span>` : r._show === "not_owed" ? `<span class="quiet">Not owed: ${esc(r.not_owed_reason || "")}</span>`
+          : r._paidOff || (!r._booked && Number(r.balance) <= 0.004 && r._show !== "not_owed") ? `<span class="ow-tag ow-paidtag" data-ow-paidon="${r.invoice_id}">Paid${OW_PAIDON.has(r.invoice_id) && OW_PAIDON.get(r.invoice_id) ? " " + esc(fmtDate(OW_PAIDON.get(r.invoice_id))) : ""}</span>` : r._show === "not_owed" ? `<span class="quiet">Not owed: ${esc(r.not_owed_reason || "")}</span>`
           : `<span class="ow-tag ow-owetag">Owing ${money(r.balance)}</span>${r._show === "checked" ? ` <span class="quiet">checked</span>` : ""}`}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="quiet" style="padding:20px 0">${src ? (q ? "Nothing matches." : "Nothing for these dates.") : "Loading…"}</p>`}
   </article>`;
   const art = main.querySelector("article.owl"); if (art && keepH) art.style.minHeight = keepH + "px";
+  owFillPaidOn(main);
   OWL._list = rows;
   main.scrollTop = top;
   main.querySelectorAll("[data-owl-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.owlCust))));
