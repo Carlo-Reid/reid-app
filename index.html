@@ -1236,7 +1236,7 @@
   tr.inv-paired td { background: #fff9ec; }
   .tp-note { margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; background: #fff4e6; border: 1px solid #f0c27b; font-size: 14px; line-height: 1.5; }
   .tp-two { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 4px 0; }
-  .vtp-t td { vertical-align: top; } .vtp-what { max-width: 260px; } .vtp-acts { white-space: nowrap; } .vtp-hand { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .vtp-supf { margin: 8px 0 4px; flex-wrap: wrap; } .vtp-t td { vertical-align: top; } .vtp-what { max-width: 260px; } .vtp-acts { white-space: nowrap; } .vtp-hand { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .ow-summary { display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; margin: 6px 0 14px; }
   .ow-sumbtn { padding: 12px 18px; border-radius: 12px; background: var(--paper, #fff); border: 2px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; min-width: 220px; cursor: pointer; font: inherit; color: inherit; text-align: left; }
   .ow-sumbtn:hover { border-color: var(--blue, #1864ab); } .ow-ptntag { background: #e7f5ff; color: #1864ab; }
@@ -17481,25 +17481,34 @@ async function loadPartners() {
 const vtpGuessSup = (r, sups) => { const t = String(r.customer || "").toLowerCase(); const s = sups.find(x => { const w = String(x.name).trim().split(/[\s(-]+/)[0].toLowerCase(); return w.length >= 4 && t.includes(w); }); return s?.id || null; };
 // Old jobs billed as two invoices: labour (the partner pays us) and the tank (the partner pays our supplier). Tie each pair.
 function vtpHtml(st, edit) {
-  const L = PP.tps || [], nm = esc(st.name), sups = (SUPPLIERS || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const ALL = PP.tps || [], nm = esc(st.name), sups = (SUPPLIERS || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  // each pair's supplier: the one it's tied to, or the one named on the tank invoice's account; filter by it
+  const supOf = r => r.supplier_id || vtpGuessSup(r, sups) || 0, supName = id => id ? String((sups.find(x => x.id === id) || {}).name || "?").trim().split(/\s+\d/)[0] : "Not known";
+  const counts = new Map(); ALL.forEach(r => { const id = supOf(r); counts.set(id, (counts.get(id) || 0) + 1); });
+  if (PP.vtpSupF != null && !counts.has(PP.vtpSupF)) PP.vtpSupF = null;
+  const L = ALL.map((r, k) => ({ ...r, _k: k })).filter(r => PP.vtpSupF == null || supOf(r) === PP.vtpSupF);
+  const supChips = counts.size > 1 || PP.vtpSupF != null ? `<div class="seg vtp-supf" role="group" aria-label="Supplier"><button type="button" data-vtp-supf="" aria-pressed="${PP.vtpSupF == null}">Every supplier <span class="pp-n">${ALL.length}</span></button>${[...counts].sort((a, b) => b[1] - a[1]).map(([id, n]) =>
+    `<button type="button" data-vtp-supf="${id}" aria-pressed="${PP.vtpSupF === id}">${esc(supName(id))} <span class="pp-n">${n}</span></button>`).join("")}</div>` : "";
   const usual = PP.vtSup || (PP.sps || []).map(x => (SUPPLIERS || []).find(s => s.name === x.supplier)?.id).find(Boolean) || (sups.find(s => /boone/i.test(s.name)) || {}).id || "";
   const supSel = (cls, v) => `<select class="${cls}" aria-label="Supplier ${nm} pays">${sups.map(s => `<option value="${s.id}" ${String(s.id) === String(v) ? "selected" : ""}>${esc(String(s.name).trim())}</option>`).join("")}</select>`;
   const inv = (x, lab) => x?.id ? `<button class="link" type="button" data-invoice="${x.id}">#${esc(x.number)}</button> <b>${money(x.total)}</b>${Number(x.balance) > 0.004 ? ` <span class="warn">${money(x.balance)} open</span>` : ` <span class="quiet">paid</span>`}<div class="quiet vtp-what">${esc(String(x.what || "").slice(0, 70))}</div>` : `<span class="quiet">${lab}</span>`;
-  return `<section class="block pp-pays vtp"><h2>Tank and labour invoices <span class="count">${L.length}</span></h2>
+  return `<section class="block pp-pays vtp"><h2>Tank and labour invoices <span class="count">${L.length}${L.length !== ALL.length ? " of " + ALL.length : ""}</span></h2>
     <p class="quiet">Older ${nm} jobs were billed as two invoices: the labour (${nm} pays us) and the tank (${nm} pays our supplier). Tie each pair: the tank then shows under "Tanks ${nm} pays our suppliers for" to keep track of, it isn't counted as owed to us, and both invoices show each other.</p>
     <div class="seg" role="group">${[["suggested", "Looks like a pair"], ["tied", "Tied"], ["all", "All"]].map(([k, t]) => `<button type="button" data-vtp-show="${k}" aria-pressed="${(PP.tpShow || "suggested") === k}">${t}</button>`).join("")}</div>
+    ${supChips}
     ${L.length ? `<table class="calls-table vtp-t"><thead><tr><th>Customer</th><th>Labour: ${nm} pays us</th><th>Tank: ${nm} pays the supplier</th><th>Supplier</th><th></th></tr></thead><tbody>
-      ${L.map((r, k) => `<tr data-vtp="${k}"><td><button class="link" type="button" data-pp-cust="${r.customer_id}">${esc(r.customer || "")}</button><div class="quiet">${esc(r.street || "")}${r.job_number ? " · job " + esc(r.job_number) : ""}</div></td>
+      ${L.map(r => { const k = r._k; return `<tr data-vtp="${k}"><td><button class="link" type="button" data-pp-cust="${r.customer_id}">${esc(r.customer || "")}</button><div class="quiet">${esc(r.street || "")}${r.job_number ? " · job " + esc(r.job_number) : ""}</div></td>
         <td>${inv(r.labour, "—")}</td><td>${inv(r.tank, "—")}</td>
         <td>${r.kind === "tied" ? `<b>${esc(r.supplier || "")}</b><div class="quiet">${esc(SP_SHORT[r.status] || r.status || "")}</div>` : edit ? supSel("vtp-sup", vtpGuessSup(r, sups) || usual) : ""}</td>
         <td class="vtp-acts">${!edit ? "" : r.kind === "tied" ? `<button class="link" type="button" data-vtp-untie="${k}">Untie</button>`
-          : `<button class="btn" type="button" data-vtp-tie="${k}">✓ Tie them</button> <button class="link" type="button" data-vtp-no="${k}" title="Not a tank and labour pair: stop suggesting it">Not a pair</button>`}</td></tr>`).join("")}</tbody></table>`
+          : `<button class="btn" type="button" data-vtp-tie="${k}">✓ Tie them</button> <button class="link" type="button" data-vtp-no="${k}" title="Not a tank and labour pair: stop suggesting it">Not a pair</button>`}</td></tr>`; }).join("")}</tbody></table>`
       : `<p class="quiet">${(PP.tpShow || "suggested") === "suggested" ? "No more pairs to look at." : "None tied yet."}</p>`}
     ${edit ? `<form class="vtp-hand" id="vtp-hand"><b>Tie two invoices by hand:</b> <input name="lab" placeholder="Labour invoice #" size="12"> <input name="tank" placeholder="Tank invoice #" size="12"> ${supSel("vtp-hsup", usual)} <button class="btn quiet-btn" type="submit">Tie them</button></form>` : ""}
   </section>`;
 }
 document.addEventListener("click", async e => {
   const sh = e.target.closest("[data-vtp-show]"); if (sh) { PP.tpShow = sh.dataset.vtpShow; return loadPartners(); }
+  const sf = e.target.closest("[data-vtp-supf]"); if (sf) { PP.vtpSupF = sf.dataset.vtpSupf === "" ? null : Number(sf.dataset.vtpSupf); const h = $("#vtp-host"); if (h) h.innerHTML = vtpHtml(PP.stores.find(x => x.id === PP.store), canPartnerPay()); return; }
   const b = e.target.closest("[data-vtp-tie], [data-vtp-no], [data-vtp-untie]"); if (!b) return;
   const k = Number(b.dataset.vtpTie ?? b.dataset.vtpNo ?? b.dataset.vtpUntie), r = (PP.tps || [])[k]; if (!r) return;
   const tr = b.closest("tr"), sup = Number(tr.querySelector(".vtp-sup")?.value) || null;
