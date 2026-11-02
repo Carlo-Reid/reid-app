@@ -1,0 +1,1 @@
+DO $$ BEGIN RAISE EXCEPTION 'PROBE %', (SELECT string_agg(format('[%s|%s|%s]', left(pl.description, 40), pi.sku, pi.model_number), ' ') FROM supplier_invoices i JOIN purchase_order_lines pl ON pl.purchase_order_id = public._sinv_po(i) LEFT JOIN pricebook_items pi ON pi.id = pl.item_id WHERE i.supplier_invoice_number = '41281148-00'); END $$;
