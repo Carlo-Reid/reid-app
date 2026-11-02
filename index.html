@@ -5129,7 +5129,7 @@ body.viewing-as #app { box-shadow: inset 0 0 0 4px #7a1f5c; }
   border: 1px solid var(--line); border-radius: 10px; background: var(--blue-wash, #eef4fb); color: inherit; font: inherit; }
 .po-file:hover, .po-file:focus-visible { border-color: var(--blue, #1864ab); box-shadow: 0 0 0 2px var(--blue, #1864ab) inset; }
 .po-file-ic { font-weight: 800; font-size: 15px; color: #fff; background: var(--red, #c92a2a); border-radius: 5px; padding: 6px 7px; letter-spacing: .5px; }
-.po-file-d { font-size: 12px; } .po-file-n { font-size: 12px; font-weight: 700; color: var(--blue, #1864ab); }
+.po-file-d { font-size: 12px; } .po-sinv-ic { background: #1864ab !important; } .po-file-n { font-size: 12px; font-weight: 700; color: var(--blue, #1864ab); }
 .sm-pos { margin-top: 3px; font-size: 13px; }
 .ow-notdue { margin-top: 4px; font-size: 12.5px; line-height: 1.35; }
 #inv-paper:has(.mkpo-pop) { max-width: 1320px !important; width: 96vw !important; }
@@ -15547,6 +15547,7 @@ async function showPO(id) {
         <td class="r num">${Number(l.quantity)}</td><td class="r num">${money(l.unit_cost)}</td><td class="r num">${money(l.line_total)}</td></tr>`).join("")}</tbody></table>
       <div class="r"><span class="quiet">Items</span> ${money(linesTotal)}${d.amount != null && Math.abs(Number(d.amount) - linesTotal) > 0.01 ? ` · <b>PO total ${money(d.amount)}</b> <span class="quiet">(with tax / shipping)</span>` : ""}</div>`
       : `<div class="quiet">No items listed.</div>`}
+    ${seeCost() ? `<div data-po-sinv="${d.id}"></div>` : ""}
     ${seeCost() ? `<div data-po-files="${d.id}" data-empty="No supplier copies tied to this PO yet. Scans sent to supplierpo@hsginc.ca are tied by the PO number printed on them."></div>` : ""}
     ${edit ? `<h3>Update</h3>
       <form class="po-upd" id="po-upd">
@@ -15557,7 +15558,7 @@ async function showPO(id) {
       </form>${d.from_st ? `<p class="quiet" style="font-size:13px">While you still use ServiceTitan, its next sync can change this PO back.</p>` : ""}` : ""}`;
   p.querySelector("[data-po-close]").addEventListener("click", () => { POP.sel = null; p.classList.add("hidden"); document.querySelectorAll(".po-row.sel").forEach(x => x.classList.remove("sel")); });
   p.querySelector("[data-po-cust]")?.addEventListener("click", () => openCustomer(d.customer_id));
-  poFilesFill(p);
+  poFilesFill(p); poSinvFill(p);
   $("#po-upd")?.addEventListener("submit", async e => {
     e.preventDefault(); const f = e.target, m = $("#po-upd-msg");
     const amt = f.amount.value.trim() === "" ? null : Number(f.amount.value.replace(/[$,\s]/g, ""));
@@ -20625,6 +20626,33 @@ async function parseGenericInvoice(rows, supplier, cells) {
     unknown.push({ code, description: descOf(i, code.toUpperCase()).slice(0, 200), cost: Math.round(c * 10000) / 10000 }); });
   return { lines: out, unread, unknown: unknown.slice(0, 40) };
 }
+// the supplier's invoices matched to a PO: a tile each, opening its pages
+async function poSinvFill(root = document) {
+  for (const box of root.querySelectorAll("[data-po-sinv]:not([data-done])")) {
+    box.dataset.done = "1"; const { data, error } = await db.rpc("po_supplier_invoices", { p_po: Number(box.dataset.poSinv) });
+    if (error || !(data || []).length) { box.innerHTML = ""; continue; }
+    box.innerHTML = `<h3 class="po-files-h">Supplier's invoice${data.length > 1 ? "s" : ""} (${data.length})</h3><div class="po-files">${data.map(x => `<button class="po-file po-sinv" type="button" data-sinv-view="${x.id}"
+        title="${esc(x.supplier)} ${x.type === "credit" ? "credit" : "invoice"} ${esc(x.number)}${(x.pages || []).length ? "" : " (no copy of the invoice: only its total)"}">
+        <span class="po-file-ic po-sinv-ic" aria-hidden="true">${x.type === "credit" ? "CR" : "INV"}</span><span class="po-file-d"><b>${esc(x.number)}</b></span>
+        <span class="po-file-d">${money(x.total)}</span><span class="po-file-n">${(x.pages || []).length ? "Open" : "Details"}</span></button>`).join("")}</div>`;
+    PO_SINV.set(box.dataset.poSinv, data);
+  }
+}
+const PO_SINV = new Map();
+// a supplier invoice on its own: its pages, with a way to it on the Supplier invoices page
+async function openSinvView(id) {
+  const x = [...PO_SINV.values()].flat().find(r => r.id === id); if (!x) return;
+  let box = document.getElementById("cmp-view"); if (!box) { box = document.createElement("div"); box.id = "cmp-view"; box.className = "cmp-view"; document.body.appendChild(box); }
+  const close = () => { box.classList.add("hidden"); document.body.classList.remove("cmp-open"); };
+  box.innerHTML = `<div class="cmp-paper jd" role="dialog" aria-modal="true" aria-label="Supplier invoice"><div class="cmp-bar no-print"><button class="btn" type="button" onclick="window.print()">Print</button><button class="btn quiet-btn" type="button" data-sinv-page>On the Supplier invoices page ›</button><button class="btn quiet-btn" type="button" data-cmp-close>Close</button></div>
+    <h1>${esc(x.supplier)} ${x.type === "credit" ? "credit" : "invoice"} ${esc(x.number)}</h1><p class="quiet">${x.date ? esc(fmtDate(String(x.date).slice(0, 10))) + " · " : ""}${money(x.total)}${x.by_hand ? " · matched to the PO by hand" : ""}</p>
+    ${(x.pages || []).length ? `<div class="jd-pages">${x.pages.map(pid => `<figure data-jd-page="${pid}"><p class="quiet">Loading page…</p></figure>`).join("")}</div>` : `<p>There's no copy of this invoice in the app, only its total from the supplier's statement.</p>`}</div>`;
+  box.classList.remove("hidden"); document.body.classList.add("cmp-open");
+  box.querySelectorAll("[data-cmp-close]").forEach(b => b.onclick = close); box.onclick = e => { if (e.target === box) close(); };
+  box.querySelector("[data-sinv-page]").onclick = () => { close(); SINV.q = String(x.number); SINV.open = x.id; openSupInv(); };
+  for (const pid of x.pages || []) { const { data: img } = await db.rpc("supplier_doc_page", { p_id: pid }); const el = box.querySelector(`[data-jd-page="${pid}"]`); if (el) el.innerHTML = img ? `<img alt="Page" src="data:image/jpeg;base64,${img}">` : `<p class="quiet">Page missing.</p>`; }
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-sinv-view]"); if (b) { e.preventDefault(); openSinvView(Number(b.dataset.sinvView)); } });
 // the supplier's own copies tied to a PO (picking tickets, invoices, scans): fills every [data-po-files] box on the page
 async function poFilesFill(root = document) {
   for (const box of root.querySelectorAll("[data-po-files]:not([data-done])")) {
