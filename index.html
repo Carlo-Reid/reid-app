@@ -14507,7 +14507,9 @@ function sinvPair(L, P, pairs) {
     const sim = sinvSim(a.x.description + " " + (a.x.code || ""), b.y.description + " " + (b.y.sku || "")), price = a.each != null && b.each > 0 && Math.abs(a.each - b.each) / b.each < 0.02;
     const score = sim + (price ? 0.6 : 0) + (a.q != null && a.q === b.q ? 0.15 : 0); if (sim >= 0.34 || price) cand.push({ a, b, score }); }); });
   cand.sort((u, v) => v.score - u.score).forEach(c => { if (!pair.has(c.a.i) && !used.has(c.b.j)) take(c.a, c.b); });
-  const rows = []; inv.forEach(a => rows.push({ a, b: pair.has(a.i) ? po[pair.get(a.i)] : null, hand: hand.has(a.i) }));
+  // one line left on each side (e.g. the invoice's model TMPV060B12MP12C and the PO's "York (60) TM9V 2 Stage 96%…"): most likely the same part
+  { const ia = inv.filter(a => !pair.has(a.i) && !a.comp), pb = po.filter(b => !used.has(b.j)); if (ia.length === 1 && pb.length === 1) { take(ia[0], pb[0]); ia[0].guess = true; } }
+  const rows = []; inv.forEach(a => rows.push({ a, b: pair.has(a.i) ? po[pair.get(a.i)] : null, hand: hand.has(a.i), guess: !!a.guess }));
   po.forEach(b => { if (used.has(b.j)) return; let k = rows.length; for (let t = rows.length - 1; t >= 0; t--) if (rows[t].b && rows[t].b.j < b.j) { k = t + 1; break; } else if (rows[t].b) k = t; rows.splice(Math.min(k, rows.length), 0, { a: null, b }); });
   return rows;
 }
@@ -14519,7 +14521,7 @@ function sinvCompare(r, L, P, what) {
   const D = SINV.det.get(r.id) || {}, IGN = new Set(D.ignored || []), canFix = !!SINV.data?.can_edit; SINV.acc = new Map(); SINV.ret = new Map(); let nFix = 0, nIgn = 0;
   const RET = new Set((D.returns || []).filter(x => x.status !== "cancelled").flatMap(x => (x.lines || []).map(l => l.key)));
   const freePo = rows.filter(x => x.b && !x.a).map(x => x.b), DL = (SINV.det.get(r.id) || {}).lines || [];
-  const body = rows.map(({ a, b, hand }) => {
+  const body = rows.map(({ a, b, hand, guess }) => {
     if (a?.amt != null) ia += a.amt; if (b) pa += b.amt || 0;
     let why = ""; const iss0 = issues.length, key = (a ? "i:" + (a.x.code || a.x.description || a.i) : "-") + "|" + (b ? "p:" + (b.y.id ?? b.j) : "-");
     if (a && !b && !a.comp) { why = `Not on the PO`; issues.push(`${a.x.code || a.x.description}: on the ${what} but not on the PO${a.amt != null ? ` (${money(a.amt)})` : ""}`); }
@@ -14534,6 +14536,7 @@ function sinvCompare(r, L, P, what) {
       if (w.length) { why = w.join(" · "); issues.push(`${a.x.code || b.y.sku}: ${why}`); } }
     const ac = a ? `<td class="ci">${esc(a.x.code || "")}</td><td class="ci">${esc(a.x.description || "")}${a.x.backorder ? ` <span class="quiet">(${a.x.backorder} back-ordered)</span>` : ""}${a.x.by_hand ? ` <span class="ow-tag">typed in</span>${canFix ? ` <button class="link danger" type="button" data-sinv-lnx="${DL.indexOf(a.x)}" title="Take this typed-in line off">✕</button>` : ""}` : ""}
         ${hand ? `<div class="quiet sinv-sm">paired by hand${canFix ? ` · <button class="link" type="button" data-sinv-unpair="${esc(sinvInvKey(a.x, a.i))}">undo</button>` : ""}</div>` : ""}
+        ${guess && !hand ? `<div class="quiet sinv-sm">paired as the only line left on each side${canFix ? ` · <button class="link" type="button" data-sinv-pairok="${esc(sinvInvKey(a.x, a.i))}" data-po-line="${b?.y.id ?? ""}">that's right</button>` : ""}</div>` : ""}
         ${a && !b && !a.comp && canFix && freePo.length ? `<div class="sinv-pairpick"><select data-sinv-pair="${esc(sinvInvKey(a.x, a.i))}" aria-label="Same part as a PO line"><option value="">Same part as a PO line…</option>${freePo.map(f => `<option value="${f.y.id}">${esc([f.y.sku, f.y.model, f.y.description].filter(Boolean).join(" · ").slice(0, 80))} (${money(f.amt)})</option>`).join("")}</select></div>` : ""}</td><td class="r ci">${a.q == null ? "" : bad(qOk, a.q)}</td>
         <td class="r ci">${a.each == null ? (a.comp ? `<span class="quiet">in kit</span>` : "") : bad(eOk, money(a.each))}${a.x.discount && a.x.unit_price != null ? `<div class="quiet sinv-sm">${money(a.x.unit_price)} −${esc(a.x.discount)}%</div>` : ""}</td>
         <td class="r ci">${a.amt == null ? "" : bad(mOk, money(a.amt))}</td>` : `<td colspan="5" class="sinv-miss ci">—</td>`;
@@ -15207,6 +15210,8 @@ function wireSupInv() {
   const sinvRe = async (msg, err) => { if (err) return alertMsg("Not saved: " + rpcErr(err)); const id = SINV.open; SINV.det.delete(id); await sinvLoadDet(id); const top = $("#main").scrollTop; renderSupInv(msg); $("#main").scrollTop = top; };
   document.querySelectorAll("[data-sinv-pair]").forEach(sel => sel.addEventListener("change", async () => { if (!sel.value) return;
     const { error } = await db.rpc("sinv_pair_set", { p_invoice: SINV.open, p_inv_key: sel.dataset.sinvPair, p_po_line: Number(sel.value) }); sinvRe("Paired with the PO line.", error); }));
+  document.querySelectorAll("[data-sinv-pairok]").forEach(b => b.addEventListener("click", async () => { if (!b.dataset.poLine) return;
+    const { error } = await db.rpc("sinv_pair_set", { p_invoice: SINV.open, p_inv_key: b.dataset.sinvPairok, p_po_line: Number(b.dataset.poLine) }); sinvRe("Saved: they're the same part.", error); }));
   document.querySelectorAll("[data-sinv-unpair]").forEach(b => b.addEventListener("click", async () => {
     const { error } = await db.rpc("sinv_pair_set", { p_invoice: SINV.open, p_inv_key: b.dataset.sinvUnpair, p_po_line: null }); sinvRe("Pairing undone.", error); }));
   document.querySelectorAll("[data-sinv-addln]").forEach(f => { f.closest("details")?.addEventListener("toggle", e => { SINV.addLn = e.target.open ? SINV.open : null; });
