@@ -1251,6 +1251,10 @@
   table.vtp-t th:nth-child(2), table.vtp-t td:nth-child(2), table.vtp-t th:nth-child(3), table.vtp-t td:nth-child(3) { width: 26%; }
   table.vtp-t th:nth-child(4), table.vtp-t td:nth-child(4) { width: 118px; }
   table.vtp-t th:nth-child(5), table.vtp-t td:nth-child(5) { width: 140px; }
+  .vtp-view { display: inline-block; margin: -2px 0 6px; padding: 2px 8px; font: inherit; font-size: 11px; font-weight: 800; letter-spacing: .3px; text-transform: uppercase; color: #fff; background: #5b6b80; border: 0; border-radius: 6px; cursor: pointer; }
+  table.vtp-t td:nth-child(2) .vtp-view, table.vtp-t td:nth-child(3) .vtp-view { background: #1b4f8a; } table.vtp-t td:nth-child(3) .vtp-view { background: #b4501a; } table.vtp-t td:nth-child(4) .vtp-view { background: #563191; white-space: normal; }
+  .vtp-view:hover { filter: brightness(1.15); } table.vtp-t td > .vtp-view + * { clear: both; }
+  table.vtp-t td > .vtp-view { display: table; }
   .vtp-docsq { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 100%; aspect-ratio: 1 / 1; max-width: 64px; margin: 0 auto 6px; padding: 4px; box-sizing: border-box; border: 0; border-radius: 12px; cursor: pointer;
     font: inherit; font-size: 9px; font-weight: 800; line-height: 1.1; text-align: center; white-space: normal; color: #fff; background: linear-gradient(160deg, #4a8ee0, #1b4f8a); box-shadow: 0 5px 12px rgba(27,79,138,.35), inset 0 1px 0 rgba(255,255,255,.35); transition: transform .1s, filter .1s; }
   .vtp-docsq:hover { transform: translateY(-2px) scale(1.03); filter: brightness(1.08); } .vtp-docsq:active { transform: scale(.96); } .vtp-dqi { font-size: 18px; line-height: 1; }
@@ -17648,6 +17652,13 @@ async function openJobDocs(invoiceIds) {
       : /^image\//.test(fd.mime || "") ? `<img alt="${esc(fd.name || "")}" src="${url}">` : `<p><a href="${url}" download="${esc(fd.name || "file")}">Download ${esc(fd.name || "the file")}</a></p>`; });
   for (const i of inv) { if (seq !== JD.seq) return; const html = await jdInvoiceHtml(i.id); const el = root.querySelector(`[data-jd-inv="${i.id}"]`); if (el && seq === JD.seq) el.innerHTML = html; }
 }
+// "View supplier invoice": the supplier's invoice (or credit) for this job, on its own; all the job's documents stay behind it
+document.addEventListener("click", async e => { const b = e.target.closest("[data-vtp-sinv]"); if (!b) return; e.preventDefault();
+  const ids = b.dataset.vtpSinv.split(",").map(Number).filter(Boolean); b.disabled = true;
+  const { data: D } = await db.rpc("job_documents", { p_invoices: ids }); b.disabled = false;
+  const si = D?.supplier_invoices || []; if (!si.length) return alertMsg("There's no supplier invoice in the app for this job yet. When the supplier's invoice is loaded and matched to the job's PO, it shows here.");
+  const want = "jd-s" + (si.find(x => x.type !== "credit") || si[0]).id; openJobDocs(ids);
+  for (let k = 0; k < 40; k++) { await new Promise(r => setTimeout(r, 250)); const root = document.querySelector("#cmp-view .jd"); if (root?.querySelector("#" + want)) return jdPop(root, want); } });
 document.addEventListener("click", e => { const b = e.target.closest("[data-jd]"); if (b) { e.preventDefault(); return openJobDocs(b.dataset.jd.split(",").map(Number)); }
   const c = e.target.closest("[data-vtp-cust]"); if (c) { e.preventDefault(); return openCustomer(Number(c.dataset.vtpCust)); } });
 // who it's for: the homeowner at the address (the invoice is often billed to an account like "Wolseley water heater credit/Vista")
@@ -17675,9 +17686,11 @@ function vtpHtml(st, edit) {
     <div class="vtp-find"><label for="vtp-q">Find a pair</label><span class="vtp-qw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="vtp-q" type="search" value="${esc(PP.tpQ || "")}" placeholder="Invoice #, PO #, job #, supplier invoice #, name, address or amount" autocomplete="off"></span>${PP.tpQ ? `<span class="quiet">Looking through every pair (looks like a pair and tied) · ${L.length} found</span> <button class="link" type="button" data-vtp-qx>Clear</button>` : ""}</div>
     ${supChips}
     ${L.length ? `<table class="calls-table vtp-t"><thead><tr><th>Customer</th><th>Labour: ${nm} pays us</th><th>Tank: ${nm} pays the supplier</th><th>Supplier</th><th></th></tr></thead><tbody>
-      ${L.map(r => { const k = r._k; return `<tr data-vtp="${k}"><td>${vtpWho(r.person_id, r.person, r.street, r.customer_id, r.customer)}${r.job_number ? `<div class="quiet">job ${esc(r.job_number)}</div>` : ""}</td>
-        <td>${inv(r.labour, "—")}</td><td>${supOf(r) ? `<div class="vtp-supn">${esc(supName(supOf(r)))}</div>` : ""}${inv(r.tank, "—")}</td>
-        <td>${r.kind === "tied" ? `<b>${esc(sinvShort(r.supplier || ""))}</b><div class="quiet">${esc(SP_SHORT[r.status] || r.status || "")}</div>` : edit ? supSel("vtp-sup", vtpGuessSup(r, sups) || usual) : ""}</td>
+      ${L.map(r => { const k = r._k; const ids = [r.labour?.id, r.tank?.id].filter(Boolean).join(",");
+        const vb = (attr, t) => `<button class="vtp-view" type="button" ${attr}>${t}</button>`;
+        return `<tr data-vtp="${k}"><td>${r.person_id ? vb(`data-vtp-cust="${r.person_id}"`, "View customer") : r.customer_id ? vb(`data-vtp-cust="${r.customer_id}"`, "View customer") : ""}${vtpWho(r.person_id, r.person, r.street, r.customer_id, r.customer)}${r.job_number ? `<div class="quiet">job ${esc(r.job_number)}</div>` : ""}</td>
+        <td>${r.labour?.id ? vb(`data-invoice="${r.labour.id}"`, "View invoice") : ""}${inv(r.labour, "—")}</td><td>${r.tank?.id ? vb(`data-invoice="${r.tank.id}"`, "View invoice") : ""}${supOf(r) ? `<div class="vtp-supn">${esc(supName(supOf(r)))}</div>` : ""}${inv(r.tank, "—")}</td>
+        <td>${vb(`data-vtp-sinv="${ids}"`, "View supplier invoice")}${r.kind === "tied" ? `<b>${esc(sinvShort(r.supplier || ""))}</b><div class="quiet">${esc(SP_SHORT[r.status] || r.status || "")}</div>` : edit ? supSel("vtp-sup", vtpGuessSup(r, sups) || usual) : ""}</td>
         <td class="vtp-acts"><button class="vtp-docsq" type="button" data-jd="${[r.labour?.id, r.tank?.id].filter(Boolean).join(",")}" title="Every invoice, PO, supplier invoice and packing slip for this job, on one page"><span class="vtp-dqi">📂</span><span>View all documents</span></button>${!edit ? "" : r.kind === "tied" ? `<button class="btn quiet-btn vtp-small vtp-untie" type="button" data-vtp-untie="${k}">Untie</button>`
           : `<button class="btn vtp-small" type="button" data-vtp-tie="${k}">✓ Tie them</button> <button class="btn quiet-btn vtp-small" type="button" data-vtp-no="${k}" title="Not a tank and labour pair: stop suggesting it">Not a pair</button>`}</td></tr>`; }).join("")}</tbody></table>`
       : `<p class="quiet">${PP.tpQ ? `Nothing matches “${esc(PP.tpQ)}”.` : (PP.tpShow || "suggested") === "suggested" ? "No more pairs to look at." : "None tied yet."}</p>`}
