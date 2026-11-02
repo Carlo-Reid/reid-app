@@ -23,7 +23,7 @@ SRC, OUT = sys.argv[1], sys.argv[2]
 os.makedirs(OUT, exist_ok=True)
 NULL = "\\N"
 NOW_ISO = datetime.now(timezone.utc).isoformat()
-report = {"counts": {}, "skipped": Counter(), "notes": []}
+report = {"counts": {}, "skipped": Counter(), "fixed": Counter(), "notes": []}
 DELTA = None
 if os.environ.get("ST_DELTA_KNOWN"):
     DELTA = json.load(open(os.environ["ST_DELTA_KNOWN"], encoding="utf-8"))
@@ -657,6 +657,10 @@ for r in rows("invoices.csv"):
     jid = jb.get("id") if jb.get("id") in job_ids else None
     unit = unit_for(bu.get("id"), job_type_of_job.get(jb.get("id")))[0]
     total, bal = num(r["total"], 0), num(r["balance"], 0)
+    # A payment taken off this invoice in ServiceTitan (moved to another invoice or refunded) without one ever being on it
+    # leaves a negative "paid" and a balance bigger than the invoice. Count it as not paid, so it never shows more owing than it's for.
+    if total >= 0 and bal > total + 0.005:
+        report["fixed"]["invoice_balance_over_total"] += 1; bal = total
     sub, tax = num(r["subTotal"], 0), num(r["salesTax"], 0)
     if total == 0 and sub == 0: status = "posted"
     elif abs(bal) < 0.005: status = "paid"
@@ -788,5 +792,6 @@ writers = {wr.table: wr for wr in Writer.order}
 manifest = [{"table": t, "file": f"{t}.csv", "columns": writers[t].columns, "rows": writers[t].n} for t in LOAD_ORDER if t in writers]
 json.dump({"tables": manifest}, open(os.path.join(OUT, "manifest.json"), "w"), indent=1)
 report["skipped"] = dict(report["skipped"])
+report["fixed"] = dict(report["fixed"])
 json.dump(report, open(os.path.join(OUT, "report.json"), "w"), indent=1)
 if DELTA is None: print(json.dumps(report, indent=1))
