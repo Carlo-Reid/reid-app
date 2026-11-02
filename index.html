@@ -1236,7 +1236,9 @@
   tr.inv-paired td { background: #fff9ec; }
   .tp-note { margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; background: #fff4e6; border: 1px solid #f0c27b; font-size: 14px; line-height: 1.5; }
   .tp-two { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 4px 0; }
-  .vtp-supf { margin: 8px 0 4px; flex-wrap: wrap; } .vtp-docs { margin-bottom: 4px; font-size: 13px; padding: 3px 9px; }
+  .vtp-supf { margin: 8px 0 4px; flex-wrap: wrap; } .sp-dropany { margin-left: 10px; padding: 3px 10px; font-size: 12.5px; text-transform: none; letter-spacing: 0; }
+  .di-whose { margin: 6px 0 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .di-whose select, .stv-t select { max-width: 260px; }
+  .di-newsup { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; margin: 0 0 10px; border: 1px solid var(--blue, #1864ab); border-radius: 8px; } .vtp-docs { margin-bottom: 4px; font-size: 13px; padding: 3px 9px; }
   body.jd-capture #inv-view, body.jd-capture #inv-cost { visibility: hidden !important; }
   .jd .jd-who { font-size: 15px; } .jd-toc { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 10px; margin: 8px 0 14px; background: var(--blue-wash, #eef4fb); border-radius: 8px; font-size: 13.5px; }
   .jd-doc { margin: 18px 0 26px; padding-top: 10px; border-top: 3px solid #34404b; } .jd-doc h2 { font-size: 18px; margin: 0 0 8px; } .jd-doc h2 .quiet { font-size: 13px; font-weight: 400; }
@@ -14368,6 +14370,7 @@ const sinvSaveTab = () => { try { localStorage.setItem("reid.sinvTab", JSON.stri
 const sinvShort = n => String(n || "").replace(/\s*[\d(].*$/, "").replace(/\s+(System|Group|Industries).*$/i, "").trim() || String(n || "");
 async function openSupInv(msg) {
   setPage("supplier-invoices", "supplier-invoices", "Supplier invoices");
+  loadSuppliers().catch(() => {});
   if (!SINV.data) $("#main").innerHTML = `<div class="loading">Loading supplier invoices…</div>`;
   const { data, error } = await db.rpc("supplier_invoices_list", { p_supplier: SINV.sup, p_statement: SINV.st });
   if (document.body.dataset.page !== "supplier-invoices") return;
@@ -14457,9 +14460,9 @@ function renderSupInv(msg) {
 // activity on top of last month's balance ("balance from prior month"), so last month's total + this month's lines = the total
 // tabs: All suppliers, then one per supplier that has statements
 function sinvTabs(D) {
-  const st = D.statements || [], ids = [...new Set(st.map(s => s.supplier_id))], cnt = D.invoice_counts || {};
+  const st = D.statements || [], cnt = D.invoice_counts || {}, ids = [...new Set(st.map(s => s.supplier_id).concat(Object.keys(cnt).map(Number)))];   // suppliers with statements or invoices
   if (ids.length < 2) return "";
-  const name = id => sinvShort(st.find(s => s.supplier_id === id).supplier);
+  const name = id => sinvShort(sinvSupList().get(id) || "Supplier");
   ids.sort((a, b) => name(a).localeCompare(name(b)));
   const all = Object.values(cnt).reduce((a, n) => a + Number(n), 0);
   const lg = id => SINV.logos?.get(id), OW = new Map(); sinvOwing(D).forEach(o => { const t = OW.get(o.sup) || []; t.push(o); OW.set(o.sup, t); });
@@ -14468,7 +14471,7 @@ function sinvTabs(D) {
     const t = L.map(o => `${o.name}: ${o.owe ? `${money(o.owe.total)} on the statement of ${fmtDate(o.owe.date)}${o.paidSince ? `, ${money(o.paidSince)} paid since, ${money(o.left)} left` : ""}${o.why ? " (" + o.why + ")" : ""}` : "no statement"}${o.pay && (!o.owe || o.pay.date > o.owe.date) ? ` · last paid ${money(o.pay.total)} on ${fmtDate(o.pay.date)}` : ""}`).join("\n");
     const last = L.find(o => o.pay && (!o.owe || o.pay.date > o.owe.date));
     return { h: `<span class="sinv-ow ${any ? "" : "quiet"}">${any ? money(amt) : last ? "Paid " + fmtDate(last.pay.date) : L[0].owe ? money(L[0].owe.total) : "—"}</span>`, t }; };
-  return `<section class="sinv-panel"><div class="sp-h">Suppliers <button class="link sp-slips" type="button" data-sinv-slips="">📦 Packing slips</button></div><nav class="sinv-tabs seg" aria-label="Suppliers"><button type="button" data-sinv-sup="" aria-pressed="${SINV.sup == null}"><span class="sinv-ic"><span class="sinv-ini sinv-all">▦</span></span><span class="sinv-tn">All suppliers</span><span class="sinv-ow">${money(sinvOwing(D).reduce((a, o) => a + (o.counted ? o.left : 0), 0))}</span></button><div class="sinv-tiles">${ids.map(id => `<button type="button" data-sinv-sup="${id}" aria-pressed="${SINV.sup === id}" title="${esc(st.find(s => s.supplier_id === id).supplier + (owe(id).t ? "\n" + owe(id).t : ""))}" class="${lg(id) ? "has-logo" : ""}"><span class="sinv-ic">${lg(id) ? `<img class="sinv-lg" alt="" src="${lg(id)}">` : `<span class="sinv-ini">${esc(name(id).slice(0, 1).toUpperCase())}</span>`}</span><span class="sinv-tn">${esc(name(id))}</span>${owe(id).h}</button>`).join("")}</div></nav>
+  return `<section class="sinv-panel"><div class="sp-h">Suppliers <button class="link sp-slips" type="button" data-sinv-slips="">📦 Packing slips</button>${D.can_edit ? ` <button class="btn sp-dropany" type="button" data-sinv-dropany title="Invoices from any supplier, even one that isn't in the app yet">⬇ Drop supplier invoices</button>` : ""}</div><nav class="sinv-tabs seg" aria-label="Suppliers"><button type="button" data-sinv-sup="" aria-pressed="${SINV.sup == null}"><span class="sinv-ic"><span class="sinv-ini sinv-all">▦</span></span><span class="sinv-tn">All suppliers</span><span class="sinv-ow">${money(sinvOwing(D).reduce((a, o) => a + (o.counted ? o.left : 0), 0))}</span></button><div class="sinv-tiles">${ids.map(id => `<button type="button" data-sinv-sup="${id}" aria-pressed="${SINV.sup === id}" title="${esc(st.find(s => s.supplier_id === id).supplier + (owe(id).t ? "\n" + owe(id).t : ""))}" class="${lg(id) ? "has-logo" : ""}"><span class="sinv-ic">${lg(id) ? `<img class="sinv-lg" alt="" src="${lg(id)}">` : `<span class="sinv-ini">${esc(name(id).slice(0, 1).toUpperCase())}</span>`}</span><span class="sinv-tn">${esc(name(id))}</span>${owe(id).h}</button>`).join("")}</div></nav>
     ${D.can_edit && SINV.logoEd ? sinvLogoEditor(ids, st) : ""}</section>`;
 }
 // Supplier logos sits on the same line as the Stock · Purchase orders · Supplier invoices buttons, at the right
@@ -14527,7 +14530,7 @@ function sinvOwing(D) {
 function sinvStChips(D) {   // a supplier's statements as app tiles: All time / By year, then the years, then that year's months
   if (SINV.sup == null) return "";
   const st = (D.statements || []).filter(s => s.supplier_id === SINV.sup);
-  if (!st.length) return "";
+  if (!st.length) return D.can_edit ? `<section class="sinv-panel"><div class="sp-h">${esc(dropInSupName(SINV.sup))} · no statements yet</div><div class="sinv-apps"><button type="button" class="sinv-app sa-act" data-sinv-dropin="${SINV.sup}"><span class="sa-ic">⬇</span><span class="sa-tn">Drag a file here</span></button></div></section>` : "";
   const cur = st.find(s => s.id === SINV.st), mode = cur ? "year" : SINV.pick || "all", yr = cur ? cur.date.slice(0, 4) : SINV.year;
   const years = [...new Set(st.map(s => s.date.slice(0, 4)))].sort().reverse();
   const tile = (attrs, on, ico, label, badge, cls = "") => `<button type="button" class="sinv-app ${cls} ${on ? "on" : ""}" ${attrs} aria-pressed="${on}"><span class="sa-ic">${ico}</span><span class="sa-tn">${label}</span></button>`;   // no number tags on the tiles
@@ -14914,14 +14917,16 @@ async function dropInKnown(sup) {
   return DROPIN.kn[sup];
 }
 // which supplier a read file belongs to, when it isn't the one it was dropped on (its name is on the page and the current one's isn't)
+const sinvSupList = () => { const st = SINV.data?.statements || [], m = new Map(); (SUPPLIERS || []).forEach(x => m.set(x.id, String(x.name))); st.forEach(y => { if (!m.has(y.supplier_id)) m.set(y.supplier_id, String(y.supplier)); }); return m; };
+const sinvSupWord = id => (sinvShort(sinvSupList().get(id) || "").split(/\s+/).filter(w => !/^(the|les?|la|a)$/i.test(w))[0] || "").toUpperCase().replace(/\W/g, "");
+const sinvSupOnPage = (T, id) => { const w = sinvSupWord(id); return w.length >= 3 && new RegExp("\\b" + w + "\\b").test(String(T || "").toUpperCase()); };
 function sinvWhichSup(text, cur) {
-  const T = String(text || "").toUpperCase(), st = SINV.data?.statements || [];
-  const word = id => (sinvShort(st.find(y => y.supplier_id === id)?.supplier || "").split(/\s+/).filter(w => !/^(the|les?|la|a)$/i.test(w))[0] || "").toUpperCase().replace(/\W/g, "");
-  const has = w => w.length >= 3 && new RegExp("\\b" + w + "\\b").test(T);
-  if (has(word(cur))) return null;
-  return [...new Set(st.map(y => y.supplier_id))].find(id => id !== cur && has(word(id))) || null;
+  const T = String(text || "").toUpperCase();
+  if (cur && sinvSupOnPage(T, cur)) return null;
+  const bySign = supplierBySign(T); if (bySign) { const id = [...sinvSupList()].find(([, n]) => n.toLowerCase().startsWith(bySign.toLowerCase()))?.[0]; if (id && id !== cur) return id; }
+  return [...sinvSupList().keys()].find(id => id !== cur && sinvSupOnPage(T, id)) || null;
 }
-const dropInSupName = id => sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === id)?.supplier || "").replace(/^the\s+/i, "") || "that supplier";
+const dropInSupName = id => sinvShort(sinvSupList().get(id) || "").replace(/^the\s+/i, "") || "that supplier";
 // a date like 23/10/26: day first when the first number can't be a month, month first when the second can't be; otherwise the reading closest to today (not in the future)
 function dropInDate(text) {
   const m = String(text).match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})\b/); if (!m) return "";
@@ -14932,14 +14937,21 @@ function dropInDate(text) {
   const ok = [md, dm].filter(d => d <= today).sort().reverse(); return ok[0] || md;
 }
 async function openDropInvoices(sup, name) {
-  DROPIN.sup = sup; DROPIN.name = name; DROPIN.items = [];
+  await loadSuppliers();
+  DROPIN.sup = sup || null; DROPIN.name = sup ? name : "the supplier"; DROPIN.items = []; DROPIN.newSup = false;
   const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open"); $("#inv-cancelbtn")?.classList.add("hidden"); $("#inv-emailbtn")?.classList.add("hidden");
   drawDropIn();
-  DROPIN.known = await dropInKnown(sup);
+  DROPIN.known = sup ? await dropInKnown(sup) : { rows: [], lines: [] };
 }
 function drawDropIn() {
   const I = DROPIN.items;
-  $("#inv-paper").innerHTML = `<div class="stv"><h2>Drop ${esc(DROPIN.name)}'s invoices in</h2>
+  const sups = [...sinvSupList()].map(([id, n]) => [id, sinvShort(n)]).sort((a, b) => a[1].localeCompare(b[1]));
+  const supSel = (attr, v) => `<select ${attr}><option value="">Pick the supplier…</option>${sups.map(([id, n]) => `<option value="${id}" ${id === v ? "selected" : ""}>${esc(n)}</option>`).join("")}<option value="new">＋ New supplier…</option></select>`;
+  const guess = (I.find(x => x.unsure && x.head?.length) || {}).head?.[0] || "";
+  $("#inv-paper").innerHTML = `<div class="stv"><h2>Drop ${DROPIN.sup ? esc(DROPIN.name) + "'s" : "supplier"} invoices in</h2>
+    <div class="di-whose"><label><b>Whose invoices</b> ${supSel("data-di-whose", DROPIN.sup)}</label> <span class="quiet">Each invoice is also checked for the supplier's name: one that's someone else's goes to them.</span></div>
+    ${DROPIN.newSup ? `<form class="di-newsup" data-di-newsup><b>New supplier</b> <input name="name" placeholder="Supplier's name" value="${esc(guess.replace(/[^\w &.'-]/g, "").trim().slice(0, 60))}" required> <input name="phone" placeholder="Phone (optional)">
+      <button class="btn" type="submit">Add the supplier</button> <button class="link" type="button" data-di-newsup-x>Cancel</button> <span class="msg" role="status"></span></form>` : ""}
     <p class="lead">Drag the invoice PDFs from the email onto the box (one PDF per invoice; several at once is fine). Each one is read, matched to the invoice we already have by its number, or added as new. Check what was read, then save.</p>
     <section class="sinv-drop" data-dropin tabindex="0"><div class="sd-ico" aria-hidden="true">⬇</div><b>Drop the invoices here</b>
       <span>Drag the PDF attachments (not the email itself), or <label class="link">pick the files<input type="file" accept="application/pdf,image/*" multiple hidden data-dropin-file></label>.</span></section>
@@ -14949,13 +14961,24 @@ function drawDropIn() {
         : `<td><input name="number" value="${esc(x.number || "")}" ${x.number ? "" : `class="di-need" placeholder="Type it here" aria-label="Invoice number (type it in)"`}></td><td><input name="date" type="date" value="${esc(x.date || "")}"></td><td><input name="po" value="${esc(x.po || "")}"></td>
         <td class="r"><input name="total" type="number" step="0.01" value="${x.total ?? ""}"></td><td>${x.other && !x.sup ? `<div class="st-bad">This looks like ${esc(dropInSupName(x.other))}'s, not ${esc(DROPIN.name)}'s. <button class="link" type="button" data-di-sup="${i}">Save it under ${esc(dropInSupName(x.other))}</button></div>` : ""}
           ${x.sup && x.sup !== DROPIN.sup ? `<div class="st-look">Moved to <b>${esc(dropInSupName(x.sup))}</b>: it's ${esc(dropInSupName(x.sup))}'s, not ${esc(DROPIN.name)}'s. <button class="link" type="button" data-di-sup0="${i}">Keep it under ${esc(DROPIN.name)}</button></div>` : ""}
-          ${x.match ? `<span class="st-ok">Adds the copy to our invoice ${esc(x.match.number)}</span>` : x.number ? `<span class="st-look">New ${x.credit ? "credit note" : "invoice"}${x.onSt ? " (it's on a statement)" : ""}</span>` : `<span class="st-bad">Type the invoice number in the box on the left of this row</span>`}${x.credit && !x.match ? `<div class="quiet">Credit: the total is saved as a minus.</div>` : ""}${x.err ? `<div class="st-bad">${esc(x.err)}</div>` : ""}</td>
+          ${x.unsure && !x.sup ? `<div class="st-bad">${DROPIN.sup ? `Can't see ${esc(DROPIN.name)} on it.` : "Whose is it?"} ${supSel(`data-di-pick="${i}"`, null)}</div>` : ""}${x.match ? `<span class="st-ok">Adds the copy to our invoice ${esc(x.match.number)}</span>` : x.number ? `<span class="st-look">New ${x.credit ? "credit note" : "invoice"}${x.onSt ? " (it's on a statement)" : ""}</span>` : `<span class="st-bad">Type the invoice number in the box on the left of this row</span>`}${x.credit && !x.match ? `<div class="quiet">Credit: the total is saved as a minus.</div>` : ""}${x.err ? `<div class="st-bad">${esc(x.err)}</div>` : ""}</td>
         <td><button class="link danger" type="button" data-di-x="${i}">✕</button></td>`}</tr>`).join("")}</tbody></table>
       ${I.some(x => !x.done && !x.busy) ? `<div class="row"><button class="btn" type="button" data-di-save>Save ${I.filter(x => !x.done && !x.busy).length === 1 ? "it" : "them all"}</button></div>` : ""}` : ""}</div>`;
   const P = $("#inv-paper");
   P.querySelector("[data-dropin-file]")?.addEventListener("change", e => dropInFiles([...e.target.files]));
   P.querySelectorAll("tr[data-di] input").forEach(inp => inp.addEventListener("change", () => { const x = DROPIN.items[Number(inp.closest("tr").dataset.di)]; x[inp.name] = inp.type === "number" ? (inp.value === "" ? null : Number(inp.value)) : inp.value.trim(); dropInMatch(x); drawDropIn(); }));
   P.querySelectorAll("[data-di-x]").forEach(b => b.addEventListener("click", () => { DROPIN.items.splice(Number(b.dataset.diX), 1); drawDropIn(); }));
+  const pickSup = async (v, apply) => { if (v === "new") { DROPIN.newSup = true; DROPIN.newFor = apply; return drawDropIn(); } if (!v) return; await dropInKnown(Number(v)); apply(Number(v)); DROPIN.items.forEach(dropInMatch); drawDropIn(); };
+  P.querySelector("[data-di-whose]")?.addEventListener("change", e => pickSup(e.target.value, id => { DROPIN.sup = id; DROPIN.name = dropInSupName(id); DROPIN.known = DROPIN.kn[id];
+    DROPIN.items.forEach(x => { if (!x.other) { x.unsure = !sinvSupOnPage(x.T, id); } }); }));
+  P.querySelectorAll("[data-di-pick]").forEach(sel => sel.addEventListener("change", () => { const x = DROPIN.items[Number(sel.dataset.diPick)]; pickSup(sel.value, id => { x.sup = id; x.unsure = false; }); }));
+  P.querySelector("[data-di-newsup-x]")?.addEventListener("click", () => { DROPIN.newSup = false; drawDropIn(); });
+  P.querySelector("[data-di-newsup]")?.addEventListener("submit", async e => { e.preventDefault(); const f = e.target, m = f.querySelector(".msg");
+    m.textContent = "Adding…"; const { data: id, error } = await db.rpc("supplier_create", { p_name: f.name.value.trim(), p_phone: f.phone.value.trim() || null });
+    if (error) { m.textContent = "Not added: " + rpcErr(error); return; }
+    SUPPLIERS = null; await loadSuppliers(); DROPIN.newSup = false; DROPIN.kn[id] = { sup: id, rows: [], lines: [] };
+    (DROPIN.newFor || (sid => { DROPIN.sup = sid; DROPIN.name = dropInSupName(sid); DROPIN.known = DROPIN.kn[sid]; DROPIN.items.forEach(x => { if (!x.other) x.unsure = false; }); }))(id);
+    DROPIN.newFor = null; DROPIN.items.forEach(dropInMatch); drawDropIn(); });
   P.querySelectorAll("[data-di-sup]").forEach(b => b.addEventListener("click", async () => { const x = DROPIN.items[Number(b.dataset.diSup)]; x.sup = x.other; await dropInKnown(x.sup); dropInMatch(x); drawDropIn(); }));
   P.querySelectorAll("[data-di-sup0]").forEach(b => b.addEventListener("click", () => { const x = DROPIN.items[Number(b.dataset.diSup0)]; x.sup = null; dropInMatch(x); drawDropIn(); }));
   // type in a box: keep it as you type (the row redraws when you leave the box)
@@ -14997,8 +15020,9 @@ async function dropInFiles(files) {
         x.credit = /CREDIT\s*-?\s*DO NOT PAY|CREDIT\s*(?:NOTE|MEMO)|RETURN MERCHANDISE/.test(T) || !!last?.[2];
         x.total = last ? n(last[1]) * (x.credit ? -1 : 1) : null;
         // dropped under the wrong supplier? (e.g. a Master credit dropped on Boone)
-        x.other = sinvWhichSup(T, DROPIN.sup);
-        if (x.other) { x.sup = x.other; await dropInKnown(x.sup); }   // dropped on the wrong supplier: it goes to the right one by itself
+        x.other = sinvWhichSup(T, DROPIN.sup); x.head = text.split(/\n/).map(l => l.trim()).filter(l => /[a-z]{3,}/i.test(l)).slice(0, 6); x.T = T;
+        if (x.other) { x.sup = x.other; await dropInKnown(x.sup); }
+        x.unsure = !x.other && !(DROPIN.sup && sinvSupOnPage(T, DROPIN.sup));   // dropped on the wrong supplier: it goes to the right one by itself
         x.subtotal = n((T.match(/SUB\s*-?\s*TOTAL[^\d\n]{0,60}([\d,]+\.\d{2})/) || [])[1]); x.hst = n((T.match(/(?:H\.?S\.?T|TVH)[^\d\n]{0,60}([\d,]+\.\d{2})/) || [])[1]);
         if (x.credit) { if (x.subtotal) x.subtotal = -Math.abs(x.subtotal); if (x.hst) x.hst = -Math.abs(x.hst); }
         x.lines = sinvDedupLines(sinvParseLines(text, x.credit), x.subtotal ?? (x.total != null ? Math.round(x.total / 1.13 * 100) / 100 : null));
@@ -15011,6 +15035,7 @@ async function dropInFiles(files) {
 async function dropInSave() {
   DROPIN.items.forEach(x => { if (!x.done && !x.busy) dropInMatch(x); });
   for (const x of DROPIN.items.filter(x => !x.done && !x.busy)) {
+    if (!(x.sup || DROPIN.sup)) { x.err = "Not saved yet: pick whose invoice it is (the Supplier box), or add a new supplier."; continue; }
     if (!x.number || !x.pages?.length) { x.err = !x.number ? "Not saved yet: the reader couldn't find the invoice number. Look at the PDF, type its invoice (or credit / order) number in the red box under Invoice #, then press Save again." : "No pages read"; continue; }
     const p = { supplier_id: x.sup || DROPIN.sup, number: x.number, date: x.date || null, total: x.total, po_text: x.po, subtotal: x.subtotal, hst: x.hst, pages: x.pages, file: x.file, lines: x.lines || [] };
     const { error } = x.match ? await db.rpc("supplier_invoice_attach", { p_invoice: x.match.id, p }) : await db.rpc("supplier_invoice_add", { p });
@@ -15038,7 +15063,8 @@ document.addEventListener("dragover", e => { const t = e.target.closest?.("[data
 document.addEventListener("dragleave", e => { const t = e.target.closest?.("[data-sinv-dropin]"); if (t && !t.contains(e.relatedTarget)) t.classList.remove("on"); });
 document.addEventListener("drop", async e => { const t = e.target.closest?.("[data-sinv-dropin]"); if (!t) return; e.preventDefault(); t.classList.remove("on");
   const files = [...(e.dataTransfer?.files || [])], sup = Number(t.dataset.sinvDropin); if (!files.length) return;
-  await openDropInvoices(sup, sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === sup)?.supplier || "the supplier")); dropInFiles(files); });
+  await openDropInvoices(sup, dropInSupName(sup)); dropInFiles(files); });
+document.addEventListener("click", e => { const b = e.target.closest?.("[data-sinv-dropany]"); if (!b) return; e.preventDefault(); openDropInvoices(SINV.sup || null, SINV.sup ? dropInSupName(SINV.sup) : ""); });
 document.addEventListener("dragover", e => { const b = e.target.closest?.("[data-dropin]"); if (!b) return; e.preventDefault(); b.classList.add("over"); });
 document.addEventListener("dragleave", e => { const b = e.target.closest?.("[data-dropin]"); if (b && !b.contains(e.relatedTarget)) b.classList.remove("over"); });
 document.addEventListener("drop", e => { const b = e.target.closest?.("[data-dropin]"); if (!b) return; e.preventDefault(); b.classList.remove("over"); dropInFiles([...(e.dataTransfer?.files || [])]); });
@@ -15259,7 +15285,7 @@ function wireSupInv() {
     if (await askChoice("Delete this logo?", "The button shows the supplier's name again.", [["yes", "Delete it", true], ["", "Keep it"]]) !== "yes") return;
     const { error } = await db.rpc("supplier_logo_set", { p_supplier: id, p_image: null }); if (error) return alertMsg("Not deleted: " + rpcErr(error)); SINV.logos.delete(id); redo(); }));
   document.querySelectorAll("[data-sinv-pay]").forEach(b => b.addEventListener("click", () => openSupPay(Number(b.dataset.sinvPay), sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === Number(b.dataset.sinvPay))?.supplier || "the supplier"))));
-  document.querySelectorAll("[data-sinv-dropin]").forEach(b => b.addEventListener("click", () => openDropInvoices(Number(b.dataset.sinvDropin), sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === Number(b.dataset.sinvDropin))?.supplier || "the supplier"))));
+  document.querySelectorAll("[data-sinv-dropin]").forEach(b => b.addEventListener("click", () => openDropInvoices(Number(b.dataset.sinvDropin), dropInSupName(Number(b.dataset.sinvDropin)))));
   document.querySelectorAll("[data-stv-new]").forEach(b => b.addEventListener("click", () => openNewStatement(Number(b.dataset.stvNew), sinvShort((SINV.data?.statements || []).find(x => x.supplier_id === Number(b.dataset.stvNew))?.supplier || "the supplier"))));
   document.querySelectorAll("[data-sinv-pk]").forEach(b => b.addEventListener("click", () => { SINV.pick = b.dataset.sinvPk; SINV.open = null;
     if (SINV.pick === "all") { SINV.year = null; if (SINV.st !== 0) { SINV.st = 0; sinvSaveTab(); return openSupInv(); } }
