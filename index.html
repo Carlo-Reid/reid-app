@@ -13097,10 +13097,12 @@ function mcCard(c) {
 let OW = { show: "todo", kind: "all", rows: [], counts: {} };
 try { Object.assign(OW, JSON.parse(localStorage.getItem("reid.owing") || "{}")); } catch {}
 OW.sort = OW.sort || "date_desc"; OW.group = OW.group || "none";
-OW.period = OW.period || "all"; OW.anchor = ymd(new Date());
+OW.period = OW.period || "all"; OW.anchor = OW.day === ymd(new Date()) && OW.anchor ? OW.anchor : ymd(new Date());
 OW.to = OW.to || ymd(new Date()); OW.from = OW.from || ymd(addDays(new Date(), -30));
 OW.jtype = OW.jtype || "all"; OW.paid = OW.paid || "all"; OW.scope = OW.scope || "owing"; OW.partner = OW.partner || "all";
-const saveOw = () => { try { localStorage.setItem("reid.owing", JSON.stringify({ sort: OW.sort, group: OW.group, period: OW.period, from: OW.from, to: OW.to, jtype: OW.jtype, paid: OW.paid, scope: OW.scope, partner: OW.partner, fold: OW.fold || {} })); } catch {} };
+// what you picked stays for the rest of the day; the next day it starts fresh (Due now, all dates)
+const saveOw = () => { try { localStorage.setItem("reid.owing", JSON.stringify({ sort: OW.sort, group: OW.group, period: OW.period, from: OW.from, to: OW.to, jtype: OW.jtype, paid: OW.paid, scope: OW.scope, partner: OW.partner, fold: OW.fold || {},
+  day: ymd(new Date()), sumSel: OW.sumSel, ageSel: OW.ageSel || null, anchor: OW.anchor, acct: OW.acct || "", showPaid: !!OW.showPaid, tools: !!OW.tools, show: OW.show, acctAll: !!OW.acctAll })); } catch {} };
 const OW_JTYPE = [["all", "All job types"], ["install", "Installs"], ["service", "Service"], ["security", "Security"], ["maintenance", "Maintenance"], ["warranty", "Warranty"], ["other", "Other"], ["none", "No job"]];
 const OW_PAID = [["all", "Paid or not"], ["none", "Nothing paid yet"], ["part", "Part paid"]];
 // "View by": the day, week (Monday to Sunday), month or year that OW.anchor falls in
@@ -13510,7 +13512,9 @@ function owDateTiles() {
 async function openOwing() {
   // the "choose the invoices" filters were taken off this page: always show everything
   OW.kind = "all"; OW.jtype = "all"; OW.paid = "all"; OW.partner = "all"; OW.group = "none";
-  OW.scope = "sum:due"; OW.sumSel = "sum:due"; OW.ageSel = null; OW.show = "todo"; OW.acct = ""; OW.period = "all"; OW.limit = 100; OW.showPaid = false; OW.acctAll = false; saveOw();
+  if (OW.day !== ymd(new Date())) {   // a new day: start fresh
+    OW.scope = "sum:due"; OW.sumSel = "sum:due"; OW.ageSel = null; OW.show = "todo"; OW.acct = ""; OW.period = "all"; OW.anchor = ymd(new Date()); OW.showPaid = false; OW.acctAll = false; OW.tools = false; }
+  OW.sumSel = OW.sumSel || "sum:due"; OW.scope = OW.scope || "sum:due"; OW.limit = 100; OW.day = ymd(new Date()); OW.acctFor = OW.scope; saveOw();
   setPage("owing", "owing");
   $("#main").innerHTML = `<div class="loading">Loading what's owing…</div>`;
   await loadOwing();
@@ -13660,13 +13664,13 @@ function renderOwing(msg) {
   document.querySelectorAll("[data-ow-scope]").forEach(b => b.addEventListener("click", () => { if (OW.scope === b.dataset.owScope) return;
     OW.scope = b.dataset.owScope; if (OW.scope.startsWith("sum:")) { OW.sumSel = OW.scope; OW.ageSel = null; } if (OW.scope.startsWith("age") || OW.scope.startsWith("bk:")) OW.ageSel = OW.scope; OW.closed = []; OW.limit = 100; OW.acctAll = false; saveOw(); renderOwing(); }));
   $("#ow-fullpage")?.addEventListener("click", () => { OWL.acct = OW.acct || ""; OWL.keepAcct = true; openOwList(); });
-  document.querySelectorAll("#main [data-owl-acct]").forEach(b => b.addEventListener("click", () => { if (OW.acct === b.dataset.owlAcct) return; OW.acct = b.dataset.owlAcct; OW.closed = []; OW.limit = 100; renderOwing(); }));
+  document.querySelectorAll("#main [data-owl-acct]").forEach(b => b.addEventListener("click", () => { if (OW.acct === b.dataset.owlAcct) return; OW.acct = b.dataset.owlAcct; OW.closed = []; OW.limit = 100; saveOw(); renderOwing(); }));
   $("#ow-cleanup")?.addEventListener("click", () => openCleanup());
-  $("#ow-tools")?.addEventListener("click", () => { OW.tools = !OW.tools; renderOwing(); });
+  $("#ow-tools")?.addEventListener("click", () => { OW.tools = !OW.tools; saveOw(); renderOwing(); });
   document.querySelectorAll("[data-ow-fold]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.owFold; OW.fold = { ...(OW.fold || {}), [k]: !OW.fold?.[k] }; saveOw(); renderOwing(); }));
   $("#ow-more")?.addEventListener("click", () => { OW.limit = (OW.limit || 100) + 100; renderOwing(); });
-  $("#ow-paidtoo")?.addEventListener("change", e => { OW.showPaid = e.target.checked; OW.limit = 100; renderOwing(); });
-  document.querySelector("[data-ow-acctall]")?.addEventListener("click", () => { OW.acctAll = !OW.acctAll; renderOwing(); });
+  $("#ow-paidtoo")?.addEventListener("change", e => { OW.showPaid = e.target.checked; OW.limit = 100; saveOw(); renderOwing(); });
+  document.querySelector("[data-ow-acctall]")?.addEventListener("click", () => { OW.acctAll = !OW.acctAll; saveOw(); renderOwing(); });
   wireOwAmt();
   $("#ow-copy")?.addEventListener("click", async e => owCopyDone(e.currentTarget, await owCopyRows(owSorted(OW.rows || []), scope)));
   document.querySelectorAll("[data-ow-period]").forEach(b => b.addEventListener("click", () => { OW.period = b.dataset.owPeriod; OW.closed = []; saveOw(); renderOwing(); }));
