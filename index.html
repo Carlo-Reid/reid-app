@@ -13240,7 +13240,10 @@ function owNoPartnerRows() {
   return owing.concat(paid).filter(r => r.job_partner_id == null && !pid.has(r.invoice_id));
 }
 const owOwedOnly = r => OW.showPaid || Number(r.balance) > 0.004;
-const owPtnRows = sc => (sc === "ptn:none" ? owNoPartnerRows() : sc === "ptn:all" ? (OW.ptnData?.rows || []).filter(owPick) : (OW.ptnData?.rows || []).filter(r => "ptn:" + r.partner_id === sc && owPick(r))).filter(owOwedOnly);
+// what's picked at the top (Total owed / Due now / Not due yet, and an age box under it): the partner boxes follow it
+const owSel = () => OW.ageSel ? (OW.ageSel.startsWith("bk:") ? owBkRows(OW.ageSel) : owAgeRows(OW.ageSel)) : owSumRows(OW.sumSel || "sum:due");
+const owSelPtn = sc => { const b = owSel(); return sc === "ptn:all" ? b.filter(r => r._ptnRow) : sc === "ptn:none" ? b.filter(r => !r._ptnRow) : b.filter(r => r._ptnRow && "ptn:" + r.partner_id === sc); };
+const owPtnRows = sc => !OW.showPaid ? owSelPtn(sc) : (sc === "ptn:none" ? owNoPartnerRows() : sc === "ptn:all" ? (OW.ptnData?.rows || []).filter(owPick) : (OW.ptnData?.rows || []).filter(r => "ptn:" + r.partner_id === sc && owPick(r))).filter(owOwedOnly);
 const owDollars = v => (Number(v) < 0 ? "−$" : "$") + Math.round(Math.abs(Number(v) || 0)).toLocaleString("en-CA");
 // Copy a list as a table (tab between columns): pastes straight into Excel, Google Sheets or an email
 // the copy button on each line: copies just that line (Date, invoice, customer, address, city, job type, partner, total, owed/paid, status)
@@ -13493,7 +13496,7 @@ function owDateTiles() {
 async function openOwing() {
   // the "choose the invoices" filters were taken off this page: always show everything
   OW.kind = "all"; OW.jtype = "all"; OW.paid = "all"; OW.partner = "all"; OW.group = "none";
-  OW.scope = "sum:due"; OW.sumSel = "sum:due"; OW.show = "todo"; OW.acct = ""; OW.period = "all"; OW.limit = 100; OW.showPaid = false; OW.acctAll = false; saveOw();
+  OW.scope = "sum:due"; OW.sumSel = "sum:due"; OW.ageSel = null; OW.show = "todo"; OW.acct = ""; OW.period = "all"; OW.limit = 100; OW.showPaid = false; OW.acctAll = false; saveOw();
   setPage("owing", "owing");
   $("#main").innerHTML = `<div class="loading">Loading what's owing…</div>`;
   await loadOwing();
@@ -13553,17 +13556,17 @@ function renderOwing(msg) {
         const B = [["sum:all", "Total owed to us", "every invoice not paid yet"], ["sum:due", "Due now", "work done, waiting to be paid"], ["sum:nd", "Not due yet", "work still booked"]];
         const pReady = OW.ptnData && !OW.ptnData.loading;
         return `<div class="ow-summary" role="group" aria-label="What's owed">${B.map(([k, t, sub]) => { const l = OW.all ? owSumRows(k) : null, pl = l ? l.filter(r => r._ptnRow) : [], cl = l ? l.filter(r => !r._ptnRow) : [];
-            return `<button type="button" class="ow-sumbtn ow-${k.slice(4)}" data-ow-scope="${k}" aria-pressed="${scope === k || (OW.sumSel === k && (scope.startsWith("age") || scope.startsWith("bk:")))}"><span>${t}</span><strong>${l ? money(sum(l)) : "…"}</strong>
+            return `<button type="button" class="ow-sumbtn ow-${k.slice(4)}" data-ow-scope="${k}" aria-pressed="${scope === k || (OW.sumSel === k && (scope.startsWith("age") || scope.startsWith("bk:") || scope.startsWith("ptn:")))}"><span>${t}</span><strong>${l ? money(sum(l)) : "…"}</strong>
               <em>${l ? `${l.length.toLocaleString()} ${l.length === 1 ? "invoice" : "invoices"} · ${sub}` : "loading…"}</em>
               ${l && k !== "sum:nd" ? `<em class="ow-split">${pReady ? `customers ${money(sum(cl))} + partners ${money(sum(pl))}` : "adding the partners…"}</em>` : ""}</button>`; }).join("")}
           <button type="button" class="btn ${OW.tools ? "" : "quiet-btn"} ow-toolsbtn" id="ow-tools" aria-expanded="${!!OW.tools}">${OW.tools ? "Hide tools ▴" : "Tools ▾"}</button></div>
         ${OW.tools ? "" : OW.period !== "all" ? `<div class="ow-datechip">Showing ${esc(owRangeLabel())} · <button class="link" type="button" data-ow-period="all">show all dates</button></div>` : ""}`; })()}
     <section class="sinv-panel ow-panel" aria-label="How old"><div class="sp-h">${OW.sumSel === "sum:nd" ? "Not due yet: when the work is booked" : OW.sumSel === "sum:all" ? "Total owed to us: how old" : "Due now: how old"}</div>
       <div class="ow-scopes ow-scopes-age" role="group" aria-label="How old">${(OW.sumSel === "sum:nd" ? OW_BK : OW.sumSel === "sum:all" ? OW_AGE.concat([["age-nd", "Not due yet", 0, 0, "work still booked"]]) : OW_AGE).map(([k, label, , , sub]) => { const rs = OW.all ? (k.startsWith("bk:") ? owBkRows(k) : owAgeRows(k)) : null;
-          return `<button type="button" class="ow-scope ow-scope-a" data-ow-scope="${k}" aria-pressed="${scope === k}"><span>${label}</span>
+          return `<button type="button" class="ow-scope ow-scope-a" data-ow-scope="${k}" aria-pressed="${scope === k || OW.ageSel === k}"><span>${label}</span>
             <strong>${rs ? money(rs.reduce((t, r) => t + Number(r.balance), 0)) : "…"}</strong><em>${rs ? `${rs.length.toLocaleString()} ${rs.length === 1 ? "invoice" : "invoices"} · ${sub}` : "loading…"}</em></button>`; }).join("")}</div>
     </section>
-      ${owPartnersKnown().length ? `<section class="sinv-panel ow-panel" aria-label="Partners"><div class="sp-h">Who owes: partners</div><div class="ow-scopes ow-scopes-ptn" role="group" aria-label="Partners">${owPartnersKnown().filter(x => { if (OW.showPaid || `ptn:${x.id}` === OW.scope) return true; const P = OW.ptnData?.loading ? null : OW.ptnData?.partners?.find(y => y.id === x.id); return !P || owPtnRows("ptn:" + x.id).length > 0; }).map(x => { const P = OW.ptnData?.loading ? null : OW.ptnData?.partners?.find(y => y.id === x.id), k = "ptn:" + x.id;
+      ${owPartnersKnown().length ? `<section class="sinv-panel ow-panel" aria-label="Partners"><div class="sp-h">Who owes: partners${OW.showPaid ? "" : ` · ${esc(OWL_NAMES[OW.sumSel || "sum:due"] || "")}${OW.ageSel ? " · " + esc((OW_AGE.concat(OW_BK).find(a => a[0] === OW.ageSel) || [, OWL_NAMES[OW.ageSel] || ""])[1]) : ""}`}</div><div class="ow-scopes ow-scopes-ptn" role="group" aria-label="Partners">${owPartnersKnown().filter(x => { if (OW.showPaid || `ptn:${x.id}` === OW.scope) return true; const P = OW.ptnData?.loading ? null : OW.ptnData?.partners?.find(y => y.id === x.id); return !P || owPtnRows("ptn:" + x.id).length > 0; }).map(x => { const P = OW.ptnData?.loading ? null : OW.ptnData?.partners?.find(y => y.id === x.id), k = "ptn:" + x.id;
           const rs = P ? owPtnRows(k) : null, owed = rs ? rs.reduce((t, r) => t + Number(r.balance), 0) : P ? Number(P.owed) : null, n = rs ? rs.length : P ? Number(P.n) : null;
           return `<button type="button" class="ow-scope ow-scope-p" data-ow-scope="${k}" aria-pressed="${scope === k}" title="${esc(x.name)}"><span>${esc(String(x.name).replace(/\s*\(.*\)\s*$/, ""))}</span>
             <strong>${owed == null ? "…" : owDollars(owed)}</strong><em>${n == null ? "loading…" : `${n.toLocaleString()} ${n === 1 ? "invoice" : "invoices"}${OW.showPaid && P && Number(P.total) ? `<br>${owDollars(P.total)} billed` : ""}`}</em></button>`; }).join("")}
@@ -13641,7 +13644,7 @@ function renderOwing(msg) {
   document.querySelectorAll("[data-ow-show]").forEach(b => b.addEventListener("click", () => { OW.show = b.dataset.owShow; if (OW.scope !== "owing") { OW.scope = "owing"; saveOw(); } OW.closed = []; renderOwing(); }));
   // the boxes show their list right here, below (like the "Still to check" boxes)
   document.querySelectorAll("[data-ow-scope]").forEach(b => b.addEventListener("click", () => { if (OW.scope === b.dataset.owScope) return;
-    OW.scope = b.dataset.owScope; if (OW.scope.startsWith("sum:")) OW.sumSel = OW.scope; OW.closed = []; OW.limit = 100; OW.acctAll = false; saveOw(); renderOwing(); }));
+    OW.scope = b.dataset.owScope; if (OW.scope.startsWith("sum:")) { OW.sumSel = OW.scope; OW.ageSel = null; } if (OW.scope.startsWith("age") || OW.scope.startsWith("bk:")) OW.ageSel = OW.scope; OW.closed = []; OW.limit = 100; OW.acctAll = false; saveOw(); renderOwing(); }));
   $("#ow-fullpage")?.addEventListener("click", () => { OWL.acct = OW.acct || ""; OWL.keepAcct = true; openOwList(); });
   document.querySelectorAll("#main [data-owl-acct]").forEach(b => b.addEventListener("click", () => { if (OW.acct === b.dataset.owlAcct) return; OW.acct = b.dataset.owlAcct; OW.closed = []; OW.limit = 100; renderOwing(); }));
   $("#ow-cleanup")?.addEventListener("click", () => openCleanup());
