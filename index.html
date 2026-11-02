@@ -1239,10 +1239,10 @@
   .vtp-t td { vertical-align: top; } .vtp-what { max-width: 260px; } .vtp-acts { white-space: nowrap; } .vtp-hand { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .ow-summary { display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; margin: 6px 0 14px; }
   .ow-sumbtn { padding: 12px 18px; border-radius: 12px; background: var(--paper, #fff); border: 2px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; min-width: 220px; cursor: pointer; font: inherit; color: inherit; text-align: left; }
-  .ow-sumbtn:hover { border-color: var(--blue, #1864ab); }
+  .ow-sumbtn:hover { border-color: var(--blue, #1864ab); } .ow-ptntag { background: #e7f5ff; color: #1864ab; }
   .ow-sumbtn[aria-pressed="true"] { background: var(--blue, #1864ab); border-color: var(--blue, #1864ab); color: #fff; }
   .ow-sumbtn span { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; opacity: .8; }
-  .ow-sumbtn strong { font-size: 28px; line-height: 1.15; } .ow-sumbtn em { font-style: normal; font-size: 13px; opacity: .8; } .ow-toolsbtn { margin-left: auto; align-self: center; }
+  .ow-sumbtn strong { font-size: 28px; line-height: 1.15; } .ow-sumbtn em { font-style: normal; font-size: 13px; opacity: .8; } .ow-sumbtn .ow-split { font-size: 12px; } .ow-toolsbtn { margin-left: auto; align-self: center; }
   .ow-datechip { margin: -6px 0 10px; font-size: 13.5px; } .ow-tools { border: 1px dashed var(--line); border-radius: 12px; padding: 10px 12px; margin: 10px 0 14px; } .ow-tools-h { margin: 0 0 8px; }
   .ow-acct-h { margin: 6px 0 4px; font-weight: 800; font-size: 13px; } .ow-accts-small .owl-acct { min-height: 0; } .ow-acct-more { font-weight: 700; color: var(--blue, #1864ab); }
   .ow-more { padding: 12px 0; text-align: center; } .ow-paidtoo { display: inline-flex; align-items: center; gap: 5px; font-size: 13.5px; margin-right: 6px; }
@@ -13199,7 +13199,10 @@ function owPartnerJobsHtml() {
 }
 const OWL_NAMES = { all: "All invoices", paid: "Paid invoices", owing: "Not paid invoices", booked: "Booked jobs", "sum:all": "Total owed to us", "sum:due": "Due now", "sum:nd": "Not due yet" };
 // the three buttons at the top: everything not paid, what's due now, and what waits on booked work
-const owSumRows = sc => ["todo", "checked"].flatMap(k => owInPeriod(OW.all?.[k] || []).map(r => ({ ...r, _show: k }))).filter(r => sc === "sum:all" || (sc === "sum:nd") === owNotDue(r));
+// partners' invoices (what Costco, Vista… owe us) are kept apart from the customers' list: both count as owed to us (done work, so due now)
+const owPtnOwed = () => (OW.ptnData?.rows || []).filter(r => Number(r.balance) > 0.004 && owPick(r)).map(r => ({ ...r, _show: "todo", _ptnRow: true }));
+const owSumRows = sc => ["todo", "checked"].flatMap(k => owInPeriod(OW.all?.[k] || []).map(r => ({ ...r, _show: k }))).filter(r => sc === "sum:all" || (sc === "sum:nd") === owNotDue(r))
+  .concat(sc === "sum:nd" ? [] : owInPeriod(owPtnOwed()));
 // how old a not-paid invoice is (as of today, whatever dates are picked)
 const OW_AGE = [["age0", "Current", 0, 30, "under 30 days old"], ["age30", "30 days", 30, 60, "30 to 59 days old"], ["age60", "60 days", 60, 90, "60 to 89 days old"], ["age90", "90 days", 90, 120, "90 to 119 days old"], ["age120", "120+ days", 120, Infinity, "120 days or older"]];
 const owPartnersKnown = () => OW.ptnData?.partners?.length ? OW.ptnData.partners : (() => { try { return JSON.parse(localStorage.getItem("reid.owPtn") || "[]"); } catch { return []; } })();
@@ -13527,8 +13530,11 @@ function renderOwing(msg) {
     <div class="sinv-top ow-top"><h1>Receivables</h1><span class="ow-top-r"><button class="btn quiet-btn ow-cleanbtn" type="button" id="ow-cleanup">Clean up old balances ›</button></span></div>
     ${(() => { const sum = l => l.reduce((t, r) => t + Number(r.balance || 0), 0);
         const B = [["sum:all", "Total owed to us", "every invoice not paid yet"], ["sum:due", "Due now", "work done, waiting to be paid"], ["sum:nd", "Not due yet", "work still booked"]];
-        return `<div class="ow-summary" role="group" aria-label="What's owed">${B.map(([k, t, sub]) => { const l = OW.all ? owSumRows(k) : null;
-            return `<button type="button" class="ow-sumbtn ow-${k.slice(4)}" data-ow-scope="${k}" aria-pressed="${scope === k}"><span>${t}</span><strong>${l ? money(sum(l)) : "…"}</strong><em>${l ? `${l.length.toLocaleString()} ${l.length === 1 ? "invoice" : "invoices"} · ${sub}` : "loading…"}</em></button>`; }).join("")}
+        const pReady = OW.ptnData && !OW.ptnData.loading;
+        return `<div class="ow-summary" role="group" aria-label="What's owed">${B.map(([k, t, sub]) => { const l = OW.all ? owSumRows(k) : null, pl = l ? l.filter(r => r._ptnRow) : [], cl = l ? l.filter(r => !r._ptnRow) : [];
+            return `<button type="button" class="ow-sumbtn ow-${k.slice(4)}" data-ow-scope="${k}" aria-pressed="${scope === k}"><span>${t}</span><strong>${l ? money(sum(l)) : "…"}</strong>
+              <em>${l ? `${l.length.toLocaleString()} ${l.length === 1 ? "invoice" : "invoices"} · ${sub}` : "loading…"}</em>
+              ${l && k !== "sum:nd" ? `<em class="ow-split">${pReady ? `customers ${money(sum(cl))} + partners ${money(sum(pl))}` : "adding the partners…"}</em>` : ""}</button>`; }).join("")}
           <button type="button" class="btn ${OW.tools ? "" : "quiet-btn"} ow-toolsbtn" id="ow-tools" aria-expanded="${!!OW.tools}">${OW.tools ? "Hide tools ▴" : "Tools ▾"}</button></div>
         ${OW.tools ? "" : OW.period !== "all" ? `<div class="ow-datechip">Showing ${esc(owRangeLabel())} · <button class="link" type="button" data-ow-period="all">show all dates</button></div>` : ""}`; })()}
     <section class="sinv-panel ow-panel" aria-label="How old"><div class="sp-h">How old</div>
@@ -13546,7 +13552,7 @@ function renderOwing(msg) {
           const n = rs ? rs.length : ps ? ps.reduce((t, x) => t + Number(x.n || 0), 0) : null, billed = ps ? ps.reduce((t, x) => t + Number(x.total || 0), 0) : null;
           return `<button type="button" class="ow-scope ow-scope-p ow-scope-all" data-ow-scope="ptn:all" aria-pressed="${scope === "ptn:all"}" title="Every partner together"><span>All partners · see all</span>
             <strong>${owed == null ? "…" : owDollars(owed)}</strong><em>${n == null ? "loading…" : `${n.toLocaleString()} ${n === 1 ? "invoice" : "invoices"}${OW.showPaid && billed ? `<br>${owDollars(billed)} billed` : ""}`}</em></button>`; })()}
-        ${(() => { const ready = OW.all && OW.paidData?.rows && OW.ptnData && !OW.ptnData.loading, rs = ready ? owNoPartnerRows() : null;
+        ${(() => { const ready = OW.all && OW.paidData?.rows && OW.ptnData && !OW.ptnData.loading, rs = ready ? owPtnRows("ptn:none") : null;
           const owed = rs ? rs.reduce((t, r) => t + Number(r.balance || 0), 0) : null, billed = rs ? rs.reduce((t, r) => t + Number(r.total || 0), 0) : null;
           return `<button type="button" class="ow-scope ow-scope-p ow-scope-np" data-ow-scope="ptn:none" aria-pressed="${scope === "ptn:none"}" title="Every invoice that isn't a partner's"><span>No partner (all others)</span>
             <strong>${owed == null ? "…" : owDollars(owed)}</strong><em>${rs ? `${rs.length.toLocaleString()} ${rs.length === 1 ? "invoice" : "invoices"}${OW.showPaid ? `<br>${owDollars(billed)} billed` : ""}` : "loading…"}</em></button>`; })()}</div></section>` : ""}
@@ -13595,7 +13601,7 @@ function renderOwing(msg) {
         <td class="num">${fmtDate(r.invoice_date)}</td>
         <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button>`}
           ${r.over_total ? `<div><span class="ow-tag odd" title="ServiceTitan shows ${esc(money(r.paid))} paid on this invoice, so it shows more owing than the invoice total. Usually a refund or a reversed payment.">Owing more than total</span></div>` : ""}
-          ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}${owNotDueHtml(r)}${owNotesHtml(r)}</td>
+          ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}${r._ptnRow ? `<div><span class="ow-tag ow-ptntag">${esc((owPartnersKnown().find(x => x.id === r.partner_id) || {}).name || "Partner")} owes this</span></div>` : ""}${owNotDueHtml(r)}${owNotesHtml(r)}</td>
         <td><button class="link" type="button" data-ow-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${esc(r.job_type || "")}</td>
         <td class="r num">${scope !== "owing" ? (owBalScope(scope) ? `<strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>` : `<strong>${money(r.total)}</strong>`) : `<strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>${r.over_total ? `<div class="ow-odd-note">paid ${money(r.paid)}</div>` : ""}`}</td>
