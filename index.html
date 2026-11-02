@@ -1239,6 +1239,10 @@
   .vtp-supf { margin: 8px 0 4px; flex-wrap: wrap; }
   .bank .bank-load { cursor: pointer; } .bank-drop { margin: 10px 0; padding: 26px; border: 2px dashed #9fb3cc; border-radius: 12px; text-align: center; color: #4a5768; font-weight: 700; } .bank-drop.on { background: #eef4fb; border-color: #1b4f8a; }
   .bank-tabs { margin: 12px 0; }
+  .bank-led tr.bank-tied td { background: #fbfdf9; } .bank-inv { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; width: 100%; text-align: left; font: inherit; font-size: 13px; padding: 5px 9px; margin: 3px 0; border: 1px solid #cfd8e3; border-left: 4px solid #1b4f8a; border-radius: 8px; background: #fff; cursor: pointer; color: #14202e; }
+  .bank-inv:hover { background: #eef4fb; border-color: #1b4f8a; } .bank-inv b { color: #1b4f8a; } .bank-inv span { color: #5b6b80; font-size: 12px; flex: 1 1 auto; } .bank-inv em { font-style: normal; font-weight: 800; }
+  .bank-invs summary { cursor: pointer; padding: 5px 9px; border: 1px solid #cfd8e3; border-radius: 8px; background: #f3f6fa; font-size: 13px; list-style: none; } .bank-invs summary::before { content: "▸ "; color: #1b4f8a; } .bank-invs[open] summary::before { content: "▾ "; }
+  .bank-invs[open] summary { margin-bottom: 4px; } .bank-led td:last-child { min-width: 280px; }
   .bank-accts { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 6px; } .bank-acct { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 200px; padding: 10px 16px; font: inherit; font-size: 16px; font-weight: 800; color: #1b4f8a; background: #fff; border: 2px solid #b9cde6; border-radius: 12px; cursor: pointer; }
   .bank-acct span { font-size: 12px; font-weight: 600; color: #5b6b80; } .bank-acct[aria-pressed="true"] { background: #1b4f8a; border-color: #1b4f8a; color: #fff; } .bank-acct[aria-pressed="true"] span { color: #dbe7f5; } .bank-find .vtp-find { flex-wrap: wrap; } .bank-dt { font-size: 13px; font-weight: 700; color: #33414f; } .bank-dt input { padding: 7px 8px; border: 1px solid #9fb3cc; border-radius: 8px; }
   .bank-cats { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; } .bank-cat { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 7px 11px; border: 1px solid #cfd8e3; border-radius: 10px; background: #fff; cursor: pointer; font: inherit; text-align: left; }
@@ -18837,7 +18841,7 @@ $("#security-link").addEventListener("click", () => openSecurity());
 // ===== Bank (owners only): the bank account's transactions from the bank's export: search them, totals by kind and month,
 // and a partner's deposits next to the payments the app has from them (what's in the bank but not the app, and the other way)
 const BANK_ACCTS = [["main", "Main account"], ["savings", "Savings"]];
-const BANK = { acct: "main", tab: "list", q: "", from: "", to: "", cat: "", dir: "", year: null, partner: 4, offset: 0, rows: [], data: null, sum: null, match: {} };
+const BANK = { led: null, ledLinked: true, ledQ: "", ledRows: [], acct: "main", tab: "list", q: "", from: "", to: "", cat: "", dir: "", year: null, partner: 4, offset: 0, rows: [], data: null, sum: null, match: {} };
 try { const s = JSON.parse(localStorage.getItem("reid.bank") || "null"); if (s) Object.assign(BANK, { tab: s.tab || "list", partner: s.partner || 4, acct: s.acct || "main" }); } catch {}
 const bankSave = () => { try { localStorage.setItem("reid.bank", JSON.stringify({ tab: BANK.tab, partner: BANK.partner, acct: BANK.acct })); } catch {} };
 const BANK_PARTNERS = [[4, "Vista Credit"], [1, "Costco"], [2, "Rona"], [3, "Lowe's"]];
@@ -18849,6 +18853,13 @@ async function openBank(msg) {
   renderBank(msg);
 }
 async function bankLoad(more) {
+  if (BANK.tab === "ledger") {
+    if (!more) BANK.offset = 0;
+    let { data, error } = await db.rpc("bank_ledger", { p_account: BANK.acct, p_q: BANK.ledQ || null, p_from: BANK.from || null, p_to: BANK.to || null, p_linked: BANK.ledLinked, p_limit: 200, p_offset: BANK.offset });
+    // nothing tied yet: match every partner's deposits first (it keeps the links), then show them
+    if (!error && data && !data.links && !BANK.ledTried && BANK.acct === "main") { BANK.ledTried = true; await bankMatchAll(); ({ data, error } = await db.rpc("bank_ledger", { p_account: BANK.acct, p_q: BANK.ledQ || null, p_from: BANK.from || null, p_to: BANK.to || null, p_linked: BANK.ledLinked, p_limit: 200, p_offset: 0 })); }
+    BANK.err = error; if (!data) return; BANK.led = data; BANK.ledRows = more ? BANK.ledRows.concat(data.rows || []) : data.rows || [];
+    if (!BANK.data) { const r = await db.rpc("bank_list", { p_limit: 1, p_account: BANK.acct }); BANK.data = r.data; } return; }
   if (BANK.tab === "sum") { const { data, error } = await db.rpc("bank_summary", { p_year: BANK.year, p_account: BANK.acct }); BANK.err = error; BANK.sum = data; if (!BANK.data) { const r = await db.rpc("bank_list", { p_limit: 1, p_account: BANK.acct }); BANK.data = r.data; } return; }
   if (BANK.tab === "partners") { if (!BANK.match[BANK.partner]) { const { data, error } = await db.rpc("bank_partner_match", { p_partner: BANK.partner }); BANK.err = error; if (data) BANK.match[BANK.partner] = data; }
     if (!BANK.data) { const r = await db.rpc("bank_list", { p_limit: 1, p_account: BANK.acct }); BANK.data = r.data; } return; }
@@ -18858,9 +18869,26 @@ async function bankLoad(more) {
   BANK.rows = more ? BANK.rows.concat(data.rows || []) : data.rows || []; BANK.data = data;
 }
 const bankMoney = n => Number(n) ? money(n) : "";
+async function bankMatchAll(say) { for (const [id, n] of BANK_PARTNERS) { say?.(`Matching ${n}'s deposits…`); const { data } = await db.rpc("bank_partner_match", { p_partner: id }); if (data) BANK.match[id] = data; } }
+function bankLedHtml() {
+  const L = BANK.led || {}, rows = BANK.ledRows || [];
+  const inv = i => `<button class="bank-inv" type="button" data-invoice="${i.id}" title="Open invoice ${esc(i.number)}"><b>#${esc(i.number)}</b><span>${esc(fmtDate(i.date))}${i.who ? " · " + esc(i.who) : ""}${i.street ? " · " + esc(i.street) : ""}</span><em>${money(i.amount)}</em></button>`;
+  return `<p class="quiet">Each bank line with the invoices its money was matched to: a partner's deposit is matched to the app's payments from that partner, and those payments show which invoices they paid. Click an invoice to open it.</p>
+    <div class="vtp-find"><label for="bank-lq">Find</label><span class="vtp-qw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="bank-lq" type="search" value="${esc(BANK.ledQ)}" placeholder="Invoice #, customer, street, description or an amount" autocomplete="off"></span>
+      <label class="bank-dt">From <input type="date" id="bank-from" value="${esc(BANK.from)}"></label><label class="bank-dt">To <input type="date" id="bank-to" value="${esc(BANK.to)}"></label>
+      <div class="seg" role="group"><button type="button" data-bank-linked="1" aria-pressed="${BANK.ledLinked}">Only lines tied to invoices</button><button type="button" data-bank-linked="0" aria-pressed="${!BANK.ledLinked}">Every line</button></div>
+      <button class="btn quiet-btn" type="button" data-bank-rematch title="Match every partner's deposits again (after new payments or a new bank file)">↻ Match again</button></div>
+    <p class="bank-tot"><b>${Number(L.count || 0).toLocaleString()}</b> lines · <span class="bank-in">in ${money(L.in || 0)}</span> · <span class="bank-out">out ${money(L.out || 0)}</span> · ${Number(L.linked || 0).toLocaleString()} bank lines tied to ${Number(L.links || 0).toLocaleString()} invoice payments in this account</p>
+    ${rows.length ? `<div class="table-wrap"><table class="calls-table bank-t bank-led"><thead><tr><th>Date</th><th>Description</th><th class="r">Out</th><th class="r">In</th><th class="r">Balance</th><th>Invoices</th></tr></thead><tbody>
+      ${rows.map(r => { const I = r.invoices || [], tot = I.reduce((a, i) => a + Number(i.amount || 0), 0);
+        return `<tr class="${I.length ? "bank-tied" : ""}"><td class="nowrap">${esc(fmtDate(r.date))}</td><td>${esc(r.description || "(no description)")}${r.note ? `<div class="quiet">📝 ${esc(r.note)}</div>` : ""}</td>
+        <td class="r bank-out">${bankMoney(r.out)}</td><td class="r bank-in">${bankMoney(r.in)}</td><td class="r quiet">${r.balance != null ? money(r.balance) : ""}</td>
+        <td>${!I.length ? `<span class="quiet">—</span>` : I.length === 1 ? inv(I[0]) : `<details class="bank-invs"><summary><b>${I.length} invoices</b> · ${money(tot)}${Math.abs(tot - Number(r.in || r.out)) > 0.01 ? ` <span class="warn" title="The invoices add up to a different amount than the bank line">≠ ${money(Number(r.in || r.out))}</span>` : " ✓"}</summary>${I.map(inv).join("")}</details>`}</td></tr>`; }).join("")}</tbody></table></div>
+      ${rows.length < Number(L.count || 0) ? `<p><button class="btn quiet-btn" type="button" data-bank-ledmore>Show more (${(Number(L.count) - rows.length).toLocaleString()} left)</button></p>` : ""}` : `<p class="quiet">${BANK.ledLinked ? "No bank lines are tied to invoices yet" + (BANK.acct === "main" ? "" : " in this account (partner deposits are in the main account)") + "." : "Nothing matches."}</p>`}`;
+}
 function renderBank(msg) {
   const D = BANK.data || {}, none = !D.all;
-  const tabs = [["list", "Transactions"], ["sum", "Totals"], ["partners", "Partner payments"]], AN = D.accounts || {}, an = (BANK_ACCTS.find(a => a[0] === BANK.acct) || [, "Main account"])[1];
+  const tabs = [["list", "Transactions"], ["ledger", "Ledger"], ["sum", "Totals"], ["partners", "Partner payments"]], AN = D.accounts || {}, an = (BANK_ACCTS.find(a => a[0] === BANK.acct) || [, "Main account"])[1];
   $("#main").innerHTML = `<article class="staff bank">
     <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Owners only</span><h1>Bank · ${esc(an)}</h1>
       <p>${none ? `No ${esc(an.toLowerCase())} transactions yet. Load the bank's export for ${esc(an.toLowerCase())} to start.` : `${Number(D.all).toLocaleString()} transactions from ${esc(fmtDate(D.first))} to ${esc(fmtDate(D.last))}.`}</p></div>
@@ -18869,7 +18897,7 @@ function renderBank(msg) {
     ${msg ? `<div class="staff-msg ok">${esc(msg)}</div>` : ""}${BANK.err ? `<div class="staff-msg err">${esc(/PGRST202|could not find/i.test(BANK.err.message || "") ? "Almost ready: try again in a few minutes." : rpcErr(BANK.err))}</div>` : ""}
     <div id="bank-drop" class="bank-drop" ${none ? "" : "hidden"}>Drop the bank's export for ${esc(an)} here</div>
     ${none ? "" : `<div class="seg bank-tabs" role="tablist">${tabs.map(([k, t]) => `<button type="button" data-bank-tab="${k}" aria-pressed="${BANK.tab === k}">${t}</button>`).join("")}</div>
-    ${BANK.tab === "sum" ? bankSumHtml() : BANK.tab === "partners" ? bankPartHtml() : bankListHtml()}`}
+    ${BANK.tab === "sum" ? bankSumHtml() : BANK.tab === "partners" ? bankPartHtml() : BANK.tab === "ledger" ? bankLedHtml() : bankListHtml()}`}
   </article>`;
   wireBank();
 }
@@ -18936,6 +18964,11 @@ function wireBank() {
   m.querySelectorAll("[data-bank-year]").forEach(b => b.addEventListener("click", () => { BANK.year = b.dataset.bankYear ? Number(b.dataset.bankYear) : null; redo(); }));
   m.querySelectorAll("[data-bank-ptn]").forEach(b => b.addEventListener("click", () => { BANK.partner = Number(b.dataset.bankPtn); bankSave(); renderBank(); redo(); }));
   m.querySelectorAll("[data-bank-inv]").forEach(b => b.addEventListener("click", async () => { const { data } = await db.from("invoices").select("id").eq("invoice_number", b.dataset.bankInv).limit(1); if (data?.[0]) openInvoice(data[0].id); }));
+  m.querySelectorAll("[data-invoice]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.invoice))));
+  m.querySelectorAll("[data-bank-linked]").forEach(b => b.addEventListener("click", () => { BANK.ledLinked = b.dataset.bankLinked === "1"; redo(); }));
+  m.querySelector("[data-bank-ledmore]")?.addEventListener("click", () => { BANK.offset = BANK.ledRows.length; redo(true); });
+  m.querySelector("[data-bank-rematch]")?.addEventListener("click", async e => { const b = e.currentTarget; b.disabled = true; BANK.match = {}; await bankMatchAll(t => { b.textContent = t; }); await bankLoad(); renderBank("Matched every partner's deposits again."); });
+  let lt = 0; $("#bank-lq")?.addEventListener("input", e => { clearTimeout(lt); lt = setTimeout(async () => { BANK.ledQ = e.target.value.trim(); const at = e.target.selectionStart; await bankLoad(); renderBank(); const i = $("#bank-lq"); if (i) { i.focus(); try { i.setSelectionRange(at, at); } catch {} } }, 350); });
   m.querySelector("[data-bank-more]")?.addEventListener("click", () => { BANK.offset = BANK.rows.length; redo(true); });
   ["bank-from", "bank-to"].forEach(id => $("#" + id)?.addEventListener("change", e => { BANK[id === "bank-from" ? "from" : "to"] = e.target.value; redo(); }));
   let t = 0; $("#bank-q")?.addEventListener("input", e => { clearTimeout(t); t = setTimeout(async () => { BANK.q = e.target.value.trim(); const at = e.target.selectionStart; await bankLoad(); renderBank(); const i = $("#bank-q"); if (i) { i.focus(); try { i.setSelectionRange(at, at); } catch {} } }, 300); });
