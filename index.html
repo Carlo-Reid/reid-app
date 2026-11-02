@@ -18861,7 +18861,7 @@ function renderBank(msg) {
   $("#main").innerHTML = `<article class="staff bank">
     <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Owners only</span><h1>Bank</h1>
       <p>${none ? "No bank transactions yet. Load the export from the bank to start." : `${Number(D.all).toLocaleString()} transactions from ${esc(fmtDate(D.first))} to ${esc(fmtDate(D.last))}.`}</p></div>
-      <div class="cl-hero-range"><label class="btn bank-load">⬆ Load a bank file<input type="file" id="bank-file" accept=".txt,.csv,.tsv,text/plain,text/csv" hidden></label><em>The bank's export (Date, Code, Description, Out, In, Balance). Lines already loaded are skipped.</em></div></header>
+      <div class="cl-hero-range"><label class="btn bank-load">⬆ Load a bank file<input type="file" id="bank-file" accept=".xlsx,.xls,.txt,.csv,.tsv,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden></label><em>The bank's export as Excel (.xlsx) or text (.txt, .csv): Date, Code, Description, Out, In, Balance. Lines already loaded are skipped.</em></div></header>
     ${msg ? `<div class="staff-msg ok">${esc(msg)}</div>` : ""}${BANK.err ? `<div class="staff-msg err">${esc(/PGRST202|could not find/i.test(BANK.err.message || "") ? "Almost ready: try again in a few minutes." : rpcErr(BANK.err))}</div>` : ""}
     <div id="bank-drop" class="bank-drop" ${none ? "" : "hidden"}>Drop the bank's export file here</div>
     ${none ? "" : `<div class="seg bank-tabs" role="tablist">${tabs.map(([k, t]) => `<button type="button" data-bank-tab="${k}" aria-pressed="${BANK.tab === k}">${t}</button>`).join("")}</div>
@@ -18951,9 +18951,19 @@ function bankParse(text) {
     out.push({ date: d, code: (p[1] || "").trim(), description: (p[2] || "").trim(), out: Math.abs(num(p[3])), in: Math.abs(num(p[4])), balance: p[5] != null && String(p[5]).trim() !== "" ? num(p[5]) : null }); }
   return out;
 }
+// an Excel file: every sheet's rows become tab-separated lines (dates as 2026-08-06), then read the same way
+async function bankFileText(f) {
+  if (!/\.(xlsx|xls|xlsm)$/i.test(f.name) && !/spreadsheet|excel/i.test(f.type)) return f.text();
+  await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js");
+  const wb = window.XLSX.read(await f.arrayBuffer(), { type: "array", cellDates: true });
+  const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return wb.SheetNames.map(n => window.XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" })
+    .map(r => r.map(v => v instanceof Date ? iso(new Date(v.getTime() + 12 * 3600e3)) : String(v ?? "").replace(/[\t\n]/g, " ")).join("\t")).join("\n")).join("\n");
+}
 async function bankReadFile(f) {
-  const rows = bankParse(await f.text());
-  if (!rows.length) return alertMsg("Couldn't find any transactions in that file. It should be the bank's export with Date, Code, Description, Out, In and Balance.");
+  let text; try { text = await bankFileText(f); } catch (e) { return alertMsg("Couldn't open that file: " + (e.message || e)); }
+  const rows = bankParse(text);
+  if (!rows.length) return alertMsg("Couldn't find any transactions in that file. It should be the bank's export (Excel or text) with Date, Code, Description, Out, In and Balance.");
   const k = await askChoice("Load the bank file?", `${rows.length.toLocaleString()} transactions from ${esc(fmtDate(rows.reduce((a, r) => r.date < a ? r.date : a, rows[0].date)))} to ${esc(fmtDate(rows.reduce((a, r) => r.date > a ? r.date : a, rows[0].date)))}. Lines already loaded are skipped.`, [["yes", "Load them", true], ["", "Cancel"]]);
   if (k !== "yes") return;
   let added = 0, already = 0; const box = document.createElement("div"); box.className = "staff-msg"; $("#main .bank")?.prepend(box);
