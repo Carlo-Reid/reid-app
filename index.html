@@ -19033,8 +19033,12 @@ async function bankLoad(more) {
   BANK.rows = more ? BANK.rows.concat(data.rows || []) : data.rows || []; BANK.data = data;
 }
 const bankMoney = n => Number(n) ? money(n) : "";
-async function bankMatchAll(say) { const errs = []; try { OW_BANK.clear(); } catch {} say?.("Pairing transfers with Savings…"); const t = await db.rpc("bank_transfer_match"); if (t.error) errs.push("Transfers: " + rpcErr(t.error));
+async function bankMatchAll(say, years) { const errs = []; try { OW_BANK.clear(); } catch {} say?.("Pairing transfers with Savings…"); const t = await db.rpc("bank_transfer_match"); if (t.error) errs.push("Transfers: " + rpcErr(t.error));
   let n0 = 0; for (const [id, n] of BANK_PARTNERS) { say?.(`Matching ${n}'s deposits…`); const { data, error } = await db.rpc("bank_partner_match", { p_partner: id }); if (error) errs.push(n + ": " + rpcErr(error)); if (data) { BANK.match[id] = data; n0 += Number(data.matched_n || 0); } }
+  // the customers' own payments: card, e-Transfer, cheque and financing deposits (either account), for the years given (or every year in the bank)
+  if (!years) { const D = BANK.data || {}; const a = Number(String(D.first || "2022").slice(0, 4)), b = Number(String(D.last || new Date().getFullYear()).slice(0, 4)); years = []; for (let y = Math.min(a, b); y <= Math.max(a, b); y++) years.push(y); }
+  for (const kind of ["card", "etransfer", "cheque", "financing"]) for (const y of years) { say?.(`Matching ${{ card: "card", etransfer: "e-Transfer", cheque: "cheque", financing: "financing" }[kind]} deposits for ${y}…`);
+    const { data, error } = await db.rpc("bank_pay_match", { p_kind: kind, p_year: y }); if (error) errs.push(`${kind} ${y}: ${rpcErr(error)}`); else n0 += Number(data?.matched || 0); }
   return { errs, matched: n0 }; }
 const bankInv = i => `<div class="bank-attw"><button class="bank-inv" type="button" data-invoice="${i.id}" title="Open invoice ${esc(i.number)}"><b>#${esc(i.number)}</b><span>${esc(fmtDate(i.date))}${i.who ? " · " + esc(i.who) : ""}${i.street ? " · " + esc(i.street) : ""}${i.how === "by hand" ? " · tied by hand" : ""}</span><em>${money(i.amount)}</em></button>${i.how === "by hand" ? `<button class="bank-x" type="button" data-bank-detach="invoice|${i.id}" title="Take it off" aria-label="Take invoice ${esc(i.number)} off">✕</button>` : ""}</div>`;
 // what was attached by hand: supplier invoices and files, and the + Attach button
@@ -19259,9 +19263,10 @@ async function bankReadFile(f) {
     const { data, error } = await db.rpc("bank_import", { p_rows: rows.slice(i, i + 1000), p_file: f.name, p_account: BANK.acct }); if (error) { box.className = "staff-msg err"; box.textContent = "Stopped: " + rpcErr(error); return; }
     added += data.added; already += data.already; }
   // match the new lines right away: transfers with Savings, then each partner's deposits
-  if (added) { BANK.match = {}; try { const res = await bankMatchAll(t => { box.textContent = "Loaded. " + t; }); if (res?.errs?.length) BANK.matchErr = res.errs.join(" · "); } catch (e) { console.warn("bank match", e); } BANK.led = null; BANK.ledRows = null; }
+  if (added) { BANK.match = {}; const yrs = [...new Set(rows.map(r => Number(r.date.slice(0, 4))))], ys = [...new Set(yrs.flatMap(y => [y - 1, y]))].filter(y => y >= 2000).sort();
+    try { const res = await bankMatchAll(t => { box.textContent = "Loaded. " + t; }, ys); if (res?.errs?.length) BANK.matchErr = res.errs.join(" · "); } catch (e) { console.warn("bank match", e); } BANK.led = null; BANK.ledRows = null; }
   BANK.data = null; BANK.sum = null; BANK.match = {}; BANK.tab = "list"; BANK.q = ""; BANK.cat = ""; BANK.dir = ""; BANK.from = ""; BANK.to = "";
-  openBank(`Loaded ${f.name} into ${an}: ${added.toLocaleString()} new transactions${already ? `, ${already.toLocaleString()} were already in (or the same line twice)` : ""}.${added ? (BANK.matchErr ? " Matching didn't finish: " + BANK.matchErr : " Matched the partners' deposits and transfers.") : ""}`); BANK.matchErr = null;
+  openBank(`Loaded ${f.name} into ${an}: ${added.toLocaleString()} new transactions${already ? `, ${already.toLocaleString()} were already in (or the same line twice)` : ""}.${added ? (BANK.matchErr ? " Matching didn't finish: " + BANK.matchErr : " Matched the partners' deposits, transfers, and card, e-Transfer, cheque and financing deposits to their invoices.") : ""}`); BANK.matchErr = null;
 }
 $("#bank-link")?.addEventListener("click", () => openBank());
 
