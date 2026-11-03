@@ -19084,7 +19084,7 @@ function bankMerchHtml() {
   return `<p class="quiet">Each statement's deposits (batches) next to the bank and the app's card payments. A deposit is fully placed when its card payments add up to it; its invoices then show on the bank line and get the 🏦 stamp.</p>
     ${L.map(st => `<details class="block bank-sec" ${L.length === 1 ? "open" : ""}><summary><h2>${esc(new Date(String(st.date).slice(0, 10) + "T12:00:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" }))} · merchant …${esc(String(st.merchant_no).slice(-4))}
         <span class="count">${money(st.sales)} in ${st.batches} deposits · fees ${money(st.fees)}</span></h2></summary>
-      <p>In the bank: ${yes(st.deposits, st.batches)} · card payments placed: ${yes(st.paid, st.batches)} · ${Number(st.invoices).toLocaleString()} invoices tied · <button class="link" type="button" data-merch-rematch="${st.id}">↻ Match again</button></p>
+      <p>In the bank: ${yes(st.deposits, st.batches)} · card payments placed: ${yes(st.paid, st.batches)} · ${Number(st.invoices).toLocaleString()} invoices tied${st.fee_days ? ` · fee lines found: ${yes(st.fee_found, st.fee_days)}` : ""} · <button class="link" type="button" data-merch-rematch="${st.id}">↻ Match again</button></p>
       <table class="calls-table bank-t"><thead><tr><th>Batch</th><th class="r">Deposit</th><th>Cards</th><th>In the bank</th><th class="r">Card payments found</th></tr></thead><tbody>
       ${(st.rows || []).map(b => `<tr><td>${esc(fmtDate(String(b.date).slice(0, 10)))}</td><td class="r"><b>${money(b.total)}</b></td><td class="quiet">${Object.entries(b.brands || {}).map(([k, v]) => `${esc(k)} ${money(v)}`).join(" · ")}</td>
         <td>${b.bank ? `<span class="bank-in">✓ found</span>` : `<span class="warn">not in the bank file yet</span>`}</td><td class="r">${Math.abs(Number(b.paid || 0) - Number(b.total)) < 0.01 ? `<span class="bank-in">✓ ${money(b.paid)}</span>` : `<span class="warn">${money(b.paid || 0)} of ${money(b.total)}</span>`}</td></tr>`).join("")}</tbody></table></details>`).join("")}`;
@@ -19110,6 +19110,10 @@ async function merchReadPdf(f) {
     const c = cur && l.match(/^(VISA|M\/C|MC|AEXP|AMEX|DISC|DCVR|DEBIT|DB|JCB|[A-Z\/]{2,6})\s+([\d,]+\.\d\d)\s+([\d,]+\.\d\d)\s*$/);
     if (c) { const k = { MC: "M/C", AMEX: "AEXP", DCVR: "DISC", DB: "DEBIT" }[c[1]] || c[1]; cur.brands[k] = Math.round(((cur.brands[k] || 0) + num(c[2])) * 100) / 100; }
   }
+  // the fees come out every day: "Daily Fee Activity" is date / amount pairs, three to a line
+  { const a = lines.findIndex(l => /^Daily Fee Activity/i.test(l)), fees = [];
+    if (a >= 0) for (let i = a + 1; i < lines.length && !/^Total\b/i.test(lines[i]); i++) for (const m of lines[i].matchAll(/(\d\d\/\d\d\/\d\d)\s+([\d,]+\.\d\d)/g)) fees.push({ date: d(m[1]), amount: num(m[2]) });
+    out.fees = fees; }
   out.pdf = await new Promise((ok, no) => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(",")[1]); rd.onerror = no; rd.readAsDataURL(f); });
   return out;
 }
@@ -19122,7 +19126,7 @@ async function merchLoadFiles(files) {
     box.textContent = `Matching ${f.name}: ${st.batches.length} deposits…`;
     const { data, error } = await db.rpc("merchant_statement_save", { p: st });
     if (error) { done.push(`${f.name}: not loaded (${rpcErr(error)})`); continue; }
-    done.push(`${esc(new Date(st.statement_date + "T12:00:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" }))} (merchant …${st.merchant_no.slice(-4)}): ${data.deposits} of ${data.batches} deposits found in the bank, ${data.brands_matched} of ${data.brands} card amounts placed, ${data.invoices} invoices tied${data.fee_line ? ", fees tied to the fee line" : ""}${off ? ` (${off} deposits didn't add up on the statement)` : ""}`); }
+    done.push(`${esc(new Date(st.statement_date + "T12:00:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" }))} (merchant …${st.merchant_no.slice(-4)}): ${data.deposits} of ${data.batches} deposits found in the bank, ${data.brands_matched} of ${data.brands} card amounts placed, ${data.invoices} invoices tied${data.fees ? `, ${data.fees_found} of ${data.fees} days of fees found in the bank` : ""}${off ? ` (${off} deposits didn't add up on the statement)` : ""}`); }
   try { OW_BANK.clear(); } catch {}
   BANK.tab = "merch"; bankSave(); await bankLoad(); renderBank(done.join(" · "));
 }
@@ -19247,7 +19251,7 @@ function wireBank() {
     const { error } = await db.rpc("bank_attach_number", { p_bank: Number(bank), p_number: num, p_amount: Number(amt) }); if (error) { b.disabled = false; return alertMsg("Not tied: " + rpcErr(error)); }
     try { OW_BANK.clear(); } catch {} BANK.match = {}; await bankLoad(); renderBank(`Invoice ${num} is tied to that deposit and counts as paid.`); }));
   $("#bank-merch")?.addEventListener("change", e => { const fs = [...(e.target.files || [])]; if (fs.length) merchLoadFiles(fs); });
-  m.querySelectorAll("[data-merch-rematch]").forEach(b => b.addEventListener("click", async () => { b.disabled = true; b.textContent = "Matching…"; const { error } = await db.rpc("merchant_statement_match", { p_id: Number(b.dataset.merchRematch) }); if (error) alertMsg("Not done: " + rpcErr(error)); try { OW_BANK.clear(); } catch {} await bankLoad(); renderBank(); }));
+  m.querySelectorAll("[data-merch-rematch]").forEach(b => b.addEventListener("click", async () => { b.disabled = true; b.textContent = "Matching…"; const { error } = await db.rpc("merchant_statement_match", { p_id: Number(b.dataset.merchRematch) }); await db.rpc("merchant_fees_match", { p_id: Number(b.dataset.merchRematch) }); if (error) alertMsg("Not done: " + rpcErr(error)); try { OW_BANK.clear(); } catch {} await bankLoad(); renderBank(); }));
   m.querySelectorAll("[data-bank-attach]").forEach(b => b.addEventListener("click", () => bankAttachForm(b)));
   m.querySelectorAll("[data-bank-detach]").forEach(b => b.addEventListener("click", async () => { const [k, id] = b.dataset.bankDetach.split("|"), bank = Number(b.closest("[data-bank-row]").dataset.bankRow);
     if ((await askChoice("Take it off this bank line?", "", [["yes", "Take it off", true], ["", "Keep it"]])) !== "yes") return;
