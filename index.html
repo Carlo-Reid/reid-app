@@ -1240,6 +1240,7 @@
   .ow-bankstamp { display: inline-block; margin-top: 4px; padding: 2px 9px; font: inherit; font-size: 11.5px; font-weight: 800; letter-spacing: .3px; text-transform: uppercase; color: #1f6b35; background: #f3fbf5;
     border: 2px solid #2f9a52; border-radius: 6px; transform: rotate(-2deg); cursor: pointer; box-shadow: 0 1px 2px rgba(31,107,53,.2); } .ow-bankstamp:hover { background: #1f6b35; color: #fff; } .ow-bankstamp-ro, .ow-bankstamp-ro:hover { cursor: default; background: #f3fbf5; color: #1f6b35; }
   .ow-sumbtn.ow-paidsum strong { color: #1f6b35; } .ow-sumbtn.ow-paidsum[aria-pressed="true"] { background: #1f6b35 !important; border-color: #1f6b35; } .ow-sumbtn.ow-paidsum[aria-pressed="true"] strong { color: #fff; }
+  .ow-amt-dates { display: inline-flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; } .ow-amt-dates label { display: inline-flex; gap: 4px; align-items: center; font-weight: 700; } .ow-amt-dates input, .ow-amt-dates select { padding: 4px 6px; border: 1px solid #9fb3cc; border-radius: 6px; font: inherit; }
   .ow-numcopy { margin-left: 6px; padding: 1px 6px; font: inherit; font-size: 12px; line-height: 1.4; color: #1b4f8a; background: #eef4fb; border: 1px solid #b9cde6; border-radius: 6px; cursor: pointer; vertical-align: 1px; } .ow-numcopy:hover { background: #1b4f8a; color: #fff; } .ow-numcopy.done { background: #e3f4e8; color: #1f6b35; border-color: #a9d8b6; }
   .bank .bank-load { cursor: pointer; } .bank-drop { margin: 10px 0; padding: 26px; border: 2px dashed #9fb3cc; border-radius: 12px; text-align: center; color: #4a5768; font-weight: 700; } .bank-drop.on { background: #eef4fb; border-color: #1b4f8a; }
   .bank-tabs { margin: 12px 0; }
@@ -13562,22 +13563,66 @@ function renderOwList() {
 }
 
 // ---- Find by amount: every invoice (any date, paid or not) with that exact total, amount paid or balance owing ----
+const owMonthEnd = m => { const [y, mo] = m.split("-").map(Number), d = new Date(y, mo, 0); return `${y}-${String(mo).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 function owAmtParse(v) { const t = String(v || "").replace(/[$,\s]/g, ""); if (!/^-?\d*\.?\d{0,2}$/.test(t) || !/\d/.test(t)) return null; return Math.round(Number(t) * 100) / 100; }
 // modes: exact = that amount exactly; pair = two invoices that add up to it; near = within $X above or below
-const OW_AMT_MODES = [["exact", "Exact amount"], ["pair", "Two that add up"], ["near", "Within $ up or down"]];
+const OW_AMT_MODES = [["exact", "Exact amount"], ["pair", "Two that add up"], ["c3", "Three"], ["c4", "Four"], ["c5", "Five"], ["near", "Within $ up or down"]];
+// 3, 4 or 5 invoices within a week of each other whose amounts add up to exactly the amount (the search runs here, in cents)
+function owAmtCombos(items, target, k, budgetMs = 6000) {
+  const t0 = performance.now(), out = [], DAY = 864e5; let stopped = false, n = 0;
+  const day = items.map(x => Date.parse(x[1] + "T12:00:00") / DAY);
+  for (let i = 0; i < items.length && !stopped; i++) {
+    const R = target - items[i][2]; if (R <= 0) continue;
+    const W = []; for (let j = i + 1; j < items.length && day[j] - day[i] <= 7; j++) if (items[j][2] <= R) W.push(j);
+    if (W.length < k - 1) continue;
+    W.sort((a, b) => items[a][2] - items[b][2]); const V = W.map(j => items[j][2]);
+    const pick = [], go = (start, r, rem) => {
+      if (stopped) return;
+      if (r === 1) { let lo = start, hi = V.length; while (lo < hi) { const m = (lo + hi) >> 1; if (V[m] < rem) lo = m + 1; else hi = m; }
+        for (let q = lo; q < V.length && V[q] === rem; q++) { out.push([i, ...pick, W[q]]); if (out.length >= 300) { stopped = true; return; } } return; }
+      let top = 0; for (let q = V.length - r; q < V.length; q++) top += V[q]; if (top < rem) return;
+      for (let q = start; q <= V.length - r; q++) { if (V[q] * r > rem) break; if ((++n & 4095) === 0 && performance.now() - t0 > budgetMs) { stopped = true; return; }
+        pick.push(W[q]); go(q + 1, r - 1, rem - V[q]); pick.pop(); }
+    };
+    go(0, k - 1, R);
+  }
+  return { combos: out.map(c => c.map(ix => items[ix][0])), spread: out.map(c => Math.round(Math.max(...c.map(ix => day[ix])) - Math.min(...c.map(ix => day[ix])))), stopped };
+}
+const owAmtMonths = () => { const out = [], d = new Date(); d.setDate(1); for (let n = 0; n < 48; n++) { out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); d.setMonth(d.getMonth() - 1); } return out; };
+const owAmtInDates = r => (!OW.amtFrom || (r.invoice_date || "") >= OW.amtFrom) && (!OW.amtTo || (r.invoice_date || "") <= OW.amtTo);
 const OW_PAIR_FIELDS = [["total", "Invoice totals"], ["balance", "What's still owed"], ["paid", "What was paid"]];
 async function owAmtFind() {
   const v = owAmtParse(OW.amtQ), mode = OW.amtMode || "exact";
   if (v == null) { OW.amt = { error: "Type an amount, like 523.45" }; return renderOwing(); }
   const range = Math.max(0.01, Math.min(10000, Number(String(OW.amtRange ?? 100).replace(/[$,\s]/g, "")) || 100)), field = OW.amtField || "total";
-  const key = [mode, v, range, field].join("|");
+  const key = [mode, v, range, field, OW.amtFrom || "", OW.amtTo || ""].join("|");
   OW.amt = { loading: true, amount: v, mode, key }; renderOwing();
+  if (/^c[345]$/.test(mode)) {   // 3, 4 or 5 that add up
+    const k = Number(mode[1]), c = await db.rpc("invoice_amount_cands", { p_max: v, p_field: field, p_from: OW.amtFrom || null, p_to: OW.amtTo || null });
+    if (OW.amt?.key !== key) return;
+    if (c.error) { OW.amt = { amount: v, mode, key, error: /PGRST202|could not find the function/i.test(c.error.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(c.error) }; return renderOwing(); }
+    const items = c.data || [], R = owAmtCombos(items, Math.round(v * 100), k);
+    const ids = [...new Set(R.combos.flat())], det = ids.length ? (await db.rpc("invoice_amount_rows", { p_ids: ids })).data || [] : [], by = new Map(det.map(r => [r.invoice_id, r]));
+    if (OW.amt?.key !== key) return;
+    OW.amt = { amount: v, mode, key, field, k, cands: items.length, stopped: R.stopped, capped: items.length >= 40000,
+      groups: R.combos.map((g, n) => ({ rows: g.map(id => by.get(id)).filter(Boolean), spread: R.spread[n] })).filter(g => g.rows.length === k).sort((a, b) => a.spread - b.spread) };
+    return document.querySelector(".owing") ? renderOwing() : null;
+  }
   const call = mode === "pair" ? db.rpc("invoice_amount_pairs", { p_amount: v, p_field: field })
     : mode === "near" ? db.rpc("invoice_amount_near", { p_amount: v, p_range: range }) : db.rpc("invoice_amount_search", { p_amount: v });
   const { data, error } = await call;
   if (OW.amt?.key !== key) return;
+  let D = data;
+  if (!error && D) {   // leave out invoices whose money was already found in the bank, and keep to the dates picked
+    const ids = mode === "pair" ? (D.rows || []).flatMap(p => [p.a?.invoice_id, p.b?.invoice_id]) : (D.rows || []).map(r => r.invoice_id);
+    const { data: banked } = ids.length ? await db.rpc("invoice_banked_ids", { p_ids: ids.filter(Boolean) }) : { data: [] }; const B = new Set(banked || []);
+    const keep = r => r && !B.has(r.invoice_id) && owAmtInDates(r), before = (D.rows || []).length;
+    D = { ...D, rows: mode === "pair" ? (D.rows || []).filter(p => keep(p.a) && keep(p.b)) : (D.rows || []).filter(keep) }; D.dropped = before - D.rows.length;
+    if (D.dropped) D.n = Math.max(D.rows.length, Number(D.n || 0) - D.dropped);
+  }
+  if (OW.amt?.key !== key) return;
   OW.amt = error ? { amount: v, mode, key, error: /PGRST202|could not find the function/i.test(error.message || "") ? "Getting ready: this turns on after the next database update." : rpcErr(error) }
-    : { amount: v, mode, key, ...data };
+    : { amount: v, mode, key, ...D };
   if (document.querySelector(".owing")) renderOwing();
 }
 function owAmtHtml() {
@@ -13609,6 +13654,15 @@ function owAmtHtml() {
         ${[p.a, p.b].map(r => `<tr class="ow-pair-row">${invCell(r)}${dateCell(r)}${custCell(r)}<td>${esc(r.job_type || "")}</td>
           <td class="r num">${hit(A.field === "total", r.total)}</td><td class="r num">${hit(A.field === "paid", r.paid)}</td><td class="r num">${hit(A.field === "balance", r.balance)}</td></tr>`).join("")}`).join("")}
       </tbody></table></div>`;
+  } else if (/^c[345]$/.test(A.mode || "")) {
+    const G = A.groups || [], fname = (OW_PAIR_FIELDS.find(x => x[0] === A.field) || OW_PAIR_FIELDS[0])[1].toLowerCase(), pick = r => Number(A.field === "balance" ? r.balance : A.field === "paid" ? r.paid : r.total), word = { 3: "three", 4: "four", 5: "five" }[A.k];
+    res = !G.length ? `<div class="quiet ow-amt-msg">No ${word} invoices within a week of each other whose ${esc(fname)} add up to exactly ${money(A.amount)}${OW.amtFrom || OW.amtTo ? " in these dates" : ""}.${A.stopped ? " The search stopped early: pick a month or dates to narrow it." : ""}</div>`
+      : `<div class="ow-amt-msg"><b>${G.length.toLocaleString()}${A.stopped ? "+" : ""} group${G.length === 1 ? "" : "s"}</b> of ${word} invoices within a week of each other whose ${esc(fname)} add up to ${money(A.amount)}, closest together first. Invoices whose money is already found in the bank are left out.${A.stopped ? ` <b>There may be more:</b> the search stopped early, pick a month or dates to narrow it.` : ""}</div>
+      <div class="staff-wrap"><table class="calls-table ow-amt-table">${head()}<tbody>
+      ${G.slice(0, 150).map((g, n) => `<tr class="ow-pair-head"><td colspan="7"><b>Group ${n + 1}</b> · ${g.rows.map(r => money(pick(r))).join(" + ")} = ${money(g.rows.reduce((t, r) => t + pick(r), 0))} · <span class="quiet">${g.spread === 0 ? "same day" : g.spread + " day" + (g.spread === 1 ? "" : "s") + " apart"}</span></td></tr>
+        ${g.rows.map(r => `<tr class="ow-pair-row">${invCell(r)}${dateCell(r)}${custCell(r)}<td>${esc(r.job_type || "")}</td>
+          <td class="r num">${hit(A.field === "total", r.total)}</td><td class="r num">${hit(A.field === "paid", r.paid)}</td><td class="r num">${hit(A.field === "balance", r.balance)}</td></tr>`).join("")}`).join("")}
+      </tbody></table></div>`;
   } else if (A.mode === "near") {
     res = !rows.length ? `<div class="quiet ow-amt-msg">No invoices within ${money(A.range)} of ${money(A.amount)}.</div>`
       : `<div class="ow-amt-msg"><b>${A.n.toLocaleString()} invoice${A.n === 1 ? "" : "s"}</b> within ${money(A.range)} of ${money(A.amount)} (${money(A.amount - A.range)} to ${money(Number(A.amount) + Number(A.range))})${A.n > rows.length ? `, showing the closest ${rows.length}` : ""}. Closest first; the highlighted amount is the close one.</div>
@@ -13625,7 +13679,8 @@ function owAmtHtml() {
         <td class="r num">${hit(r.on_total, r.total)}</td><td class="r num">${hit(r.on_paid, r.paid)}</td><td class="r num">${hit(r.on_balance, r.balance)}</td></tr>`).join("")}
       </tbody></table></div>`;
   }
-  const what = mode === "pair" ? "Two invoices of the same customer, any date, whose amounts add up to exactly this. Closest together in date first."
+  const what = /^c[345]$/.test(mode) ? `${{ c3: "Three", c4: "Four", c5: "Five" }[mode]} invoices, any customers, dated within a week of each other, whose amounts add up to exactly this. Invoices already found in the bank are left out.`
+    : mode === "pair" ? "Two invoices of the same customer, any date, whose amounts add up to exactly this. Closest together in date first."
     : mode === "near" ? "Every invoice, any date, paid or not, where the total, amount paid or balance owing is within this much of the amount, up or down."
     : "Every invoice, any date, paid or not, where the total, amount paid or balance owing is exactly this amount.";
   // all on one line, as short as it can be: the explanation is the hover text
@@ -13633,9 +13688,11 @@ function owAmtHtml() {
       <form class="ow-amt-line" id="ow-amt-form" autocomplete="off" title="${esc(what)}"><span class="ow-sec-title">Find by amount</span>
         <div class="seg" role="group" aria-label="Look for">${OW_AMT_MODES.map(([k, t]) => `<button type="button" aria-pressed="${mode === k}" data-ow-amt-mode="${k}">${t}</button>`).join("")}</div>
         ${mode === "near" ? `<label class="ow-amt-by"><span>±</span><input type="text" inputmode="decimal" id="ow-amt-range" value="${esc(String(OW.amtRange ?? 100))}" aria-label="How far up or down" title="How far up or down"></label>` : ""}
-        ${mode === "pair" ? `<select id="ow-amt-field" aria-label="Add up the">${OW_PAIR_FIELDS.map(([k, t]) => `<option value="${k}" ${(OW.amtField || "total") === k ? "selected" : ""}>${t}</option>`).join("")}</select>` : ""}
+        ${mode === "pair" || /^c[345]$/.test(mode) ? `<select id="ow-amt-field" aria-label="Add up the">${OW_PAIR_FIELDS.map(([k, t]) => `<option value="${k}" ${(OW.amtField || "total") === k ? "selected" : ""}>${t}</option>`).join("")}</select>` : ""}
         <input type="text" inputmode="decimal" id="ow-amt" value="${esc(OW.amtQ || "")}" placeholder="Amount, e.g. 523.45" aria-label="Amount to find">
-        <button class="btn" type="submit">Find invoices</button>${A ? `<button class="link" type="button" id="ow-amt-clear">Clear</button>` : ""}</form>
+        <button class="btn" type="submit">Find invoices</button>${A ? `<button class="link" type="button" id="ow-amt-clear">Clear</button>` : ""}
+        <span class="ow-amt-dates"><select id="ow-amt-month" aria-label="Month"><option value="">Any date</option>${owAmtMonths().map(m => `<option value="${m}" ${OW.amtFrom === m + "-01" && OW.amtTo === owMonthEnd(m) ? "selected" : ""}>${esc(new Date(m + "-15").toLocaleDateString("en-CA", { month: "long", year: "numeric" }))}</option>`).join("")}</select>
+          <label>From <input type="date" id="ow-amt-from" value="${esc(OW.amtFrom || "")}"></label><label>To <input type="date" id="ow-amt-to" value="${esc(OW.amtTo || "")}"></label></span></form>
       ${res}</section>`;
 }
 function wireOwAmt() {
@@ -13646,6 +13703,10 @@ function wireOwAmt() {
   document.querySelectorAll("[data-ow-amt-mode]").forEach(b => b.addEventListener("click", () => { if (OW.amtMode === b.dataset.owAmtMode) return; OW.amtMode = b.dataset.owAmtMode;
     if (OW.amtQ && owAmtParse(OW.amtQ) != null) owAmtFind(); else { OW.amt = null; renderOwing(); } }));
   $("#ow-amt-clear")?.addEventListener("click", () => { OW.amt = null; OW.amtQ = ""; renderOwing(); });
+  const reDates = () => { saveOw(); if (OW.amt && OW.amtQ && owAmtParse(OW.amtQ) != null) owAmtFind(); else renderOwing(); };
+  $("#ow-amt-month")?.addEventListener("change", e => { const m = e.target.value; OW.amtFrom = m ? m + "-01" : ""; OW.amtTo = m ? owMonthEnd(m) : ""; reDates(); });
+  $("#ow-amt-from")?.addEventListener("change", e => { OW.amtFrom = e.target.value; reDates(); });
+  $("#ow-amt-to")?.addEventListener("change", e => { OW.amtTo = e.target.value; reDates(); });
   document.querySelectorAll("[data-ow-amt-sort]").forEach(t => t.addEventListener("click", () => { const k = t.dataset.owAmtSort, S = OW.amtSort || {};
     OW.amtSort = { k, dir: S.k === k ? -S.dir : (["date", "total", "paid", "bal"].includes(k) ? -1 : 1) }; renderOwing(); }));
   document.querySelectorAll("[data-ow-amt-inv]").forEach(b => b.addEventListener("click", () => openInvoice(Number(b.dataset.owAmtInv))));
