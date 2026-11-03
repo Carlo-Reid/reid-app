@@ -25656,10 +25656,20 @@ async function reloadEquipment() {
   redrawKeepingPlace();
 }
 
+// a job's day in the history: the day it's booked for while the work isn't done (not the day ServiceTitan made the job),
+// the day it was done once it's done
+function jobBookedDay(j) {
+  if (!j) return null;
+  const open = (j.visits || []).filter(v => !["completed", "cancelled"].includes(v.status) && v.scheduled_date).map(v => String(v.scheduled_date).slice(0, 10)).sort();
+  if (!j.completed_at && j.status !== "completed" && j.status !== "cancelled" && open.length) return { d: open.find(d => d >= ymd(new Date())) || open[open.length - 1], booked: true };
+  const done = (j.visits || []).filter(v => v.status === "completed" && v.scheduled_date).map(v => String(v.scheduled_date).slice(0, 10)).sort();
+  return { d: (j.completed_at ? String(j.completed_at).slice(0, 10) : done[done.length - 1]) || String(j.created_at || "").slice(0, 10), booked: false };
+}
 function jobsHtml(jobs) {
   return `<div class="scroll-box" tabindex="0" aria-label="Job history"><table><thead><tr><th>Date</th><th>Job</th><th>What</th><th class="hide-sm">Unit</th><th>Status</th><th class="no-print"></th></tr></thead><tbody>
     ${jobs.map((j, i) => `<tr class="job-row" tabindex="0" data-job="${j.id}">
-      <td class="num">${fmtDate(j.created_at)}</td><td class="num">${esc(j.job_number)}</td>
+      <td class="num">${(() => { const b = jobBookedDay(j), made = String(j.created_at || "").slice(0, 10);
+        return b?.booked ? `<b>${fmtDate(b.d)}</b><div class="quiet">booked · made ${fmtDate(made)}</div>` : `${fmtDate(b?.d || made)}${b?.d && b.d !== made ? `<div class="quiet">made ${fmtDate(made)}</div>` : ""}`; })()}</td><td class="num">${esc(j.job_number)}</td>
       <td>${esc(j.job_types?.name || "")}<div class="quiet">${esc((j.summary || "").slice(0, 120))}</div></td>
       <td class="hide-sm">${esc(j.business_units?.name || "")}${j.partners ? `<div class="quiet">${esc(j.partners.name)}</div>` : ""}${j.tank_payer ? `<div class="htin-tank">${esc(BK_TANK.find(x => x[0] === j.tank_payer)?.[1] || "")}</div>` : ""}</td>
       <td>${badge(j.status)}</td><td class="no-print">${j.status !== "completed" && !j.completed_at && (ME.role === "owner" || can("calls.dispatch")) && !(current?.invoices || []).some(x => x.job_id === j.id) ? `<button class="row-del" type="button" data-job-del="${j.id}" data-job-num="${esc(j.job_number)}" title="Delete this job"><span aria-hidden="true">✕</span> Delete</button>` : ""}</td></tr>`).join("")}
@@ -25753,7 +25763,7 @@ async function invTankPairNote(i) {
 }
 function invoicesHtml(list) {
   return `<div class="scroll-box" tabindex="0" aria-label="Invoices"><table><thead><tr><th>Date</th><th>Invoice</th><th class="r">Total</th><th class="r">Owing</th><th>Status</th><th class="no-print"></th></tr></thead><tbody>
-    ${list.map((i, n) => `<tr class="inv-row ${tankPairOf(i.id) ? "inv-paired" : ""}" tabindex="0" data-invoice="${i.id}" title="Open invoice"><td class="num">${fmtDate(i.invoice_date)}</td><td class="num"><span class="inv-link">${esc(i.invoice_number)}</span>${tankPairTag(i.id)}</td>
+    ${list.map((i, n) => `<tr class="inv-row ${tankPairOf(i.id) ? "inv-paired" : ""}" tabindex="0" data-invoice="${i.id}" title="Open invoice"><td class="num">${fmtDate(i.invoice_date)}${(() => { const b = jobBookedDay((current?.jobs || []).find(j => j.id === i.job_id)); return b?.booked ? `<div class="quiet">work booked for ${fmtDate(b.d)}</div>` : ""; })()}</td><td class="num"><span class="inv-link">${esc(i.invoice_number)}</span>${tankPairTag(i.id)}</td>
       <td class="r num">${money(i.total)}</td><td class="r num">${i.paid_at_store ? `<span class="quiet">Paid at the store</span>` : i.balance_due > 0.004 ? (i.not_owed_reason ? `<span class="not-owed" title="${esc(i.not_owed_reason)}">Not owed</span>` : money(i.balance_due)) : ""}</td><td>${badge(i.status)}</td><td class="no-print">${invCanCancel(i) ? `<button class="row-del" type="button" data-inv-cancel="${i.id}" data-inv-num="${esc(i.invoice_number || "")}" title="Made by mistake: cancel this invoice"><span aria-hidden="true">✕</span> Cancel</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} invoices.</div>` : ""}`;
 }
