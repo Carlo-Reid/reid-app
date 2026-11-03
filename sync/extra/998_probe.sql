@@ -1,1 +1,0 @@
-DO $$ BEGIN RAISE EXCEPTION 'PROBE2 %', (SELECT string_agg(d, ' | ') FROM (SELECT txn_date || ' c=' || left(code,8) || ' d=' || left(description, 30) || ' o=' || amount_out || ' i=' || amount_in || ' b=' || coalesce(balance::text,'-') d FROM bank_transactions WHERE account = 'main' AND file_name <> 'Book3.xlsx' ORDER BY txn_date DESC, id LIMIT 3) s); END $$;
