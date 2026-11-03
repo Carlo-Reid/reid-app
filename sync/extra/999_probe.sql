@@ -1,2 +1,0 @@
-DO $$ BEGIN RAISE EXCEPTION 'PROBE trg: % | gen: %', (SELECT string_agg(tgrelid::regclass || ':' || tgname || ':' || tgfoid::regproc, ', ') FROM pg_trigger WHERE NOT tgisinternal AND tgrelid IN ('public.payment_applications'::regclass, 'public.payments'::regclass, 'public.invoices'::regclass)),
-  (SELECT string_agg(column_name || '=' || coalesce(generation_expression, is_generated), ', ') FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'invoices' AND column_name IN ('balance_due', 'amount_paid')); END $$;
