@@ -5257,6 +5257,8 @@ article.owing .ow-when-list { margin: 12px 0 8px !important; }
 .ow-payrow td { background: #f3f8ff !important; } .ow-payf { display: flex; flex-direction: column; gap: 8px; padding: 6px 4px; }
 .ow-payf-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; } .ow-payf-row label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .ow-payf-row input[name=amt] { width: 120px; } .ow-payf-row input[name=ref] { width: 200px; } .ow-paybtn { white-space: nowrap; }
+.sl-num { margin: 6px 0 10px; border: 1px solid #dbe3ec; border-radius: 12px; background: #fff; max-height: 340px; overflow: auto; } .sl-num:empty { display: none; }
+.sl-num .num-hit { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid #eef2f6; background: none; padding: 7px 12px; cursor: pointer; } .sl-num .num-hit:hover { background: #eef4fb; }
 .mc-techs { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin: 4px 0 8px; } .mc-techs .sinv-app { width: auto; min-height: 96px; padding: 10px 6px; } .mc-techs .sa-ic { font-size: 15px; font-weight: 800; }
 .mc-tech-h { font-size: 16px; margin: 14px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); } .mc-tech-h:first-of-type { border-top: 0; }
 .sinv-mkpo { margin: 6px 0 10px; padding: 12px 14px; border: 1px solid #f0c36d; background: #fffaf0; border-radius: 14px; } .sinv-mkpo input { width: 100%; } .sinv-mkpo td.r input { width: 90px; text-align: right; }
@@ -6014,8 +6016,8 @@ const NUM_KIND = { invoice: ["Invoice", "🧾"], estimate: ["Proposal", "📝"],
   equipment: ["Equipment", "⚙"], sinv: ["Supplier invoice", "🏷"], mail: ["Supplier file", "📄"] };
 let NUM_SEQ = 0, NUM_ROWS = [];
 document.addEventListener("input", e => { if (e.target.id !== "f-num") return; clearTimeout(e.target._t); e.target._t = setTimeout(() => numFind(e.target.value), 300); });
-async function numFind(v) {
-  const box = $("#num-results"), q = String(v || "").trim(), seq = ++NUM_SEQ; if (!box) return;
+async function numFind(v, sel) {
+  const box = $(sel || "#num-results"), q = String(v || "").trim(), seq = ++NUM_SEQ; if (!box) return;
   if (q.replace(/[^A-Za-z0-9]/g, "").length < 3) { box.innerHTML = q ? `<div class="hint quiet" style="padding:6px 10px">Type at least 3 characters.</div>` : ""; return; }
   box.innerHTML = `<div class="hint quiet" style="padding:6px 10px">Looking…</div>`;
   const { data, error } = await db.rpc("find_number", { p_q: q }); if (seq !== NUM_SEQ) return;
@@ -9005,7 +9007,7 @@ function renderSales(msg) {
     ${!cvOn && (ptnCount.size > 1 || SALES.ptn) ? `<div class="sl-ptns" role="group" aria-label="Reid or partner"><span class="quiet">Show:</span>
       <button type="button" class="sl-ptnb ${SALES.ptn ? "" : "on"}" data-sl-ptn="">All <b>${ptnBase.length}</b></button>
       ${[...ptnCount].sort((a, b) => (a[0] === "Reid" ? -1 : b[0] === "Reid" ? 1 : b[1] - a[1])).map(([p, c]) => `<button type="button" class="sl-ptnb ${SALES.ptn === p ? "on" : ""} ${p === "Reid" ? "" : "sl-ptnb-p"}" data-sl-ptn="${esc(p)}">${esc(p)} <b>${c}</b></button>`).join("")}</div>` : ""}
-    <div class="sl-find sl-listhead"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, job or proposal #, sales person, type…" aria-label="Search sales" autocomplete="off">
+    <div class="sl-find sl-listhead"><input type="search" id="sl-q" value="${esc(SALES.q || "")}" placeholder="Search: customer, address, any number (invoice, proposal, job, PO, payment…), sales person, type…" aria-label="Search sales" autocomplete="off">
       ${cf && !qq.length ? `<span class="sl-cf-note">Showing <b>${esc(SALES_COMMF.find(x => x[0] === cf)[1].toLowerCase())}</b>: ${rows.length} ${rows.length === 1 ? "sale" : "sales"}, ${money(cfCount[cf]?.amt || 0)} commission${cvOn && CV.by === "unpaid" ? "" : ` <button class="link" type="button" id="sl-cf-clear">Show everything</button>`}</span>` : ""}
       ${older ? `<span class="sl-cf-note">Loading the older sales…</span>` : SALES.olderErr ? `<span class="sl-cf-note">Older sales didn't load: ${esc(SALES.olderErr)}</span>` : ""}
       <span class="quiet">${qq.length ? `${rows.length} found${SALES.from || SALES.to ? " (searching all dates)" : ""}` : `${rows.length} ${rows.length === 1 ? "sale" : "sales"}`}</span>
@@ -9079,6 +9081,10 @@ function renderSales(msg) {
   ["from", "to"].forEach(k => $("#sl-" + k)?.addEventListener("change", e => { SALES[k] = e.target.value; SALES.range = SALES.from || SALES.to ? "custom" : ""; salesSave(); renderSales(); }));
   $("#sl-alldates")?.addEventListener("click", () => { SALES.range = ""; SALES.from = SALES.to = ""; salesSave(); renderSales(); });
   // search as you type (keeps your place in the box); click a column heading to sort, again to reverse
+  // a number typed in the search also looks everywhere (invoices, proposals, jobs, visits, POs, supplier invoices, payments, plans, serials), like the customer page
+  { const q = (SALES.q || "").trim(), lh = document.querySelector(".sl-find.sl-listhead");
+    if (lh && /\d/.test(q) && q.replace(/[^A-Za-z0-9]/g, "").length >= 3) { let box = $("#sl-num-results"); if (!box) { box = document.createElement("div"); box.id = "sl-num-results"; box.className = "sl-num"; lh.after(box); }
+      clearTimeout(SALES._numT); SALES._numT = setTimeout(() => numFind(q, "#sl-num-results"), 300); } }
   $("#sl-q")?.addEventListener("input", e => { SALES.q = e.target.value; const pos = e.target.selectionStart; renderSales(); const q = $("#sl-q"); if (q) { q.focus(); try { q.setSelectionRange(pos, pos); } catch {} } });
   document.querySelectorAll("[data-sl-sort]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.slSort; if (SALES.sort === k) SALES.dir = -(SALES.dir || 1); else { SALES.sort = k; SALES.dir = k === "prop" || k === "comm" || k === "pay" ? -1 : 1; } salesSave(); renderSales(); }));
   $("#sl-new").addEventListener("click", () => { SALES_FIND = true; openSearchScreen(); });
@@ -13889,7 +13895,7 @@ function renderOwing(msg) {
     const id = Number(f.dataset.owPayf), amt = Number(String(f.amt.value).replace(/[$,\s]/g, "")), msg = f.querySelector(".ow-payf-msg");
     if (!(amt > 0)) { msg.className = "ow-payf-msg staff-msg err"; msg.textContent = "Type the amount paid."; return; }
     const btn = f.querySelector("button[type=submit]"); btn.disabled = true; btn.textContent = "Saving…";
-    const { error } = await db.rpc("inv_take_payment", { p_invoice: id, p_method: OW.payMethod || "cheque", p_amount: amt, p_reference: f.ref.value.trim() || null, p_on: f.on.value || ymd(new Date()) });
+    const { error } = await db.rpc("inv_record_payment", { p_invoice: id, p_method: OW.payMethod || "cheque", p_amount: amt, p_reference: f.ref.value.trim() || null, p_on: f.on.value || ymd(new Date()) });
     if (error) { btn.disabled = false; btn.textContent = "Record the payment"; msg.className = "ow-payf-msg staff-msg err"; msg.textContent = "Not saved: " + rpcErr(error); return; }
     // take it off the lists here (or lower what's owing), without reloading everything
     let r = null; Object.keys(OW.all || {}).forEach(k => { (OW.all[k] || []).forEach(x => { if (x.invoice_id === id) { r = x; x.balance = Math.max(0, Math.round((Number(x.balance) - amt) * 100) / 100); x.paid = Number(x.paid || 0) + amt; } });
