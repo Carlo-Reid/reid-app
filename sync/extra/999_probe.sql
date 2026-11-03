@@ -1,0 +1,1 @@
+DO $$ BEGIN RAISE EXCEPTION 'PROBE %', (SELECT string_agg(d, ' | ') FROM (SELECT left(coalesce(code,'') || '/' || description, 28) || ' x' || count(*) || ' $' || sum(amount_in)::int d FROM bank_transactions WHERE file_name = 'Book3.xlsx' AND amount_in > 0 GROUP BY 1 ORDER BY sum(amount_in) DESC LIMIT 12) s); END $$;
