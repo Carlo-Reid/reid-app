@@ -19030,6 +19030,7 @@ async function openBank(msg) {
   renderBank(msg);
 }
 async function bankLoad(more) {
+  if (BANK.tab === "merch") { const { data, error } = await db.rpc("merchant_statements_list"); BANK.err = error; BANK.merch = data || []; if (!BANK.data) { const r = await db.rpc("bank_list", { p_limit: 1, p_account: BANK.acct }); BANK.data = r.data; } return; }
   if (BANK.tab === "ledger") {
     if (!more) BANK.offset = 0;
     let { data, error } = await db.rpc("bank_ledger", { p_account: BANK.acct, p_q: BANK.ledQ || null, p_from: BANK.from || null, p_to: BANK.to || null, p_linked: BANK.ledLinked, p_limit: 200, p_offset: BANK.offset });
@@ -19076,6 +19077,55 @@ function bankSearchHtml() {
         <td>${esc(r.description || "(no description)")}${r.note ? `<div class="quiet">📝 ${esc(r.note)}</div>` : ""}<div><span class="bank-k">${esc(r.cat)}</span></div></td>
         <td class="r bank-out">${bankMoney(r.out)}</td><td class="r bank-in">${bankMoney(r.in)}</td><td class="r quiet">${r.balance != null ? money(r.balance) : ""}</td><td class="bank-invcol">${bankInvCell(r)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="quiet">Nothing in the bank matches “${esc(BANK.sq)}”.</p>`}`;
 }
+function bankMerchHtml() {
+  const L = BANK.merch || [];
+  if (!L.length) return `<p class="quiet">No card statements loaded yet. Press <b>⬆ Load a card statement (PDF)</b> at the top and pick Elavon's Merchant Billing Statement(s). Each one ties that month's card deposits to the card payments and invoices in them, and its fees to the fee line in the bank.</p>`;
+  const yes = (a, b) => a >= b ? `<b class="bank-in">${a} of ${b} ✓</b>` : `<b class="warn">${a} of ${b}</b>`;
+  return `<p class="quiet">Each statement's deposits (batches) next to the bank and the app's card payments. A deposit is fully placed when its card payments add up to it; its invoices then show on the bank line and get the 🏦 stamp.</p>
+    ${L.map(st => `<details class="block bank-sec" ${L.length === 1 ? "open" : ""}><summary><h2>${esc(new Date(String(st.date).slice(0, 10) + "T12:00:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" }))} · merchant …${esc(String(st.merchant_no).slice(-4))}
+        <span class="count">${money(st.sales)} in ${st.batches} deposits · fees ${money(st.fees)}</span></h2></summary>
+      <p>In the bank: ${yes(st.deposits, st.batches)} · card payments placed: ${yes(st.paid, st.batches)} · ${Number(st.invoices).toLocaleString()} invoices tied · <button class="link" type="button" data-merch-rematch="${st.id}">↻ Match again</button></p>
+      <table class="calls-table bank-t"><thead><tr><th>Batch</th><th class="r">Deposit</th><th>Cards</th><th>In the bank</th><th class="r">Card payments found</th></tr></thead><tbody>
+      ${(st.rows || []).map(b => `<tr><td>${esc(fmtDate(String(b.date).slice(0, 10)))}</td><td class="r"><b>${money(b.total)}</b></td><td class="quiet">${Object.entries(b.brands || {}).map(([k, v]) => `${esc(k)} ${money(v)}`).join(" · ")}</td>
+        <td>${b.bank ? `<span class="bank-in">✓ found</span>` : `<span class="warn">not in the bank file yet</span>`}</td><td class="r">${Math.abs(Number(b.paid || 0) - Number(b.total)) < 0.01 ? `<span class="bank-in">✓ ${money(b.paid)}</span>` : `<span class="warn">${money(b.paid || 0)} of ${money(b.total)}</span>`}</td></tr>`).join("")}</tbody></table></details>`).join("")}`;
+}
+// Elavon's Merchant Billing Statement (PDF): the text, line by line, read in the browser
+async function merchReadPdf(f) {
+  await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const buf = await f.arrayBuffer(), pdf = await window.pdfjsLib.getDocument({ data: buf.slice(0) }).promise, lines = [];
+  for (let n = 1; n <= pdf.numPages; n++) { const tc = await (await pdf.getPage(n)).getTextContent(), rows = new Map();
+    tc.items.forEach(it => { const y = Math.round(it.transform[5]); const k = [...rows.keys()].find(v => Math.abs(v - y) <= 2) ?? y; if (!rows.has(k)) rows.set(k, []); rows.get(k).push(it); });
+    [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([, its]) => lines.push(its.sort((a, b) => a.transform[4] - b.transform[4]).map(i => i.str).join(" ").replace(/\s+/g, " ").trim())); }
+  const text = lines.join("\n"), num = v => Number(String(v).replace(/,/g, "")), d = v => { const m = String(v).match(/(\d\d)\/(\d\d)\/(\d{2,4})/); return m ? `${m[3].length === 2 ? "20" + m[3] : m[3]}-${m[1]}-${m[2]}` : null; };
+  const out = { processor: /elavon/i.test(text) ? "Elavon" : "Card processor", file_name: f.name,
+    merchant_no: (text.match(/Merchant Number:?\s*0*(\d{5,})/i) || [])[1] || null, statement_date: d((text.match(/Statement Date:?\s*(\d\d\/\d\d\/\d{2,4})/i) || [])[1] || ""),
+    total_sales: num((text.match(/Total Sales\s+\d+\s+([\d,]+\.\d\d)/i) || [, 0])[1]), total_fees: num((text.match(/Total Charges and Fees\s+([\d,]+\.\d\d)/i) || [, 0])[1]),
+    fee_account: (text.match(/posted to Account #:?\s*(\S+)/i) || [])[1] || null, batches: [] };
+  let cur = null;
+  for (const l of lines) {
+    const m = l.match(/^(\d\d\/\d\d\/\d\d)\s+(\d\d\/\d\d\/\d\d)\s+(\d{6,})\s+(\d{3,})\s+BATCH\s+([\d,]+\.\d\d)\s+([\d,]+\.\d\d)\s+([\d,]+\.\d\d)/i);
+    if (m) { cur = { batch_date: d(m[1]), settle_date: d(m[2]), reference: m[3], batch_no: m[4], total: num(m[7]), brands: {} }; out.batches.push(cur); continue; }
+    if (/^Deposits Totals/i.test(l)) { cur = null; continue; }
+    const c = cur && l.match(/^(VISA|M\/C|MC|AEXP|AMEX|DISC|DCVR|DEBIT|DB|JCB|[A-Z\/]{2,6})\s+([\d,]+\.\d\d)\s+([\d,]+\.\d\d)\s*$/);
+    if (c) { const k = { MC: "M/C", AMEX: "AEXP", DCVR: "DISC", DB: "DEBIT" }[c[1]] || c[1]; cur.brands[k] = Math.round(((cur.brands[k] || 0) + num(c[2])) * 100) / 100; }
+  }
+  out.pdf = await new Promise((ok, no) => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(",")[1]); rd.onerror = no; rd.readAsDataURL(f); });
+  return out;
+}
+async function merchLoadFiles(files) {
+  const box = document.createElement("div"); box.className = "staff-msg"; $("#main .bank")?.prepend(box); const done = [];
+  for (const f of files) { box.textContent = `Reading ${f.name}…`;
+    let st; try { st = await merchReadPdf(f); } catch (e) { done.push(`${f.name}: couldn't read it (${e.message || e})`); continue; }
+    if (!st.batches.length || !st.merchant_no || !st.statement_date) { done.push(`${f.name}: no deposits found. Is it Elavon's Merchant Billing Statement?`); continue; }
+    const off = st.batches.filter(b => Math.abs(Object.values(b.brands).reduce((a, v) => a + v, 0) - b.total) > 0.01).length;
+    box.textContent = `Matching ${f.name}: ${st.batches.length} deposits…`;
+    const { data, error } = await db.rpc("merchant_statement_save", { p: st });
+    if (error) { done.push(`${f.name}: not loaded (${rpcErr(error)})`); continue; }
+    done.push(`${esc(new Date(st.statement_date + "T12:00:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" }))} (merchant …${st.merchant_no.slice(-4)}): ${data.deposits} of ${data.batches} deposits found in the bank, ${data.brands_matched} of ${data.brands} card amounts placed, ${data.invoices} invoices tied${data.fee_line ? ", fees tied to the fee line" : ""}${off ? ` (${off} deposits didn't add up on the statement)` : ""}`); }
+  try { OW_BANK.clear(); } catch {}
+  BANK.tab = "merch"; bankSave(); await bankLoad(); renderBank(done.join(" · "));
+}
 function bankLedHtml() {
   const L = BANK.led || {}, rows = BANK.ledRows || [];
   const inv = i => `<button class="bank-inv" type="button" data-invoice="${i.id}" title="Open invoice ${esc(i.number)}"><b>#${esc(i.number)}</b><span>${esc(fmtDate(i.date))}${i.who ? " · " + esc(i.who) : ""}${i.street ? " · " + esc(i.street) : ""}</span><em>${money(i.amount)}</em></button>`;
@@ -19094,18 +19144,18 @@ function bankLedHtml() {
 }
 function renderBank(msg) {
   const D = BANK.data || {}, none = !D.all;
-  const tabs = [["list", "Transactions"], ["ledger", "Ledger"], ["sum", "Totals"], ["partners", "Partner payments"]], AN = D.accounts || {}, an = (BANK_ACCTS.find(a => a[0] === BANK.acct) || [, "Main account"])[1];
+  const tabs = [["list", "Transactions"], ["ledger", "Ledger"], ["sum", "Totals"], ["partners", "Partner payments"], ["merch", "Card statements"]], AN = D.accounts || {}, an = (BANK_ACCTS.find(a => a[0] === BANK.acct) || [, "Main account"])[1];
   $("#main").innerHTML = `<article class="staff bank">
     <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Owners and the accountant</span><h1>Bank · ${esc(an)}</h1>
       <p>${none ? `No ${esc(an.toLowerCase())} transactions yet. Load the bank's export for ${esc(an.toLowerCase())} to start.` : `${Number(D.all).toLocaleString()} transactions from ${esc(fmtDate(D.first))} to ${esc(fmtDate(D.last))}.`}</p></div>
-      <div class="cl-hero-range"><label class="btn bank-load">⬆ Load a ${esc(an)} file<input type="file" id="bank-file" accept=".xlsx,.xls,.txt,.csv,.tsv,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden></label><button class="btn quiet-btn" type="button" data-bank-rematch title="Match every partner's deposits again (after new payments or a new bank file)">↻ Match again</button><em>The bank's export as Excel (.xlsx) or text (.txt, .csv): Date, Code, Description, Out, In, Balance. Lines already loaded are skipped.</em></div></header>
+      <div class="cl-hero-range"><label class="btn quiet-btn bank-load" title="Elavon's monthly Merchant Billing Statement (PDF): ties each card deposit to the card payments and invoices in it">⬆ Load a card statement (PDF)<input type="file" id="bank-merch" accept="application/pdf,.pdf" multiple hidden></label> <label class="btn bank-load">⬆ Load a ${esc(an)} file<input type="file" id="bank-file" accept=".xlsx,.xls,.txt,.csv,.tsv,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden></label><button class="btn quiet-btn" type="button" data-bank-rematch title="Match every partner's deposits again (after new payments or a new bank file)">↻ Match again</button><em>The bank's export as Excel (.xlsx) or text (.txt, .csv): Date, Code, Description, Out, In, Balance. Lines already loaded are skipped.</em></div></header>
     <div class="vtp-find bank-all"><label for="bank-sq">Search the bank</label><span class="vtp-qw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="bank-sq" type="search" value="${esc(BANK.sq || "")}" placeholder="Anything: payee, amount, invoice #, customer, street, note, supplier invoice # or file" autocomplete="off"></span>${BANK.sq ? `<span class="quiet">Both accounts</span> <button class="link" type="button" id="bank-sqx">Clear</button>` : ""}</div>
     ${BANK.sq ? bankSearchHtml() : ""}
     <nav class="bank-accts" role="tablist" aria-label="Account" ${BANK.sq ? "hidden" : ""}>${BANK_ACCTS.map(([k, t]) => `<button type="button" role="tab" class="bank-acct" data-bank-acct="${k}" aria-pressed="${BANK.acct === k}">🏦 ${esc(t)}<span>${AN[k] ? Number(AN[k]).toLocaleString() + " transactions" : "nothing loaded yet"}</span></button>`).join("")}</nav>
     ${msg ? `<div class="staff-msg ok">${esc(msg)}</div>` : ""}${BANK.err ? `<div class="staff-msg err">${esc(/PGRST202|could not find/i.test(BANK.err.message || "") ? "Almost ready: try again in a few minutes." : rpcErr(BANK.err))}</div>` : ""}
     <div id="bank-drop" class="bank-drop" ${none ? "" : "hidden"}>Drop the bank's export for ${esc(an)} here</div>
     ${none || BANK.sq ? "" : `<div class="seg bank-tabs" role="tablist">${tabs.map(([k, t]) => `<button type="button" data-bank-tab="${k}" aria-pressed="${BANK.tab === k}">${t}</button>`).join("")}</div>
-    ${BANK.tab === "sum" ? bankSumHtml() : BANK.tab === "partners" ? bankPartHtml() : BANK.tab === "ledger" ? bankLedHtml() : bankListHtml()}`}
+    ${BANK.tab === "sum" ? bankSumHtml() : BANK.tab === "partners" ? bankPartHtml() : BANK.tab === "ledger" ? bankLedHtml() : BANK.tab === "merch" ? bankMerchHtml() : bankListHtml()}`}
   </article>`;
   wireBank();
 }
@@ -19196,6 +19246,8 @@ function wireBank() {
   m.querySelectorAll("[data-bank-gaptie]").forEach(b => b.addEventListener("click", async () => { const [bank, num, amt] = b.dataset.bankGaptie.split("|"); b.disabled = true;
     const { error } = await db.rpc("bank_attach_number", { p_bank: Number(bank), p_number: num, p_amount: Number(amt) }); if (error) { b.disabled = false; return alertMsg("Not tied: " + rpcErr(error)); }
     try { OW_BANK.clear(); } catch {} BANK.match = {}; await bankLoad(); renderBank(`Invoice ${num} is tied to that deposit and counts as paid.`); }));
+  $("#bank-merch")?.addEventListener("change", e => { const fs = [...(e.target.files || [])]; if (fs.length) merchLoadFiles(fs); });
+  m.querySelectorAll("[data-merch-rematch]").forEach(b => b.addEventListener("click", async () => { b.disabled = true; b.textContent = "Matching…"; const { error } = await db.rpc("merchant_statement_match", { p_id: Number(b.dataset.merchRematch) }); if (error) alertMsg("Not done: " + rpcErr(error)); try { OW_BANK.clear(); } catch {} await bankLoad(); renderBank(); }));
   m.querySelectorAll("[data-bank-attach]").forEach(b => b.addEventListener("click", () => bankAttachForm(b)));
   m.querySelectorAll("[data-bank-detach]").forEach(b => b.addEventListener("click", async () => { const [k, id] = b.dataset.bankDetach.split("|"), bank = Number(b.closest("[data-bank-row]").dataset.bankRow);
     if ((await askChoice("Take it off this bank line?", "", [["yes", "Take it off", true], ["", "Keep it"]])) !== "yes") return;
@@ -19214,7 +19266,8 @@ function wireBank() {
   m.querySelectorAll("[data-bank-note]").forEach(i => i.addEventListener("change", async () => { const { error } = await db.rpc("bank_note_set", { p_id: Number(i.dataset.bankNote), p_note: i.value }); i.classList.toggle("bank-saved", !error); if (error) alertMsg("Not saved: " + rpcErr(error)); }));
   $("#bank-file")?.addEventListener("change", e => { const f = e.target.files?.[0]; if (f) bankReadFile(f); });
   const dz = $("#bank-drop"); document.body.ondragover = e => { if (document.body.dataset.page === "bank" && [...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); if (dz) { dz.hidden = false; dz.classList.add("on"); } } };
-  document.body.ondrop = e => { if (document.body.dataset.page !== "bank") return; const f = e.dataTransfer?.files?.[0]; if (!f) return; e.preventDefault(); dz?.classList.remove("on"); bankReadFile(f); };
+  document.body.ondrop = e => { if (document.body.dataset.page !== "bank") return; const fs = [...(e.dataTransfer?.files || [])], f = fs[0]; if (!f) return; e.preventDefault(); dz?.classList.remove("on");
+    if (fs.every(x => /pdf/i.test(x.type) || /\.pdf$/i.test(x.name))) return merchLoadFiles(fs); bankReadFile(f); };
 }
 // reload the list where you are (after attaching or taking something off)
 async function bankReloadKeep() { if (BANK.sq) { const { data } = await db.rpc("bank_search", { p_q: BANK.sq, p_limit: 300 }); BANK.srch = data || BANK.srch; const top = $("#main").scrollTop; renderBank(); $("#main").scrollTop = top; return; } try { OW_BANK.clear(); } catch {} const top = $("#main").scrollTop, n = BANK.tab === "ledger" ? BANK.ledRows.length : BANK.rows.length; BANK.offset = 0;
