@@ -18957,7 +18957,9 @@ async function bankLoad(more) {
   BANK.rows = more ? BANK.rows.concat(data.rows || []) : data.rows || []; BANK.data = data;
 }
 const bankMoney = n => Number(n) ? money(n) : "";
-async function bankMatchAll(say) { try { OW_BANK.clear(); } catch {} say?.("Pairing transfers with Savings…"); await db.rpc("bank_transfer_match"); for (const [id, n] of BANK_PARTNERS) { say?.(`Matching ${n}'s deposits…`); const { data } = await db.rpc("bank_partner_match", { p_partner: id }); if (data) BANK.match[id] = data; } }
+async function bankMatchAll(say) { const errs = []; try { OW_BANK.clear(); } catch {} say?.("Pairing transfers with Savings…"); const t = await db.rpc("bank_transfer_match"); if (t.error) errs.push("Transfers: " + rpcErr(t.error));
+  let n0 = 0; for (const [id, n] of BANK_PARTNERS) { say?.(`Matching ${n}'s deposits…`); const { data, error } = await db.rpc("bank_partner_match", { p_partner: id }); if (error) errs.push(n + ": " + rpcErr(error)); if (data) { BANK.match[id] = data; n0 += Number(data.matched_n || 0); } }
+  return { errs, matched: n0 }; }
 const bankInv = i => `<div class="bank-attw"><button class="bank-inv" type="button" data-invoice="${i.id}" title="Open invoice ${esc(i.number)}"><b>#${esc(i.number)}</b><span>${esc(fmtDate(i.date))}${i.who ? " · " + esc(i.who) : ""}${i.street ? " · " + esc(i.street) : ""}${i.how === "by hand" ? " · tied by hand" : ""}</span><em>${money(i.amount)}</em></button>${i.how === "by hand" ? `<button class="bank-x" type="button" data-bank-detach="invoice|${i.id}" title="Take it off" aria-label="Take invoice ${esc(i.number)} off">✕</button>` : ""}</div>`;
 // what was attached by hand: supplier invoices and files, and the + Attach button
 const bankAtt = r => { const A = r.att || {}, S = A.sinv || [], F = A.files || [];
@@ -19077,7 +19079,7 @@ function wireBank() {
     Object.assign(BANK, { acct: a, data: null, sum: null, rows: [], ledRows: [], cat: "", dir: "", year: null, offset: 0, from: d, to: d }); if (BANK.tab === "ledger") BANK.ledQ = amt; else { BANK.tab = "list"; BANK.q = amt; } bankSave(); await bankLoad(); renderBank(); }));
   m.querySelectorAll("[data-bank-linked]").forEach(b => b.addEventListener("click", () => { BANK.ledLinked = b.dataset.bankLinked === "1"; redo(); }));
   m.querySelector("[data-bank-ledmore]")?.addEventListener("click", () => { BANK.offset = BANK.ledRows.length; redo(true); });
-  m.querySelectorAll("[data-bank-rematch]").forEach(x => x.addEventListener("click", async e => { const b = e.currentTarget; b.disabled = true; BANK.match = {}; await bankMatchAll(t => { b.textContent = t; }); await bankLoad(); renderBank("Matched every partner's deposits again."); }));
+  m.querySelectorAll("[data-bank-rematch]").forEach(x => x.addEventListener("click", async e => { const b = e.currentTarget; b.disabled = true; BANK.match = {}; const res = await bankMatchAll(t => { b.textContent = t; }); await bankLoad(); renderBank(res?.errs?.length ? "Matching didn't finish: " + res.errs.join(" · ") : `Matched every partner's deposits again: ${Number(res?.matched || 0).toLocaleString()} partner deposits are matched.`); }));
   let lt = 0; $("#bank-lq")?.addEventListener("input", e => { clearTimeout(lt); lt = setTimeout(async () => { BANK.ledQ = e.target.value.trim(); const at = e.target.selectionStart; await bankLoad(); renderBank(); const i = $("#bank-lq"); if (i) { i.focus(); try { i.setSelectionRange(at, at); } catch {} } }, 350); });
   m.querySelector("[data-bank-more]")?.addEventListener("click", () => { BANK.offset = BANK.rows.length; redo(true); });
   ["bank-from", "bank-to"].forEach(id => $("#" + id)?.addEventListener("change", e => { BANK[id === "bank-from" ? "from" : "to"] = e.target.value; redo(); }));
@@ -19144,9 +19146,9 @@ async function bankReadFile(f) {
     const { data, error } = await db.rpc("bank_import", { p_rows: rows.slice(i, i + 1000), p_file: f.name, p_account: BANK.acct }); if (error) { box.className = "staff-msg err"; box.textContent = "Stopped: " + rpcErr(error); return; }
     added += data.added; already += data.already; }
   // match the new lines right away: transfers with Savings, then each partner's deposits
-  if (added) { BANK.match = {}; try { await bankMatchAll(t => { box.textContent = "Loaded. " + t; }); } catch (e) { console.warn("bank match", e); } BANK.led = null; BANK.ledRows = null; }
+  if (added) { BANK.match = {}; try { const res = await bankMatchAll(t => { box.textContent = "Loaded. " + t; }); if (res?.errs?.length) BANK.matchErr = res.errs.join(" · "); } catch (e) { console.warn("bank match", e); } BANK.led = null; BANK.ledRows = null; }
   BANK.data = null; BANK.sum = null; BANK.match = {}; BANK.tab = "list"; BANK.q = ""; BANK.cat = ""; BANK.dir = ""; BANK.from = ""; BANK.to = "";
-  openBank(`Loaded ${f.name} into ${an}: ${added.toLocaleString()} new transactions${already ? `, ${already.toLocaleString()} were already in (or the same line twice)` : ""}.${added ? " Matched the partners' deposits and transfers." : ""}`);
+  openBank(`Loaded ${f.name} into ${an}: ${added.toLocaleString()} new transactions${already ? `, ${already.toLocaleString()} were already in (or the same line twice)` : ""}.${added ? (BANK.matchErr ? " Matching didn't finish: " + BANK.matchErr : " Matched the partners' deposits and transfers.") : ""}`); BANK.matchErr = null;
 }
 $("#bank-link")?.addEventListener("click", () => openBank());
 
