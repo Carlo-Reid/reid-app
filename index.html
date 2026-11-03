@@ -5254,6 +5254,9 @@ body.viewing-as #app { box-shadow: inset 0 0 0 4px #7a1f5c; }
 .sinv-pairpick select { margin-top: 4px; max-width: 280px; font-size: 12px; } .sinv-addln { margin: 10px 0; } .sinv-addln-f { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .sinv-addln-f input[name=description] { min-width: 240px; } .sinv-addln-f input[name=qty] { width: 70px; } .sinv-addln-f input[name=each] { width: 150px; }
 article.owing .ow-when-list { margin: 12px 0 8px !important; }
+.ow-payrow td { background: #f3f8ff !important; } .ow-payf { display: flex; flex-direction: column; gap: 8px; padding: 6px 4px; }
+.ow-payf-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; } .ow-payf-row label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.ow-payf-row input[name=amt] { width: 120px; } .ow-payf-row input[name=ref] { width: 200px; } .ow-paybtn { white-space: nowrap; }
 .mc-techs { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin: 4px 0 8px; } .mc-techs .sinv-app { width: auto; min-height: 96px; padding: 10px 6px; } .mc-techs .sa-ic { font-size: 15px; font-weight: 800; }
 .mc-tech-h { font-size: 16px; margin: 14px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); } .mc-tech-h:first-of-type { border-top: 0; }
 .sinv-mkpo { margin: 6px 0 10px; padding: 12px 14px; border: 1px solid #f0c36d; background: #fffaf0; border-radius: 14px; } .sinv-mkpo input { width: 100%; } .sinv-mkpo td.r input { width: 90px; text-align: right; }
@@ -13277,6 +13280,19 @@ const OW_GROUP = [["none", "No groups"], ["age", "How old"], ["month", "Month"],
 // how old an invoice is for "How old": from when the work was finished (if that was after the invoice), and not at all while the work is still booked
 const owNotDue = r => r && r.job_done === false && !!r.booked_for;
 const owAgeDays = r => { if (owNotDue(r)) return null; const from = r.done_on && r.done_on > r.invoice_date ? r.done_on : r.invoice_date; return Math.floor((Date.now() - new Date(from + "T12:00:00")) / 86400000); };
+// "Record payment" on a Receivables line: the payment you found (how, how much, the day it was paid, its reference), straight onto the invoice
+function owPayRow(r) {
+  const m = OW.payMethod || "cheque";
+  return `<tr class="ow-payrow"><td colspan="7"><form class="ow-payf" data-ow-payf="${r.invoice_id}" autocomplete="off">
+    <b>Payment on invoice ${esc(r.invoice_number)}</b> <span class="quiet">${esc(r.customer_name || "")} · owing ${money(r.balance)}</span>
+    <div class="seg" role="group" aria-label="How it was paid">${PAY_METHODS.map(([k, x]) => `<button type="button" data-ow-paym="${k}" aria-pressed="${m === k}">${x}</button>`).join("")}</div>
+    <div class="ow-payf-row"><label>Amount<input name="amt" inputmode="decimal" value="${Number(r.balance).toFixed(2)}"></label>
+      <label>Paid on<input name="on" type="date" value="${ymd(new Date())}" max="${ymd(new Date())}"></label>
+      <label>${{ card: "Approval # or last 4 digits", cheque: "Cheque #", e_transfer: "E-transfer reference", cash: "Note", financing: "Financing reference" }[m]}<input name="ref" maxlength="80"></label>
+      <button class="btn" type="submit">Record the payment</button> <button class="link" type="button" data-ow-payx>Cancel</button>
+      <button class="link" type="button" data-invoice="${r.invoice_id}">Open the invoice</button></div>
+    <div class="ow-payf-msg" role="status"></div></form></td></tr>`;
+}
 const owShortDay = d => d ? new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }) : "";
 const owNotDueHtml = r => owNotDue(r) ? `<div class="ow-notdue"><span class="ow-tag ow-booktag">Not due yet</span> Work booked for <b>${esc(owShortDay(r.booked_for))}</b>${r.booked_on ? ` <span class="quiet">(booked ${esc(fmtDate(r.booked_on))})</span>` : ""}. Due once the work is done.</div>`
   : r && r.done_on && r.done_on > r.invoice_date ? `<div class="quiet">Work done ${esc(fmtDate(r.done_on))}: counted from then</div>` : "";
@@ -13783,7 +13799,7 @@ function renderOwing(msg) {
         <td><button class="link" type="button" data-ow-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${esc(r.job_type || "")}</td>
         <td class="r num">${scope !== "owing" ? (owBalScope(scope) ? `<strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>` : `<strong>${money(r.total)}</strong>`) : `<strong>${money(r.balance)}</strong><div class="quiet">of ${money(r.total)}</div>${r.over_total ? `<div class="ow-odd-note">paid ${money(r.paid)}</div>` : ""}`}</td>
-        <td class="ow-act">${scope !== "owing" ? (r._booked ? `<span class="ow-tag ow-booktag">${esc((r.job_status || "").replace("_", " "))}</span>${r.from_estimate ? ` <span class="quiet">from the proposal</span>` : ""}` : r._paidOff ? `<span class="ow-tag ow-paidtag">Paid</span>`
+        <td class="ow-act">${Number(r.balance) > 0.004 && !r._booked && officeInv() ? `<button class="chip small ow-paybtn" type="button" data-ow-pay="${r.invoice_id}" aria-expanded="${OW.payOpen === r.invoice_id}">💲 Record payment</button> ` : ""}${scope !== "owing" ? (r._booked ? `<span class="ow-tag ow-booktag">${esc((r.job_status || "").replace("_", " "))}</span>${r.from_estimate ? ` <span class="quiet">from the proposal</span>` : ""}` : r._paidOff ? `<span class="ow-tag ow-paidtag">Paid</span>`
             : r._show === "not_owed" ? `<span class="quiet">Not owed: ${esc(r.not_owed_reason || "")}</span>` : `<span class="ow-tag ow-owetag">Owing ${money(r.balance)}</span>${r._show === "checked" ? ` <span class="quiet">checked</span>` : ""}`)
           : OW.show === "todo" ? `${["Paid monthly", "Paid elsewhere"].map(x => `<button class="chip small" type="button" data-ow-not="${x}">${x}</button>`).join("")}
             <button class="chip small" type="button" data-ow-bad title="Write it off: it goes to Bad debts on the Accounting page">Bad debt</button>
@@ -13791,7 +13807,7 @@ function renderOwing(msg) {
             <button class="chip small ow-still" type="button" data-ow-still>Still owing</button>`
           : OW.show === "checked" ? `<span class="quiet">Still owing · ${esc(r.checked_by || "")} ${r.checked_at ? esc(fmtDate(r.checked_at.slice(0, 10))) : ""}</span> <button class="link" type="button" data-ow-undo-check>Undo</button>`
           : `<span>${esc(r.not_owed_reason)}</span> <span class="quiet">· ${esc(r.marked_by || "")}</span> <button class="link" type="button" data-ow-undo-not>Undo</button>`}</td>
-      </tr>`; }).join("")}</tbody></table>${list.length > (OW.limit || 100) ? `<div class="ow-more"><button class="btn quiet-btn" type="button" id="ow-more">Show ${Math.min(100, list.length - (OW.limit || 100))} more</button> <span class="quiet">showing ${(OW.limit || 100).toLocaleString()} of ${list.length.toLocaleString()}</span></div>` : ""}</div>`; })() : `<div class="quiet" style="padding:24px 0">${scope.startsWith("age") ? "No not-paid invoices this old." : scope.startsWith("ptn:") ? (OW.ptnData && !OW.ptnData.loading ? (OW.ptnData.error ? esc(OW.ptnData.error) : "No invoices for this partner for these dates.") : "Loading…") : scope !== "owing" ? ((scope === "booked" ? BD : PD) ? (scope === "booked" ? "No booked jobs for these dates." : "No invoices for these dates.") : "Loading…") : OW.show === "todo" ? "Nothing left to check here." : "None yet."}</div>`}
+      </tr>${OW.payOpen === r.invoice_id ? owPayRow(r) : ""}`; }).join("")}</tbody></table>${list.length > (OW.limit || 100) ? `<div class="ow-more"><button class="btn quiet-btn" type="button" id="ow-more">Show ${Math.min(100, list.length - (OW.limit || 100))} more</button> <span class="quiet">showing ${(OW.limit || 100).toLocaleString()} of ${list.length.toLocaleString()}</span></div>` : ""}</div>`; })() : `<div class="quiet" style="padding:24px 0">${scope.startsWith("age") ? "No not-paid invoices this old." : scope.startsWith("ptn:") ? (OW.ptnData && !OW.ptnData.loading ? (OW.ptnData.error ? esc(OW.ptnData.error) : "No invoices for this partner for these dates.") : "Loading…") : scope !== "owing" ? ((scope === "booked" ? BD : PD) ? (scope === "booked" ? "No booked jobs for these dates." : "No invoices for these dates.") : "Loading…") : OW.show === "todo" ? "Nothing left to check here." : "None yet."}</div>`}
   </article>`;
   { const art = mainEl.querySelector("article.owing"); if (art && keepH) art.style.minHeight = keepH + "px"; }
   owFillPaidOn(mainEl);
@@ -13865,6 +13881,20 @@ function renderOwing(msg) {
     if (OW.all.not_owed && r) OW.all.not_owed.unshift({ ...r, not_owed_reason: "Bad debt", marked_by: "you" });
     renderOwing(`Written off as bad debt: invoice ${r.invoice_number}, ${r.customer_name}.`);
   }));
+  document.querySelectorAll("[data-ow-pay]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.owPay); OW.payOpen = OW.payOpen === id ? null : id; renderOwing(); document.querySelector(`[data-ow-payf="${id}"] input[name=ref]`)?.focus(); }));
+  document.querySelectorAll("[data-ow-paym]").forEach(b => b.addEventListener("click", () => { const f = b.closest("form"), keep = { amt: f.amt.value, on: f.on.value, ref: f.ref.value };
+    OW.payMethod = b.dataset.owPaym; renderOwing(); const g = document.querySelector(`[data-ow-payf="${OW.payOpen}"]`); if (g) { g.amt.value = keep.amt; g.on.value = keep.on; g.ref.value = keep.ref; } }));
+  document.querySelectorAll("[data-ow-payx]").forEach(b => b.addEventListener("click", () => { OW.payOpen = null; renderOwing(); }));
+  document.querySelectorAll("[data-ow-payf]").forEach(f => f.addEventListener("submit", async e => { e.preventDefault();
+    const id = Number(f.dataset.owPayf), amt = Number(String(f.amt.value).replace(/[$,\s]/g, "")), msg = f.querySelector(".ow-payf-msg");
+    if (!(amt > 0)) { msg.className = "ow-payf-msg staff-msg err"; msg.textContent = "Type the amount paid."; return; }
+    const btn = f.querySelector("button[type=submit]"); btn.disabled = true; btn.textContent = "Saving…";
+    const { error } = await db.rpc("inv_take_payment", { p_invoice: id, p_method: OW.payMethod || "cheque", p_amount: amt, p_reference: f.ref.value.trim() || null, p_on: f.on.value || ymd(new Date()) });
+    if (error) { btn.disabled = false; btn.textContent = "Record the payment"; msg.className = "ow-payf-msg staff-msg err"; msg.textContent = "Not saved: " + rpcErr(error); return; }
+    // take it off the lists here (or lower what's owing), without reloading everything
+    let r = null; Object.keys(OW.all || {}).forEach(k => { (OW.all[k] || []).forEach(x => { if (x.invoice_id === id) { r = x; x.balance = Math.max(0, Math.round((Number(x.balance) - amt) * 100) / 100); x.paid = Number(x.paid || 0) + amt; } });
+      OW.all[k] = (OW.all[k] || []).filter(x => !(x.invoice_id === id && x.balance <= 0.004)); });
+    OW.payOpen = null; renderOwing(`Payment of ${money(amt)} recorded on invoice ${r?.invoice_number || ""}${r && r.balance > 0.004 ? `: ${money(r.balance)} still owing` : ": paid in full"}.`); }));
   document.querySelectorAll("[data-ow-still]").forEach(b => b.addEventListener("click", () => { const tr = b.closest("tr"); act(tr, "set_invoice_checked", { p_invoice_id: Number(tr.dataset.inv), p_checked: true }, "Checked, still owing"); }));
   document.querySelectorAll("[data-ow-undo-check]").forEach(b => b.addEventListener("click", () => { const tr = b.closest("tr"); act(tr, "set_invoice_checked", { p_invoice_id: Number(tr.dataset.inv), p_checked: false }, "Put back on the To check list"); }));
   document.querySelectorAll("[data-ow-undo-not]").forEach(b => b.addEventListener("click", () => { const tr = b.closest("tr"); act(tr, "set_invoice_not_owed", { p_invoice_id: Number(tr.dataset.inv), p_reason: null }, "Counted as owing again"); }));
