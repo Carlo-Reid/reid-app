@@ -19121,8 +19121,21 @@ function bankParse(text) {
   const MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
   const day = s => { s = String(s || "").trim(); let m = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2,4})$/); if (m && MON[m[2].toLowerCase()]) { const y = m[3].length === 2 ? "20" + m[3] : m[3]; return `${y}-${String(MON[m[2].toLowerCase()]).padStart(2, "0")}-${m[1].padStart(2, "0")}`; }
     m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/); if (m) return s; m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (m) return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`; return null; };
-  for (const l of lines) { const p = split(l); const d = day(p[0]); if (!d || p.length < 5) continue;
-    out.push({ date: d, code: (p[1] || "").trim(), description: (p[2] || "").trim(), out: Math.abs(num(p[3])), in: Math.abs(num(p[4])), balance: p[5] != null && String(p[5]).trim() !== "" ? num(p[5]) : null }); }
+  // go by the column headings when the file has them (banks put Code / Withdrawal / Deposit in different places); else Date, Code, Description, Out, In, Balance
+  const H = head ? split(head).map(x => String(x).trim().toLowerCase()) : [], at = re => H.findIndex(h => re.test(h));
+  let C = { date: 0, code: 1, desc: 2, out: 3, in: 4, bal: 5, amt: -1 };
+  if (H.length) { const c = { date: at(/date/), code: at(/^code$|^type$|transaction type|tran.*code/), desc: at(/desc|details|memo|payee|narrative/),
+      out: at(/withdraw|debit|^out$|money out|paid out/), in: at(/deposit|credit|^in$|money in|paid in/), bal: at(/balance/), amt: at(/^amount$/) };
+    if (c.date >= 0 && c.desc >= 0 && (c.out >= 0 || c.in >= 0 || c.amt >= 0)) C = c; }
+  if (C.code === 1) {   // no usable headings: a file with no Code column has numbers where the description should be
+    const isNum = x => /^\s*[-(]?\$?[\d,]*\.?\d*\)?\s*$/.test(String(x ?? "")); let shifted = 0, total = 0;
+    for (const l of lines) { const p = split(l); if (!day(p[0]) || p.length < 4) continue; total++; if (isNum(p[2]) && isNum(p[3]) && !isNum(p[1])) shifted++; }
+    if (total && shifted / total > 0.8) C = { date: 0, code: -1, desc: 1, out: 2, in: 3, bal: 4, amt: -1 }; }
+  const cell = (p, i) => i >= 0 && p[i] != null ? String(p[i]).trim() : "";
+  for (const l of lines) { const p = split(l); const d = day(p[C.date]); if (!d || p.length < 3) continue;
+    let o = Math.abs(num(cell(p, C.out))), n = Math.abs(num(cell(p, C.in)));
+    if (C.amt >= 0 && !o && !n) { const v = num(cell(p, C.amt)); if (v < 0) o = -v; else n = v; }
+    out.push({ date: d, code: cell(p, C.code), description: cell(p, C.desc), out: o, in: n, balance: cell(p, C.bal) !== "" ? num(cell(p, C.bal)) : null }); }
   return out;
 }
 // an Excel file: every sheet's rows become tab-separated lines (dates as 2026-08-06), then read the same way
