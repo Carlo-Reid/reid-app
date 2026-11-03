@@ -1243,6 +1243,7 @@
   .ow-amt-dates { display: inline-flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; } .ow-amt-dates label { display: inline-flex; gap: 4px; align-items: center; font-weight: 700; } .ow-amt-dates input, .ow-amt-dates select { padding: 4px 6px; border: 1px solid #9fb3cc; border-radius: 6px; font: inherit; }
   .ow-home { display: inline-block; margin-top: 3px; padding: 1px 8px; font-size: 12.5px; font-weight: 700; background: #fff7e8; border: 1px solid #f0c27b; border-radius: 6px; color: #7a4600; } .ow-home .link { font-weight: 800; }
   .ow-zerobtn { margin-right: 10px; font-size: 13px; padding: 5px 12px; }
+  .inv-home .inv-homelink { font-size: inherit; padding: 0; } .inv-home .inv-homelink strong { text-decoration: underline; }
   .ow-numcopy { margin-left: 6px; padding: 1px 6px; font: inherit; font-size: 12px; line-height: 1.4; color: #1b4f8a; background: #eef4fb; border: 1px solid #b9cde6; border-radius: 6px; cursor: pointer; vertical-align: 1px; } .ow-numcopy:hover { background: #1b4f8a; color: #fff; } .ow-numcopy.done { background: #e3f4e8; color: #1f6b35; border-color: #a9d8b6; }
   .bank .bank-load { cursor: pointer; } .bank-drop { margin: 10px 0; padding: 26px; border: 2px dashed #9fb3cc; border-radius: 12px; text-align: center; color: #4a5768; font-weight: 700; } .bank-drop.on { background: #eef4fb; border-color: #1b4f8a; }
   .bank-tabs { margin: 12px 0; } .merch-res { display: grid; gap: 10px; margin: 14px 0; } .merch-msg { font-size: 16px; padding: 14px 16px; }
@@ -24909,7 +24910,9 @@ async function openEstimate(id) {
           return `Option ${n + 1}: ${o.name || ""}${x.accepted_option_id === o.id ? " (accepted)" : ""}\n` + ls.map(k => `  ${k.description}  x${Number(k.quantity)}  ${money(k.line_total)}`).join("\n") + `\n  Subtotal ${money(sub)}`; }).join("\n\n");
     const ok = await copyText(text); $("#inv-copy").textContent = ok ? "Copied ✓" : "Couldn't copy"; setTimeout(() => $("#inv-copy").textContent = "Copy", 1600);
   };
-  { const nv = $("#inv-newver"); nv.classList.toggle("hidden", !!ME.guided); nv.disabled = false; nv.onclick = () => estNewVersion(x.id, nv); }
+  { const nv = $("#inv-newver"), shut = ["accepted", "lost", "declined", "expired"].includes(x.status) || !!x.cancelled_at; nv.classList.toggle("hidden", !!ME.guided); nv.disabled = false;
+    nv.textContent = shut ? "✎ Edit as a new version" : "✎ Edit"; nv.title = shut ? "Make a copy of this proposal to change and save. This one stays exactly as it is." : "Change this proposal";
+    nv.onclick = () => shut ? estNewVersion(x.id, nv) : (closeInvoice(), openEstEdit(x.id)); }
   { const cb = $("#inv-costbtn"); cb.classList.toggle("hidden", !estCanCost());
     cb.onclick = () => { INV_COST_OPEN = !INV_COST_OPEN; try { sessionStorage.setItem("invCostOpen", INV_COST_OPEN ? "1" : "0"); } catch (e) {} showEstCosting(x); };
     showEstCosting(x); }
@@ -25422,9 +25425,9 @@ async function openInvoice(id, keep) {
     </div>
     <div class="inv-parties">
       ${bp ? `<div><div class="inv-label">Bill to</div><strong>${esc(bp.name)}</strong>${bpAddr.length ? "<br>" + bpAddr.map(esc).join("<br>") : ""}${bp.phone ? "<br>" + esc(phoneFmt(bp.phone)) : ""}${bp.billing_email ? "<br>" + esc(bp.billing_email) : ""}
-        <div class="inv-billref">Customer: <strong id="inv-billcust">${esc(cust.display_name || "")}</strong>${phone && !i.store_copy_of ? " · " + esc(phoneFmt(phone)) : ""}</div></div>`
+        <div class="inv-billref">Customer: <button class="link inv-homelink" type="button" data-inv-custopen="${i.customer_id}" title="Open the customer file"><strong id="inv-billcust">${esc(cust.display_name || "")}</strong></button>${phone && !i.store_copy_of ? " · " + esc(phoneFmt(phone)) : ""}</div></div>`
       : `<div><div class="inv-label">Bill to</div><strong>${esc(cust.display_name || "")}</strong>${phone ? "<br>" + esc(phoneFmt(phone)) : ""}${email ? "<br>" + esc(email) : ""}</div>`}
-      <div><div class="inv-label">Service address</div>${addr.map(esc).join("<br>") || "—"}</div>
+      <div><div class="inv-label">Service address</div>${addr.map(esc).join("<br>") || "—"}<div id="inv-home" class="inv-home"></div></div>
       <div><div class="inv-label">Work</div>${esc(i.jobs?.job_types?.name || "")}${i.business_units?.name ? `<br><span class="inv-small">${esc(i.business_units.name)}</span>` : ""}</div>
     </div>
     ${i.status === "void" ? `<div class="inv-void">VOID${i.void_reason ? ": " + esc(i.void_reason) : ""}</div>` : ""}
@@ -25462,8 +25465,14 @@ async function openInvoice(id, keep) {
       <span class="quiet">Fix it if it was labelled wrong. A store invoice is paid through the store (Partners page) and isn't owed by the customer.</span>
       <span class="staff-msg" id="from-msg" role="status"></span></div>` : ""}
     ${officeInv() && i.status !== "void" && billR.data ? `<div class="inv-from no-print">${billToHtml(billR.data, "iv")}<span class="staff-msg" id="bill-msg" role="status"></span></div>` : ""}
-    ${!i.st_id && i.status !== "void" ? `<div class="no-print inv-edit-row"><button class="btn" type="button" data-inv-edit="${i.id}">${i.status === "draft" ? "Carry on with this invoice" : Number(balance) > 0.004 ? "Signature and payment" : "Open in the invoice screen"}</button></div>` : ""}
+    ${ME.guided || i.status === "void" ? "" : !i.st_id ? `<div class="no-print inv-edit-row"><button class="btn" type="button" data-inv-edit="${i.id}">✎ ${i.status === "draft" ? "Carry on with this invoice" : Number(balance) > 0.004 ? "Edit · signature and payment" : "Edit this invoice"}</button></div>`
+      : `<div class="no-print inv-edit-row"><a class="btn" href="https://go.servicetitan.com/#/Invoice/${encodeURIComponent(i.st_id)}" target="_blank" rel="noopener">✎ Edit this invoice in ServiceTitan ↗</a> <span class="quiet">This invoice came from ServiceTitan, so it's changed there; the app picks up the change on its next update.</span></div>`}
     <div class="inv-thanks">${brand ? `Thank you for choosing ${esc(brand.branding_name || brand.name)}. Installed by ${esc(coName)}.` : `Thank you for choosing ${esc(coName)}.`}</div>`;
+  document.querySelector("[data-inv-custopen]")?.addEventListener("click", e => { const id = Number(e.currentTarget.dataset.invCustopen); if (!id) return; closeInvoice(); openCustomer(id); });
+  // billed to a partner or an account: the homeowner at the address, linked to their customer file
+  db.rpc("invoice_homeowners", { p_ids: [i.id] }).then(({ data }) => { const h = (data || {})[i.id], el = $("#inv-home"); if (!h || !el) return;
+    el.innerHTML = `<div class="inv-label" style="margin-top:8px">Homeowner</div><button class="link inv-homelink" type="button" data-inv-homecust="${h.id}" title="Open ${esc(h.name)}'s customer file"><strong>${esc(h.name)}</strong></button>${h.number ? ` <span class="inv-small">#${esc(h.number)}</span>` : ""}`;
+    el.querySelector("[data-inv-homecust]").onclick = () => { closeInvoice(); openCustomer(h.id); }; }).catch(() => {});
   document.querySelectorAll("[data-inv-from]").forEach(b => b.addEventListener("click", async () => {
     if (b.getAttribute("aria-pressed") === "true") return;
     const m = $("#from-msg"); m.className = "staff-msg"; m.textContent = "Saving…";
