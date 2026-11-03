@@ -1238,7 +1238,7 @@
   .tp-two { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 4px 0; }
   .vtp-supf { margin: 8px 0 4px; flex-wrap: wrap; }
   .ow-bankstamp { display: inline-block; margin-top: 4px; padding: 2px 9px; font: inherit; font-size: 11.5px; font-weight: 800; letter-spacing: .3px; text-transform: uppercase; color: #1f6b35; background: #f3fbf5;
-    border: 2px solid #2f9a52; border-radius: 6px; transform: rotate(-2deg); cursor: pointer; box-shadow: 0 1px 2px rgba(31,107,53,.2); } .ow-bankstamp:hover { background: #1f6b35; color: #fff; }
+    border: 2px solid #2f9a52; border-radius: 6px; transform: rotate(-2deg); cursor: pointer; box-shadow: 0 1px 2px rgba(31,107,53,.2); } .ow-bankstamp:hover { background: #1f6b35; color: #fff; } .ow-bankstamp-ro, .ow-bankstamp-ro:hover { cursor: default; background: #f3fbf5; color: #1f6b35; }
   .ow-numcopy { margin-left: 6px; padding: 1px 6px; font: inherit; font-size: 12px; line-height: 1.4; color: #1b4f8a; background: #eef4fb; border: 1px solid #b9cde6; border-radius: 6px; cursor: pointer; vertical-align: 1px; } .ow-numcopy:hover { background: #1b4f8a; color: #fff; } .ow-numcopy.done { background: #e3f4e8; color: #1f6b35; border-color: #a9d8b6; }
   .bank .bank-load { cursor: pointer; } .bank-drop { margin: 10px 0; padding: 26px; border: 2px dashed #9fb3cc; border-radius: 12px; text-align: center; color: #4a5768; font-weight: 700; } .bank-drop.on { background: #eef4fb; border-color: #1b4f8a; }
   .bank-tabs { margin: 12px 0; }
@@ -5511,7 +5511,7 @@ async function showApp() {
   $("#staff-link").classList.toggle("hidden", !(ME.perms.has("staff.manage") || ME.role === "owner"));   // Staff · Log-ins (also on the Settings page)
   $("#logins-link").classList.toggle("hidden", !(ME.perms.has("staff.manage") || ME.role === "owner"));
   $("#security-link").classList.toggle("hidden", !(ME.role === "owner" || can("security.view")));
-  $("#bank-link")?.classList.toggle("hidden", ME.role !== "owner");   // Bank: owners only
+  $("#bank-link")?.classList.toggle("hidden", !(ME.role === "owner" || can("bank.view")));   // Bank: owners, and anyone given "Bank page" (the accountant)
   $("#sent-link")?.classList.toggle("hidden", !can("email.send"));
   $("#dupes-link").classList.toggle("hidden", !can("customers.edit"));
   setTimeout(callPopStart, 1500);
@@ -13435,7 +13435,8 @@ async function owFillBank(root) {
   const need = [...new Set(els.map(t => Number(t.dataset.owBank)).filter(id => !OW_BANK.has(id)))];
   for (let i = 0; i < need.length; i += 1000) { const { data, error } = await db.rpc("invoice_bank_stamp", { p_ids: need.slice(i, i + 1000) }); if (error) return; need.slice(i, i + 1000).forEach(id => OW_BANK.set(id, (data || {})[id] || null)); }
   els.forEach(el => { const x = OW_BANK.get(Number(el.dataset.owBank)); if (!x) { el.innerHTML = ""; return; }
-    el.innerHTML = `<button class="ow-bankstamp" type="button" data-ow-bankgo="${esc(el.dataset.owBankNum)}" title="${esc(`Paid and accounted for: ${money(x.amount)} found in the bank on ${fmtDate(x.date)} (${x.bank || ""})${x.how === "by hand" ? ", tied by hand" : ""}. Click to see it on the Bank page.`)}">🏦 In the bank ${esc(fmtDate(x.date))}${x.how === "by hand" ? " · by hand" : ""}</button>`; });
+    const tip = `Paid and accounted for: ${money(x.amount)} found in the bank on ${fmtDate(x.date)} (${x.bank || ""})${x.how === "by hand" ? ", tied by hand" : ""}.`, lab = `🏦 In the bank ${esc(fmtDate(x.date))}${x.how === "by hand" ? " · by hand" : ""}`;
+    el.innerHTML = bankCan() ? `<button class="ow-bankstamp" type="button" data-ow-bankgo="${esc(el.dataset.owBankNum)}" title="${esc(tip + " Click to see it on the Bank page.")}">${lab}</button>` : `<span class="ow-bankstamp ow-bankstamp-ro" title="${esc(tip)}">${lab}</span>`; });
 }
 document.addEventListener("click", e => { const b = e.target.closest("[data-ow-bankgo]"); if (!b) return; e.preventDefault(); e.stopPropagation();
   Object.assign(BANK, { tab: "ledger", acct: "main", ledQ: b.dataset.owBankgo, ledLinked: true, from: "", to: "", data: null, ledRows: [] }); bankSave(); location.hash = "#bank"; openBank(); }, true);
@@ -13490,7 +13491,7 @@ function renderOwList() {
         <span class="staff-msg" id="owl-msg" role="status">${esc(OWL.msg || "")}</span></div>`; })() : ""}
     ${rows.length ? `<div class="staff-wrap"><table class="calls-table owl-t"><thead><tr><th class="ow-cp"></th>${scope === "owing" && officeInv() ? `<th class="pb-pick"><input type="checkbox" id="owl-all" aria-label="Pick all shown" ${rows.every(r => OWL.picked.has(r.invoice_id)) ? "checked" : ""}></th>` : ""}${th("date", scope === "booked" ? "Booked for" : "Date")}<th>${scope === "booked" ? "Job" : "Invoice"}</th>${th("cust", "Customer")}<th>Job type</th>${th("amt", scope === "owing" ? "Owing" : scope === "booked" ? "Expected" : "Total", "r")}<th>Status</th></tr></thead><tbody>
       ${rows.map((r, i) => `<tr><td class="ow-cp"><button class="ow-rowcopy" type="button" data-row-copy="${i}" title="Copy this line" aria-label="Copy this line">Copy</button></td>${scope === "owing" && officeInv() ? `<td class="pb-pick"><input type="checkbox" data-owl-pick="${r.invoice_id}" ${OWL.picked.has(r.invoice_id) ? "checked" : ""} aria-label="Pick invoice ${esc(r.invoice_number)}"></td>` : ""}<td class="num">${fmtDate(r.invoice_date)}</td>
-        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><button class="ow-numcopy" type="button" data-copy-num="${esc(r.invoice_number)}" title="Copy invoice # ${esc(r.invoice_number)}" aria-label="Copy invoice number ${esc(r.invoice_number)}">⧉</button>${ME.role === "owner" ? `<div data-ow-bank="${r.invoice_id}" data-ow-bank-num="${esc(r.invoice_number)}"></div>` : ""}`}</td>
+        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><button class="ow-numcopy" type="button" data-copy-num="${esc(r.invoice_number)}" title="Copy invoice # ${esc(r.invoice_number)}" aria-label="Copy invoice number ${esc(r.invoice_number)}">⧉</button>${bankStampCan() ? `<div data-ow-bank="${r.invoice_id}" data-ow-bank-num="${esc(r.invoice_number)}"></div>` : ""}`}</td>
         <td><button class="link" type="button" data-owl-cust="${r.customer_id}">${esc(r.customer_name || "")}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${esc(r.job_type || "")}${r.job_partner ? `<div class="quiet">${esc(r.job_partner)} job</div>` : ""}</td>
         <td class="r num"><strong>${money(amt(r))}</strong>${scope === "owing" ? `<div class="quiet">of ${money(r.total)}</div>` : ""}</td>
@@ -13771,7 +13772,7 @@ function renderOwing(msg) {
         if (r._g && (OW.closed || []).includes(r._g[0])) return head;
         return head + `<tr data-inv="${r.invoice_id}"><td class="ow-cp"><button class="ow-rowcopy" type="button" data-row-copy="${i}" title="Copy this line" aria-label="Copy this line">Copy</button></td>
         <td class="num">${fmtDate(r.invoice_date)}</td>
-        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><button class="ow-numcopy" type="button" data-copy-num="${esc(r.invoice_number)}" title="Copy invoice # ${esc(r.invoice_number)}" aria-label="Copy invoice number ${esc(r.invoice_number)}">⧉</button>${ME.role === "owner" ? `<div data-ow-bank="${r.invoice_id}" data-ow-bank-num="${esc(r.invoice_number)}"></div>` : ""}`}
+        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><button class="ow-numcopy" type="button" data-copy-num="${esc(r.invoice_number)}" title="Copy invoice # ${esc(r.invoice_number)}" aria-label="Copy invoice number ${esc(r.invoice_number)}">⧉</button>${bankStampCan() ? `<div data-ow-bank="${r.invoice_id}" data-ow-bank-num="${esc(r.invoice_number)}"></div>` : ""}`}
           ${r.over_total ? `<div><span class="ow-tag odd" title="ServiceTitan shows ${esc(money(r.paid))} paid on this invoice, so it shows more owing than the invoice total. Usually a refund or a reversed payment.">Owing more than total</span></div>` : ""}
           ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}${r._ptnRow ? `<div><span class="ow-tag ow-ptntag">${esc((owPartnersKnown().find(x => x.id === r.partner_id) || {}).name || "Partner")} owes this</span></div>` : ""}${owNotDueHtml(r)}${owNotesHtml(r)}</td>
         <td><button class="link" type="button" data-ow-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
@@ -18876,13 +18877,15 @@ function wireSecurity() {
 $("#security-link").addEventListener("click", () => openSecurity());
 // ===== Bank (owners only): the bank account's transactions from the bank's export: search them, totals by kind and month,
 // and a partner's deposits next to the payments the app has from them (what's in the bank but not the app, and the other way)
+const bankCan = () => ME.role === "owner" || can("bank.view");   // the Bank page, with owner access
+const bankStampCan = () => bankCan() || can("bank.stamp");      // only the stamp on Receivables (the bookkeeper)
 const BANK_ACCTS = [["main", "Main account"], ["savings", "Savings"]];
 const BANK = { led: null, ledLinked: true, ledQ: "", ledRows: [], acct: "main", tab: "list", q: "", from: "", to: "", cat: "", dir: "", year: null, partner: 4, offset: 0, rows: [], data: null, sum: null, match: {} };
 try { const s = JSON.parse(localStorage.getItem("reid.bank") || "null"); if (s) Object.assign(BANK, { tab: s.tab || "list", partner: s.partner || 4, acct: s.acct || "main" }); } catch {}
 const bankSave = () => { try { localStorage.setItem("reid.bank", JSON.stringify({ tab: BANK.tab, partner: BANK.partner, acct: BANK.acct })); } catch {} };
 const BANK_PARTNERS = [[4, "Vista Credit"], [1, "Costco"], [2, "Rona"], [3, "Lowe's"]];
 async function openBank(msg) {
-  if (ME.role !== "owner") { $("#main").innerHTML = `<div class="empty"><div><h2>Owners only</h2>The Bank page is only for owners.</div></div>`; return; }
+  if (!bankCan()) { $("#main").innerHTML = `<div class="empty"><div><h2>Not turned on for you</h2>An owner can turn on the Bank page for you on the Staff page.</div></div>`; return; }
   setPage("bank", "bank", "Bank");
   if (!BANK.data) $("#main").innerHTML = `<div class="loading">Loading the bank…</div>`;
   await bankLoad(); if (document.body.dataset.page !== "bank") return;
@@ -18940,7 +18943,7 @@ function renderBank(msg) {
   const D = BANK.data || {}, none = !D.all;
   const tabs = [["list", "Transactions"], ["ledger", "Ledger"], ["sum", "Totals"], ["partners", "Partner payments"]], AN = D.accounts || {}, an = (BANK_ACCTS.find(a => a[0] === BANK.acct) || [, "Main account"])[1];
   $("#main").innerHTML = `<article class="staff bank">
-    <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Owners only</span><h1>Bank · ${esc(an)}</h1>
+    <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Owners and the accountant</span><h1>Bank · ${esc(an)}</h1>
       <p>${none ? `No ${esc(an.toLowerCase())} transactions yet. Load the bank's export for ${esc(an.toLowerCase())} to start.` : `${Number(D.all).toLocaleString()} transactions from ${esc(fmtDate(D.first))} to ${esc(fmtDate(D.last))}.`}</p></div>
       <div class="cl-hero-range"><label class="btn bank-load">⬆ Load a ${esc(an)} file<input type="file" id="bank-file" accept=".xlsx,.xls,.txt,.csv,.tsv,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden></label><em>The bank's export as Excel (.xlsx) or text (.txt, .csv): Date, Code, Description, Out, In, Balance. Lines already loaded are skipped.</em></div></header>
     <nav class="bank-accts" role="tablist" aria-label="Account">${BANK_ACCTS.map(([k, t]) => `<button type="button" role="tab" class="bank-acct" data-bank-acct="${k}" aria-pressed="${BANK.acct === k}">🏦 ${esc(t)}<span>${AN[k] ? Number(AN[k]).toLocaleString() + " transactions" : "nothing loaded yet"}</span></button>`).join("")}</nav>
