@@ -13789,6 +13789,12 @@ function renderOwing(msg) {
   OW.rows = scope === "owing" ? owInPeriod(OW.all?.[OW.show] || []) : scope.startsWith("sum:") ? owSumRows(scope) : scope.startsWith("bk:") ? owBkRows(scope) : scope.startsWith("age") ? owAgeRows(scope) : scope.startsWith("ptn:") ? owPtnRows(scope)
     : scope === "paid" ? paidRows : scope === "booked" ? bookRows : owingAll.concat(paidRows);
   { if (OW.acctFor !== scope) { OW.acct = ""; OW.acctFor = scope; } const sp = owAcctSplit(OW.rows, scope, OW.acct); OW.rows = sp.rows; OW.acct = sp.sel; OW._acctHtml = sp.html; }
+  // the search box: looks through everything (owing, partners and paid), not just the button pressed
+  const owQ = String(OW.q || "").trim().toLowerCase();
+  if (owQ) { const seen = new Set(), words = owQ.split(/\s+/), num = t => t.replace(/[$,]/g, "");
+    const hay = r => [r.invoice_number, r.customer_name, r.street, r.city, r.job_type, r.job_number, r.job_partner, r.partner_name, r.not_owed_reason, money(r.total), money(r.balance), String(r.total), String(r.balance), r.invoice_date].filter(Boolean).join(" ").toLowerCase();
+    OW.rows = [...owingAll, ...owPtnOwed(), ...(OW.ptnData?.rows || []).map(r => ({ ...r, _ptnRow: true })), ...paidRows].filter(r => { const k = r.invoice_id || r.job_id; if (seen.has(k)) return false; seen.add(k); return true; })
+      .filter(r => { const h = hay(r); return words.every(w => h.includes(w) || h.includes(num(w))); }); }
   const top = $("#main").scrollTop, rows = OW.rows, total = rows.reduce((s, r) => s + Number(scope === "owing" || owBalScope(scope) ? r.balance : r.total), 0);
   const done = OW.show !== "todo", C = OW.counts, n = k => C[k]?.n || 0, m = k => C[k]?.sum || 0;
   const seg = (list, cur, attr) => `<div class="seg" role="group">${list.map(([k, txt]) => `<button type="button" aria-pressed="${cur === k}" ${attr}="${k}">${txt}</button>`).join("")}</div>`;
@@ -13846,8 +13852,9 @@ function renderOwing(msg) {
     </section>
     </div>
     ${OW._acctHtml || ""}
+    <div class="vtp-find ow-find"><label for="ow-q">Search</label><span class="vtp-qw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="ow-q" type="search" value="${esc(OW.q || "")}" placeholder="Customer, invoice #, job #, street, job type, partner or amount" autocomplete="off"></span>${OW.q ? `<span class="quiet">Looking through every invoice: owing, partners and paid</span> <button class="link" type="button" id="ow-qx">Clear</button>` : ""}</div>
     <section class="sinv-panel ow-dates ow-panel ow-fold ow-when-list ${OW.fold?.when ? "" : "shut"}" aria-label="Dates"><button type="button" class="sp-h ow-fold-h" data-ow-fold="when" aria-expanded="${!!OW.fold?.when}"><span class="ow-fold-ar">${OW.fold?.when ? "▾" : "▸"}</span> When: <b>${esc(owRangeLabel())}</b></button>${OW.fold?.when ? owDateTiles() : ""}</section>
-    <div class="ow-listhead"><strong>${scope === "owing" ? OW_SHOW.find(s => s[0] === OW.show)[1] : scope === "paid" ? "Paid" : scope === "booked" ? "Booked jobs" : scope === "all" ? "All invoices" : esc(owScopeName(scope))}: ${rows.length.toLocaleString()} ${scope === "booked" ? (rows.length === 1 ? "job" : "jobs") : rows.length === 1 ? "invoice" : "invoices"} · ${money(total)}${scope === "booked" ? " expected" : ""}</strong>
+    <div class="ow-listhead"><strong>${owQ ? `Search “${esc(OW.q.trim())}” in everything` : scope === "owing" ? OW_SHOW.find(s => s[0] === OW.show)[1] : scope === "paid" ? "Paid" : scope === "booked" ? "Booked jobs" : scope === "all" ? "All invoices" : esc(owScopeName(scope))}: ${rows.length.toLocaleString()} ${scope === "booked" ? (rows.length === 1 ? "job" : "jobs") : rows.length === 1 ? "invoice" : "invoices"} · ${money(total)}${scope === "booked" ? " expected" : ""}</strong>
       <span class="quiet">${esc(owRangeLabel())}</span>
       ${scope.startsWith("ptn:") ? `<label class="ow-paidtoo"><input type="checkbox" id="ow-paidtoo" ${OW.showPaid ? "checked" : ""}> Show paid too</label>` : ""}
       <button class="btn quiet-btn ow-copyall" type="button" id="ow-copy" ${rows.length ? "" : "disabled"} title="Copy every line in this list, ready to paste into Excel or an email">Copy all</button>
@@ -13895,6 +13902,8 @@ function renderOwing(msg) {
   $("#ow-fullpage")?.addEventListener("click", () => { OWL.acct = OW.acct || ""; OWL.keepAcct = true; openOwList(); });
   document.querySelectorAll("#main [data-owl-acct]").forEach(b => b.addEventListener("click", () => { if (OW.acct === b.dataset.owlAcct) return; OW.acct = b.dataset.owlAcct; OW.closed = []; OW.limit = 100; saveOw(); renderOwing(); }));
   $("#ow-cleanup")?.addEventListener("click", () => openCleanup());
+  { let t = 0; $("#ow-q")?.addEventListener("input", e => { clearTimeout(t); t = setTimeout(() => { const at = e.target.selectionStart; OW.q = e.target.value; OW.limit = 100; renderOwing(); const i = $("#ow-q"); if (i) { i.focus(); try { i.setSelectionRange(at, at); } catch {} } }, 250); }); }
+  $("#ow-qx")?.addEventListener("click", () => { OW.q = ""; renderOwing(); });
   $("#ow-tools")?.addEventListener("click", () => { OW.tools = !OW.tools; saveOw(); renderOwing(); });
   document.querySelectorAll("[data-ow-fold]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.owFold; OW.fold = { ...(OW.fold || {}), [k]: !OW.fold?.[k] }; saveOw(); renderOwing(); }));
   $("#ow-more")?.addEventListener("click", () => { OW.limit = (OW.limit || 100) + 100; renderOwing(); });
