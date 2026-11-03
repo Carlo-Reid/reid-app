@@ -13426,7 +13426,19 @@ const OW_PAIDON = new Map();
 document.addEventListener("click", async e => { const b = e.target.closest("[data-copy-num]"); if (!b) return; e.preventDefault(); e.stopPropagation();
   const t = b.dataset.copyNum; try { await navigator.clipboard.writeText(t); } catch { const a = document.createElement("textarea"); a.value = t; document.body.append(a); a.select(); document.execCommand("copy"); a.remove(); }
   const was = b.textContent; b.textContent = "✓ Copied"; b.classList.add("done"); setTimeout(() => { b.textContent = was; b.classList.remove("done"); }, 1400); }, true);
+// owners: a stamp on invoices whose money was found in the bank (tied on the Bank page); click it to see the bank line
+const OW_BANK = new Map();
+async function owFillBank(root) {
+  const els = [...root.querySelectorAll("[data-ow-bank]")]; if (!els.length) return;
+  const need = [...new Set(els.map(t => Number(t.dataset.owBank)).filter(id => !OW_BANK.has(id)))];
+  for (let i = 0; i < need.length; i += 1000) { const { data, error } = await db.rpc("invoice_bank_stamp", { p_ids: need.slice(i, i + 1000) }); if (error) return; need.slice(i, i + 1000).forEach(id => OW_BANK.set(id, (data || {})[id] || null)); }
+  els.forEach(el => { const x = OW_BANK.get(Number(el.dataset.owBank)); if (!x) { el.innerHTML = ""; return; }
+    el.innerHTML = `<button class="ow-bankstamp" type="button" data-ow-bankgo="${esc(el.dataset.owBankNum)}" title="${esc(`Paid and accounted for: ${money(x.amount)} found in the bank on ${fmtDate(x.date)} (${x.bank || ""})${x.how === "by hand" ? ", tied by hand" : ""}. Click to see it on the Bank page.`)}">🏦 In the bank ${esc(fmtDate(x.date))}</button>`; });
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-ow-bankgo]"); if (!b) return; e.preventDefault(); e.stopPropagation();
+  Object.assign(BANK, { tab: "ledger", acct: "main", ledQ: b.dataset.owBankgo, ledLinked: true, from: "", to: "", data: null, ledRows: [] }); bankSave(); location.hash = "#bank"; openBank(); }, true);
 async function owFillPaidOn(root) {
+  owFillBank(root);
   const tags = [...root.querySelectorAll("[data-ow-paidon]")], need = [...new Set(tags.map(t => Number(t.dataset.owPaidon)).filter(id => !OW_PAIDON.has(id)))];
   if (need.length) { for (let i = 0; i < need.length; i += 1000) { const { data } = await db.rpc("invoice_paid_on", { p_ids: need.slice(i, i + 1000) }); need.slice(i, i + 1000).forEach(id => OW_PAIDON.set(id, (data || {})[id] || null)); } }
   tags.forEach(t => { const d = OW_PAIDON.get(Number(t.dataset.owPaidon)); if (d) t.textContent = "Paid " + fmtDate(String(d).slice(0, 10)); });
@@ -13476,7 +13488,7 @@ function renderOwList() {
         <span class="staff-msg" id="owl-msg" role="status">${esc(OWL.msg || "")}</span></div>`; })() : ""}
     ${rows.length ? `<div class="staff-wrap"><table class="calls-table owl-t"><thead><tr><th class="ow-cp"></th>${scope === "owing" && officeInv() ? `<th class="pb-pick"><input type="checkbox" id="owl-all" aria-label="Pick all shown" ${rows.every(r => OWL.picked.has(r.invoice_id)) ? "checked" : ""}></th>` : ""}${th("date", scope === "booked" ? "Booked for" : "Date")}<th>${scope === "booked" ? "Job" : "Invoice"}</th>${th("cust", "Customer")}<th>Job type</th>${th("amt", scope === "owing" ? "Owing" : scope === "booked" ? "Expected" : "Total", "r")}<th>Status</th></tr></thead><tbody>
       ${rows.map((r, i) => `<tr><td class="ow-cp"><button class="ow-rowcopy" type="button" data-row-copy="${i}" title="Copy this line" aria-label="Copy this line">Copy</button></td>${scope === "owing" && officeInv() ? `<td class="pb-pick"><input type="checkbox" data-owl-pick="${r.invoice_id}" ${OWL.picked.has(r.invoice_id) ? "checked" : ""} aria-label="Pick invoice ${esc(r.invoice_number)}"></td>` : ""}<td class="num">${fmtDate(r.invoice_date)}</td>
-        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><button class="ow-numcopy" type="button" data-copy-num="${esc(r.invoice_number)}" title="Copy invoice # ${esc(r.invoice_number)}" aria-label="Copy invoice number ${esc(r.invoice_number)}">⧉</button>`}</td>
+        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><button class="ow-numcopy" type="button" data-copy-num="${esc(r.invoice_number)}" title="Copy invoice # ${esc(r.invoice_number)}" aria-label="Copy invoice number ${esc(r.invoice_number)}">⧉</button>${ME.role === "owner" ? `<div data-ow-bank="${r.invoice_id}" data-ow-bank-num="${esc(r.invoice_number)}"></div>` : ""}`}</td>
         <td><button class="link" type="button" data-owl-cust="${r.customer_id}">${esc(r.customer_name || "")}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
         <td>${esc(r.job_type || "")}${r.job_partner ? `<div class="quiet">${esc(r.job_partner)} job</div>` : ""}</td>
         <td class="r num"><strong>${money(amt(r))}</strong>${scope === "owing" ? `<div class="quiet">of ${money(r.total)}</div>` : ""}</td>
@@ -13757,7 +13769,7 @@ function renderOwing(msg) {
         if (r._g && (OW.closed || []).includes(r._g[0])) return head;
         return head + `<tr data-inv="${r.invoice_id}"><td class="ow-cp"><button class="ow-rowcopy" type="button" data-row-copy="${i}" title="Copy this line" aria-label="Copy this line">Copy</button></td>
         <td class="num">${fmtDate(r.invoice_date)}</td>
-        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><button class="ow-numcopy" type="button" data-copy-num="${esc(r.invoice_number)}" title="Copy invoice # ${esc(r.invoice_number)}" aria-label="Copy invoice number ${esc(r.invoice_number)}">⧉</button>`}
+        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><button class="ow-numcopy" type="button" data-copy-num="${esc(r.invoice_number)}" title="Copy invoice # ${esc(r.invoice_number)}" aria-label="Copy invoice number ${esc(r.invoice_number)}">⧉</button>${ME.role === "owner" ? `<div data-ow-bank="${r.invoice_id}" data-ow-bank-num="${esc(r.invoice_number)}"></div>` : ""}`}
           ${r.over_total ? `<div><span class="ow-tag odd" title="ServiceTitan shows ${esc(money(r.paid))} paid on this invoice, so it shows more owing than the invoice total. Usually a refund or a reversed payment.">Owing more than total</span></div>` : ""}
           ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}${r._ptnRow ? `<div><span class="ow-tag ow-ptntag">${esc((owPartnersKnown().find(x => x.id === r.partner_id) || {}).name || "Partner")} owes this</span></div>` : ""}${owNotDueHtml(r)}${owNotesHtml(r)}</td>
         <td><button class="link" type="button" data-ow-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</div></td>
