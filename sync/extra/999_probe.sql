@@ -1,2 +1,0 @@
-DO $$ BEGIN RAISE EXCEPTION 'PROBE %', (SELECT jsonb_build_object('guess', (SELECT count(*) FROM po_job_guess), 'links', (SELECT count(*) FROM supplier_invoice_customer_links), 'sinv', (SELECT count(DISTINCT supplier_invoice_id) FROM supplier_invoice_customer_links),
-  'ex', (SELECT string_agg(left(coalesce(p.description,''),18) || '>' || left(l.street,16), '|') FROM (SELECT * FROM po_job_guess LIMIT 4) g JOIN purchase_orders p ON p.id = g.po_id JOIN locations l ON l.id = g.location_id))::text); END $$;
