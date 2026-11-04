@@ -15298,13 +15298,20 @@ function dropInGroups(PT, cv) {
   const K = PT.map(kindOf);
   if (!K.some(k => k !== "invoice")) return [{ kind: "invoice", text: PT.join("\n"), C: cv, from: 1 }];
   if (K.every(k => k === "receipt")) return [{ kind: "receipt", text: PT.join("\n"), C: cv, from: 1 }];
+  // in a file with pick tickets, a page with ORDER NO. and no invoice # is a pick ticket too (the scan can miss the words PICK TICKET)
+  if (K.includes("slip")) PT.forEach((t, i) => { if (K[i] === "invoice" && /ORDER\s*NO/i.test(t) && !/INVOICE\s*(?:NUMBER|NO)\b/i.test(t)) K[i] = "slip"; });
   const G = [];
   PT.forEach((t, i) => { const k = K[i], n = numOf(t), g = G[G.length - 1];
-    if (g && g.kind === k && (k === "statement" || !n || (g.n && n === g.n))) { g.text += "\n" + t; g.C.push(cv[i]); }
-    else G.push({ kind: k, n, text: t, C: [cv[i]], from: i + 1 }); });
-  // a page whose invoice # wasn't read: its PO # on the statement in the same file says which invoice it is
-  const PO = new Map(); G.filter(g => g.kind === "statement").forEach(g => { for (const m of g.text.matchAll(/(\d{1,2}\/\d{2}\/\d{2,4})\s+[A-Z1]{2}\s+(\d{5,})\s+(\d{6,9}-\d{2})/g)) PO.set(m[2], m[3]); });
-  G.forEach(g => { if (g.kind !== "statement" && !g.n) { const hit = [...PO].find(([po]) => g.text.includes(po)); if (hit) g.byPo = hit[1]; } });
+    if (g && !g.closed && g.kind === k && (k === "statement" || !n || (g.n && n === g.n))) { g.text += "\n" + t; g.C.push(cv[i]); }
+    else G.push({ kind: k, n, text: t, C: [cv[i]], from: i + 1 });
+    if (k !== "statement" && /LAST\s*PAGE/i.test(t)) G[G.length - 1].closed = true; });   // "LAST PAGE": the next page is a new document
+  // the statement in the same file: each invoice's PO # and date. A page whose invoice # wasn't read gets it by its PO # (a PO with
+  // two invoices, -00 and -01, goes in page order, skipping the one already read); every page gets its invoice's date from the statement
+  const SL = []; G.filter(g => g.kind === "statement").forEach(g => { for (const m of g.text.matchAll(/(\d{1,2})\/(\d{2})\/(\d{2,4})\s+[A-Za-z1]{2}\s+(\d{5,})\s+(\d{6,9}-\d{2})/g))
+    SL.push({ date: `${m[3].length === 2 ? "20" + m[3] : m[3]}-${m[1].padStart(2, "0")}-${m[2]}`, po: m[4], ref: m[5] }); });
+  if (SL.length) { const taken = new Set(G.map(g => g.n).filter(Boolean)), flat = t => String(t).replace(/(\d)[ \t]+(?=\d)/g, "$1");
+    G.forEach(g => { if (g.kind === "statement" || g.n) return; const f = flat(g.text), hit = SL.find(l => f.includes(l.po) && !taken.has(l.ref)); if (hit) { g.byPo = hit.ref; taken.add(hit.ref); } });
+    G.forEach(g => { const r = g.n || g.byPo, l = r && SL.find(x => x.ref === r); if (l) g.date = l.date; }); }
   return G;
 }
 async function dropInFill(x, text, C) {
@@ -15358,7 +15365,7 @@ async function dropInFiles(files) {
             y.method = brand + ((l4[1] || l4[2]) ? " ending " + (l4[1] || l4[2]) : ""); y.ref = (T.match(/AUTH\s*CODE\W*([A-Z0-9]{4,8})/) || [])[1] ? "Auth " + T.match(/AUTH\s*CODE\W*([A-Z0-9]{4,8})/)[1] : "";
             y.other = sinvWhichSup(T, DROPIN.sup); if (y.other) y.sup = y.other; y.busy = null; continue; }
           if (g.kind === "slip") y.slip = true;
-          await dropInFill(y, g.text, g.C); if (g.byPo) y.number = g.byPo; y.busy = null; dropInMatch(y); }
+          await dropInFill(y, g.text, g.C); if (g.byPo) y.number = g.byPo; if (g.date) y.date = g.date; y.busy = null; dropInMatch(y); }
         drawDropIn();
       } catch (e) { x.busy = null; x.err = e.message || String(e); drawDropIn(); }
     }
