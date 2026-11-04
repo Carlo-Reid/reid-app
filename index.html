@@ -1648,6 +1648,9 @@
   .tl-card.fit { border-right: 2px solid rgba(0,0,0,.25); } .tl-card.fit-narrow .dc-sub { display: none; } .tl-card.fit .dc-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ppl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin-top: 14px; }
   .ppl-card { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 14px 16px; border: 1px solid var(--line, #dee2e6); border-radius: 12px; background: var(--paper, #fff); font: inherit; color: inherit; cursor: pointer; }
+  .ppl-logo { display: flex; align-items: center; justify-content: flex-start; height: 56px; margin-bottom: 4px; } .ppl-logo img { max-height: 56px; max-width: 200px; object-fit: contain; }
+  .ppl-wrap.over .ppl-card { outline: 3px dashed #2e9e5b; outline-offset: 2px; } .ppl-lgacts { display: block; margin-top: 4px; font-size: 13px; }
+  .pp-hlogo { display: inline-flex; align-items: center; vertical-align: middle; margin-right: 12px; padding: 4px 8px; background: #fff; border-radius: 10px; } .pp-hlogo img { max-height: 40px; max-width: 160px; object-fit: contain; }
   .ppl-card:hover { border-color: var(--dz-1c7ed6, #1c7ed6); box-shadow: 0 2px 10px rgba(28,126,214,.12); } .ppl-name { font-size: 1.2em; font-weight: 800; }
   .ppl-nums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; } .ppl-nums span { display: flex; flex-direction: column; } .ppl-nums em { font-style: normal; font-size: .8em; color: #868e96; }
   .pbl-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; } .pbl-head h2 { margin: 0 8px 0 0; } .pbl-head label.btn { cursor: pointer; }
@@ -16950,7 +16953,7 @@ const canPartnerPay = () => can("partners.pay") || can("invoices.adjust") || ["o
 async function openPartners(msg) {
   setPage("partners", "partners", "Partners"); PP.solo = false;
   if (!document.querySelector(".ppl")) $("#main").innerHTML = `<div class="loading">Loading partners…</div>`;
-  const [s, off, cards, sales] = await Promise.all([db.rpc("partner_stores"), canPartnerPay() ? db.rpc("partners_off") : null, db.rpc("partner_cards"), db.rpc("partner_sales")]);
+  const [s, off, cards, sales] = await Promise.all([db.rpc("partner_stores"), canPartnerPay() ? db.rpc("partners_off") : null, db.rpc("partner_cards"), db.rpc("partner_sales"), ppLogosLoad()]);
   PP.sales = sales && !sales.error ? sales.data || [] : null;
   if (document.body.dataset.page !== "partners" || PP.solo) return;
   if (s.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load partners</h2>${esc(rpcErr(s.error))}</div></div>`; return; }
@@ -16962,17 +16965,26 @@ async function openPartners(msg) {
       <p>Click a partner to open its page: its booking list, what it owes us, payments, rules and files.</p></div>
       <div class="cl-hero-range"><span>Partners owe us</span><strong class="ow-hero-amt">${money(PP.stores.reduce((t, x) => t + Number(x.still_owed || 0), 0))}</strong><em>${PP.stores.length} partners</em></div></header>
     <div class="ppl-grid">${PP.stores.map(x => { const c = C.get(x.id) || {}, sk = (PP.sales || []).find(y => y.id === x.id);
-      return `<div class="ppl-wrap"><button type="button" class="ppl-card" data-ppl="${x.id}"><span class="ppl-name">${esc(x.name)}</span>
+      const lg = PP_LOGOS.get(x.id);
+      return `<div class="ppl-wrap" ${canPartnerPay() ? `data-pplg-drop="${x.id}"` : ""}><button type="button" class="ppl-card" data-ppl="${x.id}">${lg ? `<span class="ppl-logo"><img alt="${esc(x.name)} logo" src="${lg}"></span>` : ""}<span class="ppl-name">${esc(x.name)}</span>
         <span class="quiet">${x.pays_us ? "We bill them; they pay us" : "Customer pays the store"}</span>
         <span class="ppl-nums"><span><b>${money(x.still_owed)}</b><em>still owed</em></span><span><b>${Number(x.invoices || 0).toLocaleString()}</b><em>invoices waiting</em></span>
           <span><b>${Number(c.open || 0).toLocaleString()}</b><em>open on the list${c.all ? ` (of ${Number(c.all).toLocaleString()})` : ""}</em></span></span></button>
-        ${PP.sales ? `<label class="ppl-sales" title="Ticked: shows under Sales Call on the booking page and can be used for sales invoices. Not ticked: only for normal invoices and billing."><input type="checkbox" data-ppl-sales="${x.id}" ${sk && sk.sales_ok ? "checked" : ""} ${canPartnerPay() ? "" : "disabled"}> Use for sales calls and sales invoices</label>` : ""}</div>`; }).join("")}</div>
+        ${PP.sales ? `<label class="ppl-sales" title="Ticked: shows under Sales Call on the booking page and can be used for sales invoices. Not ticked: only for normal invoices and billing."><input type="checkbox" data-ppl-sales="${x.id}" ${sk && sk.sales_ok ? "checked" : ""} ${canPartnerPay() ? "" : "disabled"}> Use for sales calls and sales invoices</label>` : ""}
+        ${canPartnerPay() ? `<span class="ppl-lgacts quiet">🖼 <label class="link">${lg ? "Replace the logo" : "Add a logo"}<input type="file" accept="image/*" hidden data-pplg-file="${x.id}"></label>${lg ? ` · <button class="link danger" type="button" data-pplg-del="${x.id}">Delete</button>` : ` <span>or drop a picture on the card</span>`}<span class="ppl-lgmsg"></span></span>` : ""}</div>`; }).join("")}</div>
     ${canPartnerPay() ? `<div class="pp-nf-row" style="margin-top:12px"><button class="btn quiet-btn" type="button" id="ppl-add">＋ Add a partner</button>
       ${(PP.off || []).length ? `<span class="cl-label">Switched off</span>${PP.off.map(x => `<span class="chip small">${esc(x.name)} <button class="link" type="button" data-ppl-on="${x.id}">Switch back on</button></span>`).join("")}` : ""}
       <span class="staff-msg ok" role="status">${esc(msg || "")}</span></div>` : ""}
   </article>`;
   main.scrollTop = top;
   main.querySelectorAll("[data-ppl]").forEach(b => b.addEventListener("click", () => openPartnerPage(Number(b.dataset.ppl))));
+  main.querySelectorAll("[data-pplg-file]").forEach(i => i.addEventListener("change", () => ppLogoFile(Number(i.dataset.pplgFile), i.files[0])));
+  main.querySelectorAll("[data-pplg-drop]").forEach(w => { w.addEventListener("dragover", e => { if (![...(e.dataTransfer?.types || [])].includes("Files")) return; e.preventDefault(); w.classList.add("over"); });
+    w.addEventListener("dragleave", e => { if (!w.contains(e.relatedTarget)) w.classList.remove("over"); });
+    w.addEventListener("drop", e => { e.preventDefault(); w.classList.remove("over"); ppLogoFile(Number(w.dataset.pplgDrop), e.dataTransfer?.files?.[0]); }); });
+  main.querySelectorAll("[data-pplg-del]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.pplgDel);
+    if (await askChoice("Delete this logo?", "The card shows just the partner's name again.", [["yes", "Delete it", true], ["", "Keep it"]]) !== "yes") return;
+    const { error } = await db.rpc("partner_logo_set", { p_partner: id, p_image: null }); if (error) return alertMsg("Not deleted: " + rpcErr(error)); PP_LOGOS.delete(id); openPartners("Logo deleted."); }));
   $("#ppl-add")?.addEventListener("click", async () => { PP.adding = true; const t = await db.rpc("partner_targets"); if (!t.error && t.data) OW.targets = t.data; openPartnerPage(PP.stores[0]?.id); });
   main.querySelectorAll("[data-ppl-sales]").forEach(cb => cb.addEventListener("change", async () => {
     const { error } = await db.rpc("set_partner_sales", { p_id: Number(cb.dataset.pplSales), p_on: cb.checked });
@@ -16981,6 +16993,18 @@ async function openPartners(msg) {
   main.querySelectorAll("[data-ppl-on]").forEach(b => b.addEventListener("click", async () => { const { error } = await db.rpc("set_partner_active", { p_id: Number(b.dataset.pplOn), p_on: true });
     if (error) return; OW.targets = null; openPartnerPage(Number(b.dataset.pplOn)); }));
 }
+// each partner's logo (Partners page: drop a picture on its card)
+let PP_LOGOS = new Map(), PP_LOGOS_OK = false;
+async function ppLogosLoad() { if (PP_LOGOS_OK) return; const r = await db.rpc("partner_logos_list"); if (r.error) return; PP_LOGOS = new Map((r.data || []).map(x => [x.partner_id, `data:${x.mime || "image/png"};base64,${x.image}`])); PP_LOGOS_OK = true; }
+async function ppLogoFile(id, f) {
+  const m = document.querySelector(`[data-pplg-drop="${id}"] .ppl-lgmsg`); if (!f || !/^image\//.test(f.type)) { if (m) m.textContent = " · That isn't a picture."; return; }
+  if (m) m.textContent = " · Saving…";
+  const img = await createImageBitmap(f), sc = Math.min(1, 400 / img.width, 160 / img.height), c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(img.width * sc)); c.height = Math.max(1, Math.round(img.height * sc)); c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  const url = c.toDataURL("image/png"), { error } = await db.rpc("partner_logo_set", { p_partner: id, p_image: url.split(",")[1], p_mime: "image/png" });
+  if (error) { if (m) m.textContent = " · Not saved: " + rpcErr(error); return; }
+  PP_LOGOS.set(id, url); openPartners("Logo saved.");
+}
 async function openPartnerPage(id) {
   if (!id) return openPartners();
   PP.store = id; PP.solo = true; PP.picked = new Set(); PP.pay = null; savePp();
@@ -16988,7 +17012,7 @@ async function openPartnerPage(id) {
   setPage("partner=" + id, "partners", name);
   if (PBL.partner !== id) Object.assign(PBL, { partner: id, data: null, tab: "all", q: "", msg: "" });
   $("#main").innerHTML = `<div class="loading">Opening ${esc(name)}…</div>`;
-  await Promise.all([loadPartners(), pblLoad()]);
+  await Promise.all([loadPartners(), pblLoad(), ppLogosLoad()]);
   if (document.body.dataset.page === "partners" && PP.solo) nameCurrentPage((PP.stores || []).find(x => x.id === id)?.name || name);
 }
 
@@ -17973,7 +17997,7 @@ function renderPartners(msg) {
   const tile = (cls, label, val, sub) => `<div class="cl-stat ${cls}"><span>${label}</span><strong>${money(val)}</strong>${sub ? `<em>${sub}</em>` : ""}</div>`;
   $("#main").innerHTML = `<article class="staff pp">
     <header class="cl-hero">
-      <div class="cl-hero-text"><span class="cl-eyebrow">Partner pay</span><h1>${esc(st.name)}</h1>
+      <div class="cl-hero-text"><span class="cl-eyebrow">Partner pay</span><h1>${PP_LOGOS.get(st.id) ? `<span class="pp-hlogo"><img alt="" src="${PP_LOGOS.get(st.id)}"></span>` : ""}${esc(st.name)}</h1>
         <p>${PP.view === "jobs" ? `Follow each ${esc(st.name)} lead through the portal: accepted, booked, estimate, sold, paid, installed, submitted. Fill in and sign ${esc(st.name)}'s form on the iPad.`
           : vis ? `We bill ${esc(st.name)}. ${esc(st.name)} pays us the full amount, no cut.${(() => { const nd = [st.needs_signature && "the signature", st.needs_account && "account #", st.needs_approval && "approval #"].filter(Boolean);
               return nd.length ? ` Each invoice needs ${nd.join(", ").replace(/, ([^,]*)$/, " and $1")}.` : ""; })()}`
