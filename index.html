@@ -15249,7 +15249,9 @@ function drawDropIn() {
       <span>Drag the PDF attachments (not the email itself), or <label class="link">pick the files<input type="file" accept="application/pdf,image/*" multiple hidden data-dropin-file></label>.</span></section>
     ${I.length ? `<table class="stv-t dropin-t"><thead><tr><th>File</th><th>Invoice #</th><th>Date</th><th>PO</th><th class="r">Total</th><th>What happens</th><th></th></tr></thead><tbody>
       ${I.map((x, i) => `<tr data-di="${i}"><td>${esc(x.file)}<div class="quiet">${x.part ? esc(x.part) : x.pages ? x.pages.length + (x.pages.length === 1 ? " page" : " pages") : ""}</div></td>
-        ${x.kind === "statement" ? `<td colspan="5">${x.done ? `<span class="st-ok">✓ ${esc(x.done)}</span>` : `<b>📄 Statement</b> <span class="st-look">After Save, it opens in the statement reader: check its lines there and save it.</span>`}</td><td><button class="link danger" type="button" data-di-x="${i}">✕</button></td>`
+        ${x.kind === "receipt" ? (x.done ? `<td colspan="5" class="st-ok">✓ ${esc(x.done)}</td><td></td>` : `<td><b>💳 Card receipt</b></td><td><input name="date" type="date" value="${esc(x.date || "")}" ${x.date ? "" : `class="di-need"`}></td><td><input name="method" value="${esc(x.method || "")}" aria-label="How it was paid" title="How it was paid"></td>
+          <td class="r"><input name="total" type="number" step="0.01" value="${x.total ?? ""}" ${x.total ? "" : `class="di-need"`}></td><td><span class="st-look">Records a payment of ${x.total ? money(x.total) : "this amount"} to ${esc(dropInSupName(x.sup || DROPIN.sup))}${x.method ? " by " + esc(x.method) : ""} (check the card # on the receipt)</span>${x.err ? `<div class="st-bad">${esc(x.err)}</div>` : ""}</td><td><button class="link danger" type="button" data-di-x="${i}">✕</button></td>`)
+        : x.kind === "statement" ? `<td colspan="5">${x.done ? `<span class="st-ok">✓ ${esc(x.done)}</span>` : `<b>📄 Statement</b> <span class="st-look">After Save, it opens in the statement reader: check its lines there and save it.</span>`}</td><td><button class="link danger" type="button" data-di-x="${i}">✕</button></td>`
         : x.busy ? `<td colspan="5" class="quiet">${esc(x.busy)}</td><td></td>` : x.done ? `<td>${esc(x.number)}</td><td>${esc(stDate(x.date))}</td><td>${esc(x.po || "")}</td><td class="r">${x.total != null ? money(x.total) : ""}</td><td class="st-ok">✓ ${esc(x.done)}</td><td></td>`
         : `<td><input name="number" value="${esc(x.number || "")}" ${x.number ? "" : `class="di-need" placeholder="Type it here" aria-label="Invoice number (type it in)"`}></td><td><input name="date" type="date" value="${esc(x.date || "")}" ${x.date || x.match ? "" : `class="di-need" aria-label="Invoice date (type it in)"`}></td><td><input name="po" value="${esc(x.po || "")}"></td>
         <td class="r"><input name="total" type="number" step="0.01" value="${x.total ?? ""}"></td><td>${x.other && !x.sup ? `<div class="st-bad">This looks like ${esc(dropInSupName(x.other))}'s, not ${esc(DROPIN.name)}'s. <button class="link" type="button" data-di-sup="${i}">Save it under ${esc(dropInSupName(x.other))}</button></div>` : ""}
@@ -15290,10 +15292,12 @@ function dropInMatch(x) {
 // a file's pages, grouped into documents: a statement page (it has the aging: 31-60, 61-90, over 120), a pick ticket / packing slip, or an invoice.
 // A file that's all invoice pages stays one invoice (the way it always was).
 function dropInGroups(PT, cv) {
-  const kindOf = t => { const U = String(t).toUpperCase(); if (/\bSTATEMENT\b/.test(U) && /31\s*-\s*60|61\s*-\s*90|OVER\s*120/.test(U)) return "statement"; if (/PICK\s*TICKET|PACKING\s*(?:SLIP|LIST)|PICKED\s*BY\W{0,6}PACKED\s*BY/.test(U)) return "slip"; return "invoice"; };
+  const kindOf = t => { const U = String(t).toUpperCase(); if (/\bSTATEMENT\b/.test(U) && /31\s*-\s*60|61\s*-\s*90|OVER\s*120/.test(U)) return "statement"; if (/PICK\s*TICKET|PACKING\s*(?:SLIP|LIST)|PICKED\s*BY\W{0,6}PACKED\s*BY/.test(U)) return "slip";
+    if (/RECEIPT|CARDHOLDER\s*COPY/.test(U) && /AUTH\s*CODE|AUTHORI[SZ]ED|APPROVED|SALE\s*TRANSACTION|CARDHOLDER\s*COPY/.test(U) && !/INVOICE\s*(?:NUMBER|NO)/.test(U)) return "receipt"; return "invoice"; };
   const numOf = t => (String(t).toUpperCase().match(/\b(\d{7,9}-\d{2})\b/) || [])[1] || "";
   const K = PT.map(kindOf);
   if (!K.some(k => k !== "invoice")) return [{ kind: "invoice", text: PT.join("\n"), C: cv, from: 1 }];
+  if (K.every(k => k === "receipt")) return [{ kind: "receipt", text: PT.join("\n"), C: cv, from: 1 }];
   const G = [];
   PT.forEach((t, i) => { const k = K[i], n = numOf(t), g = G[G.length - 1];
     if (g && g.kind === k && (k === "statement" || !n || (g.n && n === g.n))) { g.text += "\n" + t; g.C.push(cv[i]); }
@@ -15348,6 +15352,11 @@ async function dropInFiles(files) {
           if (g.kind === "statement") { y.kind = "statement"; y.T = g.text.toUpperCase();
             y.stFiles = await Promise.all(g.C.map((c, k) => new Promise(ok => c.toBlob(b => ok(new File([b], `${x.file.replace(/\.pdf$/i, "")} statement page ${k + 1}.png`, { type: "image/png" })), "image/png"))));
             y.busy = null; continue; }
+          if (g.kind === "receipt") { const T = g.text.toUpperCase(), am = [...T.matchAll(/(\d[\d,]*\.\d{2})\s*(?:CAD|\$)?/g)].map(m => Number(m[1].replace(/,/g, "")));
+            y.kind = "receipt"; y.T = T; y.total = (T.match(/(\d[\d,]*\.\d{2})\s*CAD/) || [])[1] ? Number(T.match(/(\d[\d,]*\.\d{2})\s*CAD/)[1].replace(/,/g, "")) : am.length ? Math.max(...am) : null;
+            y.date = dropInDate(g.text); const l4 = (T.match(/[*X•]{3,}\s*(\d{4})\b|[A-Z*]{4,}(\d{4})\b/) || []); const brand = /MASTER|M\/C/.test(T) ? "Mastercard" : /VISA/.test(T) ? "Visa" : /AMEX|AMERICAN/.test(T) ? "Amex" : "Card";
+            y.method = brand + ((l4[1] || l4[2]) ? " ending " + (l4[1] || l4[2]) : ""); y.ref = (T.match(/AUTH\s*CODE\W*([A-Z0-9]{4,8})/) || [])[1] ? "Auth " + T.match(/AUTH\s*CODE\W*([A-Z0-9]{4,8})/)[1] : "";
+            y.other = sinvWhichSup(T, DROPIN.sup); if (y.other) y.sup = y.other; y.busy = null; continue; }
           if (g.kind === "slip") y.slip = true;
           await dropInFill(y, g.text, g.C); if (g.byPo) y.number = g.byPo; y.busy = null; dropInMatch(y); }
         drawDropIn();
@@ -15358,7 +15367,15 @@ async function dropInFiles(files) {
 }
 async function dropInSave() {
   DROPIN.items.forEach(x => { if (!x.done && !x.busy) dropInMatch(x); });
-  for (const x of DROPIN.items.filter(x => !x.done && !x.busy && x.kind !== "statement")) {
+  for (const x of DROPIN.items.filter(x => !x.done && !x.busy && x.kind === "receipt")) {
+    const sid = x.sup || DROPIN.sup; if (!sid) { x.err = "Pick whose payment it is (the Supplier box at the top)."; continue; }
+    if (!(Number(x.total) > 0) || !x.date) { x.err = "Type the amount and the date paid."; continue; }
+    const h = await db.rpc("supplier_payments_list", { p_supplier: sid });
+    if ((h.data || []).some(p => !p.voided && Math.abs(Number(p.amount) - Number(x.total)) < 0.005 && p.paid_on === x.date)) { x.err = null; x.done = `Payment of ${money(x.total)} on ${fmtDate(x.date)} was already recorded`; continue; }
+    const { error } = await db.rpc("supplier_payment_add", { p: { supplier_id: sid, amount: Number(x.total), paid_on: x.date, method: x.method || "Card", reference: x.ref || "", note: `Card receipt in ${x.file}` } });
+    if (error) x.err = "Not saved: " + rpcErr(error); else { x.err = null; x.done = `Payment of ${money(x.total)} on ${fmtDate(x.date)} recorded`; SINV.pays = null; }
+  }
+  for (const x of DROPIN.items.filter(x => !x.done && !x.busy && x.kind !== "statement" && x.kind !== "receipt")) {
     if (!(x.sup || DROPIN.sup)) { x.err = "Not saved yet: pick whose invoice it is (the Supplier box), or add a new supplier."; continue; }
     if (!x.number || !x.pages?.length) { x.err = !x.number ? "Not saved yet: the reader couldn't find the invoice number. Look at the PDF, type its invoice (or credit / order) number in the red box under Invoice #, then press Save again." : "No pages read"; continue; }
     if (!x.date && !x.match) { x.err = "Not saved yet: the reader couldn't find the invoice date. Look at the PDF, type its date in the red box under Date, then press Save again."; continue; }
@@ -15375,7 +15392,7 @@ async function dropInSave() {
   const sups = [...new Set(DROPIN.items.map(x => x.sup || DROPIN.sup))];
   closeInvoice();   // all saved: close the window
   if (sups.length === 1 && sups[0] !== DROPIN.sup) { SINV.sup = sups[0]; SINV.st = 0; SINV.open = null; SINV.pick = "all"; SINV.year = null; sinvSaveTab(); }   // all of them were another supplier's: show that supplier
-  await openSupInv(DROPIN.items.length ? `Saved: ${DROPIN.items.map(x => x.number).join(", ")}.${moved.length ? " " + moved.join("; ") + "." : ""}` : undefined);
+  await openSupInv(DROPIN.items.length ? `Saved: ${DROPIN.items.map(x => x.kind === "receipt" ? x.done : x.number).join(", ")}.${moved.length ? " " + moved.join("; ") + "." : ""}` : undefined);
   // the statement page(s) from the same file: straight into the statement reader, to check and save
   if (stPages.length) { const sid = sups[0] || DROPIN.sup; openNewStatement(sid, dropInSupName(sid)); stReadFiles(stPages, STV.newS); }
 }
@@ -15544,17 +15561,17 @@ function stParse(texts, known) {
   const pre = (known || []).map(r => String(r).match(/^[A-Z]+/)?.[0]).filter(Boolean), PFX = pre.length > (known || []).length / 2 ? pre.sort((a, b) => pre.filter(x => x === b).length - pre.filter(x => x === a).length)[0] : "";
   const refOf = d => { d = d.length === 7 && d[0] === "0" ? d.slice(1) : d; return K.get(d.slice(-6)) || (PFX ? PFX + d : d); };
   const CODE = { I: "I", "1": "I", l: "I", T: "I", r: "I", z: "I", Z: "I", x: "I", X: "I", i: "I", C: "C", c: "C", e: "C", "©": "C", A: "A", D: "D", S: "S", P: "P", U: "U" };
-  const lines = [], seen = new Set(); let date = null, total = null, aging = null, discount = null, last = null;
+  const lines = [], seen = new Set(), cands = []; let date = null, total = null, aging = null, discount = null, last = null;
   texts.forEach(T => {
     const L = T.split(/\n/);
     L.forEach((raw, idx) => {
       const s = raw.replace(/[^0-9A-Za-z.,\/\-]/g, " ").replace(/\s+/g, " ").trim();
       const m = s.match(/^\D{0,3}?(\d{6,7})\D+?(?:1?(\d{3})\D+?)?(\d{1,2}\/\d{2}\/\d{2,4})(.*)$/);
-      const nb = !m && s.match(/^(\d{1,2}\/\d{2}\/\d{2,4})\s+([A-Z1]{2})\s+(?:\S+\s+)?(\d{6,9}-\d{2})\s+(.*)$/);
+      const nb = !m && s.match(/^(\d{1,2}\/\d{2}\/\d{2,4})\s+([A-Za-z1]{2})\s+(?:\S+\s+)?(\d{6,9}-\d{2})\s+(.*)$/);
       // the amount is the BALANCE DUE on the right (after the invoice # again): a part-paid invoice owes less than it was for
       const cash = t => (t.match(/-?\d{1,3}(?:,\s?\d{3})*[.,]\d{2}-?|-?\.\d{2}-?/g) || []).map(x => { const neg = /^-|-$/.test(x); const v = num(x.replace(/^-/, "").replace(/-$/, "").replace(/,(\d{2})$/, ".$1")); return v == null ? null : neg ? -Math.abs(v) : v; }).filter(v => v != null);
       if (nb && !seen.has(nb[3])) { const parts = nb[4].split(nb[3]), amts = cash(parts[0]), bal = parts.length > 1 ? cash(parts.slice(1).join(" ")) : [];
-        if (amts.length || bal.length) { const c = ({ IN: "I", I1: "I", CM: "C", MC: "C", RM: "C", UC: "U", SC: "S", PA: "P", PY: "P" })[nb[2].replace("1", "I")] || "I", a = bal.length ? bal[0] : amts[0];
+        if (amts.length || bal.length) { const c = ({ IN: "I", I1: "I", CM: "C", MC: "C", RM: "C", UC: "U", SC: "S", PA: "P", PY: "P" })[nb[2].toUpperCase().replace("1", "I")] || "I", a = bal.length ? bal[0] : amts[0];
           seen.add(nb[3]); lines.push({ reference: nb[3], branch: "", date: toIso(nb[1]), code: c, amount: ["C", "U", "P"].includes(c) ? -Math.abs(a) : a }); last = { T, idx }; } }
       if (m) { const digits = m[1], ref = refOf(digits); let rest = m[4]; const k = rest.indexOf(digits.slice(-6)); if (k >= 0) rest = rest.slice(0, k);
         const cm = rest.match(/^\W*([A-Za-z1©])[A-Za-z1]?\s/), code = cm ? CODE[cm[1]] : null; if (cm) rest = rest.slice(cm[0].length);
@@ -15562,13 +15579,15 @@ function stParse(texts, known) {
         if (amts.length && !seen.has(ref)) { seen.add(ref); const amount = amts[amts.length - 1];
           lines.push({ reference: ref, branch: m[2] || "", date: toIso(m[3]), code: amount < 0 ? "C" : code && code !== "C" ? code : "I", amount }); last = { T, idx }; } }
       if (!date) { const d = s.match(/(\d{2})\/(3[01]|[12]\d|0\d)\/(\d{2})/); if (d && idx < 12) date = toIso(`${d[1]}/${d[2]}/${d[3]}`); }
-      if (/TOTAL/i.test(s)) { const a = (s + " " + (L[idx + 1] || "") + " " + (L[idx + 2] || "")).match(/(\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2})/); if (a) total = num(a[1]); }
+      if (/TOTAL/i.test(s)) { const near = s + " " + (L[idx + 1] || "") + " " + (L[idx + 2] || ""), a = near.match(/(\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2})/); if (a) total = num(a[1]);
+        (near.match(/\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2}/g) || []).forEach(v => { const x = num(v); if (x != null) cands.push(x); }); }
       if (/deduct/i.test(s)) { const a = s.match(/(\d{1,3}(?:,\d{3})*\.\d{2})\s*$/); if (a) discount = num(a[1]); }
       if (/CURRENT/i.test(s) && !aging) { for (let j = 1; j <= 3; j++) { const ns = (L[idx + j] || "").match(/\d{1,3}(?:,\d{3})*\.\d{2}|\.00/g); if (ns && ns.length >= 3) { const v = ns.map(x => num(x));
         aging = { current: v[0], d31_60: v[1], d61_90: v[2], d91_120: v[3] ?? null, over120: v[4] ?? null }; break; } } }
     });
   });
   if (!date) { const d = texts.join("\n").match(/\bDate:?\s*(\d{1,2}\/\d{2}\/\d{2,4})\b/i); if (d) date = toIso(d[1]); }
+  { const sm = Math.round(lines.reduce((a, l) => a + l.amount, 0) * 100) / 100; if (lines.length && total != null && Math.abs(total - sm) > 0.004 && cands.some(c => Math.abs(c - sm) < 0.005)) total = sm; }
   if (aging && discount != null) aging.discount = discount;
   const sum = Math.round(lines.reduce((a, l) => a + l.amount, 0) * 100) / 100;
   if (total == null && last) {   // the total is the biggest amount printed below the last line (the TOTAL box often isn't read)
