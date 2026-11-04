@@ -19048,6 +19048,7 @@ async function openBank(msg) {
 async function bankLoad(more) {
   if (BANK.tab === "veh") { const [a, b] = await Promise.all([db.rpc("vehicles_list"), db.rpc("vehicle_suggest")]); BANK.err = a.error || b.error; BANK.veh = a.data || []; BANK.vehSug = b.data || [];
     if (!BANK.data) { const r = await db.rpc("bank_list", { p_limit: 1, p_account: BANK.acct }); BANK.data = r.data; } return; }
+  if (BANK.tab === "remit") { const { data, error } = await db.rpc("partner_remit_list"); BANK.err = error; BANK.remit = data || []; if (!BANK.data) { const r = await db.rpc("bank_list", { p_limit: 1, p_account: BANK.acct }); BANK.data = r.data; } return; }
   if (BANK.tab === "merch") { const { data, error } = await db.rpc("merchant_statements_list"); BANK.err = error; BANK.merch = data || []; if (!BANK.data) { const r = await db.rpc("bank_list", { p_limit: 1, p_account: BANK.acct }); BANK.data = r.data; } return; }
   if (BANK.tab === "ledger") {
     if (!more) BANK.offset = 0;
@@ -19231,6 +19232,105 @@ async function merchLoadFiles(files) {
   try { OW_BANK.clear(); } catch {}
   box.remove(); BANK.merchMsgs = done; BANK.tab = "merch"; bankSave(); await bankLoad(); renderBank();
 }
+// ===== Partner remittances (Vista Credit's "Remittance Advice" PDF): each one ties a partner deposit to exactly the invoices it paid
+// a PDF's text as lines, with each line's page and height on the page (so a memo split over two lines can go with its row)
+async function pdfLinesY(f) {
+  await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const pdf = await window.pdfjsLib.getDocument({ data: (await f.arrayBuffer()).slice(0) }).promise, out = [];
+  for (let n = 1; n <= pdf.numPages; n++) { const tc = await (await pdf.getPage(n)).getTextContent(), rows = new Map();
+    tc.items.forEach(it => { if (!String(it.str).trim()) return; const y = Math.round(it.transform[5]); const k = [...rows.keys()].find(v => Math.abs(v - y) <= 2) ?? y; if (!rows.has(k)) rows.set(k, []); rows.get(k).push(it); });
+    [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([y, its]) => out.push({ page: n, y, t: its.sort((a, b) => a.transform[4] - b.transform[4]).map(i => i.str).join(" ").replace(/\s+/g, " ").trim() })); }
+  return out;
+}
+const REMIT_MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const remitDate = v => { const m = String(v || "").match(/(\d{1,2})-([A-Za-z]{3})-(\d{4})/); return m && REMIT_MON[m[2].toLowerCase()] ? `${m[3]}-${String(REMIT_MON[m[2].toLowerCase()]).padStart(2, "0")}-${m[1].padStart(2, "0")}` : null; };
+const remitNum = v => { const t = String(v || ""), n = Number(t.replace(/[^\d.]/g, "")); return /-|\(/.test(t) ? -n : n; };
+async function remitReadPdf(f) {
+  const L = await pdfLinesY(f), text = L.map(l => l.t).join("\n"), docs = [];
+  const payer = /vista\s*credit/i.test(text) ? "vista" : /costco/i.test(text) ? "costco" : /\brona\b/i.test(text) ? "rona" : /lowe'?s/i.test(text) ? "lowe" : "";
+  const ROW = /^(.+?)\s+([A-Z]{0,3}\d{5,})\s+(.*?)\s*(\d{1,2}-[A-Za-z]{3}-\d{4})\s+(\(?-?\s?\$?\s?[\d,]+\.\d\d\)?)\s+(\(?-?\s?\$?\s?[\d,]+\.\d\d\)?)$/;
+  let cur = null, inTable = false, loose = [];
+  const finish = () => { if (!cur) return; // memo pieces go with the nearest row on the same page
+    loose.forEach(x => { let best = null; cur.lines.forEach(r => { if (r._page === x.page && (!best || Math.abs(r._y - x.y) < Math.abs(best._y - x.y))) best = r; }); if (best) (best._m = best._m || []).push(x); });
+    cur.lines.forEach(r => { r.memo = [...(r._m || []), { y: r._y, t: r.memo }].filter(x => x.t).sort((a, b) => b.y - a.y).map(x => x.t).join(" ").replace(/\s+,/g, ",").trim(); delete r._m; delete r._y; delete r._page; });
+    loose = []; };
+  for (const l of L) {
+    const h = l.t.match(/Remittance Advice\s+([A-Z]{0,3}\d{3,})/i);
+    if (h) { if (!cur || cur.reference !== h[1].toUpperCase()) { finish(); cur = { payer, reference: h[1].toUpperCase(), pay_date: null, total: null, file_name: f.name, lines: [] }; docs.push(cur); } inTable = false; }
+    if (!cur) continue;
+    const pd = l.t.match(/Payment Date\s+(\d{1,2}-[A-Za-z]{3}-\d{4})/i); if (pd) cur.pay_date = remitDate(pd[1]);
+    if (/Doc\.?\s*Type|Reference No/i.test(l.t)) { inTable = true; continue; }
+    const tot = l.t.match(/^Total\b.*?(-?\$\s?[\d,]+\.\d\d)\s*$/i); if (tot) { cur.total = Math.abs(remitNum(tot[1])); inTable = false; continue; }
+    const m = l.t.match(ROW);
+    if (m && inTable) { cur.lines.push({ doc_type: m[1].trim(), ref_no: m[2], memo: m[3].trim(), doc_date: remitDate(m[4]), inv_amount: remitNum(m[5]), paid: Math.round(-remitNum(m[6]) * 100) / 100, _y: l.y, _page: l.page }); continue; }
+    if (inTable && !/^Page \d|^Document\b.*Amount/i.test(l.t)) loose.push(l);
+  }
+  finish();
+  const b64 = await new Promise((ok, no) => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(",")[1]); rd.onerror = no; rd.readAsDataURL(f); });
+  docs.forEach(d => { if (d.total == null) d.total = Math.round(d.lines.reduce((a, r) => a + r.paid, 0) * 100) / 100; d.pdf = docs.length === 1 ? b64 : null; d.pdf_all = b64; });
+  return docs;
+}
+async function remitLoadFiles(files) {
+  const box = document.createElement("div"); box.className = "staff-msg merch-msg"; $("#main .bank")?.prepend(box); const done = [];
+  for (const f of files) { box.textContent = `Reading ${f.name}…`;
+    let docs; try { docs = await remitReadPdf(f); } catch (e) { done.push({ bad: true, f: f.name, t: `Couldn't read it (${e.message || e}).` }); continue; }
+    if (!docs.length) { done.push({ bad: true, f: f.name, t: "No remittance # found on it. Is it a partner's Remittance Advice?" }); continue; }
+    for (const d of docs) { const pdf = d.pdf || d.pdf_all; delete d.pdf_all; d.pdf = pdf;
+      if (!d.lines.length || !d.pay_date) { done.push({ bad: true, f: f.name, h: `Remittance ${d.reference}`, t: `Not loaded: ${!d.pay_date ? "the payment date wasn't found" : "no invoices were found on it"}.` }); continue; }
+      const sum = Math.round(d.lines.reduce((a, r) => a + r.paid, 0) * 100) / 100, off = Math.abs(sum - d.total) > 0.01;
+      box.textContent = `Matching remittance ${d.reference}…`;
+      const { data, error } = await db.rpc("partner_remit_save", { p: d });
+      if (error) { done.push({ bad: true, f: f.name, h: `Remittance ${d.reference}`, t: `Not loaded: ${rpcErr(error)}` }); continue; }
+      const dt = new Date(d.pay_date + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
+      done.push({ bad: false, warn: !data.bank_id || data.found < data.lines || data.owing > 0 || off, f: f.name, h: `${data.partner || "Partner"} remittance ${d.reference} · ${dt} · ${money(d.total)}`,
+        t: `${data.bank_id ? `✓ In the bank on ${fmtDate(data.bank_date)} (${money(data.bank_amount)}${data.how === "two" ? ", paid together with another remittance" : ""})` : "Not found in the bank yet"} · ${data.found} of ${data.lines} invoices found in the app${data.owing ? ` · ${data.owing} still show owing in the app` : ""}${off ? ` · its lines add up to ${money(sum)}, not the total` : ""}${!data.partner ? " · couldn't tell which partner sent it" : ""}` }); } }
+  try { OW_BANK.clear(); } catch {}
+  box.remove(); BANK.merchMsgs = done; BANK.tab = "remit"; BANK.match = {}; bankSave(); await bankLoad(); renderBank();
+}
+// PDFs dropped on the Bank page: a remittance or a card statement, by what's in it
+async function bankPdfFiles(fs) {
+  const remit = [], card = [];
+  for (const f of fs) { let t = ""; try { t = (await pdfLinesY(f)).slice(0, 40).map(l => l.t).join(" "); } catch {} (/Remittance Advice/i.test(t) ? remit : card).push(f); }
+  if (card.length) await merchLoadFiles(card); const keep = BANK.merchMsgs || [];
+  if (remit.length) { await remitLoadFiles(remit); if (card.length) { BANK.merchMsgs = keep.concat(BANK.merchMsgs || []); renderBank(); } }
+}
+function bankRemitHtml() {
+  const L = BANK.remit || [];
+  if (!L.length) return `<p class="quiet">No remittances loaded yet. Press <b>⬆ Load a remittance (PDF)</b> at the top and pick Vista's Remittance Advice PDFs (as many as you like at once). Each one is tied to its deposit in the bank, and that deposit gets exactly the invoices on it, with the 🏦 stamp on Receivables.</p>`;
+  const bad = d => !d.bank || d.lines.some(l => !l.inv || Number(l.inv.balance) > 0.004);
+  const shown = BANK.remitShow === "look" ? L.filter(bad) : L, inBank = L.filter(d => d.bank).length, lines = L.reduce((a, d) => a + d.lines.length, 0),
+    found = L.reduce((a, d) => a + d.lines.filter(l => l.inv).length, 0), owing = L.reduce((a, d) => a + d.lines.filter(l => l.inv && Number(l.inv.balance) > 0.004).length, 0);
+  const max = BANK.remitMax || 100;
+  return `<div class="bank-tiles"><div class="cl-stat"><span>Remittances</span><strong>${L.length}</strong><em>${money(L.reduce((a, d) => a + Number(d.total || 0), 0))}</em></div>
+      <div class="cl-stat ${inBank < L.length ? "warn" : ""}"><span>In the bank</span><strong>${inBank} of ${L.length}</strong><em>deposit found</em></div>
+      <div class="cl-stat ${found < lines ? "warn" : ""}"><span>Invoices found</span><strong>${found} of ${lines}</strong><em>in the app</em></div>
+      ${owing ? `<div class="cl-stat warn"><span>Still owing in the app</span><strong>${owing}</strong><em>paid on a remittance</em></div>` : ""}</div>
+    <div class="row"><div class="seg" role="group"><button type="button" data-remit-show="all" aria-pressed="${BANK.remitShow !== "look"}">All</button><button type="button" data-remit-show="look" aria-pressed="${BANK.remitShow === "look"}">Needs a look (${L.filter(bad).length})</button></div>
+      <button class="btn quiet-btn" type="button" data-remit-rematch>↻ Match again</button></div>
+    ${shown.slice(0, max).map(d => `<details class="block bank-sec" ${shown.length === 1 ? "open" : ""}><summary><h2>${esc(d.partner || "Partner")} remittance ${esc(d.reference)} · ${esc(fmtDate(d.date))} <span class="count">${money(d.total)} · ${d.lines.length} invoice${d.lines.length === 1 ? "" : "s"}</span>
+        ${d.bank ? `<span class="bank-in">✓ in the bank ${esc(fmtDate(d.bank.date))}</span>` : `<span class="warn">not in the bank yet</span>`}${bad(d) && d.bank ? ` <span class="warn">· needs a look</span>` : ""}</h2></summary>
+      <p>${d.bank ? `Deposit: ${esc(d.bank.description || "")} ${money(d.bank.amount)} on ${esc(fmtDate(d.bank.date))}${d.with ? ` (paid together with remittance ${esc(d.with)})` : ""}` : `No ${esc(d.partner || "partner")} deposit of ${money(d.total)} found from the payment date to 10 days after. Load the bank file for those days, then press ↻ Match again.`}
+        · <button class="link" type="button" data-remit-pdf="${d.id}">Open the PDF</button> · <button class="link danger" type="button" data-remit-del="${d.id}">Remove</button></p>
+      <table class="calls-table bank-t"><thead><tr><th>Invoice</th><th>Customer</th><th class="r">Paid on the remittance</th><th>In the app</th></tr></thead><tbody>
+      ${d.lines.map(l => `<tr><td>${l.inv ? `<button class="link" type="button" data-invoice="${l.inv.id}"><b>#${esc(l.ref)}</b></button>` : `<b>#${esc(l.ref)}</b>`}${l.type && !/^invoice$/i.test(l.type) ? ` <span class="quiet">${esc(l.type)}</span>` : ""}<div class="quiet">${esc(fmtDate(l.date))}</div></td>
+        <td>${l.inv ? `${esc(l.inv.who || "")}${l.inv.street ? `<div class="quiet">${esc(l.inv.street)}</div>` : ""}` : `<span class="quiet">${esc(l.memo || "")}</span>`}</td>
+        <td class="r"><b>${money(l.paid)}</b>${Math.abs(Number(l.paid) - Number(l.amount)) > 0.004 ? `<div class="quiet">of ${money(l.amount)}</div>` : ""}</td>
+        <td>${!l.inv ? `<span class="warn">Not found in the app</span>` : l.inv.status === "void" ? `<span class="warn">Void in the app</span>` : Number(l.inv.balance) > 0.004 ? `<span class="warn">Shows ${money(l.inv.balance)} owing</span>` : `<span class="bank-in">✓ Paid</span>`}</td></tr>`).join("")}</tbody></table></details>`).join("")}
+    ${shown.length > max ? `<p><button class="btn quiet-btn" type="button" data-remit-more>Show more (${shown.length - max} left)</button></p>` : ""}`;
+}
+function wireRemit(m) {
+  const re = async msg => { try { OW_BANK.clear(); } catch {} BANK.match = {}; await bankLoad(); renderBank(msg); };
+  $("#bank-remit")?.addEventListener("change", e => { const fs = [...(e.target.files || [])]; if (fs.length) remitLoadFiles(fs); });
+  m.querySelectorAll("[data-remit-show]").forEach(b => b.addEventListener("click", () => { BANK.remitShow = b.dataset.remitShow; BANK.remitMax = 100; renderBank(); }));
+  m.querySelector("[data-remit-more]")?.addEventListener("click", () => { BANK.remitMax = (BANK.remitMax || 100) + 100; renderBank(); });
+  m.querySelector("[data-remit-rematch]")?.addEventListener("click", async e => { e.currentTarget.disabled = true; e.currentTarget.textContent = "Matching…";
+    const ids = [...new Set(BANK_PARTNERS.map(x => x[0]))]; for (const id of ids) { const { error } = await db.rpc("partner_remit_match", { p_partner: id }); if (error) return alertMsg("Not done: " + rpcErr(error)); } re(); });
+  m.querySelectorAll("[data-remit-pdf]").forEach(b => b.addEventListener("click", async () => { const { data, error } = await db.rpc("partner_remit_pdf", { p_id: Number(b.dataset.remitPdf) }); if (error || !data?.b64) return alertMsg("Couldn't open it" + (error ? ": " + rpcErr(error) : "."));
+    const bin = atob(data.b64), u = new Uint8Array(bin.length); for (let k = 0; k < bin.length; k++) u[k] = bin.charCodeAt(k); window.open(URL.createObjectURL(new Blob([u], { type: "application/pdf" })), "_blank"); }));
+  m.querySelectorAll("[data-remit-del]").forEach(b => b.addEventListener("click", async () => { if ((await askChoice("Remove this remittance?", "Its deposit goes back to being matched the usual way. You can load the PDF again any time.", [["yes", "Remove", true], ["", "Keep it"]])) !== "yes") return;
+    const { error } = await db.rpc("partner_remit_delete", { p_id: Number(b.dataset.remitDel) }); if (error) return alertMsg("Not done: " + rpcErr(error)); re("Remittance removed."); }));
+}
 function bankLedHtml() {
   const L = BANK.led || {}, rows = BANK.ledRows || [];
   const inv = i => `<button class="bank-inv" type="button" data-invoice="${i.id}" title="Open invoice ${esc(i.number)}"><b>#${esc(i.number)}</b><span>${esc(fmtDate(i.date))}${i.who ? " · " + esc(i.who) : ""}${i.street ? " · " + esc(i.street) : ""}</span><em>${money(i.amount)}</em></button>`;
@@ -19249,11 +19349,11 @@ function bankLedHtml() {
 }
 function renderBank(msg) {
   const D = BANK.data || {}, none = !D.all;
-  const tabs = [["list", "Transactions"], ["ledger", "Ledger"], ["sum", "Totals"], ["partners", "Partner payments"], ["merch", "Card statements"], ["veh", "🚐 Vehicles"]], AN = D.accounts || {}, an = (BANK_ACCTS.find(a => a[0] === BANK.acct) || [, "Main account"])[1];
+  const tabs = [["list", "Transactions"], ["ledger", "Ledger"], ["sum", "Totals"], ["partners", "Partner payments"], ["merch", "Card statements"], ["remit", "📄 Remittances"], ["veh", "🚐 Vehicles"]], AN = D.accounts || {}, an = (BANK_ACCTS.find(a => a[0] === BANK.acct) || [, "Main account"])[1];
   $("#main").innerHTML = `<article class="staff bank">
     <header class="cl-hero"><div class="cl-hero-text"><span class="cl-eyebrow">Owners and the accountant</span><h1>Bank · ${esc(an)}</h1>
       <p>${none ? `No ${esc(an.toLowerCase())} transactions yet. Load the bank's export for ${esc(an.toLowerCase())} to start.` : `${Number(D.all).toLocaleString()} transactions from ${esc(fmtDate(D.first))} to ${esc(fmtDate(D.last))}.`}</p></div>
-      <div class="cl-hero-range"><label class="btn quiet-btn bank-load" title="Elavon's monthly Merchant Billing Statement (PDF): ties each card deposit to the card payments and invoices in it">⬆ Load a card statement (PDF)<input type="file" id="bank-merch" accept="application/pdf,.pdf" multiple hidden></label> <label class="btn bank-load">⬆ Load a ${esc(an)} file<input type="file" id="bank-file" accept=".xlsx,.xls,.txt,.csv,.tsv,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden></label><button class="btn quiet-btn" type="button" data-bank-rematch title="Match every partner's deposits again (after new payments or a new bank file)">↻ Match again</button><em>The bank's export as Excel (.xlsx) or text (.txt, .csv): Date, Code, Description, Out, In, Balance. Lines already loaded are skipped.</em></div></header>
+      <div class="cl-hero-range"><label class="btn quiet-btn bank-load" title="Elavon's monthly Merchant Billing Statement (PDF): ties each card deposit to the card payments and invoices in it">⬆ Load a card statement (PDF)<input type="file" id="bank-merch" accept="application/pdf,.pdf" multiple hidden></label> <label class="btn quiet-btn bank-load" title="Vista's Remittance Advice (PDF): ties each remittance to its deposit in the bank and the invoices it paid">⬆ Load a remittance (PDF)<input type="file" id="bank-remit" accept="application/pdf,.pdf" multiple hidden></label> <label class="btn bank-load">⬆ Load a ${esc(an)} file<input type="file" id="bank-file" accept=".xlsx,.xls,.txt,.csv,.tsv,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden></label><button class="btn quiet-btn" type="button" data-bank-rematch title="Match every partner's deposits again (after new payments or a new bank file)">↻ Match again</button><em>The bank's export as Excel (.xlsx) or text (.txt, .csv): Date, Code, Description, Out, In, Balance. Lines already loaded are skipped.</em></div></header>
     <div class="vtp-find bank-all"><label for="bank-sq">Search the bank</label><span class="vtp-qw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="bank-sq" type="search" value="${esc(BANK.sq || "")}" placeholder="Anything: payee, amount, invoice #, customer, street, note, supplier invoice # or file" autocomplete="off"></span>${BANK.sq ? `<span class="quiet">Both accounts</span> <button class="link" type="button" id="bank-sqx">Clear</button>` : ""}</div>
     ${BANK.sq ? bankSearchHtml() : ""}
     <nav class="bank-accts" role="tablist" aria-label="Account" ${BANK.sq ? "hidden" : ""}>${BANK_ACCTS.map(([k, t]) => `<button type="button" role="tab" class="bank-acct" data-bank-acct="${k}" aria-pressed="${BANK.acct === k}">🏦 ${esc(t)}<span>${AN[k] ? Number(AN[k]).toLocaleString() + " transactions" : "nothing loaded yet"}</span></button>`).join("")}</nav>
@@ -19264,7 +19364,7 @@ function renderBank(msg) {
       <select id="bank-stmt-kind" aria-label="File type"><option value="xlsx" ${BANK.stmtKind !== "txt" ? "selected" : ""}>Excel</option><option value="txt" ${BANK.stmtKind === "txt" ? "selected" : ""}>Text, like the bank's</option></select>
       <span class="quiet">${esc((BANK_ACCTS.find(a => a[0] === BANK.acct) || [, ""])[1])}: every transaction that month, laid out like the bank's export</span></div>`}
     ${none || BANK.sq ? "" : `<div class="seg bank-tabs" role="tablist">${tabs.map(([k, t]) => `<button type="button" data-bank-tab="${k}" aria-pressed="${BANK.tab === k}">${t}</button>`).join("")}</div>
-    ${BANK.tab === "sum" ? bankSumHtml() : BANK.tab === "partners" ? bankPartHtml() : BANK.tab === "ledger" ? bankLedHtml() : BANK.tab === "merch" ? bankMerchHtml() : BANK.tab === "veh" ? vehHtml() : bankListHtml()}`}
+    ${BANK.tab === "sum" ? bankSumHtml() : BANK.tab === "partners" ? bankPartHtml() : BANK.tab === "ledger" ? bankLedHtml() : BANK.tab === "merch" ? bankMerchHtml() : BANK.tab === "remit" ? bankRemitHtml() : BANK.tab === "veh" ? vehHtml() : bankListHtml()}`}
   </article>`;
   wireBank();
 }
@@ -19360,6 +19460,7 @@ function wireBank() {
   m.querySelectorAll("[data-merch-rematch]").forEach(b => b.addEventListener("click", async () => { b.disabled = true; b.textContent = "Matching…"; const { error } = await db.rpc("merchant_statement_match", { p_id: Number(b.dataset.merchRematch) }); await db.rpc("merchant_fees_match", { p_id: Number(b.dataset.merchRematch) }); if (error) alertMsg("Not done: " + rpcErr(error)); try { OW_BANK.clear(); } catch {} await bankLoad(); renderBank(); }));
   m.querySelectorAll("[data-bank-attach]").forEach(b => b.addEventListener("click", () => bankAttachForm(b)));
   if (BANK.tab === "veh") wireVeh(m);
+  wireRemit(m);
   m.querySelectorAll("[data-bank-goveh]").forEach(b => b.addEventListener("click", async () => { BANK.tab = "veh"; BANK.sq = ""; bankSave(); await bankLoad(); renderBank(); }));
   $("#bank-stmt-kind")?.addEventListener("change", e => { BANK.stmtKind = e.target.value; });
   $("#bank-stmt")?.addEventListener("change", async e => { const mo = e.target.value; if (!mo) return; e.target.disabled = true; const o = e.target.options[e.target.selectedIndex], t = o.text; o.text = "Making " + t + "…";
@@ -19382,7 +19483,7 @@ function wireBank() {
   $("#bank-file")?.addEventListener("change", e => { const f = e.target.files?.[0]; if (f) bankReadFile(f); });
   const dz = $("#bank-drop"); document.body.ondragover = e => { if (document.body.dataset.page === "bank" && [...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); if (dz) { dz.hidden = false; dz.classList.add("on"); } } };
   document.body.ondrop = e => { if (document.body.dataset.page !== "bank") return; const fs = [...(e.dataTransfer?.files || [])], f = fs[0]; if (!f) return; e.preventDefault(); dz?.classList.remove("on");
-    if (fs.every(x => /pdf/i.test(x.type) || /\.pdf$/i.test(x.name))) return merchLoadFiles(fs); bankReadFile(f); };
+    if (fs.every(x => /pdf/i.test(x.type) || /\.pdf$/i.test(x.name))) return bankPdfFiles(fs); bankReadFile(f); };
 }
 // reload the list where you are (after attaching or taking something off)
 async function bankReloadKeep() { if (BANK.sq) { const { data } = await db.rpc("bank_search", { p_q: BANK.sq, p_limit: 300 }); BANK.srch = data || BANK.srch; const top = $("#main").scrollTop; renderBank(); $("#main").scrollTop = top; return; } try { OW_BANK.clear(); } catch {} const top = $("#main").scrollTop, n = BANK.tab === "ledger" ? BANK.ledRows.length : BANK.rows.length; BANK.offset = 0;
