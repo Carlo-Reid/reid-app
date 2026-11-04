@@ -13259,7 +13259,7 @@ OW.to = OW.to || ymd(new Date()); OW.from = OW.from || ymd(addDays(new Date(), -
 OW.jtype = OW.jtype || "all"; OW.paid = OW.paid || "all"; OW.scope = OW.scope || "owing"; OW.partner = OW.partner || "all";
 // what you picked stays for the rest of the day; the next day it starts fresh (Due now, all dates)
 const saveOw = () => { try { localStorage.setItem("reid.owing", JSON.stringify({ sort: OW.sort, group: OW.group, period: OW.period, from: OW.from, to: OW.to, jtype: OW.jtype, paid: OW.paid, scope: OW.scope, partner: OW.partner, fold: OW.fold || {},
-  day: ymd(new Date()), sumSel: OW.sumSel, ageSel: OW.ageSel || null, anchor: OW.anchor, acct: OW.acct || "", showPaid: !!OW.showPaid, tools: !!OW.tools, show: OW.show, acctAll: !!OW.acctAll, hideZero: !!OW.hideZero })); } catch {} };
+  day: ymd(new Date()), sumSel: OW.sumSel, ageSel: OW.ageSel || null, ptnSel: OW.ptnSel || null, anchor: OW.anchor, acct: OW.acct || "", showPaid: !!OW.showPaid, tools: !!OW.tools, show: OW.show, acctAll: !!OW.acctAll, hideZero: !!OW.hideZero })); } catch {} };
 const OW_JTYPE = [["all", "All job types"], ["install", "Installs"], ["service", "Service"], ["security", "Security"], ["maintenance", "Maintenance"], ["warranty", "Warranty"], ["other", "Other"], ["none", "No job"]];
 const OW_PAID = [["all", "Paid or not"], ["none", "Nothing paid yet"], ["part", "Part paid"]];
 // "View by": the day, week (Monday to Sunday), month or year that OW.anchor falls in
@@ -13407,17 +13407,19 @@ const owSumRows = sc => ["todo", "checked"].flatMap(k => owInPeriod(OW.all?.[k] 
 const OW_AGE = [["age0", "Current", 0, 30, "under 30 days old"], ["age30", "30 days", 30, 60, "30 to 59 days old"], ["age60", "60 days", 60, 90, "60 to 89 days old"], ["age90", "90 days", 90, 120, "90 to 119 days old"], ["age120", "120+ days", 120, Infinity, "120 days or older"]];
 const owPartnersKnown = () => OW.ptnData?.partners?.length ? OW.ptnData.partners : (() => { try { return JSON.parse(localStorage.getItem("reid.owPtn") || "[]"); } catch { return []; } })();
 const owScopeName = sc => OWL_NAMES[sc] || (sc === "ptn:none" ? "No partner (all other invoices)" : sc === "ptn:all" ? "All partners' invoices" : sc.startsWith("ptn:") ? (owPartnersKnown().find(x => "ptn:" + x.id === sc)?.name || "Partner") + " invoices"
-  : (OW_AGE.find(a => a[0] === sc) ? (OWL_NAMES[OW.sumSel || "sum:due"] || "Not paid") + " · " + OW_AGE.find(a => a[0] === sc)[4] : "Invoices"));
+  : (OW_AGE.find(a => a[0] === sc) ? (OW.ptnSel && !OW.ptnSel.startsWith("ptn:a") && !OW.ptnSel.startsWith("ptn:n") ? (owPartnersKnown().find(x => "ptn:" + x.id === OW.ptnSel)?.name || "Partner").replace(/\s*\(.*\)\s*$/, "") + " · " : OW.ptnSel === "ptn:all" ? "All partners · " : OW.ptnSel === "ptn:none" ? "No partner · " : "") + (OWL_NAMES[OW.sumSel || "sum:due"] || "Not paid") + " · " + OW_AGE.find(a => a[0] === sc)[4] : "Invoices"));
+// the partner picked under "Who owes us" (or none): the age boxes under it count only theirs
+const owPtnF = rows => { const k = OW.ptnSel; if (!k || OW.showPaid) return rows; return k === "ptn:all" ? rows.filter(r => r._ptnRow) : k === "ptn:none" ? rows.filter(r => !r._ptnRow) : rows.filter(r => r._ptnRow && "ptn:" + r.partner_id === k); };
 function owAgeRows(sc) {
-  if (sc === "age-nd") return owSumRows("sum:nd");
+  if (sc === "age-nd") return owPtnF(owSumRows("sum:nd"));
   const a = OW_AGE.find(x => x[0] === sc); if (!a) return [];
-  return owSumRows(OW.sumSel === "sum:all" ? "sum:all" : "sum:due").filter(r => { const d = owAgeDays(r); return d != null && d >= a[2] && d < a[3]; });
+  return owPtnF(owSumRows(OW.sumSel === "sum:all" ? "sum:all" : "sum:due")).filter(r => { const d = owAgeDays(r); return d != null && d >= a[2] && d < a[3]; });
 }
 // "Not due yet": by when the work is booked
 const OW_BK = [["bk:0", "This week", 0, 7, "booked in the next 7 days"], ["bk:1", "Next week", 7, 14, "booked 7 to 13 days out"], ["bk:2", "Later this month", 14, 31, "booked 2 to 4 weeks out"], ["bk:3", "Later", 31, Infinity, "booked a month or more out"]];
 function owBkRows(sc) { const a = OW_BK.find(x => x[0] === sc); if (!a) return [];
   const today = new Date(ymd(new Date()) + "T12:00:00");
-  return owSumRows("sum:nd").filter(r => { const d = r.booked_for ? Math.round((new Date(r.booked_for + "T12:00:00") - today) / 86400000) : 0; return d >= a[2] && d < a[3]; }); }
+  return owPtnF(owSumRows("sum:nd")).filter(r => { const d = r.booked_for ? Math.round((new Date(r.booked_for + "T12:00:00") - today) / 86400000) : 0; return d >= a[2] && d < a[3]; }); }
 // "ptn:none": every invoice for the dates that isn't a partner's (not paid + paid)
 function owNoPartnerRows() {
   const pid = new Set((OW.ptnData?.rows || []).map(r => r.invoice_id));
@@ -13427,7 +13429,7 @@ function owNoPartnerRows() {
 }
 const owOwedOnly = r => OW.showPaid || Number(r.balance) > 0.004;
 // what's picked at the top (Total owed / Due now / Not due yet, and an age box under it): the partner boxes follow it
-const owSel = () => OW.ageSel ? (OW.ageSel.startsWith("bk:") ? owBkRows(OW.ageSel) : owAgeRows(OW.ageSel)) : owSumRows(OW.sumSel || "sum:due");
+const owSel = () => owSumRows(OW.sumSel || "sum:due");
 const owSelPtn = sc => { const b = owSel(); return sc === "ptn:all" ? b.filter(r => r._ptnRow) : sc === "ptn:none" ? b.filter(r => !r._ptnRow) : b.filter(r => r._ptnRow && "ptn:" + r.partner_id === sc); };
 const owPtnRows = sc => !OW.showPaid ? owSelPtn(sc) : (sc === "ptn:none" ? owNoPartnerRows() : sc === "ptn:all" ? (OW.ptnData?.rows || []).filter(owPick) : (OW.ptnData?.rows || []).filter(r => "ptn:" + r.partner_id === sc && owPick(r))).filter(owOwedOnly);
 const owDollars = v => (Number(v) < 0 ? "−$" : "$") + Math.round(Math.abs(Number(v) || 0)).toLocaleString("en-CA");
@@ -13784,7 +13786,7 @@ async function openOwing() {
   // the "choose the invoices" filters were taken off this page: always show everything
   OW.kind = "all"; OW.jtype = "all"; OW.paid = "all"; OW.partner = "all"; OW.group = "none";
   if (OW.day !== ymd(new Date())) {   // a new day: start fresh
-    OW.scope = "sum:due"; OW.sumSel = "sum:due"; OW.ageSel = null; OW.show = "todo"; OW.acct = ""; OW.period = "all"; OW.anchor = ymd(new Date()); OW.showPaid = false; OW.acctAll = false; OW.tools = false; }
+    OW.scope = "sum:due"; OW.sumSel = "sum:due"; OW.ageSel = null; OW.ptnSel = null; OW.show = "todo"; OW.acct = ""; OW.period = "all"; OW.anchor = ymd(new Date()); OW.showPaid = false; OW.acctAll = false; OW.tools = false; }
   OW.sumSel = OW.sumSel || "sum:due"; OW.scope = OW.scope || "sum:due"; OW.limit = 100; OW.day = ymd(new Date()); OW.acctFor = OW.scope; saveOw();
   setPage("owing", "owing");
   $("#main").innerHTML = `<div class="loading">Loading what's owing…</div>`;
@@ -13860,25 +13862,25 @@ function renderOwing(msg) {
             <em>${paidN == null ? "loading…" : `${Number(paidN).toLocaleString()} ${paidN === 1 ? "invoice" : "invoices"} · paid in full`}</em><em class="ow-split">${esc(owRangeLabel())}</em></button>
           <button type="button" class="btn ${OW.tools ? "" : "quiet-btn"} ow-toolsbtn" id="ow-tools" aria-expanded="${!!OW.tools}">${OW.tools ? "Hide tools ▴" : "Tools ▾"}</button></div>
 `; })()}
-    <section class="sinv-panel ow-panel ow-fold ${OW.fold?.age ? "" : "shut"}" aria-label="How old"><button type="button" class="sp-h ow-fold-h" data-ow-fold="age" aria-expanded="${!!OW.fold?.age}"><span class="ow-fold-ar">${OW.fold?.age ? "▾" : "▸"}</span> ${OW.sumSel === "sum:nd" ? "Not due yet: when the work is booked" : OW.sumSel === "sum:all" ? "Total owed to us: how old" : "Due now: how old"}${OW.ageSel ? ` · <b>${esc((OW_AGE.concat(OW_BK, [["age-nd", "Not due yet"]]).find(a => a[0] === OW.ageSel) || [, ""])[1])}</b>` : ""}</button>
-      <div class="ow-scopes ow-scopes-age ${OW.fold?.age ? "" : "ow-folded"}" role="group" aria-label="How old">${(OW.sumSel === "sum:nd" ? OW_BK : OW.sumSel === "sum:all" ? OW_AGE.concat([["age-nd", "Not due yet", 0, 0, "work still booked"]]) : OW_AGE).map(([k, label, , , sub]) => { const rs = OW.all ? (k.startsWith("bk:") ? owBkRows(k) : owAgeRows(k)) : null;
-          return `<button type="button" class="ow-scope ow-scope-a" data-ow-scope="${k}" aria-pressed="${scope === k || OW.ageSel === k}"><span>${label}</span>
-            <strong>${rs ? money(rs.reduce((t, r) => t + Number(r.balance), 0)) : "…"}</strong><em>${rs ? `${rs.length.toLocaleString()} ${rs.length === 1 ? "invoice" : "invoices"} · ${sub}` : "loading…"}</em></button>`; }).join("")}</div>
-    </section>
-      ${owPartnersKnown().length ? `<section class="sinv-panel ow-panel" aria-label="Partners"><div class="sp-h">Who owes: partners${OW.showPaid ? "" : ` · ${esc(OWL_NAMES[OW.sumSel || "sum:due"] || "")}${OW.ageSel ? " · " + esc((OW_AGE.concat(OW_BK).find(a => a[0] === OW.ageSel) || [, OWL_NAMES[OW.ageSel] || ""])[1]) : ""}`}</div><div class="ow-scopes ow-scopes-ptn" role="group" aria-label="Partners">${owPartnersKnown().filter(x => { if (OW.showPaid || `ptn:${x.id}` === OW.scope) return true; const P = OW.ptnData?.loading ? null : OW.ptnData?.partners?.find(y => y.id === x.id); return !P || owPtnRows("ptn:" + x.id).length > 0; }).map(x => { const P = OW.ptnData?.loading ? null : OW.ptnData?.partners?.find(y => y.id === x.id), k = "ptn:" + x.id;
+      ${owPartnersKnown().length ? `<section class="sinv-panel ow-panel" aria-label="Partners"><div class="sp-h">Who owes us${OW.showPaid ? "" : ` · ${esc(OWL_NAMES[OW.sumSel || "sum:due"] || "")}`} <span class="quiet">· pick one to see how old theirs is below${OW.ptnSel ? "; click it again for everyone" : ""}</span></div><div class="ow-scopes ow-scopes-ptn" role="group" aria-label="Partners">${owPartnersKnown().filter(x => { if (OW.showPaid || `ptn:${x.id}` === OW.scope) return true; const P = OW.ptnData?.loading ? null : OW.ptnData?.partners?.find(y => y.id === x.id); return !P || owPtnRows("ptn:" + x.id).length > 0; }).map(x => { const P = OW.ptnData?.loading ? null : OW.ptnData?.partners?.find(y => y.id === x.id), k = "ptn:" + x.id;
           const rs = P ? owPtnRows(k) : null, owed = rs ? rs.reduce((t, r) => t + Number(r.balance), 0) : P ? Number(P.owed) : null, n = rs ? rs.length : P ? Number(P.n) : null;
-          return `<button type="button" class="ow-scope ow-scope-p" data-ow-scope="${k}" aria-pressed="${scope === k}" title="${esc(x.name)}"><span>${esc(String(x.name).replace(/\s*\(.*\)\s*$/, ""))}</span>
+          return `<button type="button" class="ow-scope ow-scope-p" data-ow-scope="${k}" aria-pressed="${scope === k || OW.ptnSel === k}" title="${esc(x.name)}"><span>${esc(String(x.name).replace(/\s*\(.*\)\s*$/, ""))}</span>
             <strong>${owed == null ? "…" : owDollars(owed)}</strong><em>${n == null ? "loading…" : `${n.toLocaleString()} ${n === 1 ? "invoice" : "invoices"}${OW.showPaid && P && Number(P.total) ? `<br>${owDollars(P.total)} billed` : ""}`}</em></button>`; }).join("")}
         ${(() => { const ps = OW.ptnData && !OW.ptnData.loading ? (OW.ptnData.partners || []) : null, filt = OW.jtype !== "all" || OW.paid !== "all";
           const rs = ps ? owPtnRows("ptn:all") : null;
           const owed = rs ? rs.reduce((t, r) => t + Number(r.balance), 0) : ps ? ps.reduce((t, x) => t + Number(x.owed || 0), 0) : null;
           const n = rs ? rs.length : ps ? ps.reduce((t, x) => t + Number(x.n || 0), 0) : null, billed = ps ? ps.reduce((t, x) => t + Number(x.total || 0), 0) : null;
-          return `<button type="button" class="ow-scope ow-scope-p ow-scope-all" data-ow-scope="ptn:all" aria-pressed="${scope === "ptn:all"}" title="Every partner together"><span>All partners</span>
+          return `<button type="button" class="ow-scope ow-scope-p ow-scope-all" data-ow-scope="ptn:all" aria-pressed="${scope === "ptn:all" || OW.ptnSel === "ptn:all"}" title="Every partner together"><span>All partners</span>
             <strong>${owed == null ? "…" : owDollars(owed)}</strong><em>${n == null ? "loading…" : `${n.toLocaleString()} ${n === 1 ? "invoice" : "invoices"}${OW.showPaid && billed ? `<br>${owDollars(billed)} billed` : ""}`}</em></button>`; })()}
         ${(() => { const ready = OW.all && OW.paidData?.rows && OW.ptnData && !OW.ptnData.loading, rs = ready ? owPtnRows("ptn:none") : null;
           const owed = rs ? rs.reduce((t, r) => t + Number(r.balance || 0), 0) : null, billed = rs ? rs.reduce((t, r) => t + Number(r.total || 0), 0) : null;
-          return `<button type="button" class="ow-scope ow-scope-p ow-scope-np" data-ow-scope="ptn:none" aria-pressed="${scope === "ptn:none"}" title="Every invoice that isn't a partner's"><span>No partner</span>
+          return `<button type="button" class="ow-scope ow-scope-p ow-scope-np" data-ow-scope="ptn:none" aria-pressed="${scope === "ptn:none" || OW.ptnSel === "ptn:none"}" title="Every invoice that isn't a partner's"><span>No partner</span>
             <strong>${owed == null ? "…" : owDollars(owed)}</strong><em>${rs ? `${rs.length.toLocaleString()} ${rs.length === 1 ? "invoice" : "invoices"}${OW.showPaid ? `<br>${owDollars(billed)} billed` : ""}` : "loading…"}</em></button>`; })()}</div></section>` : ""}
+    <section class="sinv-panel ow-panel ow-fold ${OW.fold?.age ? "" : "shut"}" aria-label="How old"><button type="button" class="sp-h ow-fold-h" data-ow-fold="age" aria-expanded="${!!OW.fold?.age}"><span class="ow-fold-ar">${OW.fold?.age ? "▾" : "▸"}</span> ${OW.sumSel === "sum:nd" ? "Not due yet: when the work is booked" : OW.sumSel === "sum:all" ? "Total owed to us: how old" : "Due now: how old"}${OW.ptnSel && !OW.showPaid ? ` · <b>${esc(OW.ptnSel === "ptn:all" ? "all partners" : OW.ptnSel === "ptn:none" ? "no partner" : (owPartnersKnown().find(x => "ptn:" + x.id === OW.ptnSel)?.name || "partner").replace(/\s*\(.*\)\s*$/, ""))}</b>` : ""}${OW.ageSel ? ` · <b>${esc((OW_AGE.concat(OW_BK, [["age-nd", "Not due yet"]]).find(a => a[0] === OW.ageSel) || [, ""])[1])}</b>` : ""}</button>
+      <div class="ow-scopes ow-scopes-age ${OW.fold?.age ? "" : "ow-folded"}" role="group" aria-label="How old">${(OW.sumSel === "sum:nd" ? OW_BK : OW.sumSel === "sum:all" ? OW_AGE.concat([["age-nd", "Not due yet", 0, 0, "work still booked"]]) : OW_AGE).map(([k, label, , , sub]) => { const rs = OW.all ? (k.startsWith("bk:") ? owBkRows(k) : owAgeRows(k)) : null;
+          return `<button type="button" class="ow-scope ow-scope-a" data-ow-scope="${k}" aria-pressed="${scope === k || OW.ageSel === k}"><span>${label}</span>
+            <strong>${rs ? money(rs.reduce((t, r) => t + Number(r.balance), 0)) : "…"}</strong><em>${rs ? `${rs.length.toLocaleString()} ${rs.length === 1 ? "invoice" : "invoices"} · ${sub}` : "loading…"}</em></button>`; }).join("")}</div>
+    </section>
     ${`<div class="cl-stats ${scope !== "owing" ? "ow-stats-off" : ""}">
       ${tile("todo", "s-booked", "Still to check")}
       ${tile("checked", "s-owe", "Checked, still owing")}
@@ -13944,8 +13946,12 @@ function renderOwing(msg) {
   $("#main").scrollTop = top;
   document.querySelectorAll("[data-ow-show]").forEach(b => b.addEventListener("click", () => { OW.show = b.dataset.owShow; if (OW.scope !== "owing") { OW.scope = "owing"; saveOw(); } OW.closed = []; renderOwing(); }));
   // the boxes show their list right here, below (like the "Still to check" boxes)
-  document.querySelectorAll("[data-ow-scope]").forEach(b => b.addEventListener("click", () => { if (OW.scope === b.dataset.owScope) return;
-    OW.scope = b.dataset.owScope; if (OW.scope.startsWith("sum:")) { OW.sumSel = OW.scope; OW.ageSel = null; } if (OW.scope.startsWith("age") || OW.scope.startsWith("bk:")) OW.ageSel = OW.scope; OW.closed = []; OW.limit = 100; OW.acctAll = false; saveOw(); renderOwing(); }));
+  document.querySelectorAll("[data-ow-scope]").forEach(b => b.addEventListener("click", () => { const k = b.dataset.owScope;
+    if (k.startsWith("ptn:") && OW.ptnSel === k && OW.scope !== k) { OW.scope = k; OW.ageSel = null; }   // back to all of that partner's
+    else if (k.startsWith("ptn:") && OW.ptnSel === k) { OW.ptnSel = null; OW.ageSel = null; OW.scope = OW.sumSel || "sum:due"; }   // clicked again: no partner picked
+    else { if (OW.scope === k) return; OW.scope = k; }
+    if (OW.scope.startsWith("sum:")) { OW.sumSel = OW.scope; OW.ageSel = null; OW.ptnSel = null; } if (OW.scope.startsWith("age") || OW.scope.startsWith("bk:")) OW.ageSel = OW.scope;
+    if (OW.scope.startsWith("ptn:")) { OW.ptnSel = OW.scope; OW.ageSel = null; } OW.closed = []; OW.limit = 100; OW.acctAll = false; saveOw(); renderOwing(); }));
   $("#ow-fullpage")?.addEventListener("click", () => { OWL.acct = OW.acct || ""; OWL.keepAcct = true; openOwList(); });
   document.querySelectorAll("#main [data-owl-acct]").forEach(b => b.addEventListener("click", () => { if (OW.acct === b.dataset.owlAcct) return; OW.acct = b.dataset.owlAcct; OW.closed = []; OW.limit = 100; saveOw(); renderOwing(); }));
   $("#ow-cleanup")?.addEventListener("click", () => openCleanup());
