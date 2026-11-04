@@ -1243,7 +1243,7 @@
   .ow-amt-dates { display: inline-flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; } .ow-amt-dates label { display: inline-flex; gap: 4px; align-items: center; font-weight: 700; } .ow-amt-dates input, .ow-amt-dates select { padding: 4px 6px; border: 1px solid #9fb3cc; border-radius: 6px; font: inherit; }
   .ow-home { display: inline-block; margin-top: 3px; padding: 1px 8px; font-size: 12.5px; font-weight: 700; background: #fff7e8; border: 1px solid #f0c27b; border-radius: 6px; color: #7a4600; } .ow-home .link { font-weight: 800; }
   .ow-zerobtn { margin-right: 10px; font-size: 13px; padding: 5px 12px; }
-  .inv-sinv { margin: 10px 0; padding: 8px 12px; border: 1px dashed #9fb3cc; border-radius: 10px; background: #f7fbff; line-height: 1.7; } .inv-sinv-b { font-size: inherit; padding: 0; }
+  .inv-sinv { margin: 10px 0; padding: 8px 12px; border: 1px dashed #9fb3cc; border-radius: 10px; background: #f7fbff; line-height: 1.7; } .inv-sinv-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; } .inv-sinv-b { font-size: 13px; padding: 4px 10px; min-height: 0; line-height: 1.3; text-align: left; } .inv-sinv-b[aria-pressed="true"] { outline: 2px solid #2f6fbf; } .inv-sinv-b .quiet { font-weight: 400; } .inv-sinv-view { margin-top: 8px; } .inv-sinv-view .sinv-scan { max-height: 70vh; }
   .inv-home .inv-homelink { font-size: inherit; padding: 0; } .inv-home .inv-homelink strong { text-decoration: underline; }
   .ow-numcopy { margin-left: 6px; padding: 1px 6px; font: inherit; font-size: 12px; line-height: 1.4; color: #1b4f8a; background: #eef4fb; border: 1px solid #b9cde6; border-radius: 6px; cursor: pointer; vertical-align: 1px; } .ow-numcopy:hover { background: #1b4f8a; color: #fff; } .ow-numcopy.done { background: #e3f4e8; color: #1f6b35; border-color: #a9d8b6; }
   .bank .bank-load { cursor: pointer; }
@@ -25982,9 +25982,23 @@ async function openInvoice(id, keep) {
   document.querySelector("[data-inv-custopen]")?.addEventListener("click", e => { const id = Number(e.currentTarget.dataset.invCustopen); if (!id) return; closeInvoice(); openCustomer(id); });
   // the supplier invoices attached to this invoice (what the parts cost); only for people who can see costs
   db.rpc("invoice_supplier_invoices", { p_invoice: i.id }).then(({ data }) => { const el = $("#inv-sinv"); if (!el || !Array.isArray(data) || !data.length) return;
-    el.hidden = false; el.innerHTML = `<div class="inv-label">Supplier invoices for this job <span class="quiet">(only you see this, not the customer)</span></div>${data.map(x => `<button class="link inv-sinv-b" type="button" data-inv-sinv="${x.id}" data-sup="${x.supplier_id}">
-      <b>${esc(x.supplier || "Supplier")}</b> ${x.doc_type && x.doc_type !== "invoice" ? esc(x.doc_type) + " " : ""}#${esc(x.number || "")}</button> <span class="quiet">${esc(fmtDate(x.date))}${x.total != null ? " · " + money(x.total) : ""}</span>`).join("<br>")}${data.length > 1 ? `<div class="quiet">Together ${money(data.reduce((t, x) => t + Number(x.total || 0), 0))}</div>` : ""}`;
-    el.querySelectorAll("[data-inv-sinv]").forEach(b => b.addEventListener("click", () => { closeInvoice(); SINV.sup = Number(b.dataset.sup); SINV.st = 0; SINV.f = "all"; SINV.q = ""; SINV.open = Number(b.dataset.invSinv); sinvSaveTab(); openSupInv(); })); }).catch(() => {});
+    el.hidden = false; el.innerHTML = `<div class="inv-label">Supplier invoices for this job <span class="quiet">(only you see this, not the customer)</span></div>
+      <div class="inv-sinv-list">${data.map(x => `<button class="btn quiet-btn inv-sinv-b" type="button" aria-pressed="false" data-inv-sinv="${x.id}" data-sup="${x.supplier_id}" title="Show this supplier invoice">📄 <b>${esc(x.supplier || "Supplier")}</b> ${x.doc_type && x.doc_type !== "invoice" ? esc(x.doc_type) + " " : ""}#${esc(x.number || "")}
+        <span class="quiet">${esc(fmtDate(x.date))}${x.total != null ? " · " + money(x.total) : ""}</span></button>`).join("")}</div>${data.length > 1 ? `<div class="quiet">Together ${money(data.reduce((t, x) => t + Number(x.total || 0), 0))}</div>` : ""}<div class="inv-sinv-view" id="inv-sinv-view"></div>`;
+    el.querySelectorAll("[data-inv-sinv]").forEach(b => b.addEventListener("click", async () => {
+      const id = Number(b.dataset.invSinv), box = $("#inv-sinv-view"), was = b.getAttribute("aria-pressed") === "true";
+      el.querySelectorAll("[data-inv-sinv]").forEach(x => x.setAttribute("aria-pressed", "false")); box.innerHTML = ""; if (was) return;
+      b.setAttribute("aria-pressed", "true"); box.innerHTML = `<span class="quiet">Loading the pages…</span>`;
+      const { data: d, error } = await db.rpc("supplier_invoice_get", { p_id: id }); if (b.getAttribute("aria-pressed") !== "true") return;
+      const P = d?.pages || [], go = `<button class="link" type="button" data-inv-sinv-go="${id}">Open it on the Supplier invoices page</button>`;
+      if (error) { box.innerHTML = `<span class="st-bad">${esc(rpcErr(error))}</span> ${go}`; }
+      else if (!P.length) box.innerHTML = `<p class="quiet">There's no scanned copy of this one, only its line on the statement.</p>${go}`;
+      else box.innerHTML = `${P.map(p => `<figure class="sinv-scan" data-inv-sinv-img="${p.id}">${SINV.img.has(p.id) ? `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">` : `<span class="quiet">Loading page ${p.page_no}…</span>`}</figure>`).join("")}<div class="quiet">Click a page to zoom in. ${go}</div>`;
+      box.querySelectorAll(".sinv-scan").forEach(f => f.addEventListener("click", () => f.classList.toggle("zoom")));
+      box.querySelector("[data-inv-sinv-go]")?.addEventListener("click", () => { closeInvoice(); SINV.sup = Number(b.dataset.sup); SINV.st = 0; SINV.f = "all"; SINV.q = ""; SINV.open = id; sinvSaveTab(); openSupInv(); });
+      for (const p of P) { if (!SINV.img.has(p.id)) { const r = await db.rpc("supplier_doc_page", { p_id: p.id }); if (r.data) SINV.img.set(p.id, "data:image/jpeg;base64," + r.data); }
+        const f = box.querySelector(`[data-inv-sinv-img="${p.id}"]`); if (f && SINV.img.has(p.id)) f.innerHTML = `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">`; }
+    })); }).catch(() => {});
   // billed to a partner or an account: the homeowner at the address, linked to their customer file
   db.rpc("invoice_homeowners", { p_ids: [i.id] }).then(({ data }) => { const h = (data || {})[i.id], el = $("#inv-home"); if (!h || !el) return;
     el.innerHTML = `<div class="inv-label" style="margin-top:8px">Homeowner</div><button class="link inv-homelink" type="button" data-inv-homecust="${h.id}" title="Open ${esc(h.name)}'s customer file"><strong>${esc(h.name)}</strong></button>${h.number ? ` <span class="inv-small">#${esc(h.number)}</span>` : ""}`;

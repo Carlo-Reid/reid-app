@@ -245,6 +245,13 @@ def main():
         scans = read_scans(cur) if cur.fetchone()[0] else 0   # needs setup file 93
         if scans:
             say(f"Read the words on {scans} scanned invoice{'s' if scans != 1 else ''}.")
+        try:   # supplier invoices loaded since last time: attach them to the customer invoices on their PO's job
+            cur.execute("SELECT to_regprocedure('public._sinv_autolink(bigint)') IS NOT NULL")
+            if cur.fetchone()[0]:
+                cur.execute("SELECT public._sinv_autolink(NULL)"); n = cur.fetchone()[0]
+                if n: say(f"Attached {n} supplier invoice{'s' if n != 1 else ''} to their customer invoices.")
+        except Exception as e:
+            say(f"Couldn't attach supplier invoices: {str(e)[:150]}")
         set_state(cur, "last_error", None)
         set_state(cur, "last_check", datetime.datetime.now(datetime.timezone.utc).isoformat())
         say(f"Supplier mail checked: {emails} new email{'s' if emails != 1 else ''}, {files} file{'s' if files != 1 else ''} saved.")
