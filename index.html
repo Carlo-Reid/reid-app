@@ -1630,6 +1630,9 @@
   .ow-rowcopy:hover { border-color: var(--dz-1f6fd1, #1f6fd1); color: var(--dz-1f6fd1, #1f6fd1); } .ow-rowcopy.done { background: #ebfbee; border-color: #2b8a3e; color: #2b8a3e; }
   .ow-copyall { width: 150px; white-space: nowrap; padding-left: 6px; padding-right: 6px; }
   .ow-scopes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
+  .ow-remind { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0 2px; } .ow-rem-t input[type=email] { width: 100%; min-width: 220px; padding: 5px 7px; border: 1px solid #9fb3cc; border-radius: 6px; font: inherit; }
+  .ow-rem textarea, .ow-rem #rem-subj { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid #9fb3cc; border-radius: 7px; font: inherit; } .ow-rem label { display: block; margin: 6px 0; font-weight: 700; }
+  .ow-rem-prev { white-space: pre-wrap; background: #f7fbff; border: 1px solid #c9d6e6; border-radius: 8px; padding: 10px 12px; font: 13px/1.45 system-ui, sans-serif; } .ow-rem-t tr.rem-sent td { background: #effaf3; }
   .ow-scopes-ptn { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin-top: 10px; }
   .ow-scope.ow-scope-all { border-style: dashed; }
   .ow-scopes .ow-scope-p { padding: 6px 7px; min-height: 74px; } .ow-scopes .ow-scope-p span { font-size: 11px; line-height: 1.2; height: 2.4em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; max-width: 100%; }
@@ -13421,6 +13424,69 @@ function owBkRows(sc) { const a = OW_BK.find(x => x[0] === sc); if (!a) return [
   const today = new Date(ymd(new Date()) + "T12:00:00");
   return owPtnF(owSumRows("sum:nd")).filter(r => { const d = r.booked_for ? Math.round((new Date(r.booked_for + "T12:00:00") - today) / 86400000) : 0; return d >= a[2] && d < a[3]; }); }
 // "ptn:none": every invoice for the dates that isn't a partner's (not paid + paid)
+// ===== Reminder emails for an age box on Receivables (30 days, 45 days…): one email per address, listing that person's invoices in the box.
+// A popup lists everyone first: tick who gets it, change the email, then send. Partner invoices go to the partner's billing email.
+const REM = { list: [], subject: "", body: "" };
+async function openOwRemind() {
+  const a = OW_AGE.find(x => x[0] === OW.ageSel); if (!a) return;
+  const rows = owAgeRows(OW.ageSel).filter(r => Number(r.balance) > 0.004 && r.invoice_id);
+  const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open"); $("#inv-cancelbtn")?.classList.add("hidden"); $("#inv-emailbtn")?.classList.add("hidden");
+  const P = $("#inv-paper"), say = t => { P.innerHTML = `<div class="stv"><h2>Reminder emails · ${esc(a[1])}</h2><p class="quiet">${esc(t)}</p></div>`; };
+  say(`Finding the email for each of the ${rows.length} invoices…`);
+  if (!COMPANY) { const { data } = await db.from("company_settings").select("*").limit(1).maybeSingle(); COMPANY = data || { company_name: "Reid Heating & Cooling" }; }
+  const infos = new Array(rows.length); let next = 0, done = 0, test = null;
+  await Promise.all(Array.from({ length: 6 }, async () => { while (next < rows.length) { const i = next++; const r = await db.rpc("doc_send_info", { p_kind: "invoice", p_ref: rows[i].invoice_id, p_customer: null });
+    infos[i] = r.error ? null : r.data; if (r.data?.test_to) test = r.data.test_to; if (++done % 10 === 0) say(`Finding the email for each invoice… ${done} of ${rows.length}`); } }));
+  if (infos.every(x => x == null)) return say("You don't have permission to email customers (Email / Text), or the emails couldn't be looked up.");
+  // one group per address (the partner's billing email first, else the customer's main email); invoices with no email stay listed, not ticked
+  const G = new Map();
+  rows.forEach((r, i) => { const inf = infos[i] || {}, pe = inf.partner_email?.value, ce = (inf.emails || []).find(x => x.pri)?.value || inf.emails?.[0]?.value, to = pe || ce || "";
+    const name = pe ? inf.partner_email.name : inf.customer_name || r.customer_name || "Customer", k = to || "none:" + (inf.customer_id || r.customer_id || i);
+    const g = G.get(k) || { k, to, name, customer_id: inf.customer_id || r.customer_id || null, partner: !!pe, inv: [], on: !!to }; g.inv.push(r); G.set(k, g); });
+  REM.list = [...G.values()].sort((x, y) => (!!y.to - !!x.to) || y.inv.reduce((t, r) => t + Number(r.balance), 0) - x.inv.reduce((t, r) => t + Number(r.balance), 0));
+  REM.subject = `Reminder: your account with ${COMPANY?.company_name || "Reid Heating & Cooling"}`;
+  REM.body = `Hello {name},\n\nThis is a friendly reminder that the following {invoices} still open on your account:\n\n{list}\n\nTotal owing: {total}\n\nYou can view the invoice online with the link below. If you've already paid, thank you, and please ignore this reminder. If you have any questions, just reply to this email.\n\nThank you,\n${COMPANY?.company_name || "Reid Heating & Cooling"}`;
+  REM.test = test; REM.age = a; drawOwRemind();
+}
+const remFill = (g, t) => { const tot = g.inv.reduce((s, r) => s + Number(r.balance), 0);
+  return t.replace(/\{name\}/g, g.name).replace(/\{invoices\}/g, g.inv.length === 1 ? "invoice is" : "invoices are").replace(/\{total\}/g, money(tot))
+    .replace(/\{list\}/g, g.inv.map(r => `Invoice ${r.invoice_number || r.invoice_id} · ${fmtDate(r.invoice_date)} · ${money(r.balance)} owing`).join("\n")); };
+function drawOwRemind(msg) {
+  const L = REM.list, on = L.filter(g => g.on && g.to), P = $("#inv-paper");
+  P.innerHTML = `<div class="stv ow-rem"><h2>Reminder emails · ${esc(REM.age[1])}</h2>
+    <p class="lead">${L.reduce((t, g) => t + g.inv.length, 0)} invoices going to ${L.filter(g => g.to).length} email address${L.filter(g => g.to).length === 1 ? "" : "es"}${L.some(g => !g.to) ? ` (${L.filter(g => !g.to).length} with no email on file: type one in to include them)` : ""}. Untick anyone who shouldn't get one, check the email, then send. Each person gets one email listing just their invoices.</p>
+    ${REM.test ? `<div class="ds-test">Test mode: every email goes to <b>${esc(REM.test)}</b>, marked with who it was meant for.</div>` : ""}
+    ${msg ? `<div class="staff-msg ${/not sent|couldn't/i.test(msg) ? "err" : "ok"}">${esc(msg)}</div>` : ""}
+    <div class="row"><button class="link" type="button" data-rem-all="1">Tick everyone</button> · <button class="link" type="button" data-rem-all="0">Untick everyone</button></div>
+    <table class="stv-t ow-rem-t"><thead><tr><th></th><th>Who</th><th>Email</th><th>Invoices</th><th class="r">Owing</th><th></th></tr></thead><tbody>
+    ${L.map((g, i) => `<tr class="${g.sent ? "rem-sent" : ""}"><td>${g.sent ? "✓" : `<input type="checkbox" data-rem-on="${i}" ${g.on && g.to ? "checked" : ""} ${g.to ? "" : "disabled"} aria-label="Send to ${esc(g.name)}">`}</td>
+      <td><b>${esc(g.name)}</b>${g.partner ? ` <span class="quiet">partner</span>` : ""}</td>
+      <td>${g.sent ? `<span class="st-ok">${esc(g.sent)}</span>` : `<input type="email" data-rem-to="${i}" value="${esc(g.to)}" placeholder="No email on file: type one" ${g.to ? "" : `class="di-need"`}>`}${g.err ? `<div class="st-bad">${esc(g.err)}</div>` : ""}</td>
+      <td class="quiet">${g.inv.map(r => `#${esc(r.invoice_number || r.invoice_id)} · ${esc(fmtDate(r.invoice_date))} · ${money(r.balance)}`).join("<br>")}</td>
+      <td class="r"><b>${money(g.inv.reduce((t, r) => t + Number(r.balance), 0))}</b></td><td><button class="link" type="button" data-rem-see="${i}">See the email</button></td></tr>`).join("")}</tbody></table>
+    <fieldset class="ds-sec"><legend>The email</legend><label>Subject <input id="rem-subj" value="${esc(REM.subject)}"></label>
+      <label>Message <textarea id="rem-body" rows="11">${esc(REM.body)}</textarea></label>
+      <p class="quiet">{name}, {list} (their invoices), {total} and {invoices} are filled in for each person. A "View your invoice online" link is added under it.</p>
+      <pre class="ow-rem-prev" id="rem-prev" hidden></pre></fieldset>
+    <div class="row"><button class="btn" type="button" data-rem-send ${on.length ? "" : "disabled"}>✉ Send ${on.length} reminder email${on.length === 1 ? "" : "s"}</button> <button class="link" type="button" data-rem-close>Close</button><span class="msg" role="status"></span></div></div>`;
+  const keep = () => { REM.subject = $("#rem-subj").value; REM.body = $("#rem-body").value; P.querySelectorAll("[data-rem-to]").forEach(i => { const g = REM.list[Number(i.dataset.remTo)]; g.to = i.value.trim().toLowerCase(); }); };
+  P.querySelectorAll("[data-rem-on]").forEach(c => c.addEventListener("change", () => { keep(); REM.list[Number(c.dataset.remOn)].on = c.checked; drawOwRemind(); }));
+  P.querySelectorAll("[data-rem-to]").forEach(i => i.addEventListener("change", () => { keep(); const g = REM.list[Number(i.dataset.remTo)]; g.on = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(g.to); drawOwRemind(); }));
+  P.querySelectorAll("[data-rem-all]").forEach(b => b.addEventListener("click", () => { keep(); REM.list.forEach(g => { if (!g.sent) g.on = b.dataset.remAll === "1" && !!g.to; }); drawOwRemind(); }));
+  P.querySelectorAll("[data-rem-see]").forEach(b => b.addEventListener("click", () => { keep(); const g = REM.list[Number(b.dataset.remSee)], pv = $("#rem-prev"); pv.hidden = false; pv.textContent = `To: ${g.to || "(no email)"}\nSubject: ${remFill(g, REM.subject)}\n\n${remFill(g, REM.body)}`; pv.scrollIntoView({ block: "nearest" }); }));
+  P.querySelector("[data-rem-close]").addEventListener("click", () => { closeInvoice(); });
+  P.querySelector("[data-rem-send]")?.addEventListener("click", async e => { keep(); const go = REM.list.filter(g => g.on && g.to && !g.sent); if (!go.length) return;
+    if (await askChoice(`Send ${go.length} reminder email${go.length === 1 ? "" : "s"}?`, `${go.reduce((t, g) => t + g.inv.length, 0)} invoices · ${money(go.reduce((t, g) => t + g.inv.reduce((s, r) => s + Number(r.balance), 0), 0))} owing${REM.test ? `. Test mode: they all go to ${esc(REM.test)}.` : "."}`, [["yes", "Send them", true], ["", "Not yet"]]) !== "yes") return;
+    const btn = e.currentTarget, m = P.querySelector(".msg"); btn.disabled = true; let ok = 0, bad = 0;
+    for (const g of go) { m.textContent = `Sending ${ok + bad + 1} of ${go.length}…`;
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(g.to)) { g.err = "That email doesn't look right"; bad++; continue; }
+      const first = [...g.inv].sort((x, y) => String(x.invoice_date).localeCompare(String(y.invoice_date)))[0];
+      const { data, error } = await db.functions.invoke("send-doc", { body: { kind: "invoice", ref_id: first.invoice_id, customer_id: g.customer_id, title: `Reminder · ${g.inv.length} invoice${g.inv.length === 1 ? "" : "s"}`, label: "invoice",
+        channel: "email", to: g.to, subject: remFill(g, REM.subject), body: remFill(g, REM.body), with_pdf: false } });
+      let t = error ? (error.context && typeof error.context.json === "function" ? (await error.context.json().catch(() => ({})))?.error : null) || error.message : data?.error;
+      if (t) { g.err = "Not sent: " + t; bad++; } else { g.err = null; g.sent = `Sent ${data?.test ? "(test) " : ""}to ${data?.sent_to || g.to}`; g.on = false; ok++; } }
+    drawOwRemind(`${ok} sent${bad ? ` · ${bad} not sent (see the red notes)` : ""}.`); });
+}
 function owNoPartnerRows() {
   const pid = new Set((OW.ptnData?.rows || []).map(r => r.invoice_id));
   const owing = OW_SHOW.filter(([k]) => k !== "not_owed").flatMap(([k]) => owInPeriod(OW.all?.[k] || []).map(r => ({ ...r, _show: k })));
@@ -13880,6 +13946,8 @@ function renderOwing(msg) {
       <div class="ow-scopes ow-scopes-age ${OW.fold?.age ? "" : "ow-folded"}" role="group" aria-label="How old">${(OW.sumSel === "sum:nd" ? OW_BK : OW.sumSel === "sum:all" ? OW_AGE.concat([["age-nd", "Not due yet", 0, 0, "work still booked"]]) : OW_AGE).map(([k, label, , , sub]) => { const rs = OW.all ? (k.startsWith("bk:") ? owBkRows(k) : owAgeRows(k)) : null;
           return `<button type="button" class="ow-scope ow-scope-a" data-ow-scope="${k}" aria-pressed="${scope === k || OW.ageSel === k}"><span>${label}</span>
             <strong>${rs ? money(rs.reduce((t, r) => t + Number(r.balance), 0)) : "…"}</strong><em>${rs ? `${rs.length.toLocaleString()} ${rs.length === 1 ? "invoice" : "invoices"} · ${sub}` : "loading…"}</em></button>`; }).join("")}</div>
+      ${OW.fold?.age && OW.ageSel && OW_AGE.some(a => a[0] === OW.ageSel) && OW.all ? (() => { const rs = owAgeRows(OW.ageSel).filter(r => Number(r.balance) > 0.004 && r.invoice_id), a = OW_AGE.find(x => x[0] === OW.ageSel);
+        return rs.length ? `<div class="ow-remind"><button class="btn" type="button" data-ow-remind>✉ Send reminder emails · ${esc(a[1])}</button> <span class="quiet">${rs.length.toLocaleString()} ${rs.length === 1 ? "invoice" : "invoices"} · ${money(rs.reduce((t, r) => t + Number(r.balance), 0))}. You see the list and the email first, and pick who gets it.</span></div>` : ""; })() : ""}
     </section>
     ${`<div class="cl-stats ${scope !== "owing" ? "ow-stats-off" : ""}">
       ${tile("todo", "s-booked", "Still to check")}
@@ -13955,6 +14023,7 @@ function renderOwing(msg) {
   $("#ow-fullpage")?.addEventListener("click", () => { OWL.acct = OW.acct || ""; OWL.keepAcct = true; openOwList(); });
   document.querySelectorAll("#main [data-owl-acct]").forEach(b => b.addEventListener("click", () => { if (OW.acct === b.dataset.owlAcct) return; OW.acct = b.dataset.owlAcct; OW.closed = []; OW.limit = 100; saveOw(); renderOwing(); }));
   $("#ow-cleanup")?.addEventListener("click", () => openCleanup());
+  document.querySelector("[data-ow-remind]")?.addEventListener("click", () => openOwRemind());
   $("#ow-zero")?.addEventListener("click", () => { OW.hideZero = !OW.hideZero; OW.limit = 100; saveOw(); renderOwing(); });
   { let t = 0; $("#ow-q")?.addEventListener("input", e => { clearTimeout(t); t = setTimeout(() => { const at = e.target.selectionStart; OW.q = e.target.value; OW.limit = 100; renderOwing(); const i = $("#ow-q"); if (i) { i.focus(); try { i.setSelectionRange(at, at); } catch {} } }, 250); }); }
   $("#ow-qx")?.addEventListener("click", () => { OW.q = ""; renderOwing(); });
