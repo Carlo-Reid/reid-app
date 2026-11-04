@@ -15397,9 +15397,9 @@ function dropInMatch(x) {
 // a file's pages, grouped into documents: a statement page (it has the aging: 31-60, 61-90, over 120), a pick ticket / packing slip, or an invoice.
 // A file that's all invoice pages stays one invoice (the way it always was).
 function dropInGroups(PT, cv) {
-  const kindOf = t => { const U = String(t).toUpperCase(); if (/\bSTATEMENT\b/.test(U) && /31\s*-\s*60|61\s*-\s*90|OVER\s*120/.test(U)) return "statement"; if (/PICK\s*TICKET|PACKING\s*(?:SLIP|LIST)|PICKED\s*BY\W{0,6}PACKED\s*BY/.test(U)) return "slip";
+  const kindOf = t => { const U = String(t).toUpperCase(); if (/\bSTATEMENT\b/.test(U) && /31\s*-\s*60|61\s*-\s*90|OVER\s*120|1\s*-\s*30\s*DAYS|91\s*\+\s*DAYS|BALANCE\s*DUE/.test(U)) return "statement"; if (/PICK\s*TICKET|PACKING\s*(?:SLIP|LIST)|PICKED\s*BY\W{0,6}PACKED\s*BY|WORK\s*ORDER/.test(U)) return "slip";
     if (/RECEIPT|CARDHOLDER\s*COPY/.test(U) && /AUTH\s*CODE|AUTHORI[SZ]ED|APPROVED|SALE\s*TRANSACTION|CARDHOLDER\s*COPY/.test(U) && !/INVOICE\s*(?:NUMBER|NO)/.test(U)) return "receipt"; return "invoice"; };
-  const numOf = t => (String(t).toUpperCase().match(/\b(\d{7,9}-\d{2})\b/) || [])[1] || "";
+  const numOf = t => { const U = String(t).toUpperCase(), a = U.match(/\b(\d{7,9}-\d{2})\b/); if (a) return a[1]; const b = U.match(/\b(S[IO])\s*-\s*(\d{6})\b/); return b ? b[1] + "-" + b[2] : ""; };
   const K = PT.map(kindOf);
   if (!K.some(k => k !== "invoice")) return [{ kind: "invoice", text: PT.join("\n"), C: cv, from: 1 }];
   if (K.every(k => k === "receipt")) return [{ kind: "receipt", text: PT.join("\n"), C: cv, from: 1 }];
@@ -15413,10 +15413,15 @@ function dropInGroups(PT, cv) {
   // the statement in the same file: each invoice's PO # and date. A page whose invoice # wasn't read gets it by its PO # (a PO with
   // two invoices, -00 and -01, goes in page order, skipping the one already read); every page gets its invoice's date from the statement
   const SL = []; G.filter(g => g.kind === "statement").forEach(g => { for (const m of g.text.matchAll(/(\d{1,2})\/(\d{2})\/(\d{2,4})\s+[A-Za-z1]{2}\s+(\d{5,})\s+(\d{6,9}-\d{2})/g))
-    SL.push({ date: `${m[3].length === 2 ? "20" + m[3] : m[3]}-${m[1].padStart(2, "0")}-${m[2]}`, po: m[4], ref: m[5] }); });
+    SL.push({ date: `${m[3].length === 2 ? "20" + m[3] : m[3]}-${m[1].padStart(2, "0")}-${m[2]}`, po: m[4], ref: m[5] });
+    for (const m of g.text.matchAll(/(\d{1,2})\/(\d{1,2})\/(\d{4})[\s|]+(?:S[I1l|!]|\$1|51)?[\s|]*-?\s*(\d{6})\s+(\d{5,})\s/g)) SL.push({ date: `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`, po: m[5], ref: "SI-" + m[4] }); });
   if (SL.length) { const taken = new Set(G.map(g => g.n).filter(Boolean)), flat = t => String(t).replace(/(\d)[ \t]+(?=\d)/g, "$1");
-    G.forEach(g => { if (g.kind === "statement" || g.n) return; const f = flat(g.text), hit = SL.find(l => f.includes(l.po) && !taken.has(l.ref)); if (hit) { g.byPo = hit.ref; taken.add(hit.ref); } });
-    G.forEach(g => { const r = g.n || g.byPo, l = r && SL.find(x => x.ref === r); if (l) g.date = l.date; }); }
+    G.forEach(g => { if (g.kind === "statement" || (g.n && !/^SO-/.test(g.n))) return; const f = flat(g.text), hit = SL.find(l => f.includes(l.po) && !taken.has(l.ref)) || SL.find(l => f.includes(l.po));
+      if (hit) { g.byPo = hit.ref; taken.add(hit.ref); } });
+    G.forEach(g => { const r = g.byPo || g.n, l = r && SL.find(x => x.ref === r); if (l) g.date = l.date; }); }
+  // the same invoice twice in a row (a second copy): one document
+  for (let i = G.length - 1; i > 0; i--) { const a = G[i - 1], b = G[i], ka = a.byPo || a.n, kb = b.byPo || b.n;
+    if (a.kind === b.kind && a.kind !== "statement" && ka && ka === kb) { a.text += "\n" + b.text; a.C.push(...b.C); G.splice(i, 1); } }
   return G;
 }
 async function dropInFill(x, text, C) {
@@ -15424,7 +15429,7 @@ async function dropInFill(x, text, C) {
   const T = text.toUpperCase(), flat = T.replace(/\W/g, ""), n = t => t == null ? null : Number(String(t).replace(/[, ]/g, ""));
   const hit = (DROPIN.known?.rows || []).find(r => r.number && String(r.number).length >= 5 && flat.includes(String(r.number).replace(/\W/g, "").toUpperCase()))
     || (DROPIN.known?.lines || []).map(l => ({ number: l.reference })).find(l => l.number && String(l.number).length >= 5 && flat.includes(String(l.number).replace(/\W/g, "").toUpperCase()));
-  x.number = hit?.number || (T.match(/\b(\d{7,9}-\d{2})\b/) || T.match(/(?:INVOICE|CREDIT[ \t]*(?:NOTE|MEMO)?|ORDER)[ \t]*(?:NO\.?|#|NUMBER)?[ \t]*[:#.]?[ \t]*([A-Z]{0,3}\d{4,}(?:-\d{2})?)\b/) || T.match(/\b([A-Z]\d{6})\b/) || [])[1] || "";
+  x.number = hit?.number || (T.match(/\b(SI-\d{6})\b/) || T.match(/\b(\d{7,9}-\d{2})\b/) || T.match(/(?:INVOICE|CREDIT[ \t]*(?:NOTE|MEMO)?|ORDER)[ \t]*(?:NO\.?|#|NUMBER)?[ \t]*[:#.]?[ \t]*([A-Z]{0,3}\d{4,}(?:-\d{2})?)\b/) || T.match(/\b([A-Z]\d{6})\b/) || [])[1] || "";
   x.date = dropInDate(text);
   x.po = (text.match(/(?:P\.?\s?O\.?|PURCHASE\s+ORDER|CUSTOMER\s+ORDER|COMMANDE)\s*(?:#|NO\.?|NUMBER|NUM\.?)?\s*[:#.]?\s*([A-Z]{0,3}\d[\w-]{2,})/i) || [])[1] || "";
   // the reader sometimes sees the decimal point as a comma (491,96): a comma with just two digits after it is the cents
@@ -15470,7 +15475,7 @@ async function dropInFiles(files) {
             y.method = brand + ((l4[1] || l4[2]) ? " ending " + (l4[1] || l4[2]) : ""); y.ref = (T.match(/AUTH\s*CODE\W*([A-Z0-9]{4,8})/) || [])[1] ? "Auth " + T.match(/AUTH\s*CODE\W*([A-Z0-9]{4,8})/)[1] : "";
             y.other = sinvWhichSup(T, DROPIN.sup); if (y.other) y.sup = y.other; y.busy = null; continue; }
           if (g.kind === "slip") y.slip = true;
-          await dropInFill(y, g.text, g.C); if (g.byPo) y.number = g.byPo; if (g.date) y.date = g.date; y.busy = null; dropInMatch(y); }
+          await dropInFill(y, g.text, g.C); if (g.byPo || g.n) y.number = g.byPo || g.n; if (g.date) y.date = g.date; y.busy = null; dropInMatch(y); }
         drawDropIn();
       } catch (e) { x.busy = null; x.err = e.message || String(e); drawDropIn(); }
     }
@@ -15685,6 +15690,10 @@ function stParse(texts, known) {
       if (nb && !seen.has(nb[3])) { const parts = nb[4].split(nb[3]), amts = cash(parts[0]), bal = parts.length > 1 ? cash(parts.slice(1).join(" ")) : [];
         if (amts.length || bal.length) { const c = ({ IN: "I", I1: "I", CM: "C", MC: "C", RM: "C", UC: "U", SC: "S", PA: "P", PY: "P" })[nb[2].toUpperCase().replace("1", "I")] || "I", a = bal.length ? bal[0] : amts[0];
           seen.add(nb[3]); lines.push({ reference: nb[3], branch: "", date: toIso(nb[1]), code: c, amount: ["C", "U", "P"].includes(c) ? -Math.abs(a) : a }); last = { T, idx }; } }
+      const hp = !m && !nb && s.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s+(?:S[I1l]?|SI|51|1)?\s*-?\s*(\d{6})\s+(\d{5,})\s+(.*)$/);
+      if (hp && !seen.has("SI-" + hp[2])) { const am = cash(hp[4].replace(/\d{1,2}\/\d{1,2}\/\d{4}/g, " ")), U = hp[4].toUpperCase();
+        if (am.length) { const c = /CREDIT|RETURN/.test(U) ? "C" : /PAYMENT|CHEQUE|CHECK/.test(U) ? "P" : "I", a = am[am.length - 1];   // the last amount is the balance
+          seen.add("SI-" + hp[2]); lines.push({ reference: (c === "I" ? "SI-" : "") + hp[2], branch: "", date: toIso(hp[1]), code: c, amount: c === "I" ? a : -Math.abs(a) }); last = { T, idx }; } }
       if (m) { const digits = m[1], ref = refOf(digits); let rest = m[4]; const k = rest.indexOf(digits.slice(-6)); if (k >= 0) rest = rest.slice(0, k);
         const cm = rest.match(/^\W*([A-Za-z1©])[A-Za-z1]?\s/), code = cm ? CODE[cm[1]] : null; if (cm) rest = rest.slice(cm[0].length);
         const amts = (rest.match(/\d{1,3}(?:,\s?\d{3})*\.\d{2}-?|\.\d{2}-?/g) || []).map(num).filter(v => v != null);
@@ -15699,6 +15708,7 @@ function stParse(texts, known) {
     });
   });
   if (!date) { const d = texts.join("\n").match(/\bDate:?\s*(\d{1,2}\/\d{2}\/\d{2,4})\b/i); if (d) date = toIso(d[1]); }
+  if (!date) { const d = String(texts[0] || "").split(/\n/).slice(0, 14).join(" ").match(/\b(\d{1,2}\/\d{1,2}\/\d{4})\b/); if (d) date = toIso(d[1]); }   // printed at the top (HPC: 2/8/2026)
   if (aging && discount != null) aging.discount = discount;
   const sum = Math.round(lines.reduce((a, l) => a + l.amount, 0) * 100) / 100;
   if (total == null && last) {   // the total is the biggest amount printed below the last line (the TOTAL box often isn't read)
