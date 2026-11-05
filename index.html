@@ -1656,7 +1656,13 @@ button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 
   .sgm-acts { white-space: nowrap; } .sgm-acts .btn { margin: 0 4px 4px 0; font-size: 12.5px; padding: 4px 10px; min-height: 0; }
   .sgm-c { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 8px; border-radius: 999px; } .sgm-sure { background: #dff3e6; color: #17603a; } .sgm-likely { background: #e3edfb; color: #1d4f91; } .sgm-maybe { background: #fdf0d8; color: #8a5300; }
   .sp-match { color: #8a4b00; }
-  /* their statements, our statement, invoices by month */
+  .inv-paper:has(.srp-sbs) { max-width: 1760px !important; width: 98vw !important; }
+  .srp-sbs { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+  .srp-sbs .srp-r { position: sticky; top: 0; max-height: calc(100vh - 80px); overflow: auto; }
+  .srp-their { border-left: 3px solid #e2b56b; padding-left: 14px; } .srp-their .srp-page img { cursor: zoom-in; }
+  @media (max-width: 1100px) { .srp-sbs { grid-template-columns: 1fr; } .srp-sbs .srp-r { position: static; max-height: none; } }
+  @media print { .srp-sbs { grid-template-columns: 1fr 1fr; } .srp-sbs .srp-r { position: static; max-height: none; overflow: visible; } }
+    /* their statements, our statement, invoices by month */
   .srp h2 { margin: 2px 0 8px; } .srp-bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 14px; padding: 8px 10px; background: #eef3f8; border-radius: 10px; }
   .srp-bar select, .srp-bar input[type=date] { font: inherit; padding: 4px 6px; } .srp-chk { display: inline-flex; gap: 6px; align-items: center; }
   .srp-t { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 6px 0 10px; } .srp-t th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #5b6b7b; border-bottom: 2px solid #d5dde6; padding: 6px 8px; }
@@ -15346,29 +15352,59 @@ async function openOurStatement(sup, asOf) {
       cmp.push(!o ? { ref: l.reference, date: l.date, their: a, our: null, why: (D.invoices || []).some(x => norm(x.number) === k) ? "Not owing in our records (credit, or not in our records by that date)" : "We don't have this invoice", bad: true }
         : Math.abs(o.due - a) > 0.004 ? { ref: l.reference, date: l.date, their: a, our: o.due, why: o.due < 0.005 ? "We show it paid" : "Different amount", bad: true } : { ref: l.reference, date: l.date, their: a, our: o.due, why: "Same", bad: false }); });
     O.open.forEach(x => { if (!theirs.has(norm(x.number))) cmp.push({ ref: x.number, date: x.date, their: null, our: x.due, why: "Not on their statement", bad: true }); }); }
-  const bad = cmp.filter(c => c.bad), theirTot = T ? Number(T.total) : null;
+  const bad = cmp.filter(c => c.bad), theirTot = T ? Number(T.total) : null, badRef = new Set(bad.map(c => norm(c.ref)));
   const rowsShow = all ? [...O.pos, ...O.credits].sort((a, b) => String(a.date).localeCompare(String(b.date))) : O.open;
-  const P = srpOpen(`<div class="srp-bar no-print"><label>As of <select data-srp-asof>${[...new Set([date, ...(D.statements || []), ymd(new Date())])].sort().reverse().map(d => `<option value="${d}" ${d === date ? "selected" : ""}>${esc(fmtDate(d))}${(D.statements || []).includes(d) ? " · their statement" : d === ymd(new Date()) ? " · today" : ""}</option>`).join("")}</select></label>
-      <label>or <input type="date" data-srp-date value="${date}"></label>
-      <label class="srp-chk"><input type="checkbox" data-srp-all ${all ? "checked" : ""}> Show paid invoices and credits too</label></div>
-    <div class="srp-sheet"><div class="srp-head"><div><div class="srp-co">${esc(co.company_name || "Reid Heating & Cooling")}</div><div class="quiet">Our statement of account with</div><h2>${esc(D.supplier || srpName(sup))}</h2></div>
+  // the invoices' before tax, HST, PO and job (as on View Supplier Invoices)
+  if (!SRP.rowsFor || SRP.rowsFor !== sup) { const r1 = await db.rpc("supplier_invoices_list", { p_supplier: sup, p_statement: 0 }); SRP.rows = new Map((r1.data?.rows || []).map(r => [r.id, r])); SRP.rowsFor = sup; }
+  const RW = id => SRP.rows?.get(id) || {};
+  const sbsOk = !!T, sbs = sbsOk && SRP.sbs !== false, copies = !!SRP.copies;
+  const sumOf = (L, f) => L.reduce((t, x) => t + Number(f(x) || 0), 0);
+  const ourSheet = `<div class="srp-sheet"><div class="srp-head"><div><div class="srp-co">${esc(co.company_name || "Reid Heating & Cooling")}</div><div class="quiet">Our statement of account with</div><h2>${esc(D.supplier || srpName(sup))}</h2></div>
       <div class="srp-hr"><div>As of <b>${esc(fmtDate(date))}</b></div><div class="srp-big">${money(O.due)}</div><div class="quiet">we owe them, by our records</div></div></div>
-    <table class="srp-t"><thead><tr><th>Date</th><th>Invoice #</th><th>PO</th><th class="r">Amount</th><th class="r">Paid / credited</th><th class="r">Balance due</th></tr></thead><tbody>
-      ${rowsShow.length ? rowsShow.map(x => `<tr class="${x.total < 0 ? "srp-cr" : x.due > 0.004 ? "" : "srp-paid"}"><td>${esc(x.date ? fmtDate(x.date) : "")}</td><td>${esc(x.number)}${x.total < 0 ? ` <span class="quiet">credit</span>` : ""}</td><td>${esc(x.po || "")}</td>
-        <td class="r num">${money(x.total)}</td><td class="r num">${x.total < 0 ? "" : money(x.applied)}</td><td class="r num">${x.total < 0 ? "" : money(x.due)}</td></tr>`).join("") : `<tr><td colspan="6" class="quiet">Nothing owing by our records.</td></tr>`}
-      ${O.unapplied > 0.004 ? `<tr class="srp-cr"><td></td><td colspan="4">Payments and credits not used up yet</td><td class="r num">−${money(O.unapplied)}</td></tr>` : ""}</tbody></table>
+    <table class="srp-t"><thead><tr><th>Date</th><th>Invoice #</th><th>PO / job</th><th class="r">Before tax</th><th class="r">HST</th><th class="r">Total</th><th class="r">Paid / credited</th><th class="r">Balance due</th></tr></thead><tbody>
+      ${rowsShow.length ? rowsShow.map(x => { const r = RW(x.id), cr = x.total < 0; return `<tr class="${badRef.has(norm(x.number)) ? "srp-bad" : cr ? "srp-cr" : x.due > 0.004 ? "" : "srp-paid"}"><td>${esc(x.date ? fmtDate(x.date) : "")}</td>
+        <td>${esc(x.number)}${cr ? ` <span class="quiet">credit</span>` : ""}</td><td>${esc(r.po_number || x.po || r.po_text || "")}${r.po_customer ? `<div class="quiet">${esc(r.po_customer)}</div>` : ""}</td>
+        <td class="r num">${r.subtotal != null ? money(r.subtotal) : ""}</td><td class="r num">${r.hst != null ? money(r.hst) : ""}</td><td class="r num">${money(x.total)}</td>
+        <td class="r num">${cr ? "" : money(x.applied)}</td><td class="r num">${cr ? "" : money(x.due)}</td></tr>`; }).join("") : `<tr><td colspan="8" class="quiet">Nothing owing by our records.</td></tr>`}
+      ${O.unapplied > 0.004 ? `<tr class="srp-cr"><td></td><td colspan="6">Payments and credits not used up yet</td><td class="r num">−${money(O.unapplied)}</td></tr>` : ""}
+      <tr class="srp-totrow"><td colspan="3">${all ? "Total" : "Total owing"}</td><td class="r num">${money(sumOf(rowsShow, x => RW(x.id).subtotal))}</td><td class="r num">${money(sumOf(rowsShow, x => RW(x.id).hst))}</td><td class="r num">${money(sumOf(rowsShow, x => x.total))}</td><td></td><td class="r num">${money(O.due)}</td></tr></tbody></table>
     <div class="srp-age">${[["current", "Current"], ["d31_60", "31–60 days"], ["d61_90", "61–90 days"], ["d91_120", "91–120 days"], ["over120", "Over 120 days"]].map(([k, t]) => `<div><span>${t}</span><b>${money(O.ag[k])}</b></div>`).join("")}<div class="srp-agt"><span>Balance due</span><b>${money(O.due)}</b></div></div>
     <p class="quiet srp-note">Our invoices and credits to ${esc(fmtDate(date))}: ${money(O.pos.reduce((t, x) => t + x.total, 0))} invoiced, ${money(O.creditSum)} credited, ${money(O.paid)} paid (${O.pays.length} payment${O.pays.length === 1 ? "" : "s"}). Payments and credits are taken off the oldest invoices first.</p>
     ${T ? `<div class="srp-cmp"><h3>Matched against their statement of ${esc(fmtDate(T.date))}</h3>
       <div class="srp-cmptot"><span>Theirs <b>${money(theirTot)}</b></span><span>Ours <b>${money(O.due)}</b></span><span class="${Math.abs(theirTot - O.due) < 0.005 ? "st-ok" : "st-bad"}">${Math.abs(theirTot - O.due) < 0.005 ? "✓ The same" : `Off by ${money(Math.abs(theirTot - O.due))}`}</span>
-        <span class="quiet">${cmp.length - bad.length} line${cmp.length - bad.length === 1 ? "" : "s"} the same${bad.length ? `, ${bad.length} to look at` : ""}</span></div>
+        <span class="quiet">${cmp.length - bad.length} line${cmp.length - bad.length === 1 ? "" : "s"} the same${bad.length ? `, ${bad.length} to look at (in yellow)` : ""}</span></div>
       ${bad.length ? `<table class="srp-t"><thead><tr><th>Invoice #</th><th>Date</th><th class="r">Theirs</th><th class="r">Ours</th><th>Why</th></tr></thead><tbody>
         ${bad.map(c => `<tr class="srp-bad"><td>${esc(c.ref)}</td><td>${esc(c.date ? fmtDate(c.date) : "")}</td><td class="r num">${c.their == null ? "—" : money(c.their)}</td><td class="r num">${c.our == null ? "—" : money(c.our)}</td><td>${esc(c.why)}</td></tr>`).join("")}</tbody></table>` : `<p class="st-ok">Every line on their statement matches our records.</p>`}
       ${T.date !== date ? `<p class="quiet">Their newest statement on or before ${esc(fmtDate(date))} is the ${esc(fmtDate(T.date))} one; pick its date above to match them exactly.</p>` : ""}</div>`
-      : `<p class="quiet">No statement from them on or before this date to match against.</p>`}</div>`);
+      : `<p class="quiet">No statement from them on or before this date to match against.</p>`}
+    ${copies ? `<div class="srp-copies"><p class="quiet no-print">Loading the copies…</p></div>` : ""}</div>`;
+  // their statement for the same date: the scanned pages (or its lines, laid out the same way)
+  const theirSide = !sbs ? "" : `<div class="srp-sheet srp-their"><div class="srp-head"><div><div class="srp-co">${esc(D.supplier || srpName(sup))}</div><div class="quiet">Their statement</div><h2>${esc(fmtDate(T.date))}</h2></div>
+      <div class="srp-hr"><div>As of <b>${esc(fmtDate(T.date))}</b></div><div class="srp-big">${money(theirTot)}</div><div class="quiet">they say we owe</div></div></div>
+    <div class="srp-theirpages"><p class="quiet">Loading their statement…</p></div></div>`;
+  const P = srpOpen(`<div class="srp-bar no-print"><label>As of <select data-srp-asof>${[...new Set([date, ...(D.statements || []), ymd(new Date())])].sort().reverse().map(d => `<option value="${d}" ${d === date ? "selected" : ""}>${esc(fmtDate(d))}${(D.statements || []).includes(d) ? " · their statement" : d === ymd(new Date()) ? " · today" : ""}</option>`).join("")}</select></label>
+      <label>or <input type="date" data-srp-date value="${date}"></label>
+      ${sbsOk ? `<label class="srp-chk"><input type="checkbox" data-srp-sbs ${sbs ? "checked" : ""}> Side by side with their statement</label>` : ""}
+      <label class="srp-chk"><input type="checkbox" data-srp-all ${all ? "checked" : ""}> Show paid invoices and credits too</label>
+      <label class="srp-chk"><input type="checkbox" data-srp-copies ${copies ? "checked" : ""}> Include the invoice copies (scanned pages) after the list</label></div>
+    ${sbs ? `<div class="srp-sbs"><div class="srp-l">${ourSheet}</div><div class="srp-r">${theirSide}</div></div>` : ourSheet}`);
   P.querySelector("[data-srp-asof]")?.addEventListener("change", e => openOurStatement(sup, e.target.value));
   P.querySelector("[data-srp-date]")?.addEventListener("change", e => { if (e.target.value) openOurStatement(sup, e.target.value); });
   P.querySelector("[data-srp-all]")?.addEventListener("change", e => { SRP.showAll = e.target.checked; openOurStatement(sup, date); });
+  P.querySelector("[data-srp-sbs]")?.addEventListener("change", e => { SRP.sbs = e.target.checked; openOurStatement(sup, date); });
+  P.querySelector("[data-srp-copies]")?.addEventListener("change", e => { SRP.copies = e.target.checked; openOurStatement(sup, date); });
+  if (sbs) { const box = P.querySelector(".srp-theirpages"), pg = await db.rpc("supplier_statement_pages", { p_statement: T.id }); if (!document.body.contains(box)) return;
+    const imgs = pg.data || [];
+    box.innerHTML = imgs.length ? imgs.map((p, k) => `<figure class="srp-page sinv-scan"><img alt="Their statement page ${k + 1}" src="data:image/jpeg;base64,${p.image}"></figure>`).join("") + `<p class="quiet no-print">Click a page to zoom in.</p>`
+      : `<table class="srp-t"><thead><tr><th>Date</th><th>Invoice #</th><th class="r">Amount</th></tr></thead><tbody>${(T.lines || []).map(l => `<tr class="${badRef.has(norm(l.reference)) ? "srp-bad" : Number(l.amount) < 0 ? "srp-cr" : ""}"><td>${esc(l.date ? fmtDate(l.date) : "")}</td><td>${esc(l.reference)}${l.code && l.code !== "I" ? ` <span class="quiet">${esc(l.code)}</span>` : ""}</td><td class="r num">${money(l.amount)}</td></tr>`).join("")}
+          <tr class="srp-totrow"><td colspan="2">Total</td><td class="r num">${money(theirTot)}</td></tr></tbody></table><p class="quiet no-print">Their scanned statement isn't kept for this date: these are its lines as read. Add the scanned pages on Their statements to see it as it came.</p>`;
+    box.querySelectorAll(".sinv-scan").forEach(f => f.addEventListener("click", () => { const im = f.querySelector("img"); if (im) pageZoom(im.src, im.alt, f); })); }
+  if (copies) { const box = P.querySelector(".srp-copies"); let out = "", n = 0;
+    for (const x of rowsShow) { const g = await db.rpc("supplier_invoice_get", { p_id: x.id }); const pages = g.data?.pages || [];
+      for (const pg of pages) { if (!SINV.img.has(pg.id)) { const q = await db.rpc("supplier_doc_page", { p_id: pg.id }); if (q.data) SINV.img.set(pg.id, "data:image/jpeg;base64," + q.data); }
+        if (SINV.img.has(pg.id)) { n++; out += `<figure class="srp-page"><figcaption>${esc(x.number)} · ${esc(x.date ? fmtDate(x.date) : "")}${pages.length > 1 ? ` · page ${pg.page_no}` : ""}</figcaption><img alt="" src="${SINV.img.get(pg.id)}"></figure>`; } }
+      if (!document.body.contains(box)) return; box.innerHTML = out + `<p class="quiet no-print">Loading the copies… (${n} page${n === 1 ? "" : "s"} so far)</p>`; }
+    box.innerHTML = out || `<p class="quiet">No scanned copies are kept for these invoices.</p>`; }
 }
 
 /* a month of a supplier's invoices */
