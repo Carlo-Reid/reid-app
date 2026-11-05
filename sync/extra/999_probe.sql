@@ -1,0 +1,1 @@
+DO $$ BEGIN RAISE EXCEPTION 'PROBE %', (SELECT string_agg(id || ' ' || name || ' phone ' || coalesce(phone,'-') || ' invoices ' || (SELECT count(*) FROM supplier_invoices s WHERE s.supplier_id = x.id) || ' POs ' || (SELECT count(*) FROM purchase_orders p WHERE p.supplier_id = x.id), ' | ') FROM suppliers x WHERE name ~* 'breeze'); END $$;
