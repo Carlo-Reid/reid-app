@@ -15544,7 +15544,7 @@ function dropInGroups(PT, cv, HT) {
   // a statement in the file (any layout the statement reader knows): its invoice numbers name the other pages. A number on a page that's
   // on the statement is that page's; one misread digit (286390 for 286990) still counts when only one statement number is that close
   const stTexts = PT.filter((t, i) => K[i] === "statement"), STR = stTexts.length ? stParse(stTexts, []).lines.filter(l => l.code !== "P") : [];
-  const stNum = t => { if (!STR.length) return ""; const toks = [...new Set(String(t).replace(/(\d)[ ,](?=\d{3}\b)/g, "$1").match(/\b[A-Z]{0,3}-?\d{5,9}(?:-\d{2})?\b/gi) || [])], refs = STR.map(l => String(l.reference));
+  const stNum = t => { if (!STR.length) return ""; const toks = [...new Set(String(t).replace(/\b\d(?: \d){4,8}\b/g, m => m.replace(/ /g, "")).replace(/(\d)[ ,](?=\d{3}\b)/g, "$1").match(/\b[A-Z]{0,3}-?\d{5,9}(?:-\d{2})?\b/gi) || [])], refs = STR.map(l => String(l.reference));
     const dig = r => r.replace(/\D/g, ""), ex = refs.find(r => toks.some(x => dig(x) === dig(r) && dig(r).length >= 5)); if (ex) return ex;
     const near = refs.filter(r => toks.some(x => dig(x).length === dig(r).length && dig(r).length >= 5 && [...dig(x)].filter((c, i) => c !== dig(r)[i]).length === 1));
     if (near.length > 1) { const dt = r => STR.find(l => String(l.reference) === r)?.date || "", by = near.sort((a, b) => dt(b).localeCompare(dt(a)));   // two that close: the pages sent with a statement are its newest invoices
@@ -15552,7 +15552,7 @@ function dropInGroups(PT, cv, HT) {
     return near.length === 1 ? near[0] : ""; };
   const G = [];
   PT.forEach((t, i) => { const k = K[i], n = k === "statement" ? "" : numOf(t) || stNum(PH[i]), g = G[G.length - 1];
-    if (g && !g.closed && g.kind === k && (k === "statement" || (!n && (!STR.length || g.n)) || (g.n && n === g.n))) { g.text += "\n" + t; g.C.push(cv[i]); }   // with a statement, a page with no number read is the next page of the numbered one before it, or else stands alone (pick its number)
+    if (g && !g.closed && g.kind === k && (k === "statement" || (!n && (!STR.length || g.n) && !(k === "slip" && STR.length && /P?ACKING\s*LI|PICK\s*TICKET/i.test(HT[i] || ""))) || (g.n && n === g.n))) { g.text += "\n" + t; g.C.push(cv[i]); }   // with a statement, a page with no number read is the next page of the numbered one before it, or else stands alone (pick its number)
     else G.push({ kind: k, n, text: t, C: [cv[i]], from: i + 1 });
     if (k !== "statement" && /LAST\s*PAGE/i.test(t)) G[G.length - 1].closed = true; });   // "LAST PAGE": the next page is a new document
   // the statement in the same file: each invoice's PO # and date. A page whose invoice # wasn't read gets it by its PO # (a PO with
@@ -15579,6 +15579,8 @@ function dropInGroups(PT, cv, HT) {
   G.forEach(g => { const r = g.byPo || g.n, l = r && STR.find(x => String(x.reference) === r); if (l) { g.date = g.date || l.date; g.amount = l.amount; } });
   G.st = STR; return G;
 }
+function dropInTurn(c, deg) { const o = document.createElement("canvas"); o.width = c.height; o.height = c.width; const g = o.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0, 0, o.width, o.height); g.translate(o.width / 2, o.height / 2); g.rotate(deg * Math.PI / 180); g.drawImage(c, -c.width / 2, -c.height / 2); return o; }
 // the top-right corner of a page, read again bigger and in black and white: faint grey printing (Breezehill's invoice # on a packing list) shows up
 function dropInCorner(c) {
   const w = Math.round(c.width * 0.45), h = Math.round(c.height * 0.13), o = document.createElement("canvas"); o.width = w * 3; o.height = h * 3;
@@ -15623,7 +15625,12 @@ async function dropInFiles(files) {
             const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: g, viewport: vp }).promise; cv.push(c); } }
         else if (/^image\//.test(f.type)) { const img = await createImageBitmap(f), c = document.createElement("canvas"); c.width = img.width; c.height = img.height; c.getContext("2d").drawImage(img, 0, 0); cv.push(c); }
         if (!cv.length) { x.busy = null; x.err = "Not a PDF or a picture"; continue; }
-        const PT = []; for (let i = 0; i < cv.length; i++) { x.busy = `Reading page ${i + 1} of ${cv.length}…`; drawDropIn(); PT.push((await worker.recognize(cv[i])).data.text); }
+        const PT = []; for (let i = 0; i < cv.length; i++) { x.busy = `Reading page ${i + 1} of ${cv.length}…`; drawDropIn(); let d = (await worker.recognize(cv[i])).data;
+          // a page scanned sideways reads as nonsense: turn it both ways and keep the way that reads (the saved copy is turned too)
+          const good = r => (r.words || []).filter(w => w.confidence > 80 && /[A-Za-z0-9]{3,}/.test(w.text)).length;
+          if (good(d) < 8) for (const deg of [-90, 90]) { x.busy = `Page ${i + 1} looks sideways: turning it…`; drawDropIn(); const r = dropInTurn(cv[i], deg), e = (await worker.recognize(r)).data;
+            if (good(e) > good(d) + 10) { d = e; cv[i] = r; break; } }
+          PT.push(d.text); }
         const HT = []; if (cv.length > 1) { await worker.setParameters({ tessedit_pageseg_mode: "6" });
           for (let i = 0; i < cv.length; i++) { x.busy = `Checking page ${i + 1} of ${cv.length} for its number…`; drawDropIn(); HT.push((await worker.recognize(dropInCorner(cv[i]))).data.text); }
           await worker.setParameters({ tessedit_pageseg_mode: "3" }); }
