@@ -15344,6 +15344,16 @@ async function openOurStatement(sup, asOf) {
   if (!date) { const r0 = await db.rpc("supplier_our_statement", { p_supplier: sup, p_as_of: ymd(new Date()) }); date = r0.data?.statements?.[0] || ymd(new Date()); }   // to start: the date of their newest statement
   const { data: D, error } = await db.rpc("supplier_our_statement", { p_supplier: sup, p_as_of: date });
   if (error || !D) return srpOpen(`<div class="staff-msg err">${esc(error ? rpcErr(error) : "Couldn't work it out")}</div>`);
+  // a running statement, like theirs: from what was owing on an earlier statement of theirs (its lines), plus our invoices and credits since, less our payments since
+  let base = null;
+  { const sl = (await db.rpc("supplier_statements_pages", { p_supplier: sup })).data || [], before = sl.filter(x => x.date < date && Number(x.lines) > 0).sort((a, b) => a.date.localeCompare(b.date));
+    const pick = SRP.from && before.find(x => x.date === SRP.from) || before[0];
+    if (pick) { const b0 = await db.rpc("supplier_our_statement", { p_supplier: sup, p_as_of: pick.date }); const F = b0.data?.their;
+      if (F && F.date === pick.date) { base = { date: F.date, total: Number(F.total), list: before };
+        D.invoices = [...(F.lines || []).filter(l => l.code !== "P").map(l => ({ id: null, number: l.reference, date: l.date, total: Number(l.amount), type: Number(l.amount) < 0 ? "credit" : "invoice", po: "", fromSt: true })),
+          ...(F.lines || []).filter(l => l.code === "P").map(l => ({ id: null, number: l.reference, date: l.date, total: Number(l.amount), type: "credit", po: "", fromSt: true })),
+          ...(D.invoices || []).filter(x => String(x.date || "") > F.date)];
+        D.payments = (D.payments || []).filter(x => String(x.date || "") > F.date); } } }
   const O = srpOurs(D), T = D.their, all = !!SRP.showAll, co = COMPANY || {};
   // matching theirs: by invoice #, their balance due against what our records leave owing
   const norm = t => String(t || "").replace(/\W/g, "").toUpperCase(), ours = new Map(O.pos.map(x => [norm(x.number), x])), theirs = new Map((T?.lines || []).filter(l => l.code !== "P").map(l => [norm(l.reference), l]));
@@ -15363,12 +15373,13 @@ async function openOurStatement(sup, asOf) {
       <div class="srp-hr"><div>As of <b>${esc(fmtDate(date))}</b></div><div class="srp-big">${money(O.due)}</div><div class="quiet">we owe them, by our records</div></div></div>
     <table class="srp-t"><thead><tr><th>Date</th><th>Invoice #</th><th>PO / job</th><th class="r">Before tax</th><th class="r">HST</th><th class="r">Total</th><th class="r">Paid / credited</th><th class="r">Balance due</th></tr></thead><tbody>
       ${rowsShow.length ? rowsShow.map(x => { const r = RW(x.id), cr = x.total < 0; return `<tr class="${badRef.has(norm(x.number)) ? "srp-bad" : cr ? "srp-cr" : x.due > 0.004 ? "" : "srp-paid"}"><td>${esc(x.date ? fmtDate(x.date) : "")}</td>
-        <td>${esc(x.number)}${cr ? ` <span class="quiet">credit</span>` : ""}</td><td>${esc(r.po_number || x.po || r.po_text || "")}${r.po_customer ? `<div class="quiet">${esc(r.po_customer)}</div>` : ""}</td>
+        <td>${esc(x.number)}${cr ? ` <span class="quiet">credit</span>` : ""}${x.fromSt ? ` <span class="quiet">· from their statement</span>` : ""}</td><td>${esc(r.po_number || x.po || r.po_text || "")}${r.po_customer ? `<div class="quiet">${esc(r.po_customer)}</div>` : ""}</td>
         <td class="r num">${r.subtotal != null ? money(r.subtotal) : ""}</td><td class="r num">${r.hst != null ? money(r.hst) : ""}</td><td class="r num">${money(x.total)}</td>
         <td class="r num">${cr ? "" : money(x.applied)}</td><td class="r num">${cr ? "" : money(x.due)}</td></tr>`; }).join("") : `<tr><td colspan="8" class="quiet">Nothing owing by our records.</td></tr>`}
       ${O.unapplied > 0.004 ? `<tr class="srp-cr"><td></td><td colspan="6">Payments and credits not used up yet</td><td class="r num">−${money(O.unapplied)}</td></tr>` : ""}
       <tr class="srp-totrow"><td colspan="3">${all ? "Total" : "Total owing"}</td><td class="r num">${money(sumOf(rowsShow, x => RW(x.id).subtotal))}</td><td class="r num">${money(sumOf(rowsShow, x => RW(x.id).hst))}</td><td class="r num">${money(sumOf(rowsShow, x => x.total))}</td><td></td><td class="r num">${money(O.due)}</td></tr></tbody></table>
     <div class="srp-age">${[["current", "Current"], ["d31_60", "31–60 days"], ["d61_90", "61–90 days"], ["d91_120", "91–120 days"], ["over120", "Over 120 days"]].map(([k, t]) => `<div><span>${t}</span><b>${money(O.ag[k])}</b></div>`).join("")}<div class="srp-agt"><span>Balance due</span><b>${money(O.due)}</b></div></div>
+    ${base ? `<p class="quiet srp-note">Starts from what was owing on their ${esc(fmtDate(base.date))} statement (${money(base.total)}, its lines marked “from their statement”), then our invoices and credits after it, less our payments after it.</p>` : ""}
     <p class="quiet srp-note">Our invoices and credits to ${esc(fmtDate(date))}: ${money(O.pos.reduce((t, x) => t + x.total, 0))} invoiced, ${money(O.creditSum)} credited, ${money(O.paid)} paid (${O.pays.length} payment${O.pays.length === 1 ? "" : "s"}). Payments and credits are taken off the oldest invoices first.</p>
     ${T ? `<div class="srp-cmp"><h3>Matched against their statement of ${esc(fmtDate(T.date))}</h3>
       <div class="srp-cmptot"><span>Theirs <b>${money(theirTot)}</b></span><span>Ours <b>${money(O.due)}</b></span><span class="${Math.abs(theirTot - O.due) < 0.005 ? "st-ok" : "st-bad"}">${Math.abs(theirTot - O.due) < 0.005 ? "✓ The same" : `Off by ${money(Math.abs(theirTot - O.due))}`}</span>
@@ -15384,6 +15395,7 @@ async function openOurStatement(sup, asOf) {
     <div class="srp-theirpages"><p class="quiet">Loading their statement…</p></div></div>`;
   const P = srpOpen(`<div class="srp-bar no-print"><label>As of <select data-srp-asof>${[...new Set([date, ...(D.statements || []), ymd(new Date())])].sort().reverse().map(d => `<option value="${d}" ${d === date ? "selected" : ""}>${esc(fmtDate(d))}${(D.statements || []).includes(d) ? " · their statement" : d === ymd(new Date()) ? " · today" : ""}</option>`).join("")}</select></label>
       <label>or <input type="date" data-srp-date value="${date}"></label>
+      ${base ? `<label>starting from their <select data-srp-from>${base.list.map(x => `<option value="${x.date}" ${x.date === base.date ? "selected" : ""}>${esc(fmtDate(x.date))} statement · ${money(x.total)}</option>`).join("")}</select></label>` : ""}
       ${sbsOk ? `<label class="srp-chk"><input type="checkbox" data-srp-sbs ${sbs ? "checked" : ""}> Side by side with their statement</label>` : ""}
       <label class="srp-chk"><input type="checkbox" data-srp-all ${all ? "checked" : ""}> Show paid invoices and credits too</label>
       <label class="srp-chk"><input type="checkbox" data-srp-copies ${copies ? "checked" : ""}> Include the invoice copies (scanned pages) after the list</label></div>
@@ -15392,6 +15404,7 @@ async function openOurStatement(sup, asOf) {
   P.querySelector("[data-srp-date]")?.addEventListener("change", e => { if (e.target.value) openOurStatement(sup, e.target.value); });
   P.querySelector("[data-srp-all]")?.addEventListener("change", e => { SRP.showAll = e.target.checked; openOurStatement(sup, date); });
   P.querySelector("[data-srp-sbs]")?.addEventListener("change", e => { SRP.sbs = e.target.checked; openOurStatement(sup, date); });
+  P.querySelector("[data-srp-from]")?.addEventListener("change", e => { SRP.from = e.target.value; openOurStatement(sup, date); });
   P.querySelector("[data-srp-copies]")?.addEventListener("change", e => { SRP.copies = e.target.checked; openOurStatement(sup, date); });
   if (sbs) { const box = P.querySelector(".srp-theirpages"), pg = await db.rpc("supplier_statement_pages", { p_statement: T.id }); if (!document.body.contains(box)) return;
     const imgs = pg.data || [];
@@ -15400,7 +15413,7 @@ async function openOurStatement(sup, asOf) {
           <tr class="srp-totrow"><td colspan="2">Total</td><td class="r num">${money(theirTot)}</td></tr></tbody></table><p class="quiet no-print">Their scanned statement isn't kept for this date: these are its lines as read. Add the scanned pages on Their statements to see it as it came.</p>`;
     box.querySelectorAll(".sinv-scan").forEach(f => f.addEventListener("click", () => { const im = f.querySelector("img"); if (im) pageZoom(im.src, im.alt, f); })); }
   if (copies) { const box = P.querySelector(".srp-copies"); let out = "", n = 0;
-    for (const x of rowsShow) { const g = await db.rpc("supplier_invoice_get", { p_id: x.id }); const pages = g.data?.pages || [];
+    for (const x of rowsShow) { if (!x.id) continue; const g = await db.rpc("supplier_invoice_get", { p_id: x.id }); const pages = g.data?.pages || [];
       for (const pg of pages) { if (!SINV.img.has(pg.id)) { const q = await db.rpc("supplier_doc_page", { p_id: pg.id }); if (q.data) SINV.img.set(pg.id, "data:image/jpeg;base64," + q.data); }
         if (SINV.img.has(pg.id)) { n++; out += `<figure class="srp-page"><figcaption>${esc(x.number)} · ${esc(x.date ? fmtDate(x.date) : "")}${pages.length > 1 ? ` · page ${pg.page_no}` : ""}</figcaption><img alt="" src="${SINV.img.get(pg.id)}"></figure>`; } }
       if (!document.body.contains(box)) return; box.innerHTML = out + `<p class="quiet no-print">Loading the copies… (${n} page${n === 1 ? "" : "s"} so far)</p>`; }
@@ -15436,7 +15449,7 @@ async function openMonthInvoices(sup, month) {
     box.innerHTML = out || `<p class="quiet">No scanned copies are kept for these invoices.</p>`; }
 }
 document.addEventListener("click", e => { const b = e.target.closest?.("[data-sinv-theirs], [data-sinv-ours], [data-sinv-months], [data-stv-theirpages]"); if (!b) return; e.preventDefault();
-  if (b.dataset.sinvTheirs) openTheirStatements(Number(b.dataset.sinvTheirs)); else if (b.dataset.sinvOurs) { SRP.showAll = false; openOurStatement(Number(b.dataset.sinvOurs)); }
+  if (b.dataset.sinvTheirs) openTheirStatements(Number(b.dataset.sinvTheirs)); else if (b.dataset.sinvOurs) { SRP.showAll = false; SRP.from = null; openOurStatement(Number(b.dataset.sinvOurs)); }
   else if (b.dataset.sinvMonths) { SRP.copies = false; openMonthInvoices(Number(b.dataset.sinvMonths)); } else openTheirStatements(Number(b.dataset.sup), Number(b.dataset.stvTheirpages)); });
 /* ---------- Supplier invoices with no customer invoice: the job the matcher thinks they were for, to accept or turn down ---------- */
 const SGM = { conf: "sure", ticked: new Set() };
