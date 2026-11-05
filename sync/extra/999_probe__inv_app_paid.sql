@@ -1,1 +1,0 @@
-DO $$ DECLARE r text; BEGIN SELECT E'\n=====FN _inv_app_paid\n' || coalesce((SELECT string_agg(pg_get_functiondef(p.oid), E'\n---\n') FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname='_inv_app_paid'),'none') INTO r; RAISE EXCEPTION 'PROBE %', r; END $$;
