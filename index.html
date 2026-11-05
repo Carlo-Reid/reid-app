@@ -16406,7 +16406,7 @@ const stMonIso = (mon, d, y) => { const k = ["JAN", "FEB", "MAR", "APR", "MAY", 
 function stParse(texts, known) {
   // known: the references we already have for this supplier (to put back a letter the reader dropped, e.g. 336872 -> C336872)
   const num = t => { const m = String(t).replace(/[ ,]/g, "").match(/^(\d*\.\d{2})(-)?$/); return m ? (m[2] ? -1 : 1) * Number(m[1]) : null; };
-  const toIso = d => { const m = d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if (!m) return null; const y = m[3].length === 2 ? "20" + m[3] : m[3]; return `${y}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`; };
+  const toIso = d => { const m = d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if (!m || Number(m[1]) < 1 || Number(m[1]) > 12 || Number(m[2]) < 1 || Number(m[2]) > 31) return null; const y = m[3].length === 2 ? "20" + m[3] : m[3]; return `${y}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`; };   // 20/31/26 (10 misread) isn't a date
   const K = new Map(); (known || []).forEach(r => { const d = String(r).replace(/\D/g, ""); if (d) K.set(d.slice(-6), r); });
   const pre = (known || []).map(r => String(r).match(/^[A-Z]+/)?.[0]).filter(Boolean), PFX = pre.length > (known || []).length / 2 ? pre.sort((a, b) => pre.filter(x => x === b).length - pre.filter(x => x === a).length)[0] : "";
   const refOf = d => { d = d.length === 7 && d[0] === "0" ? d.slice(1) : d; return K.get(d.slice(-6)) || (PFX ? PFX + d : d); };
@@ -16455,7 +16455,8 @@ function stParse(texts, known) {
         const amts = (rest.match(/\d{1,3}(?:,\s?\d{3})*\.\d{2}-?|\.\d{2}-?/g) || []).map(num).filter(v => v != null);
         if (amts.length && !seen.has(ref)) { seen.add(ref); let amount = amts[amts.length - 1];
           const tv = tailAmt ? num(tailAmt.replace(/,/g, "")) : null;   // the tear-off column has it again: of the readings that disagree, the one read twice
-          if (tv != null && Math.abs(tv) !== Math.abs(amount) && amts.slice(0, -1).some(v => Math.abs(v) === Math.abs(tv))) amount = (amount < 0 ? -1 : 1) * Math.abs(tv);   // the sign from the line (the tear-off column prints credits without the minus)
+          if (tv != null && Math.abs(tv) !== Math.abs(amount) && (amts.slice(0, -1).some(v => Math.abs(v) === Math.abs(tv)) || /\d\.\d{3}\b/.test(rest))) amount = (amount < 0 ? -1 : 1) * Math.abs(tv);   // 598.312: a digit stuck on, the tear-off column's 598.12
+          if (amount > 0 && (amts.some(v => v < 0) || (tv != null && tv < 0))) amount = -amount;   // a credit: the minus can be missed on one of its readings   // the sign from the line (the tear-off column prints credits without the minus)
           lines.push({ reference: ref, branch: m[2] || "", date: toIso(m[3]), code: amount < 0 ? "C" : code && code !== "C" ? code : "I", amount }); last = { T, idx }; } }
       // Boone: the number on the left misread ("ca14216"), but the tear-off column on the right has it again with the amount: C414216 246.05
       if (lines.length === n0 && !nb && !hp && !ce && !ve && !cy && !mo) { const rt = s.match(/(\d{1,2}\/\d{2}\/\d{2,4})\s.*?\d\.\d{2}.*?\b([A-Za-z]{0,2})(\d{5,7})\s+(\d[\d,]*\.\d{2}-?)\s*$/);
@@ -16502,7 +16503,8 @@ function stParse(texts, known) {
   if (balDue != null) total = balDue;
   // the total read with one digit wrong (59,225.50 for 59,225.90) when the lines add up to the right one: the lines' sum
   { const sm = Math.round(lines.reduce((a, l) => a + l.amount, 0) * 100) / 100, A = Number(total || 0).toFixed(2), B = sm.toFixed(2);
-    if (lines.length > 5 && total != null && A !== B && A.length === B.length && [...A].filter((c, i) => c !== B[i]).length === 1) total = sm; }
+    if (lines.length > 5 && total != null && A !== B && A.length === B.length && [...A].filter((c, i) => c !== B[i]).length === 1) total = sm;
+    else if (lines.length > 5 && total != null && Number(total) > 0 && Number(total) < sm && A.length >= 5 && B.endsWith(A)) total = sm; }   // its first digits not read
   // the aging boxes weren't readable (Boone's small two-language row): worked out from the lines' dates as of the statement date
   if (!aging && date && lines.length) { const D = new Date(date + "T12:00"), ag = { current: 0, d31_60: 0, d61_90: 0, d91_120: 0, over120: 0, from_lines: true };
     lines.forEach(l => { if (!l.date || l.code === "P") return; const d = Math.round((D - new Date(l.date + "T12:00")) / 864e5), k = d <= 30 ? "current" : d <= 60 ? "d31_60" : d <= 90 ? "d61_90" : d <= 120 ? "d91_120" : "over120"; ag[k] = Math.round((ag[k] + Number(l.amount || 0)) * 100) / 100; });
