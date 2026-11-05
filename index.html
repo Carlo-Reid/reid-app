@@ -15572,10 +15572,11 @@ function dropInMatch(x) {
 }
 // a file's pages, grouped into documents: a statement page (it has the aging: 31-60, 61-90, over 120), a pick ticket / packing slip, or an invoice.
 // A file that's all invoice pages stays one invoice (the way it always was).
-function dropInGroups(PT, cv, HT) {
+function dropInGroups(PT, cv, HT, KL) {
   HT = HT || []; const PH = PT.map((t, i) => t + "\n" + (HT[i] || ""));   // a page's words, and its top-right corner read again (faint printed numbers, "PACKING LIST")
   const stLines = t => (String(t).match(/^\s*\d{1,2}\/\d{1,2}\/\d{2,4}[\s|]+(?:[A-Za-z1|!$]{1,2}[\s|]*)?-?\s*\d{6,9}(?:-\d{2})?\s+\d{5,}\s.*\d\.\d{2}/gm) || []).length;
-  const kindOf = t => { const U = String(t).toUpperCase(); if (stLines(t) >= 2 && !/INVOICE\s*(?:NUMBER|NO)\s*[:#]/.test(U)) return "statement"; if (/\bSTATEMENT\b/.test(U) && /31\s*-\s*60|61\s*-\s*90|OVER\s*120|1\s*-\s*30\s*DAYS|91\s*\+\s*DAYS|BALANCE\s*DUE|OVER\s*\d{2,3}\b|STATEMENT\s*DATE|AMOUNT\s*REMITTED|RETURN\s*THIS\s*PORTION/.test(U)) return "statement";   // Breezehill: Current / 30-62 / Over 62 if (/PICK\s*TICKET|PACKING\s*(?:SLIP|LIST)|PICKED\s*BY\W{0,6}PACKED\s*BY|WORK\s*ORDER/.test(U)) return "slip";
+  const moLines = t => (String(t).match(/^\W{0,3}[A-Za-z]{3}[a-z]*\.?\s+\d{1,2},?\s+\d{4}\s+\d{4,9}[A-Z]?\b.*\d[.,]\d{2}/gm) || []).length;   // Breezehill: date, number, type, amounts
+  const kindOf = t => { const U = String(t).toUpperCase(); if ((stLines(t) >= 2 || moLines(t) >= 3) && !/INVOICE\s*(?:NUMBER|NO)\s*[:#]/.test(U)) return "statement"; if (/\bSTATEMENT\b/.test(U) && /31\s*-\s*60|61\s*-\s*90|OVER\s*120|1\s*-\s*30\s*DAYS|91\s*\+\s*DAYS|BALANCE\s*DUE|OVER\s*\d{2,3}\b|STATEMENT\s*DATE|AMOUNT\s*REMITTED|RETURN\s*THIS\s*PORTION/.test(U)) return "statement";   // Breezehill: Current / 30-62 / Over 62 if (/PICK\s*TICKET|PACKING\s*(?:SLIP|LIST)|PICKED\s*BY\W{0,6}PACKED\s*BY|WORK\s*ORDER/.test(U)) return "slip";
     if (/RECEIPT|CARDHOLDER\s*COPY/.test(U) && /AUTH\s*CODE|AUTHORI[SZ]ED|APPROVED|SALE\s*TRANSACTION|CARDHOLDER\s*COPY/.test(U) && !/INVOICE\s*(?:NUMBER|NO)/.test(U)) return "receipt"; return "invoice"; };
   const numOf = t => { const U = String(t).toUpperCase(), a = U.match(/\b(\d{7,9}-\d{2})\b/); if (a) return a[1]; const b = U.match(/\b(SI)\s*-\s*(\d{6})\b/) || U.match(/\b(S[O0])\s*-\s*(\d{6})\b/); return b ? b[1].replace("0", "O") + "-" + b[2] : ""; };   // an invoice's SI # comes before the sales order (SO) printed on it
   const K = PH.map(t => /\bP?ACKING\s*LI/i.test(t) && kindOf(t) !== "statement" ? "slip" : kindOf(t));
@@ -15585,7 +15586,8 @@ function dropInGroups(PT, cv, HT) {
   if (K.includes("slip")) PT.forEach((t, i) => { if (K[i] === "invoice" && /ORDER\s*NO/i.test(t) && !/INVOICE\s*(?:NUMBER|NO)\b/i.test(t)) K[i] = "slip"; });
   // a statement in the file (any layout the statement reader knows): its invoice numbers name the other pages. A number on a page that's
   // on the statement is that page's; one misread digit (286390 for 286990) still counts when only one statement number is that close
-  const stTexts = PT.filter((t, i) => K[i] === "statement"), STR = stTexts.length ? stParse(stTexts, []).lines.filter(l => l.code !== "P") : [];
+  const stTexts = PT.filter((t, i) => K[i] === "statement"), STR = stTexts.length ? stParse(stTexts, []).lines.filter(l => l.code !== "P")
+    : (KL || []).filter(l => l.reference && l.code !== "P" && Number(l.amount) > 0);
   const stNum = t => { if (!STR.length) return ""; const toks = [...new Set(String(t).replace(/\b\d(?: \d){4,8}\b/g, m => m.replace(/ /g, "")).replace(/(\d)[ ,](?=\d{3}\b)/g, "$1").match(/\b[A-Z]{0,3}-?\d{5,9}(?:-\d{2})?\b/gi) || [])], refs = STR.map(l => String(l.reference));
     const dig = r => r.replace(/\D/g, ""), ex = refs.find(r => toks.some(x => dig(x) === dig(r) && dig(r).length >= 5)); if (ex) return ex;
     const near = refs.filter(r => toks.some(x => dig(x).length === dig(r).length && dig(r).length >= 5 && [...dig(x)].filter((c, i) => c !== dig(r)[i]).length === 1));
@@ -15693,7 +15695,9 @@ async function dropInFiles(files) {
           for (let i = 0; i < cv.length; i++) { x.busy = `Checking page ${i + 1} of ${cv.length} for its number…`; drawDropIn(); HT.push((await worker.recognize(dropInCorner(cv[i]))).data.text); }
           await worker.setParameters({ tessedit_pageseg_mode: "3" }); }
         // one file can hold several documents (Noble: the statement, an invoice, then pick tickets): each page goes where it belongs
-        const G0 = dropInGroups(PT, cv, HT), G = G0.flatMap(g => g.kind === "statement" || g.kind === "receipt" || g.byPo || g.n || g.C.length < 2 ? [g]
+        const kn = DROPIN.kn[DROPIN.sup] || DROPIN.known || {}, seenRef = new Set(), KL = [...(kn.lines || []).map(l => ({ reference: String(l.reference), date: l.date, amount: Number(l.amount), code: l.code })),
+          ...(kn.rows || []).map(r => ({ reference: String(r.number || ""), date: r.invoice_date, amount: Number(r.total), code: r.doc_type === "credit" ? "C" : "I" }))].filter(l => l.reference && !seenRef.has(l.reference) && seenRef.add(l.reference));
+        const G0 = dropInGroups(PT, cv, HT, KL), G = G0.flatMap(g => g.kind === "statement" || g.kind === "receipt" || g.byPo || g.n || g.C.length < 2 ? [g]
           : g.C.map((c, k) => ({ ...g, C: [c], text: PT[cv.indexOf(c)] ?? g.text, from: g.from + k }))); G.st = G0.st; if (G.st?.length) DROPIN.stRefs = [...(DROPIN.stRefs || []).filter(l => !G.st.some(m => m.reference === l.reference)), ...G.st];
         for (let gi = 0; gi < G.length; gi++) { const g = G[gi], y = gi === 0 ? x : { file: x.file, f: x.f };
           if (gi > 0) DROPIN.items.splice(DROPIN.items.indexOf(x) + gi, 0, y);
@@ -15713,7 +15717,8 @@ async function dropInFiles(files) {
           if (g.guess) y.guess = g.guess;
           y.busy = null; dropInMatch(y); }
         // a page without the supplier's name on it (a handwritten invoice) is the supplier's whose statement is in the same file
-        const stIt = DROPIN.items.find(z => z.file === x.file && z.kind === "statement"), stSup = stIt && (stIt.sup || (!stIt.unsure && DROPIN.sup));
+        const stIt = DROPIN.items.find(z => z.file === x.file && z.kind === "statement"), stSup = (stIt && (stIt.sup || (!stIt.unsure && DROPIN.sup)))
+          || (() => { const sure = DROPIN.items.filter(z => z.file === x.file && !z.unsure).map(z => z.sup || DROPIN.sup).filter(Boolean); return new Set(sure).size === 1 ? sure[0] : null; })();   // or a page in the file that's plainly theirs
         if (stSup) DROPIN.items.filter(z => z.file === x.file && z.kind !== "statement" && !z.sup && z.unsure).forEach(z => { z.sup = stSup; z.unsure = false; dropInMatch(z); });
         drawDropIn();
       } catch (e) { x.busy = null; x.err = e.message || String(e); drawDropIn(); }
