@@ -4144,6 +4144,13 @@ body[data-page="customer"] .file .notes-list .note.pin { background: var(--pin);
 body[data-page="customer"] .file .notes-list .note.email-item { border-left-color: color-mix(in srgb, var(--steel) 50%, var(--line)); }
 body[data-page="customer"] .file .notes-list .notes-old-h, body[data-page="customer"] .file .notes-list .notes-empty { padding: 6px 4px; }
 body[data-page="customer"] .file section.block > .note-add { margin: 6px 0 14px 18px; }
+body[data-page="customer"] .file .tn-lead { margin: -4px 0 10px 18px; font-size: calc(13px * var(--fs, 1)); }
+body[data-page="customer"] .file .tn-call { margin: 0 0 16px; } body[data-page="customer"] .file .tn-call:last-child { margin-bottom: 0; }
+body[data-page="customer"] .file .tn-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0 0 6px 2px; }
+body[data-page="customer"] .file .tn-meta { font-size: calc(12.5px * var(--fs, 1)); color: var(--steel); }
+body[data-page="customer"] .file .notes-list .note.tn-note { border-left-color: color-mix(in srgb, var(--green, #1f9d4a) 55%, var(--line)); margin-left: 14px; }
+body[data-page="customer"] .file .notes-list .note.tn-inv { border-left-color: color-mix(in srgb, var(--amber, #d97706) 60%, var(--line)); }
+body[data-page="customer"] .file .tn-kind { display: block; font-size: calc(12.5px * var(--fs, 1)); color: var(--steel); font-weight: 600; margin-bottom: 3px; white-space: normal; }
 /* ===== Section 3: missing details and yearly parts cards (Oct 2026) ===== */
 .file .tech-wrap { align-items: start; gap: 14px; }
 .file .tech-card { border: 1px solid var(--line) !important; border-left: 1px solid var(--line) !important; border-radius: 12px !important; padding: 14px 16px 12px !important;
@@ -7421,7 +7428,7 @@ document.addEventListener("input", e => { const inp = e.target.closest(".mv-find
     const digits = q.replace(/\D/g, ""), args = digits.length >= 7 && digits.length === q.replace(/[\s()-]/g, "").length ? { p_phone: digits } : /\d/.test(q) && /[a-z]/i.test(q) ? { p_address: q } : { p_name: q };
     const { data } = await db.rpc("search_customers", { ...args, p_limit: 8 }); if (inp.value.trim() !== q) return;
     out.innerHTML = (data || []).filter(r => r.customer_id !== current.c.id).map(r => `<button type="button" class="mv-hit" data-mv-pick="${r.customer_id}" data-name="${esc(r.display_name)}"><b>${esc(r.display_name)}</b> <span class="quiet">${esc([r.street, r.city].filter(Boolean).join(", "))}</span></button>`).join("") || `<span class="quiet">No one found. Try fewer words.</span>`; }, 250); });
-const NOTE_BASE = "id, entity_type, entity_id, body, pinned, created_at, app_users(login_email, employees(first_name, last_name))";
+const NOTE_BASE = "id, entity_type, entity_id, body, pinned, created_at, app_users(login_email, employees(first_name, last_name, is_technician))";
 let NOTE_EXTRA = ", source, pin_order, author_name";
 async function fetchNotes(noteFilter, jobIds) {
   const q = cols => db.from("notes").select(cols).or(noteFilter).order("created_at", { ascending: false });
@@ -7664,6 +7671,12 @@ function renderFile() {
         ${hiddenOld ? ` ${hiddenOld} older ${hiddenOld === 1 ? "note is" : "notes are"} hidden. <button class="link" type="button" data-range="all">Show all</button>` : ""}</div>` : ""}
       ${tab === "podium" ? `<div class="notes-foot">Texts, calls and review requests that Podium logged in ServiceTitan.</div>` : ""}
     </section>
+
+    ${(() => { const tn = techNotesHtml(locJobs, invoices, notes, keep); return `<section class="block tn-sec" data-tag="Section 2B">
+      <h2>Tech notes from calls <span class="count">${tn.n}</span></h2>
+      <p class="quiet tn-lead">What the techs wrote on each call here: their notes on the job and the work summary on the invoice. Newest call first.</p>
+      <div class="notes-list tn-list" tabindex="0" aria-label="Tech notes from calls">${tn.html}</div>
+    </section>`; })()}
 
     <section class="block" data-tag="Section 3">
       <h2>Equipment and coverage <span class="count">${locEquip.length || "none recorded"}</span></h2>
@@ -8012,6 +8025,42 @@ function podiumBody(text) {
   return esc(body) + (m ? ` <a class="podium-link" href="${esc(m[1])}" target="_blank" rel="noopener">Open in Podium</a>` : "");
 }
 
+// Tech notes: what the techs wrote on each call at this address: their notes on the job (in ServiceTitan or in Tech Calls)
+// and the work summary on the job's invoices. A note counts as a tech's when it was written by a tech on that call, or by anyone who is a technician.
+function techNotesHtml(jobs, invoices, notes, keep) {
+  const nm = x => String(x || "").replace(/\(former staff\)/i, "").replace(/^zpast-/i, "").replace(/\s+/g, " ").trim().toLowerCase();
+  const out = [];
+  for (const j of jobs) {
+    const techs = new Map();
+    for (const v of j.visits || []) for (const a of v.visit_assignments || []) { const n = [a.employees?.first_name, a.employees?.last_name].filter(Boolean).join(" ").trim(); if (n) techs.set(nm(n), n); }
+    const items = [];
+    for (const n of notes) {
+      if (n.entity_type !== "job" || n.entity_id !== j.id || !keep(n)) continue;
+      const e = n.app_users?.employees, who = e ? [e.first_name, e.last_name].filter(Boolean).join(" ").trim() : (n.author_name || "");
+      const w = nm(who), byTech = (w && (techs.has(w) || [...techs.keys()].some(t => t.split(" ")[0] === w.split(" ")[0] && (t.startsWith(w) || w.startsWith(t))))) || e?.is_technician;
+      if (byTech) items.push({ at: n.created_at, kind: "Job note", who: who.replace(/\s*\(former staff\)/i, ""), body: n.body });
+    }
+    for (const i of invoices) {
+      if (i.job_id !== j.id || i.status === "void") continue;
+      const sum = String(i.summary || "").trim();
+      if (sum && sum !== (j.job_types?.name || "") && keep({ created_at: i.invoice_date || i.created_at })) items.push({ at: i.invoice_date || i.created_at, kind: `On invoice ${i.invoice_number || i.id}`, who: "", body: sum, inv: i.id });
+    }
+    if (!items.length) continue;
+    items.sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+    const day = (j.visits || []).map(v => v.scheduled_date).filter(Boolean).sort().pop() || j.completed_at || j.created_at;
+    out.push({ j, day, techs: [...techs.values()], items });
+  }
+  out.sort((a, b) => String(b.day || "").localeCompare(String(a.day || "")));
+  if (!out.length) return { n: 0, html: `<div class="notes-empty">No notes from the techs on calls at this address${NOTE_RANGE !== "all" ? " in this time range" : ""}.</div>` };
+  const n = out.reduce((t, x) => t + x.items.length, 0);
+  return { n, html: out.map(({ j, day, techs, items }) => `<div class="tn-call">
+      <div class="tn-head"><button class="link job-link" type="button" data-goto-job="${j.id}"><b>Job ${esc(j.job_number)}</b>${j.job_types?.name ? ", " + esc(j.job_types.name) : ""}</button>
+        <span class="tn-meta">${esc(fmtDate(day))}${techs.length ? " · " + esc(techs.join(", ")) : ""}</span></div>
+      ${items.map(x => `<div class="note tn-note${x.inv ? " tn-inv" : ""}"><span class="tn-kind">${x.inv ? `<button class="link" type="button" data-tn-inv="${x.inv}">${esc(x.kind)}</button>` : esc(x.kind)}${x.who ? " · " + esc(x.who) : ""}${x.at ? " · " + esc(fmtDate(x.at)) : ""}</span>${esc(x.body)}</div>`).join("")}
+    </div>`).join("") };
+}
+
+document.addEventListener("click", e => { const b = e.target.closest("[data-tn-inv]"); if (b) { e.preventDefault(); openInvoice(Number(b.dataset.tnInv)); } });
 function noteHtml(n, hide, job, rank, pinCount) {
   const jobLabel = job ? `<button class="link job-link" data-goto-job="${job.id}">Job ${esc(job.job_number)}${job.job_types?.name ? ", " + esc(job.job_types.name) : ""}</button><br>` : "";
   const who = n.app_users ? (n.app_users.employees ? `${n.app_users.employees.first_name} ${n.app_users.employees.last_name}`.trim() : n.app_users.login_email) : (n.author_name || "");
