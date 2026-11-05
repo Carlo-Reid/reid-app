@@ -319,12 +319,39 @@ SAVE = {
 KEEP = {"equipment": {"no_warranty", "requested_info", "ignored_info"}}
 
 
+def st_edit_on(cur):
+    """Is 'edit a ServiceTitan invoice in the app' set up in the database yet (sync/extra/185)?"""
+    cur.execute("SELECT to_regclass('public.invoice_st_versions') IS NOT NULL AND EXISTS (SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'invoices' AND column_name = 'app_edited_at')")
+    return cur.fetchone()[0]
+
+
+def set_aside_edited(cur, table, tmp, cols):
+    """An invoice edited in the app keeps its edits: what ServiceTitan sends for it goes into invoice_st_versions.st_now
+    (shown on the invoice as "ServiceTitan changed this"), not onto the invoice. Its payments still count."""
+    if table == "invoices":
+        cur.execute(f"UPDATE invoice_st_versions v SET st_now = jsonb_set(v.st_now, '{{h}}', coalesce(v.st_now -> 'h', '{{}}') || public._inv_st_h(to_jsonb(t))) "
+                    f"FROM {tmp} t WHERE t.id = v.invoice_id")
+        if "amount_paid" in cols:
+            cur.execute(f"UPDATE invoices i SET amount_paid = t.amount_paid, status = CASE WHEN i.status IN ('draft', 'void') THEN i.status "
+                        f"WHEN t.amount_paid >= i.total - 0.004 AND i.total > 0 THEN 'paid' WHEN t.amount_paid > 0 THEN 'partially_paid' ELSE 'posted' END "
+                        f"FROM {tmp} t WHERE t.id = i.id AND i.app_edited_at IS NOT NULL AND t.amount_paid IS DISTINCT FROM i.amount_paid")
+        cur.execute(f"DELETE FROM {tmp} t USING invoices i WHERE i.id = t.id AND i.app_edited_at IS NOT NULL")
+    else:
+        cur.execute(f"UPDATE invoice_st_versions v SET st_now = jsonb_set(v.st_now, '{{l}}', coalesce(v.st_now -> 'l', '{{}}') || x.l) "
+                    f"FROM (SELECT t.invoice_id, jsonb_object_agg(t.id::text, public._inv_st_l(to_jsonb(t))) l FROM {tmp} t "
+                    f"JOIN invoices i ON i.id = t.invoice_id AND i.app_edited_at IS NOT NULL GROUP BY 1) x WHERE x.invoice_id = v.invoice_id")
+        cur.execute(f"DELETE FROM {tmp} t USING invoices i WHERE i.id = t.invoice_id AND i.app_edited_at IS NOT NULL")
+    if cur.rowcount: log(f"  {cur.rowcount} {table.replace('_', ' ')} edited in the app: ServiceTitan's version kept beside them")
+
+
 def save(cur, out_dir, manifest):
     counts = {}
     cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'customers' AND column_name = 'merged_into_id')")
     merged = cur.fetchone()[0]
     if merged:
         cur.execute("SELECT EXISTS (SELECT 1 FROM customers WHERE merged_into_id IS NOT NULL)"); merged = cur.fetchone()[0]
+    st_edit = st_edit_on(cur)
     for t in manifest:
         table, cols, n = t["table"], t["columns"], t["rows"]
         how = SAVE.get(table, "skip")
@@ -343,6 +370,8 @@ def save(cur, out_dir, manifest):
                     cp.write(chunk)
         if "customer_id" in cols and merged:   # customers merged in the app: what ServiceTitan files under the old one goes to the one kept
             cur.execute(f"UPDATE {tmp} t SET customer_id = c.merged_into_id FROM customers c WHERE t.customer_id = c.id AND c.merged_into_id IS NOT NULL")
+        if st_edit and table in ("invoices", "invoice_lines"):   # invoices edited in the app: ServiceTitan's version is kept beside them
+            set_aside_edited(cur, table, tmp, cols)
         upd = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c not in ("id", "created_at") and c not in KEEP.get(table, ()))
         sel = ", ".join(cols)
         if how == "id":
@@ -387,8 +416,17 @@ def remove_gone(cur, delta):
     if a:
         cur.execute("DELETE FROM visit_assignments WHERE st_id = ANY(%s)", (a,)); gone["techs taken off calls"] = cur.rowcount
     il = ids_of("invoice-items", lambda r: r.get("active") is False)
-    if il:
+    st_edit = st_edit_on(cur)
+    if il and st_edit:   # a line ServiceTitan removed from an invoice edited in the app: off ServiceTitan's version, not off ours
+        cur.execute("UPDATE invoice_st_versions SET st_now = jsonb_set(st_now, '{l}', coalesce(st_now -> 'l', '{}') - %s::text[]) "
+                    "WHERE coalesce(st_now -> 'l', '{}') ?| %s::text[]", ([str(x) for x in il], [str(x) for x in il]))
+        cur.execute("DELETE FROM invoice_lines l WHERE l.id = ANY(%s) AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = l.invoice_id AND i.app_edited_at IS NOT NULL)", (il,))
+        gone["invoice lines"] = cur.rowcount
+    elif il:
         cur.execute("DELETE FROM invoice_lines WHERE id = ANY(%s)", (il,)); gone["invoice lines"] = cur.rowcount
+    if st_edit:
+        cur.execute("SELECT public._inv_st_mark()"); n = cur.fetchone()[0]
+        if n: log(f"  {n} invoice(s) edited in the app changed in ServiceTitan: they show it, to apply or keep")
     return gone
 
 

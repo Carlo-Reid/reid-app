@@ -1600,6 +1600,13 @@
   .ie-tot td { font-weight: 800; font-size: calc(18px * var(--fs, 1)); border-top: 2px solid var(--ink); }
   .ie-bal td { font-weight: 800; color: var(--red); background: var(--red-wash); }
   .ie-bal.zero td { color: var(--green); background: var(--green-wash); }
+  .ie-st { margin: 10px 0; padding: 10px 14px; border: 1px solid #c9d6e6; border-radius: 10px; background: #f6f9fd; }
+  .ie-st.ie-st-chg { border-color: #e8a33d; background: #fff8ec; }
+  .ie-st-head { display: flex; flex-wrap: wrap; gap: 4px 10px; } .ie-st-list { margin: 8px 0; padding-left: 20px; line-height: 1.5; }
+  .ie-st-acts { display: flex; gap: 8px; margin: 6px 0 8px; } .ie-st-foot { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; font-size: 13px; color: #44546a; }
+  .ie-stver { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #c9d6e6; } .ie-stver .ie-table { margin: 6px 0; }
+  .ow-tag.ow-stedit { background: #e8f0fb; color: #1f4f8a; } .ow-tag.ow-stchg { background: #fff1d6; color: #8a4b00; border: 1px solid #e8a33d; cursor: pointer; font: inherit; font-size: 11px; }
+  .ow-stflag:empty { display: none; } .ow-stflag { display: block; }
   .ie-notes { display: flex; flex-direction: column; gap: 4px; font-weight: 650; margin: 0; }
   .ie-notes textarea { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font: inherit; }
   .ie-actions { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
@@ -5575,6 +5582,7 @@ function viewAsStart(v) { try { sessionStorage.setItem("reid.viewAs", JSON.strin
 function viewAsStop() { try { sessionStorage.removeItem("reid.viewAs"); } catch {} location.hash = "#staff"; location.reload(); }
 const can = code => ME.perms.has(code);
 const seeCost = () => can("costs.view");
+const stOffice = () => can("invoices.adjust") || ["owner", "admin", "accounting", "office"].includes(ME.role);   // may change a ServiceTitan invoice in the app
 
 /* ---------------- sign in ---------------- */
 async function start() {
@@ -13649,6 +13657,16 @@ async function owFillBank(root) {
 }
 document.addEventListener("click", e => { const b = e.target.closest("[data-ow-bankgo]"); if (!b) return; e.preventDefault(); e.stopPropagation();
   Object.assign(BANK, { tab: "ledger", acct: "main", ledQ: b.dataset.owBankgo, ledLinked: true, from: "", to: "", data: null, ledRows: [] }); bankSave(); location.hash = "#bank"; openBank(); }, true);
+/* ---------- ServiceTitan invoices edited in the app: a tag "Edited here", or "ServiceTitan changed it" when it has changed since ---------- */
+async function stFlagsFill(root) {
+  const els = [...(root || document).querySelectorAll("[data-stflag]")]; if (!els.length) return;
+  const ids = [...new Set(els.map(e => Number(e.dataset.stflag)).filter(Boolean))]; if (!ids.length) return;
+  const { data, error } = await db.rpc("inv_st_flags", { p_ids: ids }); if (error || !data) return;
+  els.forEach(el => { const f = data[el.dataset.stflag]; if (!f) return;
+    el.innerHTML = f.c ? `<button class="ow-tag ow-stchg" type="button" data-invedit-open="${el.dataset.stflag}" title="ServiceTitan changed this invoice after it was edited here. Open it to see what changed, then apply their changes or keep yours.">⚠ ServiceTitan changed it</button>`
+      : `<span class="ow-tag ow-stedit" title="Changed here. ServiceTitan's own version is kept beside it.">✎ Edited here</span>`; });
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-invedit-open]"); if (!b) return; e.preventDefault(); e.stopPropagation(); closeInvoice?.(); openInvoiceEditor(Number(b.dataset.inveditOpen)); });
 /* ---------- attachments on an invoice: supplier invoices, the job's documents and photos, the partner's remittance ---------- */
 const INV_ATT = new Map();
 async function attFill(root, done) {
@@ -13680,7 +13698,7 @@ const attB64Url = (b64, mime) => { const bin = atob(b64), a = new Uint8Array(bin
 document.addEventListener("click", async e => {
   const b = e.target.closest("[data-att]"); if (!b || b.disabled) return; e.preventDefault(); e.stopPropagation();
   const k = b.dataset.att;
-  if (k === "s") { const id = Number(b.dataset.attId), v = attPop(b.title, `<span class="quiet">Loading the pages…</span>`, `<button class="link att-go" type="button">Open on the Supplier invoices page</button>`);
+  if (k === "s") { const id = Number(b.dataset.attId), v = attPop(b.title, `<span class="quiet">Loading the pages…</span>`, `<button class="btn att-go" type="button">✎ Edit this supplier invoice</button>`);
     v.querySelector(".att-go").onclick = () => { v.remove(); closeInvoice?.(); SINV.sup = Number(b.dataset.sup); SINV.st = 0; SINV.f = "all"; SINV.q = ""; SINV.open = id; sinvSaveTab(); openSupInv(); };
     const { data, error } = await db.rpc("supplier_invoice_get", { p_id: id }); const box = v.querySelector(".att-body"); const P = data?.pages || [];
     if (error) { box.innerHTML = `<span class="st-bad">${esc(rpcErr(error))}</span>`; return; }
@@ -13712,7 +13730,7 @@ async function owFillHome(root) {
 }
 document.addEventListener("click", e => { const b = e.target.closest("[data-ow-homecust]"); if (!b) return; e.preventDefault(); e.stopPropagation(); openCustomer(Number(b.dataset.owHomecust)); }, true);
 async function owFillPaidOn(root) {
-  owFillBank(root); owFillHome(root); attFill(root);
+  owFillBank(root); owFillHome(root); attFill(root); stFlagsFill(root);
   const tags = [...root.querySelectorAll("[data-ow-paidon]")], need = [...new Set(tags.map(t => Number(t.dataset.owPaidon)).filter(id => !OW_PAIDON.has(id)))];
   if (need.length) { for (let i = 0; i < need.length; i += 1000) { const { data } = await db.rpc("invoice_paid_on", { p_ids: need.slice(i, i + 1000) }); need.slice(i, i + 1000).forEach(id => OW_PAIDON.set(id, (data || {})[id] || null)); } }
   tags.forEach(t => { const d = OW_PAIDON.get(Number(t.dataset.owPaidon)); if (d) t.textContent = "Paid " + fmtDate(String(d).slice(0, 10)); });
@@ -14126,7 +14144,7 @@ function renderOwing(msg) {
         const newCust = r.customer_id !== lastCust; if (newCust || head) { if (newCust) band ^= 1; lastCust = r.customer_id; }
         return head + `<tr data-inv="${r.invoice_id}" class="ow-band${band}${newCust ? " ow-newcust" : ""}">
         <td class="num ow-date">${fmtDate(r.invoice_date)}</td>
-        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<div class="ow-invno"><button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><button class="ow-numcopy" type="button" data-copy-num="${esc(r.invoice_number)}" title="Copy invoice # ${esc(r.invoice_number)}" aria-label="Copy invoice number ${esc(r.invoice_number)}">⧉</button></div>${bankStampCan() ? `<div data-ow-bank="${r.invoice_id}" data-ow-bank-num="${esc(r.invoice_number)}"></div>` : ""}`}
+        <td>${r._booked ? `<b>${esc(r.job_number || "")}</b>${r.on_board ? "" : `<div class="quiet">not on the board</div>`}` : `<div class="ow-invno"><button class="link" type="button" data-invoice="${r.invoice_id}">${esc(r.invoice_number)}</button><button class="ow-numcopy" type="button" data-copy-num="${esc(r.invoice_number)}" title="Copy invoice # ${esc(r.invoice_number)}" aria-label="Copy invoice number ${esc(r.invoice_number)}">⧉</button></div><span class="ow-stflag" data-stflag="${r.invoice_id}"></span>${bankStampCan() ? `<div data-ow-bank="${r.invoice_id}" data-ow-bank-num="${esc(r.invoice_number)}"></div>` : ""}`}
           ${r.over_total ? `<div><span class="ow-tag odd" title="ServiceTitan shows ${esc(money(r.paid))} paid on this invoice, so it shows more owing than the invoice total. Usually a refund or a reversed payment.">Owing more than total</span></div>` : ""}
           ${r.plan_sale ? `<div><span class="ow-tag">Plan sale</span></div>` : ""}${r.monthly_plan ? `<div><span class="ow-tag mo">Monthly plan</span></div>` : ""}${r._ptnRow ? `<div><span class="ow-tag ow-ptntag">${esc((owPartnersKnown().find(x => x.id === r.partner_id) || {}).name || "Partner")} owes this</span></div>` : ""}${owNotDueHtml(r)}${owNotesHtml(r)}</td>
         <td class="ow-custcell"><button class="link" type="button" data-ow-cust="${r.customer_id}">${esc(r.customer_name)}</button><div class="ow-addr">${esc([r.street, r.city].filter(Boolean).join(", "))}</div><div data-ow-home="${r.invoice_id}"></div></td>
@@ -20360,9 +20378,44 @@ function wireBillTo(root, k, invId, call, scroller, redraw) {
     keepSpot(`[data-${k}-ref="${i.dataset[k + "Ref"]}"]`, scroller, () => call("inv_set_partner_refs", { p_invoice: invId, p_account: g("acct"), p_approval: g("appr") }, "Saved."));
   }));
 }
+// a ServiceTitan invoice edited here: who edited it, ServiceTitan's own version, and what ServiceTitan changed since
+const ST_H = { invoice_number: "Invoice #", invoice_date: "Date", po_number: "PO", payment_terms_days: "Payment terms (days)", customer_id: "Customer", location_id: "Address", job_id: "Job", subtotal: "Subtotal" };
+function ieStLine(x) { return `${esc(String(x.description || "Item").split("\n")[0].slice(0, 70))} · ${Number(x.quantity)} × ${money(x.unit_price)}${x.taxable === false ? " (no HST)" : ""}`; }
+function ieStChanges(base, now) {
+  const out = [], bh = base?.h || {}, nh = now?.h || {}, bl = base?.l || {}, nl = now?.l || {};
+  if (nh.status === "void" && bh.status !== "void") out.push(`<li class="st-bad"><b>ServiceTitan voided it.</b></li>`);
+  Object.keys(ST_H).forEach(k => { const a = bh[k] ?? null, b = nh[k] ?? null; if (String(a ?? "") === String(b ?? "")) return;
+    const f = v => v == null || v === "" ? "blank" : k === "invoice_date" ? fmtDate(v) : k === "subtotal" ? money(v) : /_id$/.test(k) ? "another one" : String(v);
+    out.push(`<li>${ST_H[k]}: ${esc(f(a))} → <b>${esc(f(b))}</b></li>`); });
+  Object.keys(nl).forEach(id => { const a = bl[id], b = nl[id];
+    if (!a) return out.push(`<li>Added: <b>${ieStLine(b)}</b></li>`);
+    if (a.description !== b.description || Number(a.quantity) !== Number(b.quantity) || Number(a.unit_price) !== Number(b.unit_price) || a.taxable !== b.taxable || a.item_id !== b.item_id)
+      out.push(`<li>Changed: ${ieStLine(a)} → <b>${ieStLine(b)}</b></li>`); });
+  Object.keys(bl).forEach(id => { if (!nl[id]) out.push(`<li>Removed: <s>${ieStLine(bl[id])}</s></li>`); });
+  return out;
+}
+function ieStVersion(v, title) {
+  const L = Object.entries(v?.l || {}).map(([id, x]) => x).sort((a, b) => (a.sequence || 0) - (b.sequence || 0)), h = v?.h || {};
+  return `<div class="ie-stver"><div class="cl-label">${esc(title)}</div><div class="quiet">Invoice ${esc(h.invoice_number || "")}${h.invoice_date ? " · " + esc(fmtDate(h.invoice_date)) : ""}${h.po_number ? " · PO " + esc(h.po_number) : ""}${h.status === "void" ? " · <b>void</b>" : ""}</div>
+    <table class="ie-table"><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th></tr></thead><tbody>
+    ${L.length ? L.map(x => `<tr><td>${esc(x.description || "")}</td><td class="r">${Number(x.quantity)}</td><td class="r">${money(x.unit_price)}</td><td class="r num">${money(Number(x.quantity) * Number(x.unit_price))}</td></tr>`).join("") : `<tr><td colspan="4" class="quiet">No lines</td></tr>`}</tbody></table>
+    <div class="quiet">Subtotal ${money(h.subtotal)} · total ${money(h.total)}</div></div>`;
+}
+function ieStHtml(I) {
+  const v = I.st || {}, ch = v.changed_at ? ieStChanges(v.base, v.now) : [];
+  return `<div class="ie-st ${v.changed_at ? "ie-st-chg" : ""}">
+    ${v.changed_at ? `<div class="ie-st-head"><b>⚠ ServiceTitan changed this invoice on ${esc(fmtDate(String(v.changed_at).slice(0, 10)))}.</b> <span>Your version is still the one that counts until you choose.</span></div>
+      ${ch.length ? `<ul class="ie-st-list">${ch.join("")}</ul>` : `<p class="quiet">Only small details changed.</p>`}
+      <div class="ie-st-acts"><button class="btn" type="button" id="ie-stapply">Apply their changes</button><button class="btn quiet-btn" type="button" id="ie-stkeep">Keep mine</button></div>` : ""}
+    <div class="ie-st-foot"><span>✎ Edited here${v.edited_by ? " by " + esc(v.edited_by) : ""}${v.edited_at ? " on " + esc(fmtDate(String(v.edited_at).slice(0, 10))) : ""}. ServiceTitan's own version is kept.</span>
+      <button class="link" type="button" data-ie-stshow="now" aria-pressed="${IE.stShow === "now"}">${IE.stShow === "now" ? "Hide" : "See"} ServiceTitan's version</button>
+      <button class="link" type="button" data-ie-stshow="orig" aria-pressed="${IE.stShow === "orig"}">${IE.stShow === "orig" ? "Hide" : "See"} it as it was before it was edited</button></div>
+    ${IE.stShow === "now" ? ieStVersion(v.now, "ServiceTitan's version now") : IE.stShow === "orig" ? ieStVersion(v.original, "As it was in ServiceTitan before it was edited here") : ""}
+  </div>`;
+}
 function renderInvoiceEditor(msg) {
   const kids = l => IE.lines.filter(x => x.kit_parent === l.id);
-  const I = IE, draft = I.status === "draft", edit = I.can_edit && draft, top = $("#main").scrollTop;
+  const I = IE, draft = I.status === "draft", edit = I.can_edit && (draft || I.st_edit), top = $("#main").scrollTop;
   const st = { draft: ["Not finished", "ie-draft"], posted: ["Finished, not paid", "ie-open"], partially_paid: ["Part paid", "ie-part"], paid: ["Paid", "ie-paid"], void: ["Void", "ie-void"] }[I.status] || [I.status, ""];
   $("#main").innerHTML = `<article class="staff ie">
     <div class="ie-topbar"><button class="btn quiet-btn ie-close" type="button" data-ie-close>✕ Close</button>
@@ -20371,7 +20424,8 @@ function renderInvoiceEditor(msg) {
       <p>${esc(I.address || "")}${I.job_type ? " · " + esc(I.job_type) : ""}${I.member ? " · <b>Plan member: member prices</b>" : ""}${I.store ? ` · <b>${esc(I.store)} job: the customer pays ${esc(I.store)}</b>` : ""}</p></div>
       <div class="cl-hero-range"><span class="ie-status ${st[1]}">${st[0]}</span><strong class="ow-hero-amt">${money(I.total)}</strong><em>${Number(I.balance) > 0.004 && !draft ? "Still owing " + money(I.balance) : draft ? "Total so far" : "Nothing owing"}</em></div></header>
     ${msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"} ie-msg" role="status">${esc(msg)}</div>` : `<div class="staff-msg ie-msg" role="status"></div>`}
-    ${I.from_st ? `<div class="approve-banner"><div>This invoice came from ServiceTitan. Change it there until the live date.</div></div>` : ""}
+    ${I.st_edit ? ieStHtml(I) : I.from_st ? `<div class="approve-banner"><div>This invoice came from ServiceTitan.${I.can_st_take ? " Edit it here: ServiceTitan's own version is kept beside your changes, and you're told if ServiceTitan changes it later." : " Change it there."}</div>
+      ${I.can_st_take ? `<button class="btn" type="button" id="ie-sttake">✎ Edit this invoice</button>` : ""}</div>` : ""}
     <div class="ie-grid${I.cost ? " has-cost" : ""}"><div class="ie-main">
     <section class="cl-tools ie-lines-box">
       <div class="ie-steps">${["Add the work", "Finish", "Customer signs", "Payment"].map((x, n) => { const done = [!draft, !draft, !!I.signature, Number(I.balance) <= 0.004 && !draft][n];
@@ -20413,9 +20467,10 @@ function renderInvoiceEditor(msg) {
         ${!draft ? `<tr class="ie-bal ${Number(I.balance) > 0.004 ? "" : "zero"}"><td>Still owing</td><td class="r num">${money(I.balance)}</td></tr>` : ""}
       </table></div>
       ${edit ? `<label class="ie-notes">Note on the invoice <span class="quiet">(optional, the customer sees it)</span><textarea id="ie-notes" rows="2">${esc(I.notes || "")}</textarea></label>
-        <div class="ie-actions"><button class="btn" type="button" id="ie-finish" ${I.lines.length ? "" : "disabled"}>Finish the invoice</button><span class="quiet">Changes save as you go.</span></div>` : ""}
-      ${!draft && I.can_edit && I.status !== "void" && !(I.payments || []).length ? `<div class="ie-actions"><button class="link" type="button" id="ie-reopen">Change it (open it again)</button></div>` : ""}
-      ${I.can_edit && I.status !== "void" ? `<div class="ie-cancel">${IE.cancelOpen ? `<form id="ie-cancel-f" class="ie-cancel-f">
+        ${I.st_edit ? `<div class="ie-actions"><button class="btn quiet-btn" type="button" id="ie-stnote">Save the note</button><span class="quiet">Changes save as you go. It keeps its number, date and payments.</span></div>`
+          : `<div class="ie-actions"><button class="btn" type="button" id="ie-finish" ${I.lines.length ? "" : "disabled"}>Finish the invoice</button><span class="quiet">Changes save as you go.</span></div>`}` : ""}
+      ${!draft && I.can_edit && !I.from_st && I.status !== "void" && !(I.payments || []).length ? `<div class="ie-actions"><button class="link" type="button" id="ie-reopen">Change it (open it again)</button></div>` : ""}
+      ${I.can_edit && !I.from_st && I.status !== "void" ? `<div class="ie-cancel">${IE.cancelOpen ? `<form id="ie-cancel-f" class="ie-cancel-f">
           <strong>Cancel this invoice?</strong> ${draft ? "It hasn't been finished, so it's removed completely." : "It's kept on the file, marked <b>Void</b>, so there's a record of it."}
           ${(I.payments || []).length ? `<div class="staff-msg err">A payment is on it. The office needs to take the payment off first (the × next to the payment above).</div>` : ""}
           <label>Why <input name="why" value="Made in error" maxlength="200"></label>
@@ -20518,6 +20573,13 @@ function wireInvoiceEditor() {
   $("#ie-notes")?.addEventListener("change", e => { IE.notes = e.target.value; });
   $("#ie-finish")?.addEventListener("click", () => call("inv_finish", { p_invoice: I.id, p_notes: $("#ie-notes")?.value || null }, "Finished. The customer can sign, then take the payment."));
   $("#ie-reopen")?.addEventListener("click", () => call("inv_reopen", { p_invoice: I.id }, "Open again: change what you need, then finish it again."));
+  // a ServiceTitan invoice: edit it here; ServiceTitan changed it since: apply their changes or keep ours
+  $("#ie-sttake")?.addEventListener("click", e => { e.currentTarget.disabled = true; call("inv_st_take", { p_invoice: I.id }, "You can change it now. ServiceTitan's own version is kept beside it."); });
+  $("#ie-stnote")?.addEventListener("click", () => call("inv_set_notes", { p_invoice: I.id, p_notes: $("#ie-notes")?.value || "" }, "Note saved."));
+  $("#main").querySelectorAll("[data-ie-stshow]").forEach(b => b.addEventListener("click", () => { IE.stShow = IE.stShow === b.dataset.ieStshow ? null : b.dataset.ieStshow; renderInvoiceEditor(); }));
+  $("#ie-stkeep")?.addEventListener("click", () => call("inv_st_resolve", { p_invoice: I.id, p_apply: false }, "Kept yours. You'll be told if ServiceTitan changes it again."));
+  $("#ie-stapply")?.addEventListener("click", () => { if (!confirm("Use ServiceTitan's version? Your lines on this invoice are replaced by ServiceTitan's. (Their version stays on record either way.)")) return;
+    call("inv_st_resolve", { p_invoice: I.id, p_apply: true }, "ServiceTitan's changes applied."); });
   wireCosting(document.querySelector("#main .ie-cost"), I, call, reload);
   document.querySelectorAll("[data-ie-close]").forEach(b => b.addEventListener("click", () => {
     IE.cancelOpen = false;
@@ -26100,6 +26162,8 @@ async function openInvoice(id, keep) {
     <div id="inv-sinv" class="no-print inv-sinv" hidden></div>
     <div id="inv-att" class="no-print inv-sinv" hidden><div class="inv-label">Attached to this invoice <span class="quiet">(only you see this, not the customer)</span></div><div class="att-btns" data-att-inv="${i.id}" data-att-nosinv="1"></div></div>
     ${ME.guided || i.status === "void" ? "" : !i.st_id ? `<div class="no-print inv-edit-row"><button class="btn" type="button" data-inv-edit="${i.id}">✎ ${i.status === "draft" ? "Carry on with this invoice" : Number(balance) > 0.004 ? "Edit · signature and payment" : "Edit this invoice"}</button></div>`
+      : stOffice() ? `<div class="no-print inv-edit-row"><button class="btn" type="button" data-inv-stedit="${i.id}">✎ Edit this invoice</button> <span class="ow-stflag" data-stflag="${i.id}"></span>
+          <span class="quiet">It came from ServiceTitan: ServiceTitan's own version is kept beside your changes, and you're told if ServiceTitan changes it later. <a class="link" href="https://go.servicetitan.com/#/Invoice/${encodeURIComponent(i.st_id)}" target="_blank" rel="noopener">Open it in ServiceTitan ↗</a></span></div>`
       : `<div class="no-print inv-edit-row"><a class="btn" href="https://go.servicetitan.com/#/Invoice/${encodeURIComponent(i.st_id)}" target="_blank" rel="noopener">✎ Edit this invoice in ServiceTitan ↗</a> <span class="quiet">This invoice came from ServiceTitan, so it's changed there; the app picks up the change on its next update.</span></div>`}
     <div class="inv-thanks">${brand ? `Thank you for choosing ${esc(brand.branding_name || brand.name)}. Installed by ${esc(coName)}.` : `Thank you for choosing ${esc(coName)}.`}</div>`;
   document.querySelector("[data-inv-custopen]")?.addEventListener("click", e => { const id = Number(e.currentTarget.dataset.invCustopen); if (!id) return; closeInvoice(); openCustomer(id); });
@@ -26146,6 +26210,11 @@ async function openInvoice(id, keep) {
     if (document.querySelector(".owing")) loadOwing();
   }, $("#inv-view"), () => openInvoice(i.id, true));
   document.querySelector("[data-inv-edit]")?.addEventListener("click", e => { const id = Number(e.currentTarget.dataset.invEdit); closeInvoice(); openInvoiceEditor(id); });
+  document.querySelector("[data-inv-stedit]")?.addEventListener("click", async e => { const b = e.currentTarget, id = Number(b.dataset.invStedit); b.disabled = true; b.textContent = "Opening…";
+    const { error } = await db.rpc("inv_st_take", { p_invoice: id });
+    if (error) { b.disabled = false; b.textContent = "✎ Edit this invoice"; b.insertAdjacentHTML("afterend", ` <span class="st-bad">${esc(rpcErr(error))}</span>`); return; }
+    closeInvoice(); openInvoiceEditor(id); });
+  stFlagsFill(document.querySelector(".inv-edit-row") || document);
   const setOwed = async reason => {
     const m = $("#owed-msg"); if (m) { m.className = "staff-msg"; m.textContent = "Saving…"; }
     const { error } = await db.rpc("set_invoice_not_owed", { p_invoice_id: i.id, p_reason: reason });
