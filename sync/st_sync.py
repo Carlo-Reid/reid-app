@@ -4560,6 +4560,22 @@ def main():
                                    "Run SYNC NOW.bat once on the computer that has the export_... folder.")
             new_state["reseed-from-export"] = {"continue_from": None, "since": started.isoformat()}
         st = ST(st_s) if not args.from_files else None
+        # one time: the tech's work summary on every invoice already here (new and changed invoices bring theirs with the sync)
+        cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'invoices' AND column_name = 'tech_summary')")
+        if cur.fetchone()[0] and st and "invoice-summaries" not in state:
+            try:
+                log("Getting the tech's summary on every invoice (one time)...")
+                recs, _ = pull_export(st, "accounting/v2/tenant/{t}/export/invoices", None)
+                rows_ = [(int(r["id"]), str(r.get("summary")).strip()[:4000]) for r in recs if r.get("id") and str(r.get("summary") or "").strip()]
+                cur.execute("CREATE TEMP TABLE _s_inv_sum (id bigint, s text) ON COMMIT DROP")
+                with cur.copy("COPY _s_inv_sum (id, s) FROM STDIN") as cp:
+                    for x in rows_: cp.write_row(x)
+                cur.execute("UPDATE invoices i SET tech_summary = t.s FROM _s_inv_sum t WHERE i.id = t.id AND i.tech_summary IS DISTINCT FROM t.s")
+                log(f"  {cur.rowcount} invoices got their summary ({len(rows_)} of {len(recs)} have one)")
+                cur.execute("DROP TABLE _s_inv_sum")
+                new_state["invoice-summaries"] = {"continue_from": None, "since": started.isoformat()}
+            except Exception as e:
+                conn.rollback(); log(f"  invoice summaries not done this time: {str(e)[:200]}")
         delta = {}
         log("Asking ServiceTitan what changed...")
         for name, path, kind in FEEDS:

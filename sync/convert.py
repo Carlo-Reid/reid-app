@@ -647,7 +647,7 @@ inv_ids = known("invoice_ids")
 inv_tax_rate = {int(k): v for k, v in known("invoice_tax_rate", dict).items()}
 w = Writer("invoices", ["id", "invoice_number", "job_id", "customer_id", "location_id", "business_unit_id", "channel",
                         "status", "invoice_date", "payment_terms_days", "po_number", "subtotal", "tax_total", "total",
-                        "amount_paid", "sent_at", "st_id", "created_at"])
+                        "amount_paid", "sent_at", "st_id", "created_at", "tech_summary"])
 for r in rows("invoices.csv"):
     cust = j(r["customer"], {}) or {}; loc = j(r["location"], {}) or {}; jb = j(r["job"], {}) or {}
     bu = j(r["businessUnit"], {}) or {}
@@ -676,7 +676,7 @@ for r in rows("invoices.csv"):
           location_id=loc.get("id") if loc.get("id") in location_ids else None, business_unit_id=UNIT_IDS[unit],
           channel=channel, status=status, invoice_date=idate, payment_terms_days=terms, po_number=None,
           subtotal=sub, tax_total=tax, total=total, amount_paid=round(total - bal, 2),
-          sent_at=None, st_id=r["id"], created_at=ts(r["createdOn"]))
+          sent_at=None, st_id=r["id"], created_at=ts(r["createdOn"]), tech_summary=clean_text(r["summary"], 4000) or None)
     iid = int(r["id"]); inv_ids.add(iid)
     inv_tax_rate[iid] = round(tax / sub * 100, 2) if sub and tax and 0 < tax / sub < 0.2 else 0
 w.close()
