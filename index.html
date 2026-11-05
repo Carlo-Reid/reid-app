@@ -5752,6 +5752,7 @@ async function showApp() {
   if (location.hash === "#receivables-list" && ME.role) return openOwList();
   if (location.hash === "#receivables-cleanup" && can("invoices.adjust")) return openCleanup();
   if (location.hash === "#pos" && ME.role) return openPOs();
+  if (location.hash === "#po-new" && ME.role) return openPONewPage();
   if (/^#po=\d+$/.test(location.hash) && ME.role) return openPOPage(Number(location.hash.slice(4)));
   if (location.hash === "#supplier-invoices" && ME.role) return openSupInv();
   if (location.hash === "#installs" && ME.role) return openInstalls();
@@ -7209,6 +7210,7 @@ function routeTo(h) {
   if (h === "#receivables-cleanup") return openCleanup();
   if (h === "#partner-notes") return openNfPick();
   if (h === "#pos") return openPOs();
+  if (h === "#po-new") return openPONewPage();
   if (/^#po=\d+$/.test(h)) return openPOPage(Number(h.slice(4)));
   if (h === "#supplier-invoices") return openSupInv();
   if (h === "#installs") return openInstalls();
@@ -16722,7 +16724,7 @@ function renderPOs(msg) {
   document.querySelectorAll(".po-row").forEach(tr => { tr.addEventListener("click", () => { POP.sel = null; POP.back = $("#main").scrollTop; openPOPage(Number(tr.dataset.po)); });
     tr.addEventListener("keydown", e => { if (e.key === "Enter") tr.click(); }); });
   $("#po-sinv")?.addEventListener("click", () => openSupInv());
-  $("#po-new")?.addEventListener("click", () => { POP.newOpen = !POP.newOpen; renderPOs(); document.querySelector(".po-new-box select")?.focus(); });
+  $("#po-new")?.addEventListener("click", () => { POP.back = $("#main").scrollTop; openPONewPage(); });
   const nf = document.querySelector("[data-po-stock]");
   if (nf) {
     nf.supplier.addEventListener("change", () => { nf.querySelector(".po-other").classList.toggle("hidden", nf.supplier.value !== "other"); });
@@ -16745,6 +16747,38 @@ function renderPOs(msg) {
 }
 // a PO on its own page: see everything and change it (status, supplier, what it's for, dates, supplier #, amount, and its lines)
 const POPG = { id: null, d: null, lines: [], msg: "" };
+// New PO for shop or truck stock: a page of its own
+async function openPONewPage() {
+  setPage("po-new", "pos", "New PO");
+  if (!can("po.create")) { $("#main").innerHTML = `<div class="empty"><div><h2>You can't make POs</h2><p><button class="btn" type="button" id="pon-back0">Back to POs</button></p></div></div>`; $("#pon-back0")?.addEventListener("click", () => openPOs()); return; }
+  $("#main").innerHTML = `<div class="loading">Opening…</div>`;
+  await loadSuppliers();
+  if (document.body.dataset.page !== "pos" || location.hash !== "#po-new") return;
+  $("#main").innerHTML = `<article class="staff pos po-page po-newpage">
+    <div class="po-page-top"><button class="btn quiet-btn" type="button" id="pon-back">‹ Back to POs</button></div>
+    <h1>New PO for shop or truck stock</h1>
+    <p class="lead">For parts that aren't for one job. A PO for a job is made from the job, or by the tech on their call.</p>
+    <div class="po-new-box">${poForm(0).replace('data-po-job="0"', 'data-po-stock="1"').replace("Get the number", "Make the PO")}
+      <label class="po-kind">For <select name="kind" form=""><option value="warehouse_restock">Shop stock</option><option value="truck_restock">Truck stock</option><option value="other">Something else</option></select></label></div>
+  </article>`;
+  const back = async () => { await openPOs(); if (POP.back) $("#main").scrollTop = POP.back; };
+  $("#pon-back").addEventListener("click", back);
+  const nf = document.querySelector("[data-po-stock]"); if (!nf) return;
+  nf.supplier?.focus();
+  nf.supplier.addEventListener("change", () => { nf.querySelector(".po-other").classList.toggle("hidden", nf.supplier.value !== "other"); });
+  nf.querySelector("[data-po-x]")?.addEventListener("click", back);
+  nf.addEventListener("submit", async e => {
+    e.preventDefault();
+    const other = nf.supplier.value === "other", m = nf.querySelector(".po-msg");
+    if (other && !nf.other.value.trim()) { m.className = "po-msg err"; m.textContent = "Type the supplier's name."; return; }
+    const { data, error } = await db.rpc("new_stock_po", { p_supplier_id: other ? null : Number(nf.supplier.value), p_supplier_name: other ? nf.other.value.trim() : null,
+      p_what: nf.what.value.trim() || null, p_purpose: document.querySelector(".po-kind select").value });
+    if (error) { m.className = "po-msg err"; m.textContent = "Not made: " + rpcErr(error); return; }
+    if (other) SUPPLIERS = null; await loadSuppliers();
+    if (data?.id) await openPOPage(Number(data.id)); else await openPOs();   // the new PO's own page
+    poShow(data);
+  });
+}
 async function openPOPage(id, msg) {
   POPG.id = id; POPG.msg = msg || "";
   setPage("po=" + id, "pos", "PO");
