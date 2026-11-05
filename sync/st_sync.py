@@ -4493,7 +4493,9 @@ def main():
                 cur.execute("SET lock_timeout = '500ms'")
                 cur.execute(open(path, encoding="utf-8").read()); conn.commit(); log(f"  {name} checked."); break
             except Exception as e:
-                conn.rollback(); log(f"  {name} not added (try {attempt + 1}): {str(e)[:200]}")
+                conn.rollback()
+                if "probe" in name: log(f"  {name}: {e}"); break   # a read-only look at the database: its whole answer, once
+                log(f"  {name} not added (try {attempt + 1}): {str(e)[:200]}")
                 if os.environ.get("GITHUB_ACTIONS") and attempt == 2: print(f"::notice::{name} not added: {str(e)[:200]}", flush=True)
                 time.sleep(5)
     try: cur.execute("SET lock_timeout = 0"); conn.commit()
