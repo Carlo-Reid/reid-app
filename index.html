@@ -15840,7 +15840,9 @@ function dropInGroups(PT, cv, HT, KL) {
   const kindOf = t => { const U = String(t).toUpperCase(); if ((stLines(t) >= 2 || moLines(t) >= 3) && !/INVOICE\s*(?:NUMBER|NO)\s*[:#]/.test(U)) return "statement"; if (/\bSTATEMENT\b/.test(U) && /31\s*-\s*60|61\s*-\s*90|OVER\s*120|1\s*-\s*30\s*DAYS|91\s*\+\s*DAYS|BALANCE\s*DUE|OVER\s*\d{2,3}\b|STATEMENT\s*DATE|AMOUNT\s*REMITTED|RETURN\s*THIS\s*PORTION/.test(U)) return "statement";   // Breezehill: Current / 30-62 / Over 62
     if (/PICK\s*TICKET|PACKING\s*(?:SLIP|LIST)|PICKED\s*BY\W{0,6}PACKED\s*BY|WORK\s*ORDER|DELIVERY\s*RECEIPT|ACKNOWLEDGES\s*RECEIPT\s*OF\s*GOODS|FULFIL+MENT\s*DETAILS/.test(U)) return "slip";   // Carrier: Dock/Delivery Receipt
     if (/RECEIPT|CARDHOLDER\s*COPY/.test(U) && /AUTH\s*CODE|AUTHORI[SZ]ED|APPROVED|SALE\s*TRANSACTION|CARDHOLDER\s*COPY/.test(U) && !/INVOICE\s*(?:NUMBER|NO)/.test(U)) return "receipt"; return "invoice"; };
-  const numOf = t => { const U = String(t).toUpperCase(), a = U.match(/\b(\d{7,9}-\d{2})\b/); if (a) return a[1]; const b = U.match(/\b(SI)\s*-\s*(\d{6})\b/) || U.match(/\b(S[O0])\s*-\s*(\d{6})\b/); return b ? b[1].replace("0", "O") + "-" + b[2] : ""; };   // an invoice's SI # comes before the sales order (SO) printed on it
+  const numOf = t => { const U = String(t).toUpperCase(), a = U.match(/\b(\d{7,9}-\d{2})\b/); if (a) return a[1];
+    const ce = /CARRIER/.test(U) && U.match(/\b(\d{7})-(\d)(?![\d-])/); if (ce) return `${ce[1]}-0${ce[2]}`;   // Carrier's delivery receipt cuts the order # short: 1819696-0 is 1819696-00
+    const b = U.match(/\b(SI)\s*-\s*(\d{6})\b/) || U.match(/\b(S[O0])\s*-\s*(\d{6})\b/); return b ? b[1].replace("0", "O") + "-" + b[2] : ""; };   // an invoice's SI # comes before the sales order (SO) printed on it
   const K = PH.map(t => /\bP?ACKING\s*LI/i.test(t) && kindOf(t) !== "statement" ? "slip" : kindOf(t));
   // a blank page (the back of a sheet scanned on both sides) goes with the page before it, not as a new invoice
   const blank = t => String(t).replace(/[^A-Za-z0-9]/g, "").length < 25;
@@ -15853,9 +15855,10 @@ function dropInGroups(PT, cv, HT, KL) {
   // on the statement is that page's; one misread digit (286390 for 286990) still counts when only one statement number is that close
   const stTexts = PT.filter((t, i) => K[i] === "statement"), STR = stTexts.length ? stParse(stTexts, []).lines.filter(l => l.code !== "P")
     : (KL || []).filter(l => l.reference && l.code !== "P" && Number(l.amount) > 0);
-  const stNum = t => { if (!STR.length) return ""; const toks = [...new Set(String(t).replace(/\b\d(?: \d){4,8}\b/g, m => m.replace(/ /g, "")).replace(/(\d)[ ,](?=\d{3}\b)/g, "$1").match(/\b[A-Z]{0,3}-?\d{5,9}(?:-\d{2})?\b/gi) || [])], refs = STR.map(l => String(l.reference));
+  const stNum = t => { if (!STR.length) return ""; const toks = [...new Set(String(t).replace(/(\d{6,9})[:;](\d{2})\b/g, "$1-$2").replace(/\b\d(?: \d){4,8}\b/g, m => m.replace(/ /g, "")).replace(/(\d)[ ,](?=\d{3}\b)/g, "$1").match(/\b[A-Z]{0,3}-?\d{5,9}(?:-\d{2})?\b/gi) || [])], refs = STR.map(l => String(l.reference));
     const dig = r => r.replace(/\D/g, ""), base = r => dig(String(r).replace(/-\d{2}$/, ""));
-    const ex = refs.find(r => toks.some(x => dig(x) === dig(r) && dig(r).length >= 5)) || refs.find(r => /-\d{2}$/.test(r) && base(r).length >= 6 && toks.some(x => dig(x) === base(r) || dig(x).replace(/0$/, "") === base(r))); if (ex) return ex;
+    const ex = refs.find(r => toks.some(x => dig(x) === dig(r) && dig(r).length >= 5)) || refs.find(r => /-\d{2}$/.test(r) && dig(r).length >= 8 && toks.some(x => dig(x).length === dig(r).length + 1 && dig(x).slice(1) === dig(r)))   // a mark before it read as a 1: 11838426-00
+      || refs.find(r => /-\d{2}$/.test(r) && base(r).length >= 6 && toks.some(x => dig(x) === base(r) || dig(x).replace(/0$/, "") === base(r))); if (ex) return ex;
     const near = refs.filter(r => toks.some(x => dig(x).length === dig(r).length && dig(r).length >= 5 && [...dig(x)].filter((c, i) => c !== dig(r)[i]).length === 1));
     if (near.length > 1) { const dt = r => STR.find(l => String(l.reference) === r)?.date || "", by = near.sort((a, b) => dt(b).localeCompare(dt(a)));   // two that close: the pages sent with a statement are its newest invoices
       if (dt(by[0]) && dt(by[1]) && (new Date(dt(by[0])) - new Date(dt(by[1]))) / 864e5 > 30) return by[0]; }
