@@ -15507,7 +15507,7 @@ function drawDropIn() {
         : `<td><input name="number" value="${esc(x.number || "")}" ${DROPIN.stRefs?.length ? `list="di-stnums"` : ""} ${x.number ? "" : `class="di-need" placeholder="${DROPIN.stRefs?.length ? "Pick or type it" : "Type it here"}" aria-label="Invoice number (type it in)"`}></td><td><input name="date" type="date" value="${esc(x.date || "")}" ${x.date || x.match ? "" : `class="di-need" aria-label="Invoice date (type it in)"`}></td><td><input name="po" value="${esc(x.po || "")}"></td>
         <td class="r"><input name="total" type="number" step="0.01" value="${x.total ?? ""}"></td><td>${x.other && !x.sup ? `<div class="st-bad">This looks like ${esc(dropInSupName(x.other))}'s, not ${esc(DROPIN.name)}'s. <button class="link" type="button" data-di-sup="${i}">Save it under ${esc(dropInSupName(x.other))}</button></div>` : ""}
           ${x.sup && !DROPIN.sup ? `<div class="st-ok">Goes under <b>${esc(dropInSupName(x.sup))}</b> (its name is on it)</div>` : ""}${x.sup && DROPIN.sup && x.sup !== DROPIN.sup ? `<div class="st-look">Moved to <b>${esc(dropInSupName(x.sup))}</b>: it's ${esc(dropInSupName(x.sup))}'s, not ${esc(DROPIN.name)}'s. <button class="link" type="button" data-di-sup0="${i}">Keep it under ${esc(DROPIN.name)}</button></div>` : ""}
-          ${x.unsure && !x.sup ? `<div class="st-bad">${DROPIN.sup ? `Can't see ${esc(DROPIN.name)} on it.` : "Whose is it?"} ${supSel(`data-di-pick="${i}"`, null)}</div>` : ""}${x.guess ? `<div class="st-look">Its number wasn't readable: ${esc(x.number)} is the only one on the statement left for it. Check it against the page.</div>` : ""}${x.slip ? (x.match ? `<span class="st-ok">📦 Pick ticket / packing slip: added to our invoice ${esc(x.match.number)}</span>` : x.number ? `<span class="st-look">📦 Pick ticket / packing slip for ${esc(x.number)}: saved under that invoice # (its amount comes from the statement or the invoice)</span>` : `<span class="st-bad">📦 Pick ticket: type its order / invoice # in the box on the left</span>`)
+          ${x.unsure && !x.sup ? `<div class="st-bad">${DROPIN.sup ? `Can't see ${esc(DROPIN.name)} on it.` : "Whose is it?"} ${supSel(`data-di-pick="${i}"`, null)}</div>` : ""}${x.guess ? `<div class="st-look">Its number wasn't readable: ${x.guess === "amount" ? `${esc(x.number)} is the statement's invoice whose amount is closest to what's written on it` : x.guess === "date" ? `${esc(x.number)} is the statement's invoice with the date written on it` : `${esc(x.number)} is the only one on the statement left for it`}. Check it against the page.</div>` : ""}${x.slip ? (x.match ? `<span class="st-ok">📦 Pick ticket / packing slip: added to our invoice ${esc(x.match.number)}</span>` : x.number ? `<span class="st-look">📦 Pick ticket / packing slip for ${esc(x.number)}: saved under that invoice # (its amount comes from the statement or the invoice)</span>` : `<span class="st-bad">📦 Pick ticket: type its order / invoice # in the box on the left</span>`)
           : x.match ? `<span class="st-ok">Adds the copy to our invoice ${esc(x.match.number)}</span>` : x.number ? `<span class="st-look">New ${x.credit ? "credit note" : "invoice"}${x.onSt ? " (it's on a statement)" : ""}</span>` : `<span class="st-bad">Type the invoice number in the box on the left of this row</span>`}${x.credit && !x.match ? `<div class="quiet">Credit: the total is saved as a minus.</div>` : ""}${x.err ? `<div class="st-bad">${esc(x.err)}</div>` : ""}</td>
         <td><button class="link danger" type="button" data-di-x="${i}">✕</button></td>`}</tr>`).join("")}</tbody></table>
       ${I.some(x => !x.done && !x.busy) ? `<div class="row"><button class="btn" type="button" data-di-save>Save ${I.filter(x => !x.done && !x.busy).length === 1 ? "it" : "them all"}</button></div>` : ""}` : ""}</div>`;
@@ -15602,7 +15602,17 @@ function dropInGroups(PT, cv, HT) {
   if (STR.length) { const last = STR.map(l => l.date).filter(Boolean).sort().pop(), recent = STR.filter(l => l.date && last && (new Date(last) - new Date(l.date)) / 864e5 <= 40);
     ["invoice", "slip"].forEach(kind => { const free = G.filter(g => g.kind === kind && !(g.byPo || g.n)); if (free.length !== 1) return;
       const taken = new Set(G.filter(g => g.kind === kind).map(g => g.byPo || g.n).filter(Boolean)), cand = recent.filter(l => !taken.has(String(l.reference)));
-      if (cand.length === 1) { free[0].n = String(cand[0].reference); free[0].guess = true; } }); }
+      if (cand.length === 1) { free[0].n = String(cand[0].reference); free[0].guess = true; return; }
+      // a few left: an amount read on the page (handwriting reads roughly: 145.28 as "1145. 23") close to just one of theirs
+      const ed = (a, b) => { const d = Array.from({ length: b.length + 1 }, (_, j) => j); for (let i = 1; i <= a.length; i++) { let p = d[0]; d[0] = i;
+          for (let j = 1; j <= b.length; j++) { const t = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, p + (a[i - 1] === b[j - 1] ? 0 : 1)); p = t; } } return d[b.length]; };
+      const toks = (String(free[0].text).match(/\d[\d.,]*\s?[.,]\s?\d{2}\b/g) || []).map(t => t.replace(/\D/g, "")).filter(t => t.length >= 3);
+      const near = cand.filter(l => { const a = Math.abs(Number(l.amount)).toFixed(2).replace(".", ""); return a.length >= 4 && toks.some(t => t === a || ed(t, a) <= (a.length >= 5 ? 2 : 1)); });
+      if (near.length === 1 && cand.length <= 4) { free[0].n = String(near[0].reference); free[0].guess = "amount"; return; }
+      // or the day of a handwritten date ("Apr 2/2026" reads as "fer 2/2024"): the only one of theirs dated that day of the month
+      const days = new Set([...String(free[0].text).matchAll(/(?:^|[^\d])(\d{1,2})\s*[\/|]\s*20\d{2}\b/g)].map(m => Number(m[1])).filter(d => d >= 1 && d <= 31));
+      const onDay = cand.filter(l => days.has(Number(String(l.date).slice(8, 10))));
+      if (onDay.length === 1 && cand.length <= 4) { free[0].n = String(onDay[0].reference); free[0].guess = "date"; } }); }
   // its date and amount from the statement line
   G.forEach(g => { const r = g.byPo || g.n, l = r && STR.find(x => String(x.reference) === r); if (l) { g.date = g.date || l.date; g.amount = l.amount; } });
   G.st = STR; return G;
@@ -15679,7 +15689,7 @@ async function dropInFiles(files) {
           if (g.kind === "slip") y.slip = true;
           await dropInFill(y, g.text, g.C); if (g.byPo || g.n) y.number = g.byPo || g.n; if (g.date) y.date = g.date;
           if (g.amount != null && y.total == null && !y.slip) y.total = g.amount;   // handwritten: the amount from the statement
-          if (g.guess) y.guess = true;
+          if (g.guess) y.guess = g.guess;
           y.busy = null; dropInMatch(y); }
         // a page without the supplier's name on it (a handwritten invoice) is the supplier's whose statement is in the same file
         const stIt = DROPIN.items.find(z => z.file === x.file && z.kind === "statement"), stSup = stIt && (stIt.sup || (!stIt.unsure && DROPIN.sup));
