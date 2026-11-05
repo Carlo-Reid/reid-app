@@ -16416,7 +16416,7 @@ function stParse(texts, known) {
     const L = T.split(/\n/);
     L.forEach((raw, idx) => {
       const s = raw.replace(/[^0-9A-Za-z.,\/\-]/g, " ").replace(/\s+/g, " ").trim();
-      const m = s.match(/^\D{0,3}?(\d{6,7})\D+?(?:1?(\d{3})\D+?)?(\d{1,2}\/\d{2}\/\d{2,4})(.*)$/);
+      const m = s.match(/^\D{0,3}?(\d{6,7})\D+?(?:1?(\d{3})\D+?)?(?:\d{1,3}\D+?){0,2}?(\d{1,2}\/\d{2}\/\d{2,4})(.*)$/);   // the branch (150) can be misread as 0 or 50, or have a stray mark
       const nb = !m && s.match(/^(\d{1,2}\/\d{2}\/\d{2,4})\s+([A-Za-z1]{2})\s+(?:\S+\s+)?(\d{6,9}-\d{2})\s+(.*)$/);
       // the amount is the BALANCE DUE on the right (after the invoice # again): a part-paid invoice owes less than it was for
       const cash = t => (t.match(/-?(?:\d{1,3}(?:,\s?\d{3})+|\d+)[.,]\d{2}-?|-?\.\d{2}-?/g) || []).map(x => { const neg = /^-|-$/.test(x); const v = num(x.replace(/^-/, "").replace(/-$/, "").replace(/,(\d{2})$/, ".$1")); return v == null ? null : neg ? -Math.abs(v) : v; }).filter(v => v != null);
@@ -16449,11 +16449,18 @@ function stParse(texts, known) {
       if (moIso && !seen.has(refOf(mo[4]))) { const am = cash(mo[6]), U = mo[5].toUpperCase();
         if (am.length) { const c = /CREDIT|RETURN/.test(U) ? "C" : /PAY|CHEQUE|CHECK|RECEIPT/.test(U) ? "P" : /DEBIT/.test(U) ? "D" : /FINANCE|SERVICE|INTEREST|CHARGE/.test(U) ? "S" : /ADJ/.test(U) ? "A" : "I", a = am[am.length - 1], ref = refOf(mo[4]);
           seen.add(ref); lines.push({ reference: ref, branch: "", date: moIso, code: c, amount: ["C", "P"].includes(c) ? -Math.abs(a) : a }); last = { T, idx }; } }
-      if (m) { const digits = m[1], ref = refOf(digits); let rest = m[4]; const k = rest.indexOf(digits.slice(-6)); if (k >= 0) rest = rest.slice(0, k);
+      const n0 = lines.length;
+      if (m) { const digits = m[1], ref = refOf(digits); let rest = m[4]; const k = rest.indexOf(digits.slice(-6)); const tailAmt = k >= 0 ? (rest.slice(k + 6).match(/\d[\d,]*\.\d{2}-?/) || [])[0] : null; if (k >= 0) rest = rest.slice(0, k);
         const cm = rest.match(/^\W*([A-Za-z1©])[A-Za-z1]?\s/), code = cm ? CODE[cm[1]] : null; if (cm) rest = rest.slice(cm[0].length);
         const amts = (rest.match(/\d{1,3}(?:,\s?\d{3})*\.\d{2}-?|\.\d{2}-?/g) || []).map(num).filter(v => v != null);
-        if (amts.length && !seen.has(ref)) { seen.add(ref); const amount = amts[amts.length - 1];
+        if (amts.length && !seen.has(ref)) { seen.add(ref); let amount = amts[amts.length - 1];
+          const tv = tailAmt ? num(tailAmt.replace(/,/g, "")) : null;   // the tear-off column has it again: of the readings that disagree, the one read twice
+          if (tv != null && Math.abs(tv) !== Math.abs(amount) && amts.slice(0, -1).some(v => Math.abs(v) === Math.abs(tv))) amount = (amount < 0 ? -1 : 1) * Math.abs(tv);   // the sign from the line (the tear-off column prints credits without the minus)
           lines.push({ reference: ref, branch: m[2] || "", date: toIso(m[3]), code: amount < 0 ? "C" : code && code !== "C" ? code : "I", amount }); last = { T, idx }; } }
+      // Boone: the number on the left misread ("ca14216"), but the tear-off column on the right has it again with the amount: C414216 246.05
+      if (lines.length === n0 && !nb && !hp && !ce && !ve && !cy && !mo) { const rt = s.match(/(\d{1,2}\/\d{2}\/\d{2,4})\s.*?\d\.\d{2}.*?\b([A-Za-z]{0,2})(\d{5,7})\s+(\d[\d,]*\.\d{2}-?)\s*$/);
+        if (rt) { const fin = /^S/i.test(rt[2]), ref = fin ? rt[2].toUpperCase() + rt[3] : refOf(rt[3]), a = num(rt[4].replace(/,/g, ""));   // SC38006: a finance charge
+          if (a != null && !seen.has(ref)) { seen.add(ref); lines.push({ reference: ref, branch: "", date: toIso(rt[1]), code: fin ? "S" : a < 0 ? "C" : "I", amount: a }); last = { T, idx }; } } }
       if (!date) { const d = s.match(/(\d{2})\/(3[01]|[12]\d|0\d)\/(\d{2})(?!\d)/); if (d && idx < 12) date = toIso(`${d[1]}/${d[2]}/${d[3]}`); }
       if (/TOTAL/i.test(s)) { const near = s + " " + (L[idx + 1] || "") + " " + (L[idx + 2] || ""), a = near.match(/(\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2})/); if (a) total = num(a[1]);
         (near.match(/\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2}/g) || []).forEach(v => { const x = num(v); if (x != null) cands.push(x); }); }
@@ -16478,6 +16485,8 @@ function stParse(texts, known) {
   if (!date) { const d = String(texts[0] || "").split(/\n/).slice(0, 14).join(" ").match(/\b(\d{1,2}\/\d{1,2}\/\d{4})\b/); if (d) date = toIso(d[1]); }   // printed at the top (HPC: 2/8/2026)
   if (!date) { const all = texts.join("\n"), d = all.match(/STATEMENT\s*DATE\W{0,12}([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/i) || String(texts[0] || "").split(/\n/).slice(0, 14).join(" ").match(/\b([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})\b/);
     if (d) date = stMonIso(d[1], d[2], d[3]); }   // Breezehill: "Statement Date Mar 06, 2026"
+  if (!date) { for (const T of texts) { const d = String(T).split(/\n/).slice(0, 8).join(" ").match(/(?:^|[^\d])(1[0-2]|0?[1-9])[\/s]?([0-3]\d)\/(\d{2})(?!\d)/); if (d && Number(d[2]) <= 31) { date = toIso(`${d[1]}/${d[2]}/${d[3]}`); break; } } }   // Boone's heading read as 1031/26 or 10s31/26
+  if (!date && lines.length) { const nw = lines.map(l => l.date).filter(Boolean).sort().pop(); if (nw) { const [y, mo] = nw.split("-").map(Number); const e = new Date(y, mo, 0); date = `${e.getFullYear()}-${String(e.getMonth() + 1).padStart(2, "0")}-${String(e.getDate()).padStart(2, "0")}`; } }   // a monthly statement: the end of the newest line's month
   if (aging && discount != null) aging.discount = discount;
   if (balDue != null) total = balDue;   // the statement's own BALANCE DUE is what we owe, not a TOTALS column or an aging box
   const sum = Math.round(lines.reduce((a, l) => a + l.amount, 0) * 100) / 100;
@@ -16491,6 +16500,13 @@ function stParse(texts, known) {
     const AG = aging ? [aging.current, aging.d31_60, aging.d61_90, aging.d91_120, aging.over120].filter(v => v != null) : [], agSum = AG.reduce((a, v) => a + v, 0);
     if (lines.length > 1 && total != null && Math.abs(total - sm) > 0.004 && AG.some(v => Math.abs(v - total) < 0.005) && Math.abs(agSum - total) > 0.004) total = sm; }
   if (balDue != null) total = balDue;
+  // the total read with one digit wrong (59,225.50 for 59,225.90) when the lines add up to the right one: the lines' sum
+  { const sm = Math.round(lines.reduce((a, l) => a + l.amount, 0) * 100) / 100, A = Number(total || 0).toFixed(2), B = sm.toFixed(2);
+    if (lines.length > 5 && total != null && A !== B && A.length === B.length && [...A].filter((c, i) => c !== B[i]).length === 1) total = sm; }
+  // the aging boxes weren't readable (Boone's small two-language row): worked out from the lines' dates as of the statement date
+  if (!aging && date && lines.length) { const D = new Date(date + "T12:00"), ag = { current: 0, d31_60: 0, d61_90: 0, d91_120: 0, over120: 0, from_lines: true };
+    lines.forEach(l => { if (!l.date || l.code === "P") return; const d = Math.round((D - new Date(l.date + "T12:00")) / 864e5), k = d <= 30 ? "current" : d <= 60 ? "d31_60" : d <= 90 ? "d61_90" : d <= 120 ? "d91_120" : "over120"; ag[k] = Math.round((ag[k] + Number(l.amount || 0)) * 100) / 100; });
+    aging = ag; }
   return { lines, date, total: total ?? sum, aging, sum };
 }
 function stCompare(SL, PL) {
