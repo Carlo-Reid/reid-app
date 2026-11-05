@@ -1611,6 +1611,8 @@
 .iz-bar .btn { min-height: 0; padding: 3px 11px; font-size: 13.5px; } .iz-pct { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; } .iz-hint { font-size: 12px; margin-left: 4px; }
 .iz-view { height: 70vh; width: 100%; overflow: auto; contain: size; cursor: grab; touch-action: none; background: #f5f7fa; } .iz-view.iz-drag { cursor: grabbing; } .iz-view img { display: block; max-width: none; background: #fff; user-select: none; transform-origin: center center; }
 figure.iz-on, .di-pages figure.iz-on { flex-basis: 100%; max-width: none; cursor: default; max-height: none; overflow: visible; }
+body.hold-dragging, body.hold-dragging * { cursor: grabbing !important; user-select: none; }
+button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 0 10px 28px rgba(16, 24, 40, .35) !important; outline: 3px dashed #2f6fbf; outline-offset: 2px; z-index: 5; position: relative; transition: none !important; }
 .di-supask { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 4px 0; padding: 6px 8px; background: #fff7e6; border: 1px solid #f0c36d; border-radius: 8px; color: #5c3b00; }
 .di-supask .btn, .di-whose .di-supok { min-height: 0; padding: 4px 12px; font-size: 13px; } .di-supfind input { min-width: 230px; padding: 4px 8px; border: 1px solid #c9d6e6; border-radius: 6px; font: inherit; }
 .di-whose .di-supok { margin-left: 8px; }
@@ -15116,8 +15118,46 @@ function renderSupInv(msg) {
         ${SINV.open === r.id ? `<tr class="sinv-det"><td colspan="7">${sinvDetail(r, edit)}</td></tr>` : ""}`).join("")}</tbody></table></div>`
       : `<p class="quiet" style="padding:20px 0">${qq ? "Nothing matches your search." : "Nothing here."}</p>`}
   </article>`;
+  holdSortApply($("#main"));
   wireSupInv();
 }
+/* ---------- Supplier invoices page: press and hold any button, then drag it to a new spot in its row (the order is remembered) ---------- */
+const HOLD_KEY = "sinv-button-order";
+const holdRead = () => { try { return JSON.parse(localStorage.getItem(HOLD_KEY) || "{}") || {}; } catch { return {}; } };
+const holdWrite = o => { try { localStorage.setItem(HOLD_KEY, JSON.stringify(o)); } catch {} };
+// a button's name for remembering it: its first data- attribute (a supplier's number on a tile for that supplier is left out, so the order is the same for every supplier)
+const holdBtnKey = b => { const a = [...b.attributes].find(x => x.name.startsWith("data-") && x.name !== "data-sup"); if (!a) return "t:" + (b.textContent || "").trim().slice(0, 40);
+  return a.name + (/^\d+$/.test(a.value) && a.name !== "data-sinv-sup" ? "" : "=" + a.value); };
+const holdGroups = root => [...new Set([...root.querySelectorAll("article button")].map(b => b.parentElement))].filter(g => [...g.children].filter(c => c.tagName === "BUTTON").length > 1);
+const holdGroupKey = g => { const c = (g.className || g.tagName).toString().split(/\s+/).filter(Boolean).sort().join("."), same = [...document.querySelectorAll("#main article *")].filter(x => holdGroups.cache?.has(x) && ((x.className || x.tagName).toString().split(/\s+/).filter(Boolean).sort().join(".")) === c);
+  return c + "#" + Math.max(0, same.indexOf(g)) + "|" + [...g.children].filter(x => x.tagName === "BUTTON").map(holdBtnKey).sort().slice(0, 2).join(","); };
+function holdSortApply(root) {
+  if (!root) return; const G = holdGroups(root); holdGroups.cache = new Set(G); const O = holdRead();
+  G.forEach(g => { const want = O[holdGroupKey(g)]; if (!want?.length) return; const B = [...g.children].filter(c => c.tagName === "BUTTON"), rank = k => { const i = want.indexOf(k); return i < 0 ? 1e6 : i; };
+    const sorted = B.map((b, i) => ({ b, i, r: rank(holdBtnKey(b)) })).sort((x, y) => x.r - y.r || x.i - y.i).map(x => x.b);
+    const anchor = B[B.length - 1].nextSibling; sorted.forEach(b => g.insertBefore(b, anchor)); });
+}
+(function holdSort() {
+  let t = null, st = null, drag = null, eat = false;
+  const onPage = () => document.body.dataset.page === "supplier-invoices";
+  document.addEventListener("pointerdown", e => { if (!onPage() || e.button !== 0) return; const b = e.target.closest?.("#main article button"); if (!b || !holdGroups.cache?.has(b.parentElement)) return;
+    st = { b, x: e.clientX, y: e.clientY, id: e.pointerId };
+    t = setTimeout(() => { if (!st) return; drag = st; drag.b.classList.add("hold-drag"); document.body.classList.add("hold-dragging"); navigator.vibrate?.(15); }, 450); }, true);
+  document.addEventListener("pointermove", e => {
+    if (st && !drag && Math.hypot(e.clientX - st.x, e.clientY - st.y) > 8) { clearTimeout(t); st = null; return; }   // moving before the hold: an ordinary scroll or drag
+    if (!drag) return; e.preventDefault();
+    const el = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("button"), g = drag.b.parentElement;
+    if (!el || el === drag.b || el.parentElement !== g) return;
+    const r = el.getBoundingClientRect(), after = Math.abs(r.top - drag.b.getBoundingClientRect().top) < r.height / 2 ? e.clientX > r.left + r.width / 2 : e.clientY > r.top + r.height / 2;
+    g.insertBefore(drag.b, after ? el.nextSibling : el); }, { passive: false, capture: true });
+  const end = () => { clearTimeout(t); if (drag) { const b = drag.b, g = b.parentElement; b.classList.remove("hold-drag"); document.body.classList.remove("hold-dragging");
+      const O = holdRead(); O[holdGroupKey(g)] = [...g.children].filter(c => c.tagName === "BUTTON").map(holdBtnKey); holdWrite(O); eat = true; setTimeout(() => { eat = false; }, 400); }
+    st = null; drag = null; };
+  document.addEventListener("pointerup", end, true); document.addEventListener("pointercancel", end, true);
+  document.addEventListener("click", e => { if (eat) { e.preventDefault(); e.stopImmediatePropagation(); eat = false; } }, true);   // letting go after a move isn't a click
+  document.addEventListener("contextmenu", e => { if (drag || st) e.preventDefault(); }, true);
+  document.addEventListener("dragstart", e => { if (drag || st) e.preventDefault(); }, true);
+})();
 // does the statement add up? Newer ones list every open item (they add up to the total); older ones list the month's
 // activity on top of last month's balance ("balance from prior month"), so last month's total + this month's lines = the total
 // tabs: All suppliers, then one per supplier that has statements
