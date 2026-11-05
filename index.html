@@ -15664,18 +15664,26 @@ async function sinvAttachFiles(id, files) {
       else if (/^image\//.test(f.type)) { const img = await createImageBitmap(f), c = document.createElement("canvas"); c.width = img.width; c.height = img.height; c.getContext("2d").drawImage(img, 0, 0); cv.push(c); }
     }
     if (!cv.length) return say(`<span class="st-bad">That isn't a PDF or a picture. Drag the invoice's PDF attachment from the email.</span>`);
-    const worker = await window.Tesseract.createWorker("eng"); let text = "";
-    for (let i = 0; i < cv.length; i++) { say(`Reading page ${i + 1} of ${cv.length}…`); text += "\n" + (await worker.recognize(cv[i])).data.text; }
+    const worker = await window.Tesseract.createWorker("eng"); let text = ""; const PTX = [];
+    for (let i = 0; i < cv.length; i++) { say(`Reading page ${i + 1} of ${cv.length}…`); const t1 = (await worker.recognize(cv[i])).data.text; PTX.push(t1); text += "\n" + t1; }
     await worker.terminate();
-    const pages = cv.map(c => { const w = Math.min(1500, c.width), h = Math.round(c.height * w / c.width), o = document.createElement("canvas"); o.width = w; o.height = h; o.getContext("2d").drawImage(c, 0, 0, w, h); return o.toDataURL("image/jpeg", 0.72).split(",")[1]; });
+    // a file with several invoices in it (a supplier's packet): only the pages with this invoice's number on them (and a page right after one, its next page)
+    const flatN = String(r?.number || "").replace(/\W/g, "").toUpperCase(), onIt = PTX.map(t => !!flatN && t.replace(/\W/g, "").toUpperCase().includes(flatN));
+    let keep = cv.map((_, i) => true);
+    if (cv.length > 2 && onIt.some(Boolean) && !onIt.every(Boolean)) keep = onIt.map((v, i) => v || (onIt[i - 1] && !/(?:INVOICE|FACTURE)\s*(?:NO|#|NUMBER)?/i.test(PTX[i].slice(0, 400)) && PTX[i].replace(/\W/g, "").length < 400));
+    const leftOut = keep.filter(k => !k).length;
+    text = PTX.filter((_, i) => keep[i]).join("\n");
+    const pagesAll = cv.map(c => { const w = Math.min(1500, c.width), h = Math.round(c.height * w / c.width), o = document.createElement("canvas"); o.width = w; o.height = h; o.getContext("2d").drawImage(c, 0, 0, w, h); return o.toDataURL("image/jpeg", 0.72).split(",")[1]; });
     const n = t => t == null ? null : Number(String(t).replace(/[, ]/g, ""));
     const po = (text.match(/(?:P\.?\s?O\.?|PURCHASE\s+ORDER|CUSTOMER\s+ORDER|ORDER|COMMANDE)\s*(?:#|NO\.?|NUMBER|NUM\.?)?\s*[:#.]?\s*([A-Z]{0,3}\d[\w-]{2,})/i) || [])[1] || "";
     const sub = n((text.match(/SUB\s*-?\s*TOTAL\D{0,12}([\d,]+\.\d{2})/i) || [])[1]), hst = n((text.match(/(?:H\.?S\.?T|TVH|TAX)\D{0,12}([\d,]+\.\d{2})/i) || [])[1]);
     const hasNum = r && text.replace(/\W/g, "").toUpperCase().includes(String(r.number).replace(/\W/g, "").toUpperCase());
-    say(`<div class="sd-read">${hasNum ? `✓ It's invoice ${esc(r.number)}.` : `<span class="st-bad">⚠ I couldn't find the number ${esc(r?.number || "")} on it: make sure it's the right invoice.</span>`} ${cv.length} ${cv.length === 1 ? "page" : "pages"}.
+    let pages = pagesAll.filter((_, i) => keep[i]);
+    say(`<div class="sd-read">${hasNum ? `✓ It's invoice ${esc(r.number)}.` : `<span class="st-bad">⚠ I couldn't find the number ${esc(r?.number || "")} on it: make sure it's the right invoice.</span>`} ${leftOut ? `<span class="st-look">This file has ${cv.length} pages, but only page${pages.length === 1 ? "" : "s"} ${keep.map((k, i) => k ? i + 1 : null).filter(Boolean).join(", ")} ${pages.length === 1 ? "has" : "have"} ${esc(r.number)} on ${pages.length === 1 ? "it" : "them"}: the other ${leftOut} look like other invoices and won't be added to this one. <label><input type="checkbox" data-sd-allpages> Add all ${cv.length} pages anyway</label></span>` : `${cv.length} ${cv.length === 1 ? "page" : "pages"}.`}
       <label>PO number on it <input type="text" data-sd-po value="${esc(po)}" placeholder="PO number"></label>
       <label>Subtotal <input type="number" step="0.01" data-sd-sub value="${sub ?? ""}"></label><label>HST <input type="number" step="0.01" data-sd-hst value="${hst ?? ""}"></label>
       <button class="btn" type="button" data-sd-save>Save the invoice</button></div>`);
+    box.querySelector("[data-sd-allpages]")?.addEventListener("change", e => { pages = e.target.checked ? pagesAll : pagesAll.filter((_, i) => keep[i]); });
     box.querySelector("[data-sd-save]").addEventListener("click", async e => { e.target.disabled = true; say2("Saving…");
       const v = q => box.querySelector(q)?.value.trim() || null;
       const { error } = await db.rpc("supplier_invoice_attach", { p_invoice: id, p: { pages, po_text: v("[data-sd-po]"), subtotal: v("[data-sd-sub]"), hst: v("[data-sd-hst]"), file: files.map(f => f.name).join(" + ") } });
