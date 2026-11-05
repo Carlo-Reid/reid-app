@@ -1618,6 +1618,8 @@ button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 
 .pol-search input { width: min(560px, 100%); padding: 8px 12px; font: inherit; font-size: 15px; border: 1px solid #9fb3cc; border-radius: 8px; margin: 4px 0 10px; }
 .pol .sgm-txt mark { background: #fff1b8; padding: 0 2px; border-radius: 3px; } .pol-find input { width: 100%; min-width: 240px; padding: 5px 8px; border: 1px solid #c9d6e6; border-radius: 6px; font: inherit; }
 .pol-hits { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; } .pol-hit { text-align: left; font-size: 12.5px; }
+.sinv-app.sa-month.sa-pend { border: 2px dashed #e2b56b !important; background: linear-gradient(180deg, #fffdf8, #fff3dc) !important; }
+.sinv-app.sa-month.sa-pend.on { border-style: solid !important; } .sinv-app.sa-pend .sa-cal em { color: #b86a00; }
 .di-supask { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 4px 0; padding: 6px 8px; background: #fff7e6; border: 1px solid #f0c36d; border-radius: 8px; color: #5c3b00; }
 .di-supask .btn, .di-whose .di-supok { min-height: 0; padding: 4px 12px; font-size: 13px; } .di-supfind input { min-width: 230px; padding: 4px 8px; border: 1px solid #c9d6e6; border-radius: 6px; font: inherit; }
 .di-whose .di-supok { margin-left: 8px; }
@@ -15050,6 +15052,7 @@ async function openSupInv(msg) {
   if (!SINV.rets) { const rt = await db.rpc("supplier_returns_list", { p_invoice: null }); SINV.rets = rt.error ? [] : rt.data || []; }
   if (!SINV.pays) { const pp = await db.rpc("supplier_payments_all"); SINV.pays = pp.error ? [] : pp.data || []; }
   if (!SINV.sugg) await sgmLoad().catch(() => {});
+  SINV.pendD = null; if (SINV.sup != null) { const pm = await db.rpc("supplier_pending_months", { p_supplier: SINV.sup }); SINV.pendD = pm.error ? null : pm.data; if (SINV.pend && !(SINV.pendD?.months || []).some(m => m.month === SINV.pend)) SINV.pend = null; } else SINV.pend = null;
   if (!SINV.logos) { const lg = await db.rpc("supplier_logos_list"); SINV.logos = new Map((lg.error ? [] : lg.data || []).map(x => [x.supplier_id, `data:${x.mime || "image/png"};base64,${x.image}`])); }
   SINV.data = data; if (SINV.st == null && data.statement_id) SINV.st = data.statement_id;   // (the list opens on the newest statement)
   else if (SINV.st == null && data.statements?.length) { SINV.st = data.statements[0].id; return openSupInv(msg); }
@@ -15079,6 +15082,7 @@ const SINV_F = [["look", "Needs a look"], ["match", "Matches PO"], ["credit", "C
 function renderSupInv(msg) {
   const D = SINV.data || { rows: [], statements: [] }, S = (D.statements || []).find(s => s.id === SINV.st), edit = D.can_edit;
   const rows = (D.rows || []).filter(r => !(SINV.st === 0 && SINV.sup != null && SINV.pick === "year" && SINV.year) || String(r.invoice_date || "").startsWith(SINV.year)).map(r => ({ ...r, _s: sinvState(r) }));   // By year: that year's invoices
+  if (SINV.st === 0 && SINV.pend) { const after = SINV.pendD?.last?.date || ""; for (let i = rows.length - 1; i >= 0; i--) if (!String(rows[i].invoice_date || "").startsWith(SINV.pend) || String(rows[i].invoice_date) <= after) rows.splice(i, 1); }   // a month with no statement yet: its invoices
   const inF = (r, f) => f === "all" || (f === "look" ? r._s.look : f === "credit" ? ["credit", "charge"].includes(r._s.k) : r._s.k === f);
   const qq = SINV.q.trim().toLowerCase(), hay = r => [r.number, r.po_text, r.po_number, r.po_customer, r.po_job_number, r.job_name, r.handwriting, r.match_note].join(" ").toLowerCase();
   const list = rows.filter(r => qq ? hay(r).includes(qq) : inF(r, SINV.f));
@@ -15104,10 +15108,11 @@ function renderSupInv(msg) {
     ${SINV.backTo ? `<div class="stv-back"><button class="btn" type="button" data-stv-back>‹ Back to the statement</button><button class="link" type="button" data-stv-backx>✕</button></div>` : ""}
     ${(SINV.rets || []).length ? `<details class="sinv-retbox" ${SINV.retOpen ? "open" : ""}><summary>↩ Returns to the suppliers <b>${SINV.rets.length}</b> <span class="quiet">still to send back or waiting for the credit</span></summary>${sinvReturnsHtml(SINV.rets, edit, true)}</details>` : ""}
     ${sinvTabs(D)}
-    ${SINV.st === 0 ? sinvAllHead(D, rows) : S ? `<section class="sinv-st sinv-panel sinv-stcards">
+    ${SINV.st === 0 ? (SINV.pend ? sinvPendHead() : sinvAllHead(D, rows)) : S ? `<section class="sinv-st sinv-panel sinv-stcards">
       <div><span class="quiet">Statement</span><b>${esc(S.supplier)}${S.account ? ` · account ${esc(S.account)}${S.aging?.account_name ? ` (${esc(S.aging.account_name)})` : ""}` : ""} · ${esc(fmtDate(S.date))}</b><span class="quiet">${esc(S.file || "")}${S.pages ? ` · ${S.pages} pages` : ""}</span></div>
     </section>` : `<p class="quiet">No supplier statements loaded yet.</p>`}
     ${sinvStChips(D)}
+    ${SINV.st === 0 && SINV.pend ? sinvPendCards() : ""}
     ${SINV.st !== 0 && S ? `<section class="sinv-st sinv-panel sinv-stcards sinv-stmoney" aria-label="What this statement says we owe">
       <div><span class="quiet">${S.aging?.kind === "payment" ? `Payment${S.aging.number ? ` ${esc(S.aging.number)}` : ""}` : AP.paid ? "Still owing" : "Total owing"}</span><b><button type="button" class="link stv-totbtn" data-stv-open="${S.id}" title="Open the statement">${money(S.aging?.kind === "payment" ? S.total : AP.total)} 📄</button></b><span class="quiet">${AP.paid && S.aging?.kind !== "payment" ? `statement ${money(S.total)} · ` : ""}${SL.length} ${S.aging?.kind === "payment" ? "invoices paid" : "lines"}${sinvAddUp(S, slTot, D.statements)}</span></div>
       ${AP.paid && S.aging?.kind !== "payment" ? `<div class="st-paid"><span class="quiet">We paid since</span><b>${money(AP.paid)}</b><span class="quiet">taken off the oldest first</span></div>` : ""}
@@ -15466,8 +15471,37 @@ function sinvStChips(D) {   // a supplier's statements as app tiles: All time / 
         `${money(s.total)}${s.account ? `<small>${esc(s.aging?.account_name || "acct " + s.account)}</small>` : ""}${s.aging?.kind === "payment" ? "<small>paid</small>" : ""}`, "", "sa-month")).join("")}</div>`;
       if (cur) html += `<button type="button" class="sinv-stv-open" data-stv-open="${cur.id}">📄 Open the ${esc(mon(cur.date).toLocaleDateString("en-CA", { month: "long", year: "numeric" }))} statement <b>${money(cur.total)}</b><small>Laid out like ${esc(sinvShort(cur.supplier))}'s, with our records beside each line</small></button>`; }
   }
+  const PM = SINV.pendD?.months || [];
+  if (PM.length) html += `<div class="sp-sub">Not on a statement yet · amount due so far</div><div class="sinv-apps">${PM.map(m => { const d = new Date(m.month + "-15T12:00"), due = sinvPendCalc(m.month).due;
+      return tile(`data-sinv-pend="${m.month}"`, SINV.st === 0 && SINV.pend === m.month, `<span class="sa-cal"><i>${esc(d.toLocaleDateString("en-CA", { month: "short" }).replace(".", "").toUpperCase())}</i><em>…</em></span>`,
+        `${money(due)}<small>so far · ${m.n} invoice${m.n == 1 ? "" : "s"}</small>`, "", "sa-month sa-pend"); }).join("")}</div>`;
   return html + `</section>`;
 }
+// a month after the newest statement: the statement's balance carried on, plus the invoices up to that month, less what's been paid since;
+// the aging moves on a month (the statement's current becomes 31-60 …) and payments come off the oldest first
+function sinvPendCalc(month) {
+  const P = SINV.pendD || {}, L = P.last, ag0 = L?.aging || {}, mths = (P.months || []).filter(m => m.month <= month), mine = mths.find(m => m.month === month);
+  const before = mths.filter(m => m.month < month).reduce((a, m) => a + Number(m.total || 0), 0), thisM = Number(mine?.total || 0), paid = Number(P.paid_since || 0), prev = Number(L?.total || 0);
+  const ag = { current: thisM, d31_60: Number(ag0.current || 0) + before, d61_90: Number(ag0.d31_60 || 0), d91_120: Number(ag0.d61_90 || 0), over120: Number(ag0.d91_120 || 0) + Number(ag0.over120 || 0) };
+  let left = paid; for (const k of ["over120", "d91_120", "d61_90", "d31_60", "current"]) { if (left <= 0) break; const take = Math.min(Math.max(0, ag[k]), left); ag[k] = Math.round((ag[k] - take) * 100) / 100; left -= take; }
+  Object.keys(ag).forEach(k => ag[k] = Math.round(ag[k] * 100) / 100);
+  return { L, prev, before, thisM, n: mine?.n || 0, paid, due: Math.round((prev + before + thisM - paid) * 100) / 100, ag };
+}
+const sinvPendName = m => new Date(m + "-15T12:00").toLocaleDateString("en-CA", { month: "long", year: "numeric" });
+function sinvPendHead() {
+  const C = sinvPendCalc(SINV.pend), sup = sinvShort(sinvSupList().get(SINV.sup) || "");
+  return `<section class="sinv-st sinv-panel sinv-stcards"><div><span class="quiet">Not on a statement yet</span><b>${esc(sup)} · ${esc(sinvPendName(SINV.pend))} so far</b>
+    <span class="quiet">${C.n} invoice${C.n == 1 ? "" : "s"} loaded for ${esc(sinvPendName(SINV.pend).split(" ")[0])}. ${esc(sup)}'s statement for it comes after the month ends; until then, the amount due is worked out from ${C.L ? `the ${esc(fmtDate(C.L.date))} statement` : "these invoices"}.</span></div></section>`;
+}
+function sinvPendCards() {
+  const C = sinvPendCalc(SINV.pend), mo = sinvPendName(SINV.pend).split(" ")[0];
+  return `<section class="sinv-st sinv-panel sinv-stcards sinv-stmoney sinv-pendcards" aria-label="What we owe so far">
+    <div><span class="quiet">Amount due so far</span><b>${money(C.due)}</b><span class="quiet">${C.L ? `${money(C.prev)} on the ${esc(fmtDate(C.L.date))} statement` : "no statement yet"}${C.before ? ` + ${money(C.before)} since` : ""} + ${money(C.thisM)} in ${esc(mo)}${C.paid ? ` − ${money(C.paid)} paid since` : ""}</span></div>
+    <div><span class="quiet">Current (${esc(mo)})</span><b>${money(C.ag.current)}</b></div><div><span class="quiet">31–60 days</span><b>${money(C.ag.d31_60)}</b></div><div><span class="quiet">61–90 days</span><b>${money(C.ag.d61_90)}</b></div>
+    ${C.ag.d91_120 ? `<div><span class="quiet">91–120 days</span><b>${money(C.ag.d91_120)}</b></div>` : ""}${C.ag.over120 ? `<div><span class="quiet">Over 120 days</span><b>${money(C.ag.over120)}</b></div>` : ""}</section>`;
+}
+document.addEventListener("click", e => { const b = e.target.closest?.("[data-sinv-pend]"); if (b) { SINV.pend = b.dataset.sinvPend; SINV.st = 0; SINV.open = null; sinvSaveTab(); openSupInv(); return; }
+  if (e.target.closest?.("[data-sinv-stid], [data-sinv-pk], [data-sinv-yr], [data-sinv-sup]")) SINV.pend = null; }, true);   // another month, year or supplier: not the month in progress
 // "All invoices": what's loaded, and what we owe each supplier now (newest statement), with the total of all of them
 function sinvAllHead(D, rows) {
   const st = (D.statements || []).filter(s => (SINV.sup == null || s.supplier_id === SINV.sup) && !(SINV.sup != null && SINV.pick === "year" && SINV.year && !s.date.startsWith(SINV.year)));
