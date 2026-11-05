@@ -16385,7 +16385,7 @@ function stParse(texts, known) {
   const pre = (known || []).map(r => String(r).match(/^[A-Z]+/)?.[0]).filter(Boolean), PFX = pre.length > (known || []).length / 2 ? pre.sort((a, b) => pre.filter(x => x === b).length - pre.filter(x => x === a).length)[0] : "";
   const refOf = d => { d = d.length === 7 && d[0] === "0" ? d.slice(1) : d; return K.get(d.slice(-6)) || (PFX ? PFX + d : d); };
   const CODE = { I: "I", "1": "I", l: "I", T: "I", r: "I", z: "I", Z: "I", x: "I", X: "I", i: "I", C: "C", c: "C", e: "C", "©": "C", A: "A", D: "D", S: "S", P: "P", U: "U" };
-  const lines = [], seen = new Set(), cands = []; let date = null, total = null, aging = null, discount = null, last = null;
+  const lines = [], seen = new Set(), cands = []; let date = null, total = null, aging = null, discount = null, last = null, balDue = null;
   texts.forEach(T => {
     const L = T.split(/\n/);
     L.forEach((raw, idx) => {
@@ -16412,7 +16412,7 @@ function stParse(texts, known) {
         if (am.length) { const c = U === "CREDIT" ? "C" : U === "PAYMENT" ? "P" : U === "DEBIT" ? "D" : /FINANCE|SERVICE/.test(U) ? "S" : "I", a = am[am.length - 1];
           seen.add(ve[1]); lines.push({ reference: ve[1], branch: "", date: toIso(ve[3]), code: c, amount: ["C", "P"].includes(c) ? -Math.abs(a) : a }); last = { T, idx }; } }
       // City Electric: date, ref # (153475, LOD234), type (INVOICE PO-..., LATE FEE, CREDIT…), HST, PST, amount, the ref again, amount due
-      const cy = !m && !nb && !hp && !ce && !ve && s.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s+([A-Z]{0,4}\d{3,8})\s+(INVOICE|CREDIT|RETURN|LATE\s*FEE|FINANCE|SERVICE|PAYMENT|DEBIT|ADJ[A-Z]*)\b(.*)$/i);
+      const cy = !m && !nb && !hp && !ce && !ve && s.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s+([A-Z]{0,4}\d[A-Z0-9]{2,7})\s+(INVOICE|CREDIT|RETURN|LATE\s*FEE|FINANCE|SERVICE|PAYMENT|DEBIT|ADJ[A-Z]*)\b(.*)$/i);
       if (cy && !seen.has(cy[2].toUpperCase())) { const am = cash(cy[4].replace(/\bPO-?\S*/gi, " ")), U = cy[3].toUpperCase();
         if (am.length) { const c = /CREDIT|RETURN/.test(U) ? "C" : /PAY/.test(U) ? "P" : /DEBIT/.test(U) ? "D" : /FEE|FINANCE|SERVICE/.test(U) ? "S" : /ADJ/.test(U) ? "A" : "I", a = am[am.length - 1], ref = cy[2].toUpperCase();
           seen.add(ref); const po = (cy[4].match(/\bP[O0]{1,2}\s*-?\s*([A-Z0-9]{3,})/i) || [])[1];
@@ -16431,6 +16431,13 @@ function stParse(texts, known) {
       if (!date) { const d = s.match(/(\d{2})\/(3[01]|[12]\d|0\d)\/(\d{2})(?!\d)/); if (d && idx < 12) date = toIso(`${d[1]}/${d[2]}/${d[3]}`); }
       if (/TOTAL/i.test(s)) { const near = s + " " + (L[idx + 1] || "") + " " + (L[idx + 2] || ""), a = near.match(/(\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2})/); if (a) total = num(a[1]);
         (near.match(/\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2}/g) || []).forEach(v => { const x = num(v); if (x != null) cands.push(x); }); }
+      // "1-30 DAYS DUE NOW · 31-60 · 61-90 · OVER 91 · LATE FEES · BALANCE DUE": the amounts on the line under it; the last one is the balance due
+      if (balDue == null && /BALANCE\s*DUE/i.test(raw) && /\b1\s*-\s*30\b|CURRENT|DAYS/i.test(raw)) {
+        for (let j = 1; j <= 4; j++) { const vs = (L[idx + j] || "").match(/\(?\$?\d{1,3}(?:,\d{3})*\.\d{2}\)?|\(?\$?\d+\.\d{2}\)?/g); if (!vs || vs.length < 3) continue;
+          const v = vs.map(x => { const y = num(x.replace(/[$(),]/g, "")); return y != null && /^\(/.test(x) ? -y : y; }); balDue = v[v.length - 1];
+          const top = String(L[idx + 1] || "") + " " + raw, n30 = /\b1\s*-\s*30\b/.test(raw), boxes = v.length >= 6 && Math.abs(v.slice(0, -2).reduce((a, b) => a + (b || 0), 0) - balDue) < 0.02 ? v.slice(0, -2) : null;   // the boxes add up to it (BALANCE DUE twice at the end)
+          if (n30 && boxes && !aging) aging = { current: boxes[0], d31_60: boxes[1] ?? 0, d61_90: boxes[2] ?? 0, d91_120: boxes[3] ?? 0, over120: null, ...(boxes.length > 4 && /LATE/i.test(top) ? { late_fees: boxes[4] } : {}) };
+          break; } }
       if (/deduct/i.test(s)) { const a = s.match(/(\d{1,3}(?:,\d{3})*\.\d{2})\s*$/); if (a) discount = num(a[1]); }
       if (/CURRENT/i.test(s) && !aging) { const nB = (raw.match(/CURRENT|\d+\s*-\s*\d+|OVER\s*\d+|\d+\s*\+/gi) || []).length;   // a statement with 3 aging boxes (Current, 30-62, Over 62) has its total after them
         for (let j = 1; j <= 3; j++) { let ns = (L[idx + j] || "").match(/\(?\$?\d{1,3}(?:,\d{3})*\.\d{2}\)?|\.00/g);
@@ -16446,6 +16453,7 @@ function stParse(texts, known) {
   if (!date) { const all = texts.join("\n"), d = all.match(/STATEMENT\s*DATE\W{0,12}([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/i) || String(texts[0] || "").split(/\n/).slice(0, 14).join(" ").match(/\b([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})\b/);
     if (d) date = stMonIso(d[1], d[2], d[3]); }   // Breezehill: "Statement Date Mar 06, 2026"
   if (aging && discount != null) aging.discount = discount;
+  if (balDue != null) total = balDue;   // the statement's own BALANCE DUE is what we owe, not a TOTALS column or an aging box
   const sum = Math.round(lines.reduce((a, l) => a + l.amount, 0) * 100) / 100;
   if (total == null && last) {   // the total is the biggest amount printed below the last line (the TOTAL box often isn't read)
     const tail = last.T.split(/\n/).slice(last.idx + 1).join(" "), a = (tail.match(/\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2}/g) || []).map(num).filter(v => v != null);
@@ -16456,6 +16464,7 @@ function stParse(texts, known) {
     // the "total" read is really one of the aging boxes (e.g. 31-60 DAYS) and not all of them: the lines are the better guess
     const AG = aging ? [aging.current, aging.d31_60, aging.d61_90, aging.d91_120, aging.over120].filter(v => v != null) : [], agSum = AG.reduce((a, v) => a + v, 0);
     if (lines.length > 1 && total != null && Math.abs(total - sm) > 0.004 && AG.some(v => Math.abs(v - total) < 0.005) && Math.abs(agSum - total) > 0.004) total = sm; }
+  if (balDue != null) total = balDue;
   return { lines, date, total: total ?? sum, aging, sum };
 }
 function stCompare(SL, PL) {
