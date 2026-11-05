@@ -1612,6 +1612,8 @@
 .iz-view { height: 70vh; width: 100%; overflow: auto; contain: size; cursor: grab; touch-action: none; background: #f5f7fa; } .iz-view.iz-drag { cursor: grabbing; } .iz-view img { display: block; max-width: none; background: #fff; user-select: none; transform-origin: center center; }
 figure.iz-on, .di-pages figure.iz-on { flex-basis: 100%; max-width: none; cursor: default; max-height: none; overflow: visible; }
 body.hold-dragging, body.hold-dragging * { cursor: grabbing !important; user-select: none; }
+body.hold-dragging .sinv-apps, body.hold-dragging .sinv-tiles { outline: 2px dashed #b6cbe6; outline-offset: 6px; border-radius: 12px; min-height: 140px; }
+.hold-reset { color: #8a4b00 !important; }
 button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 0 10px 28px rgba(16, 24, 40, .35) !important; outline: 3px dashed #2f6fbf; outline-offset: 2px; z-index: 5; position: relative; transition: none !important; }
 .di-supask { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 4px 0; padding: 6px 8px; background: #fff7e6; border: 1px solid #f0c36d; border-radius: 8px; color: #5c3b00; }
 .di-supask .btn, .di-whose .di-supok { min-height: 0; padding: 4px 12px; font-size: 13px; } .di-supfind input { min-width: 230px; padding: 4px 8px; border: 1px solid #c9d6e6; border-radius: 6px; font: inherit; }
@@ -15137,7 +15139,23 @@ function holdSortApply(root) {
   G.forEach(g => { const want = O[holdGroupKey(g)]; if (!want?.length) return; const B = [...g.children].filter(c => c.tagName === "BUTTON"), rank = k => { const i = want.indexOf(k); return i < 0 ? 1e6 : i; };
     const sorted = B.map((b, i) => ({ b, i, r: rank(holdBtnKey(b)) })).sort((x, y) => x.r - y.r || x.i - y.i).map(x => x.b);
     const anchor = B[B.length - 1].nextSibling; sorted.forEach(b => g.insertBefore(b, anchor)); });
+  G.forEach(g => { const cells = O[holdGroupKey(g) + "@cells"]; if (!cells || getComputedStyle(g).display !== "grid") return; const n = holdCols(g);
+    [...g.children].filter(c => c.tagName === "BUTTON").forEach(b => { const c = cells[holdBtnKey(b)]; if (c) { b.style.gridColumn = String(Math.min(c[0], n)); b.style.gridRow = String(c[1]); } }); });
+  // a way back to the normal layout, once something's been moved
+  if (Object.keys(O).length && !root.querySelector("[data-hold-reset]")) { const h = root.querySelector("article .sinv-panel .sp-h"); if (h) { const r = document.createElement("button");
+    r.type = "button"; r.className = "link sp-slips hold-reset"; r.dataset.holdReset = "1"; r.textContent = "↺ Put the boxes back"; r.title = "Undo every box you moved on this page"; h.append(r); } }
 }
+const holdCols = g => getComputedStyle(g).gridTemplateColumns.split(" ").filter(Boolean).length || 1;
+// the empty grid cell under the pointer (its column and row), or null if a box is there
+function holdCell(g, x, y, self) { if (getComputedStyle(g).display !== "grid") return null; const cs = getComputedStyle(g), r = g.getBoundingClientRect();
+  const B = [...g.children].filter(c => c.tagName === "BUTTON" && c !== self), any = self || B[0]; if (!any) return null; const bw = any.getBoundingClientRect();
+  const cw = parseFloat(cs.gridTemplateColumns) || bw.width, cg = parseFloat(cs.columnGap) || 0, rg = parseFloat(cs.rowGap) || 0, rh = bw.height, top = r.top + (parseFloat(cs.paddingTop) || 0), left = r.left + (parseFloat(cs.paddingLeft) || 0);
+  if (x < r.left - 10 || x > r.right + 10 || y < r.top - 10 || y > r.bottom + rh * 2) return null;
+  const col = Math.max(1, Math.min(holdCols(g), Math.floor((x - left) / (cw + cg)) + 1)), row = Math.max(1, Math.floor((y - top) / (rh + rg)) + 1);
+  const cx = left + (col - 1) * (cw + cg) + cw / 2, cy = top + (row - 1) * (rh + rg) + rh / 2;
+  if (B.some(b => { const q = b.getBoundingClientRect(); return cx > q.left && cx < q.right && cy > q.top && cy < q.bottom; })) return null;
+  return [col, row]; }
+document.addEventListener("click", e => { if (!e.target.closest?.("[data-hold-reset]")) return; e.preventDefault(); try { localStorage.removeItem(HOLD_KEY); } catch {} renderSupInv(); });
 (function holdSort() {
   let t = null, st = null, drag = null, eat = false;
   const onPage = () => document.body.dataset.page === "supplier-invoices";
@@ -15148,11 +15166,15 @@ function holdSortApply(root) {
     if (st && !drag && Math.hypot(e.clientX - st.x, e.clientY - st.y) > 8) { clearTimeout(t); st = null; return; }   // moving before the hold: an ordinary scroll or drag
     if (!drag) return; e.preventDefault();
     const el = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("button"), g = drag.b.parentElement;
-    if (!el || el === drag.b || el.parentElement !== g) return;
+    if (!el || el.parentElement !== g) { const c = holdCell(g, e.clientX, e.clientY, drag.b); if (c) { drag.b.style.gridColumn = String(c[0]); drag.b.style.gridRow = String(c[1]); drag.cell = c; } return; }   // an empty spot
+    if (el === drag.b) return;
+    drag.b.style.gridColumn = ""; drag.b.style.gridRow = ""; drag.cell = null;
     const r = el.getBoundingClientRect(), after = Math.abs(r.top - drag.b.getBoundingClientRect().top) < r.height / 2 ? e.clientX > r.left + r.width / 2 : e.clientY > r.top + r.height / 2;
     g.insertBefore(drag.b, after ? el.nextSibling : el); }, { passive: false, capture: true });
   const end = () => { clearTimeout(t); if (drag) { const b = drag.b, g = b.parentElement; b.classList.remove("hold-drag"); document.body.classList.remove("hold-dragging");
-      const O = holdRead(); O[holdGroupKey(g)] = [...g.children].filter(c => c.tagName === "BUTTON").map(holdBtnKey); holdWrite(O); eat = true; setTimeout(() => { eat = false; }, 400); }
+      const O = holdRead(), gk = holdGroupKey(g); O[gk] = [...g.children].filter(c => c.tagName === "BUTTON").map(holdBtnKey);
+      const cells = O[gk + "@cells"] || {}; if (drag.cell) cells[holdBtnKey(b)] = drag.cell; else delete cells[holdBtnKey(b)];
+      if (Object.keys(cells).length) O[gk + "@cells"] = cells; else delete O[gk + "@cells"]; holdWrite(O); eat = true; setTimeout(() => { eat = false; }, 400); }
     st = null; drag = null; };
   document.addEventListener("pointerup", end, true); document.addEventListener("pointercancel", end, true);
   document.addEventListener("click", e => { if (eat) { e.preventDefault(); e.stopImmediatePropagation(); eat = false; } }, true);   // letting go after a move isn't a click
