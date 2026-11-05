@@ -1600,6 +1600,7 @@
   .ie-tot td { font-weight: 800; font-size: calc(18px * var(--fs, 1)); border-top: 2px solid var(--ink); }
   .ie-bal td { font-weight: 800; color: var(--red); background: var(--red-wash); }
   .ie-bal.zero td { color: var(--green); background: var(--green-wash); }
+  .stv-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .stv-acts .stv-acc { font-weight: 650; } .stv-acts .stv-actmsg { align-self: center; color: #44546a; }
   .ie-st { margin: 10px 0; padding: 10px 14px; border: 1px solid #c9d6e6; border-radius: 10px; background: #f6f9fd; }
   .ie-st.ie-st-chg { border-color: #e8a33d; background: #fff8ec; }
   .ie-st-head { display: flex; flex-wrap: wrap; gap: 4px 10px; } .ie-st-list { margin: 8px 0; padding-left: 20px; line-height: 1.5; }
@@ -15814,6 +15815,9 @@ function drawSupStatement() {
   const ours = l => { const r = l.invoice_id && rows.get(l.invoice_id); if (!r) return { t: "Invoice not loaded in our system", c: "st-no" }; const s = sinvState(r);
     return { t: s.k === "ok" || s.k === "match" ? "✓ " + s.label : s.label, c: s.k === "ok" || s.k === "match" ? "st-ok" : s.look ? "st-look" : "", r }; };
   const sum = SL.reduce((a, l) => a + Number(l.amount || 0), 0), R = STV.read;
+  const miss = SL.filter(l => !l.invoice_id && ["I", "C", "D", "S"].includes(l.code || "I")).length;   // lines with no supplier invoice in the app
+  if (STV.id && STV.accFor !== STV.id) { const id = STV.accFor = STV.id; STV.acc = null;   // accepted? (who and when)
+    db.rpc("supplier_statement_accepts", { p_ids: [id] }).then(r => { if (STV.accFor === id && r.data?.[id]) { STV.acc = r.data[id]; drawSupStatement(); } }); }
   const cmp = R ? stCompare(SL, R.lines) : null;
   $("#inv-paper").innerHTML = `<div class="stv">
     <div class="stv-hd"><div class="stv-sup">${SINV.logos?.get(S.supplier_id) ? `<img class="stv-logo-img" alt="${esc(sinvShort(S.supplier || ""))}" src="${SINV.logos.get(S.supplier_id)}">` : `<div class="stv-logo">${esc(sinvShort(S.supplier || ""))}</div>`}<div class="stv-supn">${esc(S.supplier || "")}</div></div>
@@ -15829,7 +15833,11 @@ function drawSupStatement() {
     <div class="stv-foot"><div class="stv-age">${[["CURRENT", ag.current], ["31-60 DAYS", ag.d31_60], ["61-90 DAYS", ag.d61_90], ["91-120 DAYS", ag.d91_120], ["OVER 120 DAYS", ag.over120]].map(([t, v]) => `<div><span>${t}</span><b>${v == null ? "" : stMoney(v)}</b></div>`).join("")}</div>
       <div class="stv-tot"><span>TOTAL</span><b>${stMoney(S.total)}</b>${ag.discount ? `<small>You may deduct ${stMoney(ag.discount)} if paid in full by term</small>` : ""}</div></div>
     <p class="quiet stv-note">${SL.length} lines · they add up to ${money(sum)}${Math.abs(sum - Number(S.total || 0)) < 0.01 ? " ✓" : ` (the statement says ${money(S.total)})`}. "Our records" shows if we have the invoice and how it matches our PO.</p>
-    <div class="stv-acts no-print"><label class="btn"><input type="file" id="stv-file" accept="application/pdf,image/*" multiple hidden>⬆ Compare with ${esc(sinvShort(S.supplier || "the supplier"))}'s statement (PDF or photo)</label></div>
+    <div class="stv-acts no-print">${STV.id ? (STV.acc?.at ? `<span class="st-ok stv-acc">✓ Accepted${STV.acc.by ? " by " + esc(STV.acc.by) : ""} on ${esc(fmtDate(String(STV.acc.at).slice(0, 10)))}</span> <button class="link" type="button" data-stv-unaccept>Undo</button>`
+        : `<button class="btn" type="button" data-stv-accept>✓ Accept this statement</button>`) : ""}
+      ${STV.id && miss ? `<button class="btn quiet-btn" type="button" data-stv-addmiss>＋ Add the ${miss} missing invoice${miss === 1 ? "" : "s"}</button>` : ""}
+      <span class="stv-actmsg" role="status"></span>
+      <label class="btn"><input type="file" id="stv-file" accept="application/pdf,image/*" multiple hidden>⬆ Compare with ${esc(sinvShort(S.supplier || "the supplier"))}'s statement (PDF or photo)</label></div>
     <div id="stv-read"></div></div>`;
   $("#inv-paper").querySelectorAll("[data-stv-inv]").forEach(b => b.addEventListener("click", async () => {   // open that invoice's record (lines, PO, scans), with a way back to the statement
     closeInvoice(); SINV.sup = STV.sup; SINV.st = STV.id; SINV.f = "all"; SINV.q = ""; SINV.open = Number(b.dataset.stvInv); SINV.backTo = { id: STV.id, sup: STV.sup }; sinvSaveTab();
@@ -15837,6 +15845,16 @@ function drawSupStatement() {
     if (!row) { SINV.st = 0; SINV.pick = "all"; SINV.q = b.textContent.trim(); await openSupInv(); row = document.querySelector(`.sinv-row[data-sinv="${SINV.open}"]`); }   // billed in an earlier month: find it among all of theirs
     row?.scrollIntoView({ block: "start" }); if (row) $("#main").scrollBy(0, -70); }));
   $("#stv-file")?.addEventListener("change", e => stReadFiles([...e.target.files], S));
+  const actMsg = t => { const m = $("#inv-paper .stv-actmsg"); if (m) m.textContent = t; };
+  $("#inv-paper").querySelectorAll("[data-stv-accept], [data-stv-unaccept]").forEach(b => b.addEventListener("click", async () => { const on = b.matches("[data-stv-accept]"); b.disabled = true;
+    const { data, error } = await db.rpc("supplier_statement_accept", { p_id: STV.id, p_on: on });
+    if (error) { b.disabled = false; return actMsg("Not saved: " + rpcErr(error)); } STV.acc = on ? data : null; drawSupStatement(); }));
+  $("#inv-paper").querySelector("[data-stv-addmiss]")?.addEventListener("click", async e => { const b = e.currentTarget;
+    if (!confirm(`Add the ${miss} invoice${miss === 1 ? "" : "s"} on this statement that aren't in the app yet? Each gets its number, date and amount from the statement (you can drop in its copy later).`)) return;
+    b.disabled = true; actMsg("Adding…"); const { data: n, error } = await db.rpc("supplier_statement_add_missing", { p_id: STV.id });
+    if (error) { b.disabled = false; return actMsg("Not added: " + rpcErr(error)); }
+    const r = await db.rpc("supplier_invoices_list", { p_supplier: STV.sup, p_statement: STV.id }); if (!r.error && r.data) STV.D = r.data; SINV.data = null;
+    drawSupStatement(); actMsg(`Added ${n} invoice${n === 1 ? "" : "s"} from the statement.`); });
   $("#inv-paper").querySelector("[data-stv-save]")?.addEventListener("click", () => stSave(S));
   $("#inv-paper").querySelector("[data-stv-clear]")?.addEventListener("click", () => { STV.read = null; drawSupStatement(); });
 }
