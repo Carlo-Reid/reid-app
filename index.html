@@ -1615,6 +1615,9 @@ body.hold-dragging, body.hold-dragging * { cursor: grabbing !important; user-sel
 body.hold-dragging .sinv-apps, body.hold-dragging .sinv-tiles { outline: 2px dashed #b6cbe6; outline-offset: 6px; border-radius: 12px; min-height: 140px; }
 .hold-reset { color: #8a4b00 !important; }
 button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 0 10px 28px rgba(16, 24, 40, .35) !important; outline: 3px dashed #2f6fbf; outline-offset: 2px; z-index: 5; position: relative; transition: none !important; }
+.pol-search input { width: min(560px, 100%); padding: 8px 12px; font: inherit; font-size: 15px; border: 1px solid #9fb3cc; border-radius: 8px; margin: 4px 0 10px; }
+.pol .sgm-txt mark { background: #fff1b8; padding: 0 2px; border-radius: 3px; } .pol-find input { width: 100%; min-width: 240px; padding: 5px 8px; border: 1px solid #c9d6e6; border-radius: 6px; font: inherit; }
+.pol-hits { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; } .pol-hit { text-align: left; font-size: 12.5px; }
 .di-supask { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 4px 0; padding: 6px 8px; background: #fff7e6; border: 1px solid #f0c36d; border-radius: 8px; color: #5c3b00; }
 .di-supask .btn, .di-whose .di-supok { min-height: 0; padding: 4px 12px; font-size: 13px; } .di-supfind input { min-width: 230px; padding: 4px 8px; border: 1px solid #c9d6e6; border-radius: 6px; font: inherit; }
 .di-whose .di-supok { margin-left: 8px; }
@@ -5753,6 +5756,7 @@ async function showApp() {
   if (location.hash === "#receivables-cleanup" && can("invoices.adjust")) return openCleanup();
   if (location.hash === "#pos" && ME.role) return openPOs();
   if (location.hash === "#po-new" && ME.role) return openPONewPage();
+  if (location.hash === "#po-link" && ME.role) return openPOLinkPage();
   if (/^#po=\d+$/.test(location.hash) && ME.role) return openPOPage(Number(location.hash.slice(4)));
   if (location.hash === "#supplier-invoices" && ME.role) return openSupInv();
   if (location.hash === "#installs" && ME.role) return openInstalls();
@@ -7211,6 +7215,7 @@ function routeTo(h) {
   if (h === "#partner-notes") return openNfPick();
   if (h === "#pos") return openPOs();
   if (h === "#po-new") return openPONewPage();
+  if (h === "#po-link") return openPOLinkPage();
   if (/^#po=\d+$/.test(h)) return openPOPage(Number(h.slice(4)));
   if (h === "#supplier-invoices") return openSupInv();
   if (h === "#installs") return openInstalls();
@@ -16688,7 +16693,7 @@ function renderPOs(msg) {
   let last = null;
   const top = $("#main").scrollTop;
   $("#main").innerHTML = `<article class="staff pos">
-    <div class="pos-head"><h1>Purchase orders</h1><span class="pos-head-r"></span>${can("po.create") ? `<button class="btn" type="button" id="po-new">+ New PO for shop or truck stock</button>` : ""}</div>
+    <div class="pos-head"><h1>Purchase orders</h1><span class="pos-head-r"></span>${can("po.create") ? `<button class="btn quiet-btn" type="button" id="po-link">🔗 Link POs to customers</button> <button class="btn" type="button" id="po-new">+ New PO for shop or truck stock</button>` : ""}</div>
     <p class="lead">Every PO, from ServiceTitan and made here. POs for a job can also be made from the job, or by the tech on their call.</p>
     ${POP.newOpen ? `<div class="po-new-box">${poForm(0).replace('data-po-job="0"', 'data-po-stock="1"').replace("Get the number", "Make the PO")}
         <label class="po-kind">For <select name="kind" form=""><option value="warehouse_restock">Shop stock</option><option value="truck_restock">Truck stock</option><option value="other">Something else</option></select></label></div>` : ""}
@@ -16743,6 +16748,7 @@ function renderPOs(msg) {
     tr.addEventListener("keydown", e => { if (e.key === "Enter") tr.click(); }); });
   $("#po-sinv")?.addEventListener("click", () => openSupInv());
   $("#po-new")?.addEventListener("click", () => { POP.back = $("#main").scrollTop; openPONewPage(); });
+  $("#po-link")?.addEventListener("click", () => { POP.back = $("#main").scrollTop; openPOLinkPage(); });
   const nf = document.querySelector("[data-po-stock]");
   if (nf) {
     nf.supplier.addEventListener("change", () => { nf.querySelector(".po-other").classList.toggle("hidden", nf.supplier.value !== "other"); });
@@ -16765,6 +16771,63 @@ function renderPOs(msg) {
 }
 // a PO on its own page: see everything and change it (status, supplier, what it's for, dates, supplier #, amount, and its lines)
 const POPG = { id: null, d: null, lines: [], msg: "" };
+/* ---------- Link POs to customers: POs not on a job, the customer each is probably for (address, name or job # written on it), or find it by hand ---------- */
+const POL = { tab: "sure", q: "", find: null };
+async function openPOLinkPage() {
+  setPage("po-link", "pos", "Link POs to customers");
+  $("#main").innerHTML = `<div class="loading">Reading the POs…</div>`;
+  const { data, error } = await db.rpc("po_link_list");
+  if (location.hash !== "#po-link") return;
+  if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open it</h2>${esc(error ? (/function|schema|PGRST202/i.test(error.message || "") ? "This turns on with the next sync, in about 10 minutes." : rpcErr(error)) : "You don't have permission for this.")}<p><button class="btn" type="button" id="pol-back0">Back to POs</button></p></div></div>`;
+    $("#pol-back0")?.addEventListener("click", () => openPOs()); return; }
+  POL.d = data; polDraw();
+}
+function polDraw(msg = "") {
+  const D = POL.d, q = POL.q.trim().toLowerCase(), hit = x => !q || [x.text, x.po, x.supplier, x.customer, x.street, x.job].some(v => String(v || "").toLowerCase().includes(q));
+  const S = (D.suggest || []).filter(hit), O = (D.open || []).filter(hit), n = k => S.filter(x => k === "all" || x.conf === k).length;
+  if (POL.tab !== "open" && POL.tab !== "all" && !n(POL.tab)) POL.tab = ["sure", "likely", "maybe"].find(k => n(k)) || (S.length ? "all" : "open");
+  const lab = { sure: "Sure", likely: "Likely", maybe: "Maybe" }, why = { sure: "A job number, or an address with only one job near the PO date.", likely: "A full name, or an address with more than one job near that date (the nearest is picked).", maybe: "Only a last name, and only one customer with that name had a job within 45 days.", open: "Nothing on these points to one customer. Find the customer yourself: type a name, street, invoice # or job #." };
+  const L = POL.tab === "open" ? O : S.filter(x => POL.tab === "all" || x.conf === POL.tab);
+  const fmtTxt = t => esc(t || "").replace(/\b(\d{1,5}\s+[A-Za-z][A-Za-z.'-]{2,}(?:\s+(?:Rd|Road|St|Street|Ave|Avenue|Dr|Drive|Cres|Crescent|Cr|Crt|Court|Way|Pl|Place|Blvd|Lane|Ln|Private|Pvt|Trail|Circle|Terrace))?)/gi, "<mark>$1</mark>");
+  $("#main").innerHTML = `<article class="staff pos po-page pol">
+    <div class="po-page-top"><button class="btn quiet-btn" type="button" id="pol-back">‹ Back to POs</button></div>
+    <h1>Link POs to customers</h1>
+    <p class="lead">POs that aren't on a job in ServiceTitan. The app read what's written on each one (an address, a customer's name or a job number) and found the customer and job it was probably for. <b>Link</b> puts the PO on that job, and its supplier invoices go on that job's customer invoices by themselves. ${Number(D.linked_by_address) ? `${Number(D.linked_by_address).toLocaleString()} POs are already linked this way.` : ""}</p>
+    <div class="pol-search"><input type="search" id="pol-q" value="${esc(POL.q)}" placeholder="Search the POs for an address, a name, a PO #…" aria-label="Search the POs"></div>
+    <div class="seg sgm-seg" role="group" aria-label="Which POs">${["sure", "likely", "maybe", "all"].map(k => `<button type="button" data-pol-tab="${k}" aria-pressed="${POL.tab === k}">${k === "all" ? "All found" : lab[k]} <b>${n(k)}</b></button>`).join("")}<button type="button" data-pol-tab="open" aria-pressed="${POL.tab === "open"}">No customer found <b>${O.length}</b></button></div>
+    <p class="quiet sgm-why">${POL.tab === "all" ? "Every PO the app found a customer for." : why[POL.tab]}</p>
+    ${msg ? `<p class="st-ok">${esc(msg)}</p>` : ""}
+    ${POL.tab !== "open" && L.length ? `<div class="sgm-bar"><button class="btn" type="button" data-pol-all="1">Link all ${L.length} shown</button><span class="quiet">or check them one by one below</span></div>` : ""}
+    ${L.length ? `<table class="srp-t sgm-t"><thead><tr><th>PO</th><th>What's written on it</th><th>${POL.tab === "open" ? "Find the customer" : "Probably for"}</th>${POL.tab === "open" ? "" : "<th>Why</th>"}<th></th></tr></thead><tbody>
+      ${L.slice(0, 400).map(x => `<tr data-pol-row="${x.po_id}"><td><b>${esc(x.po || "")}</b><div class="quiet">${esc(x.supplier || "")}</div><div class="quiet">${esc(x.date ? fmtDate(x.date) : "")}${x.amount != null ? " · " + money(x.amount) : ""}</div>${Number(x.sinv) ? `<div class="quiet">${x.sinv} supplier invoice${x.sinv == 1 ? "" : "s"}</div>` : ""}</td>
+        <td class="sgm-txt">${fmtTxt(x.text)}</td>
+        ${POL.tab === "open" ? `<td class="pol-find"><input type="search" placeholder="Name, street, invoice # or job #" data-pol-find="${x.po_id}" aria-label="Find the customer for PO ${esc(x.po || "")}"><div class="pol-hits" data-pol-hits="${x.po_id}"></div></td><td></td>`
+          : `<td><b>${esc(x.customer || "")}</b><div class="quiet">${esc(x.street || "")}</div><div>Job ${esc(x.job || "")} <span class="quiet">· ${esc(x.job_date ? fmtDate(x.job_date) : "")}</span></div></td>
+        <td><span class="sgm-c sgm-${x.conf}">${lab[x.conf]}</span><div class="quiet">${esc(String(x.how || "").replace(/^address /, "address: ").replace(/^name /, "name: "))}</div></td>
+        <td class="sgm-acts"><button class="btn" type="button" data-pol-one="1" data-id="${x.po_id}">Link</button><button class="btn quiet-btn" type="button" data-pol-one="0" data-id="${x.po_id}">Not this</button></td>`}</tr>`).join("")}</tbody></table>${L.length > 400 ? `<p class="quiet">Showing the newest 400 of ${L.length}. Search to narrow them down.</p>` : ""}`
+      : `<p>${q ? "No POs match your search." : "Nothing here."}</p>`}
+  </article>`;
+  $("#pol-back").addEventListener("click", async () => { await openPOs(); if (POP.back) $("#main").scrollTop = POP.back; });
+  const qi = $("#pol-q"); let tq = 0; qi.addEventListener("input", () => { clearTimeout(tq); tq = setTimeout(() => { POL.q = qi.value; const pos = qi.selectionStart; polDraw(); const n2 = $("#pol-q"); n2.focus(); n2.setSelectionRange(pos, pos); }, 250); });
+  document.querySelectorAll("[data-pol-tab]").forEach(b => b.addEventListener("click", () => { POL.tab = b.dataset.polTab; polDraw(); }));
+  document.querySelectorAll("[data-pol-one]").forEach(b => b.addEventListener("click", () => polDecide([Number(b.dataset.id)], b.dataset.polOne === "1", b)));
+  $("[data-pol-all]")?.addEventListener("click", e => { if (confirm(`Link all ${L.length} POs shown to the customer and job found for each?`)) polDecide(L.map(x => x.po_id), true, e.target); });
+  document.querySelectorAll("[data-pol-find]").forEach(inp => { let t = 0; inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(async () => {
+    const box = document.querySelector(`[data-pol-hits="${inp.dataset.polFind}"]`); const v = inp.value.trim(); if (v.length < 2) { box.innerHTML = ""; return; }
+    box.innerHTML = `<span class="quiet">Looking…</span>`; const { data, error } = await db.rpc("sinv_cust_find", { p_q: v });
+    if (error) { box.innerHTML = `<span class="st-bad">${esc(rpcErr(error))}</span>`; return; }
+    box.innerHTML = (data || []).length ? (data || []).filter(i => i.job).map(i => `<button class="link pol-hit" type="button" data-pol-set="${inp.dataset.polFind}" data-inv="${i.id}"><b>${esc(i.who || "")}</b> · ${esc(i.street || "")} · job ${esc(i.job || "")} · ${esc(i.date ? fmtDate(i.date) : "")} · invoice ${esc(i.number || "")}</button>`).join("") || `<span class="quiet">No invoice with a job found.</span>` : `<span class="quiet">Nothing found.</span>`;
+    box.querySelectorAll("[data-pol-set]").forEach(b => b.addEventListener("click", async () => { b.disabled = true; const { data: r, error: e2 } = await db.rpc("po_link_set", { p_po: Number(b.dataset.polSet), p_invoice: Number(b.dataset.inv) });
+      if (e2) { box.innerHTML = `<span class="st-bad">Not linked: ${esc(rpcErr(e2))}</span>`; return; }
+      POL.d.open = POL.d.open.filter(x => x.po_id !== Number(b.dataset.polSet)); polDraw(`PO linked to ${r?.customer || "the customer"}, job ${r?.job || ""}. Its supplier invoices are attached to that job's invoices.`); })); }, 350); }); });
+}
+async function polDecide(ids, accept, btn) {
+  if (btn) btn.disabled = true;
+  const { data, error } = await db.rpc("po_link_decide", { p_ids: ids, p_accept: accept });
+  if (error) { if (btn) btn.disabled = false; alertMsg("Not done: " + rpcErr(error)); return; }
+  POL.d.suggest = POL.d.suggest.filter(x => !ids.includes(x.po_id));
+  polDraw(accept ? `${data} PO${data == 1 ? "" : "s"} linked. Their supplier invoices are attached to the job's invoices.` : `${data} turned down: they won't be suggested again.`);
+}
 // New PO for shop or truck stock: a page of its own
 async function openPONewPage() {
   setPage("po-new", "pos", "New PO");
