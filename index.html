@@ -15951,12 +15951,46 @@ function dropInGroups(PT, cv, HT, KL) {
       const days = new Set([...String(free[0].text).matchAll(/(?:^|[^\d])(\d{1,2})\s*[\/|]\s*20\d{2}\b/g)].map(m => Number(m[1])).filter(d => d >= 1 && d <= 31));
       const onDay = cand.filter(l => days.has(Number(String(l.date).slice(8, 10))));
       if (onDay.length === 1 && cand.length <= 4) { free[0].n = String(onDay[0].reference); free[0].guess = "date"; } }); }
+  // still no number (faint print, e.g. City Electric's yellow copies): score each page against the statement lines not used yet, on the
+  // invoice # read closest to theirs (this print reads 3 as 5), the date ("09 Apr 2026") and the PO; the surest page goes first, each one
+  // narrowing the rest. A page takes a line only when that line is clearly the best for it (marked as a guess, to check)
+  if (STR.length) { const MON = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+    const monOf = t => { t = String(t).toUpperCase().replace(/0/g, "O"); if (MON[t]) return MON[t]; const k = Object.keys(MON).filter(k => k[0] === t[0] && [...k].filter((c, i) => c !== t[i]).length === 1); return k.length === 1 ? MON[k[0]] : 0; };   // "Aor" is Apr
+    const fix = t => String(t).replace(/[OoDUu]/g, "0").replace(/[lI|i!]/g, "1").replace(/[Zz]/g, "2").replace(/[Yy]/g, "9").replace(/B/g, "8").replace(/[Gb]/g, "6");
+    const ed = (a, b) => { const d = Array.from({ length: b.length + 1 }, (_, j) => j); for (let i = 1; i <= a.length; i++) { let p = d[0]; d[0] = i;
+        for (let j = 1; j <= b.length; j++) { const t = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, p + (a[i - 1] === b[j - 1] ? 0 : 1)); p = t; } } return d[b.length]; };
+    const near = (toks, want) => { if (!want || want.length < 5) return 9; let best = 9; toks.forEach(t => { if (Math.abs(t.length - want.length) <= 1) best = Math.min(best, ed(t, want)); }); return best; };
+    const score = (g, l) => { const T = String(g.text), toks = [...new Set((T.match(/[0-9A-Za-z|!]{5,10}/g) || []).map(fix).map(t => t.replace(/\D/g, "")).filter(t => t.length >= 5))];
+      const ref = String(l.reference).replace(/\D/g, ""), po = String(l.po || "").replace(/\D/g, ""), n = near(toks, ref), pn = po.length >= 6 ? near(toks.concat([fix(T.replace(/\s+/g, "")).replace(/\D/g, "")].filter(x => x.length < 12)), po) : 9;
+      let sc = n === 0 ? 4 : n === 1 ? 3 : n === 2 && ref.length >= 6 ? 2 : 0; if (pn === 0) sc += 3; else if (pn <= 2) sc += 2;
+      const [y, m, d] = String(l.date || "").split("-").map(Number);
+      if (m && [...T.matchAll(/(?:^|[^\w])([0-9OoUuDlIiYyBb]{1,2})\s+([A-Za-z]{3})[a-z]*\.?\s+[0-9ZzOo]{2,4}/g)].some(x => Number(fix(x[1])) === d && monOf(x[2]) === m)) sc += 2;
+      return sc; };
+    const used = new Set(G.map(g => g.byPo || g.n).filter(Boolean));
+    for (;;) { const free = G.filter(g => (g.kind === "invoice" || g.kind === "slip") && !(g.byPo || g.n)), left = STR.filter(l => !used.has(String(l.reference)) && Number(l.amount) > 0);
+      if (!free.length || !left.length) break;
+      let pick = null;
+      free.forEach(g => { const S = left.map(l => ({ l, sc: score(g, l) })).sort((a, b) => b.sc - a.sc), [a, b] = S;
+        if (!a || a.sc < 2 || (b && b.sc === a.sc) || (a.sc < 3 && b && b.sc > 0)) return;
+        if (!pick || a.sc > pick.sc) pick = { g, l: a.l, sc: a.sc }; });
+      if (!pick) break;
+      pick.g.n = String(pick.l.reference); pick.g.guess = "read"; used.add(pick.g.n); } }
   // its date and amount from the statement line
   G.forEach(g => { const r = g.byPo || g.n, l = r && STR.find(x => String(x.reference) === r); if (l) { g.date = g.date || l.date; g.amount = l.amount; } });
   G.st = STR; return G;
 }
 function dropInTurn(c, deg) { const o = document.createElement("canvas"); o.width = c.height; o.height = c.width; const g = o.getContext("2d");
   g.fillStyle = "#fff"; g.fillRect(0, 0, o.width, o.height); g.translate(o.width / 2, o.height / 2); g.rotate(deg * Math.PI / 180); g.drawImage(c, -c.width / 2, -c.height / 2); return o; }
+// a page on yellow paper: most of it is pale yellow (red and green high, blue lower)
+function dropInYellow(c) { const g = c.getContext("2d"), w = c.width, h = c.height; let n = 0, y = 0;
+  for (let i = 1; i < 12; i++) for (let j = 1; j < 16; j++) { const [r, gg, b] = g.getImageData(Math.round(w * i / 12), Math.round(h * j / 16), 1, 1).data; n++; if (r > 215 && gg > 210 && b < gg - 30) y++; }
+  return y / n > 0.5; }
+// its right-hand box, twice as big: the faint print is a slightly darker beige, so the green level is stretched to black and white and the red bars blanked
+function dropInFaint(c) { const sx = Math.round(c.width * 0.7), sy = Math.round(c.height * 0.08), w = c.width - sx, h = Math.round(c.height * 0.24), o = document.createElement("canvas");
+  o.width = w * 2; o.height = h * 2; const g = o.getContext("2d"); g.imageSmoothingEnabled = true; g.drawImage(c, sx, sy, w, h, 0, 0, o.width, o.height);
+  const im = g.getImageData(0, 0, o.width, o.height), d = im.data;
+  for (let i = 0; i < d.length; i += 4) { const r = d[i], gg = d[i + 1], v = r > 190 && gg < 150 ? 255 : Math.max(0, Math.min(255, (gg - 215) * 255 / 33)); d[i] = d[i + 1] = d[i + 2] = v; }
+  g.putImageData(im, 0, 0); return o; }
 // the top-right corner of a page, read again bigger and in black and white: faint grey printing (Breezehill's invoice # on a packing list) shows up
 function dropInCorner(c) {
   const w = Math.round(c.width * 0.45), h = Math.round(c.height * 0.13), o = document.createElement("canvas"); o.width = w * 3; o.height = h * 3;
@@ -16008,6 +16042,10 @@ async function dropInFiles(files) {
           if (good(d) < 8) for (const deg of [-90, 90]) { x.busy = `Page ${i + 1} looks sideways: turning it…`; drawDropIn(); const r = dropInTurn(cv[i], deg), e = (await worker.recognize(r)).data;
             if (good(e) > good(d) + 10) { d = e; cv[i] = r; break; } }
           PT.push(d.text); }
+        // a page printed faintly on yellow paper (City Electric's copies): its right-hand box (invoice #, dates, PO) read again, cleaned up and bigger
+        if (cv.length > 1) { const yel = cv.map(dropInYellow); if (yel.some(Boolean)) { await worker.setParameters({ tessedit_pageseg_mode: "6" });
+          for (let i = 0; i < cv.length; i++) if (yel[i]) { x.busy = `Page ${i + 1} is printed faintly: reading its number…`; drawDropIn(); PT[i] += "\n" + (await worker.recognize(dropInFaint(cv[i]))).data.text; }
+          await worker.setParameters({ tessedit_pageseg_mode: "3" }); } }
         const HT = []; if (cv.length > 1) { await worker.setParameters({ tessedit_pageseg_mode: "6" });
           for (let i = 0; i < cv.length; i++) { x.busy = `Checking page ${i + 1} of ${cv.length} for its number…`; drawDropIn(); HT.push((await worker.recognize(dropInCorner(cv[i]))).data.text); }
           await worker.setParameters({ tessedit_pageseg_mode: "3" }); }
@@ -16315,7 +16353,8 @@ function stParse(texts, known) {
       const cy = !m && !nb && !hp && !ce && !ve && s.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s+([A-Z]{0,4}\d{3,8})\s+(INVOICE|CREDIT|RETURN|LATE\s*FEE|FINANCE|SERVICE|PAYMENT|DEBIT|ADJ[A-Z]*)\b(.*)$/i);
       if (cy && !seen.has(cy[2].toUpperCase())) { const am = cash(cy[4].replace(/\bPO-?\S*/gi, " ")), U = cy[3].toUpperCase();
         if (am.length) { const c = /CREDIT|RETURN/.test(U) ? "C" : /PAY/.test(U) ? "P" : /DEBIT/.test(U) ? "D" : /FEE|FINANCE|SERVICE/.test(U) ? "S" : /ADJ/.test(U) ? "A" : "I", a = am[am.length - 1], ref = cy[2].toUpperCase();
-          seen.add(ref); lines.push({ reference: ref, branch: "", date: toIso(cy[1]), code: c, amount: ["C", "P"].includes(c) ? -Math.abs(a) : a }); last = { T, idx }; } }
+          seen.add(ref); const po = (cy[4].match(/\bP[O0]{1,2}\s*-?\s*([A-Z0-9]{3,})/i) || [])[1];
+          lines.push({ reference: ref, branch: "", date: toIso(cy[1]), code: c, amount: ["C", "P"].includes(c) ? -Math.abs(a) : a, ...(po ? { po } : {}) }); last = { T, idx }; } }
       // Breezehill: "Jul 08, 2025 284047 Invoice 97.63 | 284047 97.63" (date, transaction #, type, balance, invoice # again, amount due)
       const mo = !m && !nb && !hp && !ce && !ve && !cy && s.match(/^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})\s+(\d{4,9}[A-Z]?)\s+([A-Za-z][A-Za-z ]*?)\s+(-?[\d.,].*)$/);   // a number can end in a letter: 287201A
       const moIso = mo && stMonIso(mo[1], mo[2], mo[3]);
