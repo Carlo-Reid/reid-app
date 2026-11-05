@@ -16255,8 +16255,13 @@ function stParse(texts, known) {
       if (ce && !seen.has(ce[3])) { const am = cash(ce[4].replace(/\b\d{6,}-\d{2,3}\b/g, " ")), ty = ce[2].replace("1", "I");
         if (am.length) { const c = ({ IN: "I", SC: "S", DM: "D", CM: "C", MC: "C", RV: "C", CK: "P", SP: "P", CD: "P", UC: "U" })[ty] || "I", a = am[am.length - 1];
           seen.add(ce[3]); lines.push({ reference: ce[3], branch: "", date: toIso(ce[1]), code: c, amount: ["C", "P", "U"].includes(c) ? -Math.abs(a) : a }); last = { T, idx }; } }
+      // Carrier's emailed statement: invoice # (1610182-00), PO, Invoice/Credit, date, due date, "Overdue by 54" / "Due in 12", balance ($196.52, a credit in brackets)
+      const ve = !m && !nb && !hp && !ce && s.match(/^(\d{6,9}-\d{2})\s+(?:\S+\s+)?(Invoice|Credit|Debit|Payment|Finance|Service)\b[A-Za-z ]*?\s+(\d{1,2}\/\d{1,2}\/\d{4})(.*)$/i);
+      if (ve && !seen.has(ve[1])) { const am = cash(ve[4].replace(/\d{1,2}\/\d{1,2}\/\d{4}/g, " ").replace(/\b(?:by|in)\s+\d+\b/gi, " ")), U = ve[2].toUpperCase();
+        if (am.length) { const c = U === "CREDIT" ? "C" : U === "PAYMENT" ? "P" : U === "DEBIT" ? "D" : /FINANCE|SERVICE/.test(U) ? "S" : "I", a = am[am.length - 1];
+          seen.add(ve[1]); lines.push({ reference: ve[1], branch: "", date: toIso(ve[3]), code: c, amount: ["C", "P"].includes(c) ? -Math.abs(a) : a }); last = { T, idx }; } }
       // Breezehill: "Jul 08, 2025 284047 Invoice 97.63 | 284047 97.63" (date, transaction #, type, balance, invoice # again, amount due)
-      const mo = !m && !nb && !hp && !ce && s.match(/^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})\s+(\d{4,9}[A-Z]?)\s+([A-Za-z][A-Za-z ]*?)\s+(-?[\d.,].*)$/);   // a number can end in a letter: 287201A
+      const mo = !m && !nb && !hp && !ce && !ve && s.match(/^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})\s+(\d{4,9}[A-Z]?)\s+([A-Za-z][A-Za-z ]*?)\s+(-?[\d.,].*)$/);   // a number can end in a letter: 287201A
       const moIso = mo && stMonIso(mo[1], mo[2], mo[3]);
       if (moIso && !seen.has(refOf(mo[4]))) { const am = cash(mo[6]), U = mo[5].toUpperCase();
         if (am.length) { const c = /CREDIT|RETURN/.test(U) ? "C" : /PAY|CHEQUE|CHECK|RECEIPT/.test(U) ? "P" : /DEBIT/.test(U) ? "D" : /FINANCE|SERVICE|INTEREST|CHARGE/.test(U) ? "S" : /ADJ/.test(U) ? "A" : "I", a = am[am.length - 1], ref = refOf(mo[4]);
@@ -16270,8 +16275,10 @@ function stParse(texts, known) {
       if (/TOTAL/i.test(s)) { const near = s + " " + (L[idx + 1] || "") + " " + (L[idx + 2] || ""), a = near.match(/(\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2})/); if (a) total = num(a[1]);
         (near.match(/\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2}/g) || []).forEach(v => { const x = num(v); if (x != null) cands.push(x); }); }
       if (/deduct/i.test(s)) { const a = s.match(/(\d{1,3}(?:,\d{3})*\.\d{2})\s*$/); if (a) discount = num(a[1]); }
-      if (/CURRENT/i.test(s) && !aging) { const nB = (s.match(/CURRENT|\d+\s*-\s*\d+|OVER\s*\d+|\d+\s*\+/gi) || []).length;   // a statement with 3 aging boxes (Current, 30-62, Over 62) has its total after them
-        for (let j = 1; j <= 3; j++) { let ns = (L[idx + j] || "").match(/\d{1,3}(?:,\d{3})*\.\d{2}|\.00/g); if (ns && nB >= 3 && ns.length > nB) ns = ns.slice(0, nB); if (ns && ns.length >= 3) { const v = ns.map(x => num(x));
+      if (/CURRENT/i.test(s) && !aging) { const nB = (raw.match(/CURRENT|\d+\s*-\s*\d+|OVER\s*\d+|\d+\s*\+/gi) || []).length;   // a statement with 3 aging boxes (Current, 30-62, Over 62) has its total after them
+        for (let j = 1; j <= 3; j++) { let ns = (L[idx + j] || "").match(/\(?\$?\d{1,3}(?:,\d{3})*\.\d{2}\)?|\.00/g);
+          if (ns && nB >= 3 && ns.length === nB + 1 && /BALANCE/i.test(s) && total == null) total = num(ns[nB].replace(/[$()]/g, ""));   // Carrier: Current 1-30 31-60 61-90 91+ Balance
+          if (ns && nB >= 3 && ns.length > nB) ns = ns.slice(0, nB); if (ns && ns.length >= 3) { const v = ns.map(x => { const y = num(x.replace(/[$()]/g, "")); return y != null && /^\(/.test(x) ? -y : y; });
         aging = { current: v[0], d31_60: v[1], d61_90: v[2], d91_120: v[3] ?? null, over120: v[4] ?? null }; break; } } }
     });
   });
