@@ -237,6 +237,38 @@ def seed_from_export():
     return state
 
 
+def sync_nonjob(st, conn, cur, started):
+    """ServiceTitan's non-job appointments (events on the techs' schedules) into st_nonjob_appts. Used by the full sync and the hourly events sync."""
+    cur.execute("SELECT to_regclass('public.st_nonjob_appts') IS NOT NULL")
+    if not cur.fetchone()[0]: return
+    try:
+        d0 = (started - timedelta(days=180)).strftime("%Y-%m-%dT00:00:00Z"); d1 = (started + timedelta(days=60)).strftime("%Y-%m-%dT00:00:00Z")
+        recs = []
+        for page in range(1, 60):
+            o = st.get("dispatch/v2/tenant/{t}/non-job-appointments", {"startsOnOrAfter": d0, "startsOnOrBefore": d1, "page": page, "pageSize": 500, "activeOnly": "false"})
+            recs += o.get("data") or []
+            if not o.get("hasMore"): break
+        def mins(d):   # "02:30:00" or "1.02:30:00"
+            d = str(d or "0:0:0"); days = 0
+            if "." in d.split(":")[0]: days, d = d.split(".", 1); days = int(days)
+            h, m, *_ = (d.split(":") + ["0", "0"])[:3]; return days * 1440 + int(h) * 60 + int(m)
+        rows_ = [(int(r["id"]), int(r["technicianId"]) if r.get("technicianId") else None, r.get("start"), mins(r.get("duration")), (r.get("name") or "")[:300],
+                  (r.get("summary") or "")[:2000], r.get("timesheetCodeId"), bool(r.get("allDay")), r.get("active") is not False) for r in recs if r.get("id")]
+        cur.execute("CREATE TEMP TABLE _s_nj (id bigint, t bigint, s timestamptz, m int, n text, su text, tc bigint, ad boolean, ac boolean) ON COMMIT DROP")
+        with cur.copy("COPY _s_nj FROM STDIN") as cp:
+            for x in rows_: cp.write_row(x)
+        cur.execute("""INSERT INTO st_nonjob_appts (id, technician_id, starts_at, duration_min, name, summary, timesheet_code_id, all_day, active, synced_at)
+                       SELECT id, t, s, m, n, su, tc, ad, ac, now() FROM _s_nj ON CONFLICT (id) DO UPDATE SET technician_id = EXCLUDED.technician_id, starts_at = EXCLUDED.starts_at,
+                       duration_min = EXCLUDED.duration_min, name = EXCLUDED.name, summary = EXCLUDED.summary, timesheet_code_id = EXCLUDED.timesheet_code_id,
+                       all_day = EXCLUDED.all_day, active = EXCLUDED.active, synced_at = now()""")
+        # gone from ServiceTitan in that window: no longer on the schedule
+        cur.execute("UPDATE st_nonjob_appts SET active = false WHERE starts_at BETWEEN %s AND %s AND id NOT IN (SELECT id FROM _s_nj)", (d0, d1))
+        cur.execute("DROP TABLE _s_nj"); conn.commit()
+        log(f"Non-job appointments on the schedule: {len(rows_)}")
+    except Exception as e:
+        conn.rollback(); log(f"  non-job appointments not done this time: {str(e)[:200]}")
+
+
 # ---------------------------------------------------------------------------
 # database
 # ---------------------------------------------------------------------------
@@ -4577,34 +4609,7 @@ def main():
             except Exception as e:
                 conn.rollback(); log(f"  invoice summaries not done this time: {str(e)[:200]}")
         # non-job appointments on the techs' schedules (time that's paid but not on a job): 180 days back to 60 ahead, every run
-        cur.execute("SELECT to_regclass('public.st_nonjob_appts') IS NOT NULL")
-        if cur.fetchone()[0] and st:
-            try:
-                d0 = (started - timedelta(days=180)).strftime("%Y-%m-%dT00:00:00Z"); d1 = (started + timedelta(days=60)).strftime("%Y-%m-%dT00:00:00Z")
-                recs = []
-                for page in range(1, 60):
-                    o = st.get("dispatch/v2/tenant/{t}/non-job-appointments", {"startsOnOrAfter": d0, "startsOnOrBefore": d1, "page": page, "pageSize": 500, "activeOnly": "false"})
-                    recs += o.get("data") or []
-                    if not o.get("hasMore"): break
-                def mins(d):   # "02:30:00" or "1.02:30:00"
-                    d = str(d or "0:0:0"); days = 0
-                    if "." in d.split(":")[0]: days, d = d.split(".", 1); days = int(days)
-                    h, m, *_ = (d.split(":") + ["0", "0"])[:3]; return days * 1440 + int(h) * 60 + int(m)
-                rows_ = [(int(r["id"]), int(r["technicianId"]) if r.get("technicianId") else None, r.get("start"), mins(r.get("duration")), (r.get("name") or "")[:300],
-                          (r.get("summary") or "")[:2000], r.get("timesheetCodeId"), bool(r.get("allDay")), r.get("active") is not False) for r in recs if r.get("id")]
-                cur.execute("CREATE TEMP TABLE _s_nj (id bigint, t bigint, s timestamptz, m int, n text, su text, tc bigint, ad boolean, ac boolean) ON COMMIT DROP")
-                with cur.copy("COPY _s_nj FROM STDIN") as cp:
-                    for x in rows_: cp.write_row(x)
-                cur.execute("""INSERT INTO st_nonjob_appts (id, technician_id, starts_at, duration_min, name, summary, timesheet_code_id, all_day, active, synced_at)
-                               SELECT id, t, s, m, n, su, tc, ad, ac, now() FROM _s_nj ON CONFLICT (id) DO UPDATE SET technician_id = EXCLUDED.technician_id, starts_at = EXCLUDED.starts_at,
-                               duration_min = EXCLUDED.duration_min, name = EXCLUDED.name, summary = EXCLUDED.summary, timesheet_code_id = EXCLUDED.timesheet_code_id,
-                               all_day = EXCLUDED.all_day, active = EXCLUDED.active, synced_at = now()""")
-                # gone from ServiceTitan in that window: no longer on the schedule
-                cur.execute("UPDATE st_nonjob_appts SET active = false WHERE starts_at BETWEEN %s AND %s AND id NOT IN (SELECT id FROM _s_nj)", (d0, d1))
-                cur.execute("DROP TABLE _s_nj"); conn.commit()
-                log(f"Non-job appointments on the schedule: {len(rows_)}")
-            except Exception as e:
-                conn.rollback(); log(f"  non-job appointments not done this time: {str(e)[:200]}")
+        if st: sync_nonjob(st, conn, cur, started)
         delta = {}
         log("Asking ServiceTitan what changed...")
         for name, path, kind in FEEDS:
