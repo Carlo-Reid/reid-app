@@ -26302,7 +26302,7 @@ async function openPayrollPerson(user, day) {
     <div class="pr-period"><button type="button" class="btn" data-pr-go="${prev}">← Previous</button>
       <div><b>${fmtDate(p.from)} – ${fmtDate(p.to)}</b><div class="muted">Paid on ${fmtDate(p.pay)}${p.from <= today && today <= p.to ? " · this period" : ""}</div></div>
       <button type="button" class="btn" data-pr-go="${next}"${p.from > today ? " disabled" : ""}>Next →</button>
-      ${p.from <= today && today <= p.to ? "" : `<button type="button" class="link" data-pr-go="${today}">This period</button>`}<button type="button" class="btn pr-print" onclick="window.print()">🖨 Print</button><button type="button" class="btn pr-dl" id="pr-dl">⬇ Download</button></div>
+      ${p.from <= today && today <= p.to ? "" : `<button type="button" class="link" data-pr-go="${today}">This period</button>`}<button type="button" class="btn pr-print" onclick="window.print()">🖨 Print</button><button type="button" class="btn pr-dl" id="pr-dl">⬇ Excel (to print)</button></div>
     <div class="pr-tiles">
       <div class="pr-tile"><span>Days worked</span><b>${worked.length}</b></div>
       <div class="pr-tile"><span>Calls</span><b>${worked.reduce((t, x) => t + x.x.n, 0)}</b><small>${Object.entries(kinds).map(([k, n]) => `${n} ${esc(k)}`).join(" · ")}</small></div>
@@ -26356,22 +26356,44 @@ async function openPayrollPerson(user, day) {
       <p class="quiet pr-side-note">On the job is from Arrived to Done. Calls never marked Done aren't in the times.</p>`;
     box.querySelectorAll("[data-pr-rg]").forEach(b => b.addEventListener("click", () => side(b.dataset.prRg))); };
   side(PR.range || "90");
-  $("#pr-dl")?.addEventListener("click", () => {
-    const T = v => v == null ? "" : new Date(v).toLocaleTimeString("en-CA", { timeZone: "America/Toronto", hour: "numeric", minute: "2-digit" }), M = ms => ms == null ? "" : Math.round(ms / 60000);
-    const out = [["Date", "Day", "What", "Customer / event", "Address", "Job", "From", "To", "Minutes"]];
-    for (const z of days) { const x = z.x, wd = new Date(z.d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short" }); if (!x || !(x.n || x.blocks?.length)) { out.push([z.d, wd, "No calls", "", "", "", "", "", ""]); continue; }
-      const ts = v => v ? Date.parse(v) : null, items = [];
-      if (x.pickup) items.push([x.start, ["Pick up equipment" + (x.pickup.approved ? " (approved)" : ""), x.pickup.why || "", "", "", T(x.start), T(x.start + x.pickup.min * 60000), x.pickup.min]]);
-      for (const c of x.rows) { if (c.canceled && !c.arrived) { items.push([ts(c.on_way) ?? Infinity, ["Cancelled", c.customer || "", c.address || "", c.job_number || "", "", "", ""]]); continue; }
-        if (c.drive != null) items.push([ts(c.on_way), ["Drive", c.customer || "", c.address || "", c.job_number || "", T(c.on_way), T(c.arrived), M(c.drive)]]);
-        items.push([ts(c.arrived) ?? ts(c.on_way), [c.kind || "Call", c.customer || "", c.address || "", c.job_number || "", T(c.arrived), c.done ? T(c.done) : "not marked Done", M(c.onCall)]]); }
-      for (const b of x.blocks || []) items.push([b.a, [b.ev ? "Event" + (b.ev.approved ? " (approved)" : " (waiting for approval)") : "Non-job time", b.name, "", "", T(b.a), T(b.b), M(b.b - b.a)]]);
-      items.sort((a, b) => a[0] - b[0]).forEach(([, r]) => out.push([z.d, wd, ...r]));
-      const drive = x.rows.filter(c => !(c.canceled && !c.arrived)).reduce((t, c) => t + (c.drive || 0), 0);
-      out.push([z.d, wd, "Day total", `Working ${prHrs(x.onCall)} · Driving ${prHrs(drive)} · Calls ${x.n}`, "", "", T(x.start), T(x.end), M(x.span)]); }
-    const csv = out.map(r => r.map(v => { const t = String(v ?? ""); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; }).join(",")).join("\r\n");
-    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv" }));
-    a.download = `Time sheet ${(data.name || "tech").replace(/[^\w ]+/g, "")} ${p.from} to ${p.to}.csv`; document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); });
+  // the time sheet as an Excel file set up to print: landscape, fit to the page width, a block per day with its total, week totals, the period's total
+  $("#pr-dl")?.addEventListener("click", async e => { const btn = e.currentTarget; btn.disabled = true; const was = btn.textContent; btn.textContent = "Making the Excel file…";
+    try {
+      await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js");
+      const T = v => v == null ? "" : new Date(v).toLocaleTimeString("en-CA", { timeZone: "America/Toronto", hour: "numeric", minute: "2-digit" }).replace(/\s*a\.m\./, " am").replace(/\s*p\.m\./, " pm");
+      const H = ms => ms == null ? null : Math.round(ms / 36e5 * 100) / 100, ts = v => v ? Date.parse(v) : null;
+      const wb = new ExcelJS.Workbook(), ws = wb.addWorksheet("Time sheet", { views: [{ showGridLines: false }] }), name = data.name || "Tech";
+      ws.pageSetup = { orientation: "landscape", paperSize: 1, fitToPage: true, fitToWidth: 1, fitToHeight: 0, horizontalCentered: true, margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 }, printTitlesRow: "4:4" };
+      ws.headerFooter.oddFooter = `&L${name} · ${fmtDate(p.from)} – ${fmtDate(p.to)}&RPage &P of &N`;
+      ws.columns = [{ width: 13 }, { width: 22 }, { width: 30 }, { width: 34 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 9 }];
+      const fill = c => ({ type: "pattern", pattern: "solid", fgColor: { argb: c } }), thin = { style: "thin", color: { argb: "FFD0D7DE" } }, box = { top: thin, bottom: thin, left: thin, right: thin };
+      ws.mergeCells("A1:H1"); ws.getCell("A1").value = `Time sheet — ${name}`; ws.getCell("A1").font = { size: 16, bold: true, color: { argb: "FF1E3A8A" } };
+      ws.mergeCells("A2:H2"); ws.getCell("A2").value = `Hours worked ${fmtDate(p.from)} – ${fmtDate(p.to)} · paid on ${fmtDate(p.pay)}`; ws.getCell("A2").font = { size: 11, color: { argb: "FF555555" } };
+      const hdr = ws.getRow(4); hdr.values = ["Day", "What", "Customer / event", "Address", "Job", "From", "To", "Hours"];
+      hdr.eachCell(c => { c.font = { bold: true, color: { argb: "FFFFFFFF" } }; c.fill = fill("FF1D4ED8"); c.border = box; c.alignment = { vertical: "middle" }; }); hdr.height = 18;
+      const COL = { pick: "FFEDE9FE", drive: "FFFDF0D9", call: "FFFFFFFF", nj: "FFE0F2FE", ev: "FFFEF9C3", cx: "FFF3F4F6", tot: "FFDBEAFE", wk: "FFBFDBFE", none: "FFF8FAFC" };
+      const add = (vals, kind, bold) => { const r = ws.addRow(vals); r.eachCell({ includeEmpty: true }, (c, n) => { if (n > 8) return; c.fill = fill(COL[kind] || "FFFFFFFF"); c.border = box; c.alignment = { vertical: "top", wrapText: n >= 2 && n <= 4 };
+          if (bold) c.font = { bold: true }; if (n === 8) c.numFmt = "0.00"; }); return r; };
+      let grand = 0;
+      for (let w = 0; w < 2; w++) { const wd = days.slice(w * 7, w * 7 + 7); let wtot = 0;
+        const wr = ws.addRow([`Week ${w + 1}: ${fmtDate(wd[0].d)} – ${fmtDate(wd[wd.length - 1].d)}`]); ws.mergeCells(`A${wr.number}:H${wr.number}`); wr.getCell(1).font = { bold: true, size: 12, color: { argb: "FF1E3A8A" } }; wr.getCell(1).fill = fill(COL.wk); wr.height = 18;
+        for (const z of wd) { const x = z.x, day = new Date(z.d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
+          if (!x || !(x.n || x.blocks?.length)) { add([day, "No calls", "", "", "", "", "", null], "none"); continue; }
+          const items = [];
+          if (x.pickup) items.push([x.start, ["Pick up equipment" + (x.pickup.approved ? " (approved)" : ""), x.pickup.why || "", "", "", T(x.start), T(x.start + x.pickup.min * 60000), H(x.pickup.min * 60000)], "pick"]);
+          for (const c of x.rows) { if (c.canceled && !c.arrived) { items.push([ts(c.on_way) ?? Infinity, ["Cancelled", c.customer || "", c.address || "", c.job_number || "", "", "", null], "cx"]); continue; }
+            if (c.drive != null) items.push([ts(c.on_way), ["Drive", c.customer || "", c.address || "", c.job_number || "", T(c.on_way), T(c.arrived), H(c.drive)], "drive"]);
+            items.push([ts(c.arrived) ?? ts(c.on_way), [c.kind || "Call", c.customer || "", c.address || "", c.job_number || "", T(c.arrived), c.done ? T(c.done) : "not marked Done", H(c.onCall)], "call"]); }
+          for (const b of x.blocks || []) items.push([b.a, [b.ev ? "Event" + (b.ev.approved ? " (approved)" : " (waiting for approval)") : "Non-job time", b.name, "", "", T(b.a), T(b.b), H(b.b - b.a)], b.ev ? "ev" : "nj"]);
+          items.sort((a, b) => a[0] - b[0]).forEach(([, r, k], n) => add([n === 0 ? day : "", ...r], k));
+          const drive = x.rows.filter(c => !(c.canceled && !c.arrived)).reduce((t, c) => t + (c.drive || 0), 0);
+          add(["", `Day total · ${x.n} call${x.n === 1 ? "" : "s"}`, `Working ${prHrs(x.onCall)} · Driving ${prHrs(drive)}`, "", "", T(x.start), T(x.end), H(x.span)], "tot", true);
+          wtot += x.span || 0; }
+        add(["", `Week ${w + 1} total`, "", "", "", "", "", H(wtot)], "wk", true); grand += wtot; }
+      ws.addRow([]); const g = add(["", "Total hours for the period", "", "", "", "", "", H(grand)], "wk", true); g.getCell(2).font = g.getCell(8).font = { bold: true, size: 12 };
+      const buf = await wb.xlsx.writeBuffer(), a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      a.download = `Time sheet ${name.replace(/[^\w ]+/g, "")} ${p.from} to ${p.to}.xlsx`; document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+    } catch (err) { alertMsg("Couldn't make the Excel file: " + (err.message || err)); } finally { btn.disabled = false; btn.textContent = was; } });
   document.querySelectorAll("[data-ev-add]").forEach(b => b.addEventListener("click", async () => {
     const day = b.dataset.evAdd, nice = new Date(day + "T12:00:00").toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" }), v = { s: "", e: "", w: "" };
     for (;;) {
