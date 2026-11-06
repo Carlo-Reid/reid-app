@@ -1546,6 +1546,7 @@
   .pr-ln-pu { background: #ede9fe; border-color: #c4b5fd; color: #4c1d95; } .pr-ln-pu > span { color: #5b21b6; } .pr-ln-pu.ok { background: #dcfce7; border-color: #86d6a4; color: #14532d; } .pr-ln-pu.ok > span { color: #166534; }
   .pr-pu { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; margin: -1px 0 1px; } .pr-pu input { width: 52px; padding: 1px 4px; font-size: 11.5px; }
   .pr-pu .btn { padding: 1px 8px; font-size: 11px; min-height: 0; } .pr-pu .btn.done { color: #166534; border-color: #86d6a4; }
+  .pr-ln-nj { background: #e0f2fe; border-color: #7dd3fc; color: #0c4a6e; white-space: normal !important; flex-wrap: wrap !important; } .pr-ln-nj > span { color: #075985; text-transform: none; font-size: 10.5px; letter-spacing: 0; }
   .pr-pu-st { font-size: 10.5px; font-weight: 700; color: #6b21a8; }
   .pr-pu-why { font-size: 10.5px; line-height: 1.3; color: #4c1d95; padding: 1px 6px; white-space: normal; }
   @media print { .pr-pu { display: none !important; } }
@@ -26153,7 +26154,12 @@ async function openPayrollPerson(user, day) {
   for (const c of data.calls || []) if (byDay.has(c.day)) byDay.get(c.day).push(c);
   const days = [...byDay].map(([d, cs]) => ({ d, cs, x: cs.length ? prDay(cs) : null }));
   // a day that starts with an install: time to pick up the equipment at the office first (30 minutes unless an owner changed it), before the first drive
-  let ex = { data: [] }; try { ex = await db.rpc("payroll_extras", { p_user: user, p_from: p.from, p_to: p.to }); } catch { }
+  let ex = { data: [] }, nj = { data: [] }; try { [ex, nj] = await Promise.all([db.rpc("payroll_extras", { p_user: user, p_from: p.from, p_to: p.to }), db.rpc("payroll_nonjob", { p_user: user, p_from: p.from, p_to: p.to })]); } catch { }
+  // non-job time booked on the schedule (Tire N Rim City, George needs you…): paid hours, in the day in time order
+  for (const b of nj.data || []) { const z = days.find(q => q.d === String(b.day).slice(0, 10)); if (!z) continue; const a0 = Date.parse(b.start), a1 = a0 + Number(b.minutes || 0) * 60000;
+    if (!z.x) z.x = { start: null, end: null, span: null, onCall: 0, offCall: 0, open: false, rows: [], n: 0 };
+    const x = z.x; (x.blocks = x.blocks || []).push({ a: a0, b: a1, name: b.name || "Non-job time", summary: b.summary || "", min: Number(b.minutes || 0) });
+    x.onCall = (x.onCall || 0) + (a1 - a0); x.start = x.start == null ? a0 : Math.min(x.start, a0); x.end = x.end == null ? a1 : Math.max(x.end, a1); x.span = x.end - x.start; }
   if (seq !== openPayrollPerson.seq) return;
   const EX = new Map((ex.data || []).filter(e => e.kind === "pickup").map(e => [String(e.day).slice(0, 10), e]));
   for (const z of days) { const x = z.x; if (!x || !x.n || x.start == null) continue;
@@ -26161,7 +26167,7 @@ async function openPayrollPerson(user, day) {
     const saved = EX.get(z.d); if (!saved && !/install/i.test(first?.kind || "")) continue;
     const min = saved ? Number(saved.minutes) : 30; x.pickup = { min, approved: !!saved?.approved, saved: !!saved, by: saved?.set_by || "", why: saved?.reason || "" };
     x.start -= min * 60000; if (x.span != null) x.span += min * 60000; x.onCall = (x.onCall || 0) + min * 60000; }
-  const worked = days.filter(x => x.x && x.x.n);
+  const worked = days.filter(x => x.x && (x.x.n || x.x.blocks?.length));
   const sum = k => worked.reduce((t, x) => t + (x.x[k] || 0), 0);
   const kinds = {}; for (const c of data.calls || []) if (!(c.canceled && !c.arrived)) kinds[c.kind] = (kinds[c.kind] || 0) + 1;
   const today = salesToday(), next = cvAddDays(p.from, PAYROLL.every), prev = cvAddDays(p.from, -PAYROLL.every);
@@ -26169,13 +26175,14 @@ async function openPayrollPerson(user, day) {
   // one square per day: the day at a glance; click it to open the day hour by hour below
   // under each day, in order: Start time, then for each job the drive to it and Time in / Time out at it, then End time
   const dayJobs = ({ d, x }) => {
-    if (!x || !x.rows?.length) return "";
+    if (!x || !(x.rows?.length || x.blocks?.length)) return "";
     const ts = v => v ? Date.parse(v) : null, tm = v => prTime(v).replace(/\s*a\.m\./, " am").replace(/\s*p\.m\./, " pm");
     // 8:06–8:23 am (the am/pm once when both are the same); 17m or 1h 05m
     const rng = (a, b) => { const A = tm(a), B = tm(b), pa = A.slice(-2), pb = B.slice(-2); return pa === pb ? `${A.slice(0, -3)}–${B}` : `${A}–${B}`; };
     const short = ms => { const m = Math.round(ms / 60000); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`; };
     const rows = x.rows.slice().sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity));
-    const live = rows.filter(c => !(c.canceled && !c.arrived)), lastDone = live.length && live.every(c => c.done) ? x.end : null;
+    const live = rows.filter(c => !(c.canceled && !c.arrived)), lastDone = live.every(c => c.done) ? x.end : null;
+    const blocks = (x.blocks || []).slice().sort((a, b) => a.a - b.a), njHtml = b => `<div class="pr-ln pr-ln-nj" title="${esc(b.summary || b.name)} · paid time, not a job"><span>${esc(b.name)}</span><b>${rng(new Date(b.a).toISOString(), new Date(b.b).toISOString())}</b><i>${short(b.b - b.a)}</i></div>`;
     const out = [`<div class="pr-ln pr-ln-start"><span>Start time</span><b>${x.start ? tm(new Date(x.start).toISOString()) : "—"}</b></div>`];
     if (x.pickup) { const pu = x.pickup, a0 = new Date(x.start).toISOString(), a1 = new Date(x.start + pu.min * 60000).toISOString();
       out.push(`<div class="pr-ln pr-ln-pu${pu.approved ? " ok" : ""}" title="${pu.approved ? "Approved" + (pu.by ? " by " + esc(pu.by) : "") : "Added on its own: the first job is an install. Approve it or change the minutes."}"><span>Pick up equipment</span><b>${rng(a0, a1)}</b><i>${short(pu.min * 60000)}</i></div>
@@ -26183,6 +26190,7 @@ async function openPayrollPerson(user, day) {
           ${ME.role === "owner" ? `<button type="button" class="btn pr-pu-go${pu.approved ? " done" : ""}" data-pu-save>${pu.approved ? "✓ Approved" : "Approve"}</button>`
             : `<button type="button" class="btn pr-pu-go hidden" data-pu-save>Save</button><span class="pr-pu-st">${pu.approved ? "✓ Approved" : pu.saved ? "Waiting for approval" : ""}</span>`}</div>`); }
     for (const c of rows) {
+      const ct = ts(c.on_way) ?? ts(c.arrived); while (blocks.length && ct != null && blocks[0].a <= ct) out.push(njHtml(blocks.shift()));   // non-job time before this call
       if (c.canceled && !c.arrived) { out.push(`<div class="pr-ln pr-ln-cx"><span>Cancelled</span><b>${esc(c.customer || c.kind)}</b></div>`); continue; }
       out.push(c.drive != null
         ? `<div class="pr-ln pr-ln-dr" title="Driving ${tm(c.on_way)} – ${tm(c.arrived)}, ${prHrs(c.drive)}"><span>Drive</span><b>${rng(c.on_way, c.arrived)}</b><i>${short(c.drive)}</i></div>`
@@ -26193,12 +26201,13 @@ async function openPayrollPerson(user, day) {
         <span class="pr-jb-io"><span>Time in</span><b>${c.arrived ? tm(c.arrived) : "—"}</b></span>
         <span class="pr-jb-io"><span>Time out</span><b class="${c.done ? "" : "pr-jb-miss"}">${o}</b></span></button>`);
     }
+    while (blocks.length) out.push(njHtml(blocks.shift()));
     out.push(`<div class="pr-ln pr-ln-end"><span>End time</span><b class="${lastDone ? "" : "pr-jb-miss"}">${lastDone ? tm(new Date(lastDone).toISOString()) : x.end ? tm(new Date(x.end).toISOString()) + "?" : "—"}</b></div>`);
     return `<div class="pr-jobs">${out.join("")}</div>`;
   };
   const dayTile = ({ d, x }) => {
     const wd = new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short" }), md = new Date(d + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric" });
-    if (!x || !x.n) return `<div class="pr-dt pr-dt-none${d === today ? " pr-dt-today" : ""}"><span class="pr-dt-wd">${wd}</span><span class="pr-dt-md">${md}</span><span class="pr-dt-no">${d > today ? "" : "No calls"}</span></div>`;
+    if (!x || !(x.n || x.blocks?.length)) return `<div class="pr-dt pr-dt-none${d === today ? " pr-dt-today" : ""}"><span class="pr-dt-wd">${wd}</span><span class="pr-dt-md">${md}</span><span class="pr-dt-no">${d > today ? "" : "No calls"}</span></div>`;
     const tot = (x.onCall || 0) + (x.offCall || 0), pin = tot ? Math.round(100 * (x.onCall || 0) / tot) : 0;
     return `<button type="button" class="pr-dt${PR.day === d ? " on" : ""}${d === today ? " pr-dt-today" : ""}" data-pr-day="${d}" aria-pressed="${PR.day === d}" title="Open the day hour by hour">
       <span class="pr-dt-top"><span class="pr-dt-wd">${wd}</span><span class="pr-dt-md">${md}</span>${x.open ? `<span class="pr-open-ic" title="${d === today ? "Still on a call" : "A call was never marked Done"}">⚠</span>` : ""}<b class="pr-dt-len">${prHrs(x.span)}</b></span>
