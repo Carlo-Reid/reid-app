@@ -1569,6 +1569,7 @@
   .pr-ev-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; } .pr-ev-form label { display: flex; flex-direction: column; gap: 3px; font-weight: 600; font-size: 13px; } .pr-ev-form .w { grid-column: 1 / -1; } .pr-ev-form textarea { width: 100%; }
   @media print { .pr-ev-add, .pr-ev-ctl { display: none !important; } }
   .pr-tech .pr-jb-addr { grid-column: 1 / -1; font-size: 10.5px; line-height: 1.25; color: var(--muted, #556); white-space: normal; word-break: break-word; }
+  .pr-ln-unpaid { opacity: .6; text-decoration: line-through; text-decoration-thickness: 1px; } .pr-ln-unpaid > span { text-decoration: none; }
   .pr-pu-st { font-size: 10.5px; font-weight: 700; color: #6b21a8; }
   .pr-pu-why { font-size: 10.5px; line-height: 1.3; color: #4c1d95; padding: 1px 6px; white-space: normal; }
   @media print { .pr-pu { display: none !important; } }
@@ -26200,10 +26201,12 @@ async function openPayrollPerson(user, day) {
   // non-job time booked on the schedule (Tire N Rim City, George needs you…): paid hours, in the day in time order
   // schedule reminders that aren't work aren't paid: the 3:30 am "calls past this…" marker, "off by…", "do not book…", "… has phone" (being on call)
   const NJ_NOT_WORK = /CALL[S]?\s+PAST\s+THIS|^\s*OFF\s+(BY|AT|AFTER)\b|DO\s+NOT\s+BOOK|\bHAS\s+(THE\s+)?PHONE\b|\bDAY\s+OFF\b|\bVACATION\b|\bSICK\b/i;
-  for (const b of [...(nj.data || []), ...evAsNj]) { const z = days.find(q => q.d === String(b.day).slice(0, 10)); if (!z || (!b.ev && NJ_NOT_WORK.test(b.name || ""))) continue; const a0 = Date.parse(b.start), a1 = a0 + Number(b.minutes || 0) * 60000;
+  for (const b of [...(nj.data || []), ...evAsNj]) { const z = days.find(q => q.d === String(b.day).slice(0, 10)); if (!z || (!b.ev && NJ_NOT_WORK.test(b.name || ""))) continue;
+    const a0 = Date.parse(b.start), a1 = a0 + Number(b.minutes || 0) * 60000, paid = b.ev ? !!b.ev.approved : !!b.paid;
     if (!z.x) z.x = { start: null, end: null, span: null, onCall: 0, offCall: 0, open: false, rows: [], n: 0 };
-    const x = z.x; (x.blocks = x.blocks || []).push({ a: a0, b: a1, name: b.name || "Non-job time", summary: b.summary || "", min: Number(b.minutes || 0), ev: b.ev || null });
-    x.onCall = (x.onCall || 0) + (a1 - a0); x.start = x.start == null ? a0 : Math.min(x.start, a0); x.end = x.end == null ? a1 : Math.max(x.end, a1); x.span = x.end - x.start; }
+    const x = z.x; (x.blocks = x.blocks || []).push({ a: a0, b: a1, name: b.name || "Non-job time", summary: b.summary || "", min: Number(b.minutes || 0), ev: b.ev || null, nj: b.ev ? null : b.id, paid, by: b.paid_by || "" });
+    if (!paid) continue;   // not paid until it's added (from the schedule) or approved (added by hand)
+    x.paidN = (x.paidN || 0) + 1; x.onCall = (x.onCall || 0) + (a1 - a0); x.start = x.start == null ? a0 : Math.min(x.start, a0); x.end = x.end == null ? a1 : Math.max(x.end, a1); x.span = x.end - x.start; }
   if (seq !== openPayrollPerson.seq) return;
   const EX = new Map((ex.data || []).filter(e => e.kind === "pickup").map(e => [String(e.day).slice(0, 10), e]));
   for (const z of days) { const x = z.x; if (!x || !x.n || x.start == null) continue;
@@ -26211,7 +26214,7 @@ async function openPayrollPerson(user, day) {
     const saved = EX.get(z.d); if (!saved && !/install/i.test(first?.kind || "")) continue;
     const min = saved ? Number(saved.minutes) : 30; x.pickup = { min, approved: !!saved?.approved, saved: !!saved, by: saved?.set_by || "", why: saved?.reason || "" };
     x.start -= min * 60000; if (x.span != null) x.span += min * 60000; x.onCall = (x.onCall || 0) + min * 60000; }
-  const worked = days.filter(x => x.x && (x.x.n || x.x.blocks?.length));
+  const worked = days.filter(x => x.x && (x.x.n || x.x.paidN));
   const sum = k => worked.reduce((t, x) => t + (x.x[k] || 0), 0);
   const kinds = {}; for (const c of data.calls || []) if (!(c.canceled && !c.arrived)) kinds[c.kind] = (kinds[c.kind] || 0) + 1;
   const today = salesToday(), next = cvAddDays(p.from, PAYROLL.every), prev = cvAddDays(p.from, -PAYROLL.every);
@@ -26226,7 +26229,7 @@ async function openPayrollPerson(user, day) {
     const short = ms => { const m = Math.round(ms / 60000); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`; };
     const rows = x.rows.slice().sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity));
     const live = rows.filter(c => !(c.canceled && !c.arrived)), lastDone = live.every(c => c.done) ? x.end : null;
-    const blocks = (x.blocks || []).slice().sort((a, b) => a.a - b.a), njHtml = b => `<div class="pr-ln pr-ln-nj${b.ev ? " pr-ln-ev" + (b.ev.approved ? " ok" : "") : ""}" title="${esc(b.summary || b.name)} · paid time, not a job"><span>${esc(b.name)}</span><b>${rng(new Date(b.a).toISOString(), new Date(b.b).toISOString())}</b><i>${short(b.b - b.a)}</i></div>${b.ev ? `<div class="pr-ev-ctl" data-ev="${b.ev.id}">${b.ev.approved ? `<span class="pr-pu-st ok">✓ Approved</span>` : ME.role === "owner" ? `<button type="button" class="btn" data-ev-ok>Approve</button>` : `<span class="pr-pu-st">Waiting for approval</span>`}${ME.role === "owner" || !b.ev.approved ? `<button type="button" class="link danger" data-ev-del title="Remove this event">✕ Remove</button>` : ""}</div>` : ""}`;
+    const blocks = (x.blocks || []).slice().sort((a, b) => a.a - b.a), njHtml = b => `<div class="pr-ln pr-ln-nj${b.ev ? " pr-ln-ev" + (b.ev.approved ? " ok" : "") : ""}${b.paid ? "" : " pr-ln-unpaid"}" title="${esc(b.summary || b.name)} · paid time, not a job"><span>${esc(b.name)}</span><b>${rng(new Date(b.a).toISOString(), new Date(b.b).toISOString())}</b><i>${short(b.b - b.a)}</i></div>${b.nj ? `<div class="pr-ev-ctl" data-nj="${b.nj}">${b.paid ? `<span class="pr-pu-st ok">✓ Paid</span><button type="button" class="link danger" data-nj-pay="0">Not paid</button>` : `<span class="pr-pu-st">Not paid</span><button type="button" class="btn" data-nj-pay="1">＋ Add to pay</button>`}</div>` : ""}${b.ev ? `<div class="pr-ev-ctl" data-ev="${b.ev.id}">${b.ev.approved ? `<span class="pr-pu-st ok">✓ Approved</span>` : ME.role === "owner" ? `<button type="button" class="btn" data-ev-ok>Approve</button>` : `<span class="pr-pu-st">Waiting for approval</span>`}${ME.role === "owner" || !b.ev.approved ? `<button type="button" class="link danger" data-ev-del title="Remove this event">✕ Remove</button>` : ""}</div>` : ""}`;
     const out = [`<div class="pr-ln pr-ln-start"><span>Start time</span><b>${x.start ? tm(new Date(x.start).toISOString()) : "—"}</b></div>`];
     if (x.pickup) { const pu = x.pickup, a0 = new Date(x.start).toISOString(), a1 = new Date(x.start + pu.min * 60000).toISOString();
       out.push(`<div class="pr-ln pr-ln-pu${pu.approved ? " ok" : ""}" title="${pu.approved ? "Approved" + (pu.by ? " by " + esc(pu.by) : "") : "Added on its own: the first job is an install. Approve it or change the minutes."}"><span>Pick up equipment</span><b>${rng(a0, a1)}</b><i>${short(pu.min * 60000)}</i></div>
@@ -26387,7 +26390,7 @@ async function openPayrollPerson(user, day) {
           for (const c of x.rows) { if (c.canceled && !c.arrived) { items.push([ts(c.on_way) ?? Infinity, ["Cancelled", c.customer || "", c.address || "", c.job_number || "", "", "", null], "cx"]); continue; }
             if (c.drive != null) items.push([ts(c.on_way), ["Drive", c.customer || "", c.address || "", c.job_number || "", T(c.on_way), T(c.arrived), H(c.drive)], "drive"]);
             items.push([ts(c.arrived) ?? ts(c.on_way), [c.kind || "Call", c.customer || "", c.address || "", c.job_number || "", T(c.arrived), c.done ? T(c.done) : "not marked Done", H(c.onCall)], "call"]); }
-          for (const b of x.blocks || []) items.push([b.a, [b.ev ? "Event" + (b.ev.approved ? " (approved)" : " (waiting for approval)") : "Non-job time", b.name, "", "", T(b.a), T(b.b), H(b.b - b.a)], b.ev ? "ev" : "nj"]);
+          for (const b of x.blocks || []) items.push([b.a, [(b.ev ? "Event" + (b.ev.approved ? " (approved)" : " (waiting for approval, not paid)") : "Schedule event" + (b.paid ? " (paid)" : " (not paid)")), b.name, "", "", T(b.a), T(b.b), b.paid ? H(b.b - b.a) : null], b.paid ? (b.ev ? "ev" : "nj") : "cx"]);
           items.sort((a, b) => a[0] - b[0]).forEach(([, r, k], n) => add([n === 0 ? day : "", ...r], k));
           const drive = x.rows.filter(c => !(c.canceled && !c.arrived)).reduce((t, c) => t + (c.drive || 0), 0);
           add(["", `Day total · ${x.n} call${x.n === 1 ? "" : "s"}`, `Working ${prHrs(x.onCall)} · Driving ${prHrs(drive)}`, "", "", T(x.start), T(x.end), H(x.span)], "tot", true);
@@ -26409,6 +26412,8 @@ async function openPayrollPerson(user, day) {
       if (!v.s || !v.e) { alertMsg("Put in when it started and when it ended."); continue; } if (v.e <= v.s) { alertMsg("The end time has to be after the start time."); continue; } if (!v.w.trim()) { alertMsg("Say what the event was."); continue; }
       const { error } = await db.rpc("payroll_event_add", { p_user: user, p_day: day, p_starts: v.s, p_ends: v.e, p_what: v.w.trim() });
       if (error) { alertMsg("Not saved: " + rpcErr(error)); continue; } return openPayrollPerson(user, p.from); } }));
+  document.querySelectorAll("[data-nj]").forEach(box => box.querySelectorAll("[data-nj-pay]").forEach(b => b.addEventListener("click", async () => {
+    const { error } = await db.rpc("payroll_nonjob_set", { p_user: user, p_id: Number(box.dataset.nj), p_paid: b.dataset.njPay === "1" }); if (error) return alertMsg("Not saved: " + rpcErr(error)); openPayrollPerson(user, p.from); })));
   document.querySelectorAll("[data-ev]").forEach(box => { const id = Number(box.dataset.ev);
     box.querySelector("[data-ev-ok]")?.addEventListener("click", async () => { const { error } = await db.rpc("payroll_event_approve", { p_id: id }); if (error) return alertMsg("Not approved: " + rpcErr(error)); openPayrollPerson(user, p.from); });
     box.querySelector("[data-ev-del]")?.addEventListener("click", async () => { if (await askChoice("Remove this event?", "It comes off this day's paid time.", [["del", "Remove it", true], ["", "Keep it"]]) !== "del") return;
