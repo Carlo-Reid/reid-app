@@ -1558,6 +1558,9 @@
   /* techs: no side bar size buttons, no "Pages" heading or Find a page box: just their page buttons */
   body[data-role="technician"] #side .side-size, body[data-role="technician"] #side .nav-head, body[data-role="technician"] #side .nav-find { display: none !important; }
   .pr-has-note { font-size: 11px; font-weight: 700; background: #fef3c7; color: #78350f; border: 1px solid #fcd34d; border-radius: 99px; padding: 0 7px; margin-left: 4px; vertical-align: 1px; white-space: nowrap; }
+  .pr-tech .pr-jb.pr-jb-open { background: #fee2e2; border-color: #dc2626; border-left-color: #dc2626 !important; } .pr-tech .pr-jb.pr-jb-open .pr-jb-miss { color: #b91c1c; font-weight: 800; }
+  #open-calls { position: fixed; left: 0; right: 0; bottom: 0; z-index: 9999; max-height: 40vh; overflow-y: auto; background: #dc2626; color: #fff; padding: 10px 16px; font-size: 14px; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+  #open-calls ul { margin: 4px 0; padding-left: 20px; } #open-calls small { opacity: .9; }
   .pr-note { border: 1px solid #fcd34d; background: #fffbeb; border-radius: 12px; padding: 10px 14px; margin: 6px 0 12px; } .pr-note label { display: block; font-weight: 700; color: #78350f; margin-bottom: 6px; }
   .pr-note textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line, #d0d7de); resize: vertical; background: #fff; }
   .pr-note-row { display: flex; gap: 10px; align-items: center; margin-top: 6px; flex-wrap: wrap; } .pr-note-row .quiet { font-size: 12px; }
@@ -5943,6 +5946,7 @@ async function showApp() {
   $("#dispatchmap-link").classList.toggle("hidden", !ME.booking || !(can("calls.dispatch") || can("calls.book")));
   $("#mycalls-link").classList.toggle("hidden", !ME.booking || !(ME.role === "technician" || ME.role === "owner"));   // My calls: techs (and owners) only
   $("#fu-link").classList.toggle("hidden", !ME.role);
+  checkOpenCalls();
   $("#sales-link").classList.toggle("hidden", !(ME.role === "sales" || ME.role === "owner" || can("calls.dispatch")));
   $("#sdsp-link").classList.toggle("hidden", !(ME.role === "sales" || ME.role === "owner"));
   document.body.classList.toggle("sales-only", ME.role === "sales");
@@ -24956,6 +24960,21 @@ async function pbLoadKit(id, r, edit) {
   }, 250); });
 }
 
+/* ---------------- calls not closed: a warning that stays on screen until the tech presses Done (in ServiceTitan) ---------------- */
+async function checkOpenCalls() {
+  if (!ME.role || ME.role === "owner") return document.querySelector("#open-calls")?.remove();
+  let rows = []; try { const r = await db.rpc("my_open_calls"); if (r.error) return; rows = r.data || []; } catch { return; }
+  let box = document.querySelector("#open-calls");
+  if (!rows.length) { box?.remove(); return; }
+  if (!box) { box = document.createElement("div"); box.id = "open-calls"; box.setAttribute("role", "alert"); document.body.prepend(box); }
+  const when = v => new Date(v).toLocaleString("en-CA", { timeZone: "America/Toronto", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  box.innerHTML = `<b>⚠️ ${rows.length === 1 ? "You have a call that isn't closed" : `You have ${rows.length} calls that aren't closed`}.</b> Press <b>Done</b> on ${rows.length === 1 ? "it" : "each one"} in ServiceTitan.
+    <ul>${rows.map(r => `<li>${esc(r.customer || "Customer")}${r.address ? " · " + esc(r.address) : ""} · arrived ${esc(when(r.arrived))}${r.job_number ? " · Job " + esc(r.job_number) : ""}</li>`).join("")}</ul>
+    <small>This message stays until ${rows.length === 1 ? "the call is" : "they're all"} closed. After you press Done it can take up to an hour to go away.</small>`;
+}
+setInterval(() => { if (!document.hidden) checkOpenCalls(); }, 10 * 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkOpenCalls(); });
+
 /* ---------------- follow up: each person's own list ---------------- */
 let FU = { keys: new Set(), off: false };
 async function loadFollowKeys() {
@@ -26289,8 +26308,9 @@ async function openPayrollPerson(user, day) {
       out.push(c.drive != null
         ? `<div class="pr-ln pr-ln-dr" title="Driving ${tm(c.on_way)} – ${tm(c.arrived)}, ${prHrs(c.drive)}"><span>Drive</span><b>${rng(c.on_way, c.arrived)}</b><i>${short(c.drive)}</i></div>`
         : `<div class="pr-ln pr-ln-dr pr-ln-none"><span>Drive</span><b>not recorded</b></div>`);
-      const o = c.done ? tm(c.done) : (d === today ? "still there" : "not marked Done");
-      out.push(`<button type="button" class="pr-jb ${kindCls(c.kind)}" data-pr-open="${d}" title="${esc(c.kind)}${c.job_number ? " · Job " + esc(c.job_number) : ""}${c.address ? " · " + esc(c.address) : ""}">
+      const notClosed = !c.done && !c.canceled && c.arrived && (d !== today || Date.now() - Date.parse(c.arrived) > 10 * 3600000);
+      const o = c.done ? tm(c.done) : notClosed ? "⚠️ not closed" : (d === today ? "still there" : "not marked Done");
+      out.push(`<button type="button" class="pr-jb ${kindCls(c.kind)}${notClosed ? " pr-jb-open" : ""}" data-pr-open="${d}" title="${esc(c.kind)}${c.job_number ? " · Job " + esc(c.job_number) : ""}${c.address ? " · " + esc(c.address) : ""}">
         <span class="pr-jb-who"><span class="pr-kind ${kindCls(c.kind)}">${esc(c.kind)}</span> ${esc(c.customer || "")}</span>
         ${c.address ? `<span class="pr-jb-addr">${esc(c.address)}</span>` : ""}
         <span class="pr-jb-io"><span>Time in</span><b>${c.arrived ? tm(c.arrived) : "—"}</b></span>
