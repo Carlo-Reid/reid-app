@@ -11,3 +11,9 @@
 ## Payroll side bar
 
 - **No green or red in the Payroll side bar ("His calls").** Carlo is saving those colours for special side bar functions later. Maintenance shows teal-blue and Warranty grey there (`.pr-side .pr-k-*`); the call boxes keep their usual colours.
+
+## Office staff time (Payroll)
+
+- Office staff = app role office, admin, accounting, dispatcher or warehouse (not techs, even if ServiceTitan says technician). Their payroll page is time in / time out, not calls (`openOfficePayroll`, `sync/extra/212_office_time.sql`).
+- Work day turns over at 2 am. Time in: "Let's start the day" screen, or signing in in the morning. Time out: the "Done work" button at the top of the side bar; if they forget, their last typing/click/scroll, and they must verify it next time.
+- Pay counts only from 15 min before the expected start to 15 min after the expected end. Owners set expected hours per weekday on the person's payroll page.
