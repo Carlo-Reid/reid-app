@@ -15835,7 +15835,7 @@ function sinvCompare(r, L, P, what) {
     partial = r.subtotal == null && /continued/i.test(r.read_notes || "") && !/end of order/i.test(r.read_notes || "");
   const issues = []; let ia = 0, pa = 0;
   const bad = (ok, h) => ok ? h : `<span class="sinv-bad">${h}</span>`;
-  const D = SINV.det.get(r.id) || {}, IGN = new Set(D.ignored || []), canFix = !!SINV.data?.can_edit; SINV.acc = new Map(); SINV.ret = new Map(); let nFix = 0, nIgn = 0;
+  const D = SINV.det.get(r.id) || {}, IGN = new Set(D.ignored || []), canFix = !!SINV.data?.can_edit; SINV.acc = new Map(); SINV.ret = new Map(); SINV.rmv = new Map(); let nFix = 0, nIgn = 0;
   const RET = new Set((D.returns || []).filter(x => x.status !== "cancelled").flatMap(x => (x.lines || []).map(l => l.key)));
   const freePo = rows.filter(x => x.b && !x.a).map(x => x.b), DL = (SINV.det.get(r.id) || {}).lines || [];
   const body = rows.map(({ a, b, hand, guess }) => {
@@ -15870,7 +15870,9 @@ function sinvCompare(r, L, P, what) {
       else if (a && !b && !a.comp) fix = { c: { description: [a.x.code, a.x.description].filter(Boolean).join(" ").trim() || "Line from invoice " + r.number, quantity: a.q != null ? Math.abs(a.q) : 1, unit_cost: a.each ?? (a.amt != null ? Math.abs(a.amt) : 0) }, t: "Add it to the PO" };
       else if (b && !a && b.y.id) fix = { c: { id: b.y.id, delete: true }, t: "Take it off the PO" };
       if (fix) { SINV.acc.set(key, fix.c); nFix++; } }
-    const acts = why && !soft && canFix ? (ign ? `<div class="sinv-fx"><span class="quiet">${retd ? "↩ Being sent back" : "Let go"}</span></div>`
+    // a PO line that isn't billed on this invoice can always be taken off the PO (even when the invoice might be one of two)
+    if (canFix && b && !a && b.y.id && !ign) { SINV.rmv.set(key, { id: b.y.id, delete: true }); if (!fix) { fix = { c: { id: b.y.id, delete: true }, t: "Take it off the PO" }; SINV.acc.set(key, fix.c); } }
+    const acts = why && (!soft || SINV.rmv.has(key)) && canFix ? (ign ? `<div class="sinv-fx"><span class="quiet">${retd ? "↩ Being sent back" : "Let go"}</span></div>`
       : `<div class="sinv-fx">${fix ? `<button class="sinv-acc" type="button" data-sinv-acc="${esc(key)}">✓ ${esc(fix.t)}</button>` : ""}${SINV.ret.has(key) ? `<button class="sinv-ret" type="button" data-sinv-ret="${esc(key)}" title="It wasn't ordered: put it on a return to the supplier">↩ Return it</button>` : ""}<button class="sinv-ign" type="button" data-sinv-ign="${esc(key)}" title="Leave the PO as it is for this one (it's recorded)">Ignore</button></div>`) : "";
     return `<tr class="${why && !ign ? (soft ? "sinv-row-soft" : "sinv-row-bad") : a && b ? "sinv-row-ok" : ""}">${ac}${pc}<td class="sinv-why">${why ? `<span class="${ign ? "quiet" : soft ? "sinv-soft" : "sinv-bad"}">${esc(why)}</span>${acts}` : a && b ? `<span class="sinv-ok">✓</span>` : ""}</td></tr>`; }).join("");
   // before tax: as printed, else from the statement's total (13% HST), else the lines added up
@@ -15882,6 +15884,8 @@ function sinvCompare(r, L, P, what) {
       ${canFix && SINV.ret.size ? `<div class="sinv-accall sinv-extra"><b>${SINV.ret.size} ${SINV.ret.size === 1 ? "item" : "items"} billed that ${SINV.ret.size === 1 ? "isn't" : "aren't"} on the PO:</b>
         <button class="btn quiet-btn" type="button" data-sinv-addx="${r.id}">＋ Add ${SINV.ret.size === 1 ? "it" : "them all"} to the PO</button><button class="btn quiet-btn" type="button" data-sinv-retx="${r.id}">↩ Return ${SINV.ret.size === 1 ? "it" : "them all"}</button></div>` : ""}
       ${canFix && nFix ? `<div class="sinv-accall"><button class="btn" type="button" data-sinv-accall="${r.id}">✓ Accept the invoice's prices (${nFix} ${nFix === 1 ? "change" : "changes"} to the PO)</button><span class="quiet">Puts the invoice's quantities and prices on the PO, adds what it billed, and marks it checked. Every change is recorded.</span></div>` : ""}</div>`
+      : ""}${canFix && SINV.rmv.size ? `<div class="sinv-accall sinv-rmall"><b>${SINV.rmv.size} ${SINV.rmv.size === 1 ? "line is" : "lines are"} on our PO but not on this ${what}.</b>
+        <button class="btn" type="button" data-sinv-rmall="${r.id}">✕ Take ${SINV.rmv.size === 1 ? "it" : "them"} off the PO and approve the ${what}</button></div>` : ""}${issues.length ? ""
       : `<div class="sinv-allok">✓ Every line ${split ? "on this " + what + " " : ""}matches the PO${nIgn ? ` (${nIgn} difference${nIgn === 1 ? "" : "s"} let go)` : ""}.</div>`}${tip ? `<p class="sinv-soft">${esc(tip)}</p>` : ""}
     <div class="sinv-cmp-w"><table class="sinv-lt sinv-ct"><thead><tr><th colspan="5" class="ci ci-h">${SINV.logos?.get(r.supplier_id) ? `<img class="sinv-ct-logo" src="${SINV.logos.get(r.supplier_id)}" alt="">` : "🧾"} THEIR SIDE · On ${esc(sinvShort(r.supplier) || "the supplier")}'s ${what}</th><th colspan="5" class="sinv-split cp cp-h">📋 OUR SIDE · On our PO ${esc(r.po_number || "")}</th><th></th></tr>
       <tr><th class="ci">Code</th><th class="ci">What</th><th class="r ci">Qty</th><th class="r ci">Each</th><th class="r ci">Amount</th><th class="sinv-split cp">Code</th><th class="cp">What</th><th class="r cp">Qty</th><th class="r cp">Each</th><th class="r cp">Amount</th><th>Difference</th></tr></thead>
@@ -16989,6 +16993,9 @@ function wireSupInv() {
   const retAdd = async (id, items, msg) => { const { error } = await db.rpc("supplier_return_add", { p_invoice: id, p_items: items, p_note: null });
     if (error) return alertMsg("Not saved: " + rpcErr(error)); SINV.det.delete(id); await openSupInv(msg); };
   document.querySelectorAll("[data-sinv-ret]").forEach(b => b.addEventListener("click", () => { const it = SINV.ret?.get(b.dataset.sinvRet); if (it) retAdd(SINV.open, [it], "Put on a return to the supplier. It's under Returns from this invoice."); }));
+  document.querySelectorAll("[data-sinv-rmall]").forEach(b => b.addEventListener("click", async () => { const ch = [...(SINV.rmv?.values() || [])]; if (!ch.length) return;
+    const k = await askChoice("Take them off the PO and approve?", `${ch.length} ${ch.length === 1 ? "line comes" : "lines come"} off the PO because ${ch.length === 1 ? "it isn't" : "they aren't"} on the invoice, and the invoice is marked checked. Each change is recorded under <b>Changes to this PO</b>.`, [["yes", "Take them off and approve", true], ["", "Not now"]]);
+    if (k === "yes") apply(Number(b.dataset.sinvRmall), ch, true, "Taken off the PO and the invoice approved."); }));
   document.querySelectorAll("[data-sinv-retx]").forEach(b => b.addEventListener("click", async () => { const items = [...(SINV.ret?.values() || [])]; if (!items.length) return;
     const k = await askChoice("Return what wasn't ordered?", `${items.length} ${items.length === 1 ? "item goes" : "items go"} on a return to the supplier: ${esc(items.map(x => x.description).join(", "))}.`, [["yes", "Make the return", true], ["", "Not now"]]);
     if (k === "yes") retAdd(Number(b.dataset.sinvRetx), items, "Return made. Mark it Sent back when it goes, and Credit received when the credit comes."); }));
