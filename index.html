@@ -1546,6 +1546,7 @@
   .pr-ln-pu { background: #ede9fe; border-color: #c4b5fd; color: #4c1d95; } .pr-ln-pu > span { color: #5b21b6; } .pr-ln-pu.ok { background: #dcfce7; border-color: #86d6a4; color: #14532d; } .pr-ln-pu.ok > span { color: #166534; }
   .pr-pu { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; margin: -1px 0 1px; } .pr-pu input { width: 52px; padding: 1px 4px; font-size: 11.5px; }
   .pr-pu .btn { padding: 1px 8px; font-size: 11px; min-height: 0; } .pr-pu .btn.done { color: #166534; border-color: #86d6a4; }
+  .pr-pu-st { font-size: 10.5px; font-weight: 700; color: #6b21a8; }
   .pr-pu-why { font-size: 10.5px; line-height: 1.3; color: #4c1d95; padding: 1px 6px; white-space: normal; }
   @media print { .pr-pu { display: none !important; } }
   /* the day headings: highlighted blue, the day and date bigger */
@@ -5858,7 +5859,7 @@ async function showApp() {
   viewAsApply();   // Carlo only: the app the way someone else sees it
   loginAsBar();    // Carlo signed in as someone else: the way back
   $("#staff-link").classList.toggle("hidden", !(ME.perms.has("staff.manage") || ME.role === "owner"));
-  $("#payroll-link").classList.toggle("hidden", ME.role !== "owner");   // Payroll: owners only   // Staff · Log-ins (also on the Settings page)
+  $("#payroll-link").classList.toggle("hidden", !ME.role);   // Payroll: owners see everyone; everyone else sees only their own   // Staff · Log-ins (also on the Settings page)
   $("#logins-link").classList.toggle("hidden", !(ME.perms.has("staff.manage") || ME.role === "owner"));
   $("#security-link").classList.toggle("hidden", !(ME.role === "owner" || can("security.view")));
   $("#bank-link")?.classList.toggle("hidden", !(ME.role === "owner" || can("bank.view")));   // Bank: owners, and anyone given "Bank page" (the accountant)
@@ -26091,8 +26092,9 @@ function openPayrollHash(h) {
   return m ? openPayrollPerson(Number(m[1]), m[2] || null) : openPayroll();
 }
 async function openPayroll() {
+  if (ME.role !== "owner" && !ME.id) { const r = await db.rpc("current_app_user_id"); if (!r.error && r.data) ME.id = r.data; }
   setPage("payroll", "payroll", "Payroll");
-  if (ME.role !== "owner") { $("#main").innerHTML = `<div class="empty"><div><h2>Payroll</h2>Only owners can see payroll.</div></div>`; return; }
+  if (ME.role !== "owner") { if (ME.id) return openPayrollPerson(ME.id); $("#main").innerHTML = `<div class="empty"><div><h2>Payroll</h2>Your payroll couldn't be found. Try again in a moment.</div></div>`; return; }
   $("#main").innerHTML = `<div class="loading">Loading payroll…</div>`;
   const { data, error } = await db.rpc("payroll_people");
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load payroll</h2>${esc(error.message)}</div></div>`; return; }
@@ -26138,9 +26140,10 @@ function prDay(calls) {
   return { start, end, firstArrived: firstArr.length ? Math.min(...firstArr) : null, span, onCall, offCall: span != null ? Math.max(0, span - onCall) : null, open, rows, n: live.length };
 }
 async function openPayrollPerson(user, day) {
+  if (ME.role !== "owner" && !ME.id) { const r = await db.rpc("current_app_user_id"); if (!r.error && r.data) ME.id = r.data; }
   const p = prPeriodOf(day || salesToday());
   setPage(`payroll=${user}${day ? "&" + p.from : ""}`, "payroll", "Payroll");
-  if (ME.role !== "owner") { $("#main").innerHTML = `<div class="empty"><div><h2>Payroll</h2>Only owners can see payroll.</div></div>`; return; }
+  if (ME.role !== "owner" && Number(user) !== Number(ME.id)) { if (ME.id) return openPayrollPerson(ME.id, day); $("#main").innerHTML = `<div class="empty"><div><h2>Payroll</h2>You can only see your own payroll.</div></div>`; return; }
   if (!$("#main .pr-tech")) $("#main").innerHTML = `<div class="loading">Loading…</div>`;
   const seq = openPayrollPerson.seq = (openPayrollPerson.seq || 0) + 1;
   const { data, error } = await db.rpc("payroll_tech_period", { p_user: user, p_from: p.from, p_to: p.to });
@@ -26177,7 +26180,8 @@ async function openPayrollPerson(user, day) {
     if (x.pickup) { const pu = x.pickup, a0 = new Date(x.start).toISOString(), a1 = new Date(x.start + pu.min * 60000).toISOString();
       out.push(`<div class="pr-ln pr-ln-pu${pu.approved ? " ok" : ""}" title="${pu.approved ? "Approved" + (pu.by ? " by " + esc(pu.by) : "") : "Added on its own: the first job is an install. Approve it or change the minutes."}"><span>Pick up equipment</span><b>${rng(a0, a1)}</b><i>${short(pu.min * 60000)}</i></div>
         ${pu.why ? `<div class="pr-pu-why">Why: ${esc(pu.why)}</div>` : ""}<div class="pr-pu" data-pu-day="${d}" data-pu-why="${esc(pu.why)}"><input type="number" min="0" max="600" step="5" value="${pu.min}" aria-label="Minutes to pick up equipment"> min
-          <button type="button" class="btn pr-pu-go${pu.approved ? " done" : ""}" data-pu-save>${pu.approved ? "✓ Approved" : "Approve"}</button></div>`); }
+          ${ME.role === "owner" ? `<button type="button" class="btn pr-pu-go${pu.approved ? " done" : ""}" data-pu-save>${pu.approved ? "✓ Approved" : "Approve"}</button>`
+            : `<button type="button" class="btn pr-pu-go hidden" data-pu-save>Save</button><span class="pr-pu-st">${pu.approved ? "✓ Approved" : pu.saved ? "Waiting for approval" : ""}</span>`}</div>`); }
     for (const c of rows) {
       if (c.canceled && !c.arrived) { out.push(`<div class="pr-ln pr-ln-cx"><span>Cancelled</span><b>${esc(c.customer || c.kind)}</b></div>`); continue; }
       out.push(c.drive != null
@@ -26241,7 +26245,7 @@ async function openPayrollPerson(user, day) {
       <div class="pr-legend"><span class="pr-lg pr-seg-call"></span> On a call <span class="pr-lg pr-seg-drive"></span> Driving <span class="pr-lg pr-seg-gap"></span> Between calls</div></section>`;
   };
   const per = PR.people?.find(x => x.user === user);
-  $("#main").innerHTML = `<article class="staff pr-page pr-tech"><p class="pr-back"><button type="button" class="link" id="pr-back">← Payroll</button></p>
+  $("#main").innerHTML = `<article class="staff pr-page pr-tech"><p class="pr-back"${ME.role === "owner" ? "" : " hidden"}><button type="button" class="link" id="pr-back">← Payroll</button></p>
     <h1>${esc(data.name || per?.name || "Payroll")}</h1>
     ${data.no_employee ? `<p class="staff-msg">This log-in isn't linked to an employee on the Staff page, so there are no calls to show. Link them on the Staff page.</p>` : ""}
     <div class="pr-period"><button type="button" class="btn" data-pr-go="${prev}">← Previous</button>
@@ -26276,7 +26280,7 @@ async function openPayrollPerson(user, day) {
       c.querySelectorAll(".pr-back,.pr-period .btn,.pr-period .link,#pr-dv-box,.pr-note").forEach(e => e.style.display = "none"); document.body.append(c);
       const h = c.getBoundingClientRect().height; c.remove(); art.style.setProperty("--pr-zoom", h * 0.78 > 755 ? (0.98 * 755 / h).toFixed(3) : "0.78"); }); }
   document.querySelectorAll("[data-pu-day]").forEach(box => { const inp = box.querySelector("input"), btn = box.querySelector("[data-pu-save]"), was = inp.value;
-    inp.addEventListener("input", () => { const ch = inp.value !== was; btn.textContent = ch ? "Save" : (btn.classList.contains("done") ? "✓ Approved" : "Approve"); btn.classList.toggle("save-go", ch); });
+    inp.addEventListener("input", () => { const ch = inp.value !== was; btn.textContent = ch ? "Save" : (btn.classList.contains("done") ? "✓ Approved" : "Approve"); btn.classList.toggle("save-go", ch); if (ME.role !== "owner") { btn.textContent = "Save"; btn.classList.toggle("hidden", !ch); } });
     btn.addEventListener("click", async () => { const m = Math.round(Number(inp.value)); if (!(m >= 0 && m <= 600)) return alertMsg("Type the minutes, 0 to 600.");
       // a time other than the 30 minutes: say why (kept with it, shown on the line)
       let why = box.dataset.puWhy || "";
@@ -26285,7 +26289,7 @@ async function openPayrollPerson(user, day) {
           const pr = askChoice("Why is more time needed?", `Picking up equipment is usually 30 minutes. Say why it took ${m} minutes this day.<br><textarea id="pu-why" rows="3" style="width:100%;margin-top:8px" placeholder="e.g. two furnaces and an A/C to load, waited for the parts order"></textarea>`, [["save", "Save", true], ["", "Cancel"]]);
           const ta = document.getElementById("pu-why"); ta?.focus(); ta?.addEventListener("input", () => { typed = ta.value; });
           if (await pr !== "save") return; why = typed; if (!why.trim()) alertMsg("Type the reason first."); } }
-      btn.disabled = true; const { error } = await db.rpc("payroll_extra_set", { p_user: user, p_day: box.dataset.puDay, p_kind: "pickup", p_minutes: m, p_approved: true, p_reason: m === 30 ? null : why.trim() });
+      btn.disabled = true; const { error } = await db.rpc("payroll_extra_set", { p_user: user, p_day: box.dataset.puDay, p_kind: "pickup", p_minutes: m, p_approved: ME.role === "owner", p_reason: m === 30 ? null : why.trim() });
       if (error) { btn.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); } openPayrollPerson(user, p.from); }); });
   document.querySelectorAll("button[data-pr-open]").forEach(b => b.addEventListener("click", () => {
     const t = document.querySelector(`button[data-pr-day="${b.dataset.prOpen}"]`); if (!t) return;
