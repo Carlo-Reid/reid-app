@@ -1573,6 +1573,7 @@
   .pr-pay-go, .pr-pay-go:hover { background: #1f9d4a !important; border-color: #1f9d4a !important; color: #fff !important; }
   .mc-ev { border: 1px solid #7dd3fc; background: #e0f2fe; border-radius: 12px; padding: 8px 12px; margin: 8px 0 12px; } .mc-ev h3 { margin: 0 0 4px; font-size: 14px; color: #075985; }
   .mc-ev-i { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; padding: 4px 0; border-top: 1px solid #bae6fd; } .mc-ev-i:first-of-type { border-top: 0; } .mc-ev-t { font-weight: 700; color: #0c4a6e; min-width: 140px; }
+  .pr-pu-st.wait { color: #b45309; font-weight: 700; } .fu-pay .fu-item { border-left: 4px solid #f59e0b; } .fu-pay-btns { display: flex; gap: 12px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
   .pr-pu-st { font-size: 10.5px; font-weight: 700; color: #6b21a8; }
   .pr-pu-why { font-size: 10.5px; line-height: 1.3; color: #4c1d95; padding: 1px 6px; white-space: normal; }
   @media print { .pr-pu { display: none !important; } }
@@ -24946,7 +24947,7 @@ async function pbLoadKit(id, r, edit) {
 /* ---------------- follow up: each person's own list ---------------- */
 let FU = { keys: new Set(), off: false };
 async function loadFollowKeys() {
-  const r = await db.rpc("my_follow_ups");
+  const r = await db.rpc("my_follow_ups"); loadPayWaiting();
   if (r.error) { if (/function|schema|column/i.test(r.error.message)) { FU.off = true; $("#fu-link").classList.add("hidden"); } return; }   // setup file 21 not run yet
   const mine = r.data.filter(x => x.list !== "to_me");
   FU.keys = new Set(mine.map(x => x.customer_id + ":" + (x.visit_id || 0)));
@@ -24970,8 +24971,14 @@ async function loadFollowKeys() {
   }
   showFollowCount();
 }
+// owners: payroll items waiting for approval also go on the Tasks list
+async function loadPayWaiting() {
+  if (ME.role !== "owner") { FU.pay = []; return []; }
+  try { const r = await db.rpc("payroll_waiting"); FU.pay = r.error ? [] : r.data || []; } catch { FU.pay = []; }
+  showFollowCount(); return FU.pay;
+}
 function showFollowCount() {
-  const n = FU.count ?? FU.keys.size;
+  const n = (FU.count ?? FU.keys.size) + (FU.pay?.length || 0);
   $("#fu-link").innerHTML = n ? `Tasks <span class="badge-n fu-n" title="${n} on your task list">${n}</span>` : "Tasks";
   $("#fu-link").classList.toggle("nav-alert", !!n);
 }
@@ -25239,7 +25246,7 @@ async function openFollowUps(flash, quiet) {
   if (!quiet) setPage("tasks", "followups");
   if (TASK_TAB === "closed") return openClosedTasks();
   if (!document.querySelector(".followups")) $("#main").innerHTML = `<div class="loading">Loading your tasks…</div>`;
-  const [res, ppl] = await Promise.all([db.rpc("my_follow_ups"), FU_PEOPLE ? { data: FU_PEOPLE } : db.rpc("follow_up_people")]);
+  const [res, ppl, payW] = await Promise.all([db.rpc("my_follow_ups"), FU_PEOPLE ? { data: FU_PEOPLE } : db.rpc("follow_up_people"), loadPayWaiting()]);
   const { data, error } = res;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load your tasks</h2>${esc(/function|schema|column/i.test(error.message) ? "Run RUN SETUP.bat to switch on Tasks." : error.message)}</div></div>`; return; }
   FU_PEOPLE = ppl.data || [];
@@ -25294,14 +25301,33 @@ async function openFollowUps(flash, quiet) {
   $("#main").innerHTML = `<article class="staff followups">
     <h1>Tasks</h1>
     <p class="lead">Your own list. Click <strong>+ Task</strong> on a customer file (as many as you need), or tick <strong>Task</strong> next to a call. Each one stays here until it's done. You can send a task to several people and see who has finished.</p>
-    ${taskTabs(data.length)}
+    ${taskTabs(data.length + payW.length)}
     ${msgHtml()}
+    ${payW.length ? `<section class="fu-group fu-pay"><h2>Payroll: waiting for your approval <span class="count">${payW.length}</span></h2>
+      <p class="quiet fu-help">Events the techs want paid. They don't count in their hours until you approve them.</p>
+      <ol class="fu-list">${payW.map(w => { const a = new Date(w.start), b = new Date(a.getTime() + Number(w.minutes || 0) * 60000), t = v => v.toLocaleTimeString("en-CA", { timeZone: "America/Toronto", hour: "numeric", minute: "2-digit" });
+        return `<li class="fu-item fu-pay-i" data-pw-kind="${w.kind}" data-pw-id="${w.id}" data-pw-user="${w.user}" data-pw-day="${esc(String(w.day).slice(0, 10))}"><div class="fu-main">
+          <div class="fu-top"><span class="fu-tag call">Payroll</span> <strong>${esc(w.tech || "")}</strong> · ${esc(longDate(String(w.day).slice(0, 10)))} · ${t(a)} – ${t(b)} (${(m => ((m >= 60 ? Math.floor(m / 60) + " h " : "") + (m % 60 ? (m % 60) + " min" : "")).trim())(Math.round(Number(w.minutes || 0)))})</div>
+          <div class="fu-what">${esc(w.name || "Event")}${w.kind === "ev" ? ' <span class="quiet">(added by hand)</span>' : ""}</div>
+          <div class="fu-pay-btns"><button type="button" class="btn pr-pay-go" data-pw-ok="1">✓ Approve</button><button type="button" class="link danger" data-pw-ok="0">Not paid</button><button type="button" class="link" data-pw-open>Open his payroll</button></div></div></li>`; }).join("")}</ol></section>` : ""}
     ${flash ? `<div class="staff-msg ok" role="status">${esc(flash)}</div>` : ""}
     ${shown || `<div class="fu-empty">No tasks. Click <strong>+ Task</strong> next to a customer's name, or tick <strong>Task</strong> next to a call on the Calls page, to add one here.</div>`}
   </article>`;
   wireTaskTabs();
   msgStart();
-  document.querySelectorAll(".fu-item").forEach(li => {
+  document.querySelectorAll(".fu-pay-i").forEach(li => {
+    const d = li.dataset;
+    li.querySelector("[data-pw-open]").addEventListener("click", () => openPayrollPerson(Number(d.pwUser), d.pwDay));
+    li.querySelectorAll("[data-pw-ok]").forEach(b => b.addEventListener("click", async () => {
+      const ok = b.dataset.pwOk === "1", id = Number(d.pwId);
+      if (d.pwKind === "ev" && !ok && !(await askChoice("Not paid?", "This removes the event he added by hand.", [["yes", "Remove it", true], ["", "Keep it"]]))) return;
+      const { error } = d.pwKind === "nj" ? await db.rpc("payroll_nonjob_approve", { p_user: Number(d.pwUser), p_id: id, p_ok: ok })
+        : await db.rpc(ok ? "payroll_event_approve" : "payroll_event_del", { p_id: id });
+      if (error) return alertMsg("Not saved: " + rpcErr(error));
+      openFollowUps(ok ? "Approved: it now counts in his hours." : "Marked not paid.", true);
+    }));
+  });
+  document.querySelectorAll(".fu-item:not(.fu-pay-i)").forEach(li => {
     const id = Number(li.dataset.id), cust = Number(li.dataset.cust), list = li.dataset.list;
     const msg = li.querySelector(".fu-actions .msg");
     const fail = (t, near) => msg ? (msg.className = "msg err", msg.textContent = t) : alertLine(near || li, t);
@@ -26210,9 +26236,9 @@ async function openPayrollPerson(user, day) {
   // schedule reminders that aren't work aren't paid: the 3:30 am "calls past this…" marker, "off by…", "do not book…", "… has phone" (being on call)
   const NJ_NOT_WORK = /CALL[S]?\s+PAST\s+THIS|^\s*OFF\s+(BY|AT|AFTER)\b|DO\s+NOT\s+BOOK|\bHAS\s+(THE\s+)?PHONE\b|\bDAY\s+OFF\b|\bVACATION\b|\bSICK\b/i;
   for (const b of [...(nj.data || []), ...evAsNj]) { const z = days.find(q => q.d === String(b.day).slice(0, 10)); if (!z || (!b.ev && NJ_NOT_WORK.test(b.name || ""))) continue;
-    const a0 = Date.parse(b.start), a1 = a0 + Number(b.minutes || 0) * 60000, paid = b.ev ? !!b.ev.approved : !!b.paid;
+    const a0 = Date.parse(b.start), a1 = a0 + Number(b.minutes || 0) * 60000, wait = !b.ev && !!b.paid && b.approved === null, paid = b.ev ? !!b.ev.approved : !!b.paid && !wait;
     if (!z.x) z.x = { start: null, end: null, span: null, onCall: 0, offCall: 0, open: false, rows: [], n: 0 };
-    const x = z.x; (x.blocks = x.blocks || []).push({ a: a0, b: a1, name: b.name || "Non-job time", summary: b.summary || "", min: Number(b.minutes || 0), ev: b.ev || null, nj: b.ev ? null : b.id, paid, by: b.paid_by || "" });
+    const x = z.x; (x.blocks = x.blocks || []).push({ a: a0, b: a1, name: b.name || "Non-job time", summary: b.summary || "", min: Number(b.minutes || 0), ev: b.ev || null, nj: b.ev ? null : b.id, paid, wait, by: b.paid_by || "" });
     if (!paid) continue;   // not paid until it's added (from the schedule) or approved (added by hand)
     x.paidN = (x.paidN || 0) + 1; x.onCall = (x.onCall || 0) + (a1 - a0); x.start = x.start == null ? a0 : Math.min(x.start, a0); x.end = x.end == null ? a1 : Math.max(x.end, a1); x.span = x.end - x.start; }
   if (seq !== openPayrollPerson.seq) return;
@@ -26237,7 +26263,7 @@ async function openPayrollPerson(user, day) {
     const short = ms => { const m = Math.round(ms / 60000); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`; };
     const rows = x.rows.slice().sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity));
     const live = rows.filter(c => !(c.canceled && !c.arrived)), lastDone = live.every(c => c.done) ? x.end : null;
-    const blocks = (x.blocks || []).slice().sort((a, b) => a.a - b.a), njHtml = b => `<div class="pr-ln pr-ln-nj${b.ev ? " pr-ln-ev" + (b.ev.approved ? " ok" : "") : ""}${b.paid ? "" : " pr-ln-unpaid"}" title="${esc(b.summary || b.name)} · paid time, not a job"><span>${esc(b.name)}</span><b>${rng(new Date(b.a).toISOString(), new Date(b.b).toISOString())}</b><i>${short(b.b - b.a)}</i></div>${b.nj ? `<div class="pr-ev-ctl" data-nj="${b.nj}">${b.paid ? `<span class="pr-pu-st ok">✓ Paid</span><button type="button" class="link danger" data-nj-pay="0">Not paid</button>` : `<span class="pr-pu-st">Not paid</span><button type="button" class="btn pr-pay-go" data-nj-pay="1">＋ Add to pay</button>`}</div>` : ""}${b.ev ? `<div class="pr-ev-ctl" data-ev="${b.ev.id}">${b.ev.approved ? `<span class="pr-pu-st ok">✓ Approved</span>` : ME.role === "owner" ? `<button type="button" class="btn" data-ev-ok>Approve</button>` : `<span class="pr-pu-st">Waiting for approval</span>`}${ME.role === "owner" || !b.ev.approved ? `<button type="button" class="link danger" data-ev-del title="Remove this event">✕ Remove</button>` : ""}</div>` : ""}`;
+    const blocks = (x.blocks || []).slice().sort((a, b) => a.a - b.a), njHtml = b => `<div class="pr-ln pr-ln-nj${b.ev ? " pr-ln-ev" + (b.ev.approved ? " ok" : "") : ""}${b.paid ? "" : " pr-ln-unpaid"}" title="${esc(b.summary || b.name)} · paid time, not a job"><span>${esc(b.name)}</span><b>${rng(new Date(b.a).toISOString(), new Date(b.b).toISOString())}</b><i>${short(b.b - b.a)}</i></div>${b.nj ? `<div class="pr-ev-ctl" data-nj="${b.nj}">${b.wait ? `<span class="pr-pu-st wait">⏳ Waiting for approval</span>${ME.role === "owner" ? `<button type="button" class="btn pr-pay-go" data-nj-ok="1">✓ Approve</button>` : ""}<button type="button" class="link danger" data-nj-pay="0">Not paid</button>` : b.paid ? `<span class="pr-pu-st ok">✓ Paid</span><button type="button" class="link danger" data-nj-pay="0">Not paid</button>` : `<span class="pr-pu-st">Not paid</span><button type="button" class="btn pr-pay-go" data-nj-pay="1">＋ Add to pay</button>`}</div>` : ""}${b.ev ? `<div class="pr-ev-ctl" data-ev="${b.ev.id}">${b.ev.approved ? `<span class="pr-pu-st ok">✓ Approved</span>` : ME.role === "owner" ? `<button type="button" class="btn" data-ev-ok>Approve</button>` : `<span class="pr-pu-st">Waiting for approval</span>`}${ME.role === "owner" || !b.ev.approved ? `<button type="button" class="link danger" data-ev-del title="Remove this event">✕ Remove</button>` : ""}</div>` : ""}`;
     const out = [`<div class="pr-ln pr-ln-start"><span>Start time</span><b>${x.start ? tm(new Date(x.start).toISOString()) : "—"}</b></div>`];
     if (x.pickup) { const pu = x.pickup, a0 = new Date(x.start).toISOString(), a1 = new Date(x.start + pu.min * 60000).toISOString();
       out.push(`<div class="pr-ln pr-ln-pu${pu.approved ? " ok" : ""}" title="${pu.approved ? "Approved" + (pu.by ? " by " + esc(pu.by) : "") : "Added on its own: the first job is an install. Approve it or change the minutes."}"><span>Pick up equipment</span><b>${rng(a0, a1)}</b><i>${short(pu.min * 60000)}</i></div>
@@ -26398,7 +26424,7 @@ async function openPayrollPerson(user, day) {
           for (const c of x.rows) { if (c.canceled && !c.arrived) { items.push([ts(c.on_way) ?? Infinity, ["Cancelled", c.customer || "", c.address || "", c.job_number || "", "", "", null], "cx"]); continue; }
             if (c.drive != null) items.push([ts(c.on_way), ["Drive", c.customer || "", c.address || "", c.job_number || "", T(c.on_way), T(c.arrived), H(c.drive)], "drive"]);
             items.push([ts(c.arrived) ?? ts(c.on_way), [c.kind || "Call", c.customer || "", c.address || "", c.job_number || "", T(c.arrived), c.done ? T(c.done) : "not marked Done", H(c.onCall)], "call"]); }
-          for (const b of x.blocks || []) items.push([b.a, [(b.ev ? "Event" + (b.ev.approved ? " (approved)" : " (waiting for approval, not paid)") : "Schedule event" + (b.paid ? " (paid)" : " (not paid)")), b.name, "", "", T(b.a), T(b.b), b.paid ? H(b.b - b.a) : null], b.paid ? (b.ev ? "ev" : "nj") : "cx"]);
+          for (const b of x.blocks || []) items.push([b.a, [(b.ev ? "Event" + (b.ev.approved ? " (approved)" : " (waiting for approval, not paid)") : "Schedule event" + (b.paid ? " (paid)" : b.wait ? " (waiting for approval, not paid)" : " (not paid)")), b.name, "", "", T(b.a), T(b.b), b.paid ? H(b.b - b.a) : null], b.paid ? (b.ev ? "ev" : "nj") : "cx"]);
           items.sort((a, b) => a[0] - b[0]).forEach(([, r, k], n) => add([n === 0 ? day : "", ...r], k));
           const drive = x.rows.filter(c => !(c.canceled && !c.arrived)).reduce((t, c) => t + (c.drive || 0), 0);
           add(["", `Day total · ${x.n} call${x.n === 1 ? "" : "s"}`, `Working ${prHrs(x.onCall)} · Driving ${prHrs(drive)}`, "", "", T(x.start), T(x.end), H(x.span)], "tot", true);
@@ -26420,6 +26446,8 @@ async function openPayrollPerson(user, day) {
       if (!v.s || !v.e) { alertMsg("Put in when it started and when it ended."); continue; } if (v.e <= v.s) { alertMsg("The end time has to be after the start time."); continue; } if (!v.w.trim()) { alertMsg("Say what the event was."); continue; }
       const { error } = await db.rpc("payroll_event_add", { p_user: user, p_day: day, p_starts: v.s, p_ends: v.e, p_what: v.w.trim() });
       if (error) { alertMsg("Not saved: " + rpcErr(error)); continue; } return openPayrollPerson(user, p.from); } }));
+  document.querySelectorAll("[data-nj] [data-nj-ok]").forEach(b => b.addEventListener("click", async () => {
+    const { error } = await db.rpc("payroll_nonjob_approve", { p_user: user, p_id: Number(b.closest("[data-nj]").dataset.nj), p_ok: true }); if (error) return alertMsg("Not saved: " + rpcErr(error)); loadPayWaiting(); openPayrollPerson(user, p.from); }));
   document.querySelectorAll("[data-nj]").forEach(box => box.querySelectorAll("[data-nj-pay]").forEach(b => b.addEventListener("click", async () => {
     const { error } = await db.rpc("payroll_nonjob_set", { p_user: user, p_id: Number(box.dataset.nj), p_paid: b.dataset.njPay === "1" }); if (error) return alertMsg("Not saved: " + rpcErr(error)); openPayrollPerson(user, p.from); })));
   document.querySelectorAll("[data-ev]").forEach(box => { const id = Number(box.dataset.ev);
