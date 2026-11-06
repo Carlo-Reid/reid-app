@@ -1543,6 +1543,10 @@
   .pr-tech .pr-dt-none { border-bottom-color: var(--line, #d0d7de); justify-content: flex-start; } .pr-tech .pr-dt-none .pr-dt-no { margin: 4px 0 0; font-size: 11px; }
   .pr-tech .pr-dt-io { flex-wrap: nowrap; white-space: nowrap; overflow: hidden; }
   .pr-open-ic { color: #b45309; font-size: 12px; }
+  .pr-ln-pu { background: #ede9fe; border-color: #c4b5fd; color: #4c1d95; } .pr-ln-pu > span { color: #5b21b6; } .pr-ln-pu.ok { background: #dcfce7; border-color: #86d6a4; color: #14532d; } .pr-ln-pu.ok > span { color: #166534; }
+  .pr-pu { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; margin: -1px 0 1px; } .pr-pu input { width: 52px; padding: 1px 4px; font-size: 11.5px; }
+  .pr-pu .btn { padding: 1px 8px; font-size: 11px; min-height: 0; } .pr-pu .btn.done { color: #166534; border-color: #86d6a4; }
+  @media print { .pr-pu { display: none !important; } }
   /* the day headings: highlighted blue, the day and date bigger */
   .pr-tech .pr-dt { background: #dbeafe !important; border-bottom: 3px solid #1d4ed8 !important; border-radius: 8px 8px 0 0 !important; padding: 5px 8px 6px !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .pr-tech .pr-dt-none { background: #eef4fd !important; border-radius: 8px 8px 0 0 !important; padding: 5px 8px 6px !important; }
@@ -26144,6 +26148,15 @@ async function openPayrollPerson(user, day) {
   const byDay = new Map(); for (let d = p.from; d <= p.to; d = cvAddDays(d, 1)) byDay.set(d, []);
   for (const c of data.calls || []) if (byDay.has(c.day)) byDay.get(c.day).push(c);
   const days = [...byDay].map(([d, cs]) => ({ d, cs, x: cs.length ? prDay(cs) : null }));
+  // a day that starts with an install: time to pick up the equipment at the office first (30 minutes unless an owner changed it), before the first drive
+  const ex = await db.rpc("payroll_extras", { p_user: user, p_from: p.from, p_to: p.to }).catch(() => ({ data: [] }));
+  if (seq !== openPayrollPerson.seq) return;
+  const EX = new Map((ex.data || []).filter(e => e.kind === "pickup").map(e => [String(e.day).slice(0, 10), e]));
+  for (const z of days) { const x = z.x; if (!x || !x.n || x.start == null) continue;
+    const ts = v => v ? Date.parse(v) : null, first = x.rows.filter(c => !(c.canceled && !c.arrived)).sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity))[0];
+    const saved = EX.get(z.d); if (!saved && !/install/i.test(first?.kind || "")) continue;
+    const min = saved ? Number(saved.minutes) : 30; x.pickup = { min, approved: !!saved?.approved, saved: !!saved, by: saved?.set_by || "" };
+    x.start -= min * 60000; if (x.span != null) x.span += min * 60000; x.onCall = (x.onCall || 0) + min * 60000; }
   const worked = days.filter(x => x.x && x.x.n);
   const sum = k => worked.reduce((t, x) => t + (x.x[k] || 0), 0);
   const kinds = {}; for (const c of data.calls || []) if (!(c.canceled && !c.arrived)) kinds[c.kind] = (kinds[c.kind] || 0) + 1;
@@ -26160,6 +26173,10 @@ async function openPayrollPerson(user, day) {
     const rows = x.rows.slice().sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity));
     const live = rows.filter(c => !(c.canceled && !c.arrived)), lastDone = live.length && live.every(c => c.done) ? x.end : null;
     const out = [`<div class="pr-ln pr-ln-start"><span>Start time</span><b>${x.start ? tm(new Date(x.start).toISOString()) : "—"}</b></div>`];
+    if (x.pickup) { const pu = x.pickup, a0 = new Date(x.start).toISOString(), a1 = new Date(x.start + pu.min * 60000).toISOString();
+      out.push(`<div class="pr-ln pr-ln-pu${pu.approved ? " ok" : ""}" title="${pu.approved ? "Approved" + (pu.by ? " by " + esc(pu.by) : "") : "Added on its own: the first job is an install. Approve it or change the minutes."}"><span>Pick up equipment</span><b>${rng(a0, a1)}</b><i>${short(pu.min * 60000)}</i></div>
+        <div class="pr-pu" data-pu-day="${d}"><input type="number" min="0" max="600" step="5" value="${pu.min}" aria-label="Minutes to pick up equipment"> min
+          <button type="button" class="btn pr-pu-go${pu.approved ? " done" : ""}" data-pu-save>${pu.approved ? "✓ Approved" : "Approve"}</button></div>`); }
     for (const c of rows) {
       if (c.canceled && !c.arrived) { out.push(`<div class="pr-ln pr-ln-cx"><span>Cancelled</span><b>${esc(c.customer || c.kind)}</b></div>`); continue; }
       out.push(c.drive != null
@@ -26257,6 +26274,11 @@ async function openPayrollPerson(user, day) {
       const c = art.cloneNode(true); c.style.cssText = "position:fixed;left:0;top:0;width:1276px;visibility:hidden;z-index:-1";
       c.querySelectorAll(".pr-back,.pr-period .btn,.pr-period .link,#pr-dv-box,.pr-note").forEach(e => e.style.display = "none"); document.body.append(c);
       const h = c.getBoundingClientRect().height; c.remove(); art.style.setProperty("--pr-zoom", h * 0.78 > 755 ? (0.98 * 755 / h).toFixed(3) : "0.78"); }); }
+  document.querySelectorAll("[data-pu-day]").forEach(box => { const inp = box.querySelector("input"), btn = box.querySelector("[data-pu-save]"), was = inp.value;
+    inp.addEventListener("input", () => { const ch = inp.value !== was; btn.textContent = ch ? "Save" : (btn.classList.contains("done") ? "✓ Approved" : "Approve"); btn.classList.toggle("save-go", ch); });
+    btn.addEventListener("click", async () => { const m = Math.round(Number(inp.value)); if (!(m >= 0 && m <= 600)) return alertMsg("Type the minutes, 0 to 600.");
+      btn.disabled = true; const { error } = await db.rpc("payroll_extra_set", { p_user: user, p_day: box.dataset.puDay, p_kind: "pickup", p_minutes: m, p_approved: true });
+      if (error) { btn.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); } openPayrollPerson(user, p.from); }); });
   document.querySelectorAll("button[data-pr-open]").forEach(b => b.addEventListener("click", () => {
     const t = document.querySelector(`button[data-pr-day="${b.dataset.prOpen}"]`); if (!t) return;
     if (PR.day !== b.dataset.prOpen) t.click(); else $("#pr-dv")?.scrollIntoView({ behavior: "smooth", block: "start" });
