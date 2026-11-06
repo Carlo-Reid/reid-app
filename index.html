@@ -1546,6 +1546,7 @@
   .pr-ln-pu { background: #ede9fe; border-color: #c4b5fd; color: #4c1d95; } .pr-ln-pu > span { color: #5b21b6; } .pr-ln-pu.ok { background: #dcfce7; border-color: #86d6a4; color: #14532d; } .pr-ln-pu.ok > span { color: #166534; }
   .pr-pu { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; margin: -1px 0 1px; } .pr-pu input { width: 52px; padding: 1px 4px; font-size: 11.5px; }
   .pr-pu .btn { padding: 1px 8px; font-size: 11px; min-height: 0; } .pr-pu .btn.done { color: #166534; border-color: #86d6a4; }
+  .pr-pu-why { font-size: 10.5px; line-height: 1.3; color: #4c1d95; padding: 1px 6px; white-space: normal; }
   @media print { .pr-pu { display: none !important; } }
   /* the day headings: highlighted blue, the day and date bigger */
   .pr-tech .pr-dt { background: #dbeafe !important; border-bottom: 3px solid #1d4ed8 !important; border-radius: 8px 8px 0 0 !important; padding: 5px 8px 6px !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -26155,7 +26156,7 @@ async function openPayrollPerson(user, day) {
   for (const z of days) { const x = z.x; if (!x || !x.n || x.start == null) continue;
     const ts = v => v ? Date.parse(v) : null, first = x.rows.filter(c => !(c.canceled && !c.arrived)).sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity))[0];
     const saved = EX.get(z.d); if (!saved && !/install/i.test(first?.kind || "")) continue;
-    const min = saved ? Number(saved.minutes) : 30; x.pickup = { min, approved: !!saved?.approved, saved: !!saved, by: saved?.set_by || "" };
+    const min = saved ? Number(saved.minutes) : 30; x.pickup = { min, approved: !!saved?.approved, saved: !!saved, by: saved?.set_by || "", why: saved?.reason || "" };
     x.start -= min * 60000; if (x.span != null) x.span += min * 60000; x.onCall = (x.onCall || 0) + min * 60000; }
   const worked = days.filter(x => x.x && x.x.n);
   const sum = k => worked.reduce((t, x) => t + (x.x[k] || 0), 0);
@@ -26175,7 +26176,7 @@ async function openPayrollPerson(user, day) {
     const out = [`<div class="pr-ln pr-ln-start"><span>Start time</span><b>${x.start ? tm(new Date(x.start).toISOString()) : "—"}</b></div>`];
     if (x.pickup) { const pu = x.pickup, a0 = new Date(x.start).toISOString(), a1 = new Date(x.start + pu.min * 60000).toISOString();
       out.push(`<div class="pr-ln pr-ln-pu${pu.approved ? " ok" : ""}" title="${pu.approved ? "Approved" + (pu.by ? " by " + esc(pu.by) : "") : "Added on its own: the first job is an install. Approve it or change the minutes."}"><span>Pick up equipment</span><b>${rng(a0, a1)}</b><i>${short(pu.min * 60000)}</i></div>
-        <div class="pr-pu" data-pu-day="${d}"><input type="number" min="0" max="600" step="5" value="${pu.min}" aria-label="Minutes to pick up equipment"> min
+        ${pu.why ? `<div class="pr-pu-why">Why: ${esc(pu.why)}</div>` : ""}<div class="pr-pu" data-pu-day="${d}" data-pu-why="${esc(pu.why)}"><input type="number" min="0" max="600" step="5" value="${pu.min}" aria-label="Minutes to pick up equipment"> min
           <button type="button" class="btn pr-pu-go${pu.approved ? " done" : ""}" data-pu-save>${pu.approved ? "✓ Approved" : "Approve"}</button></div>`); }
     for (const c of rows) {
       if (c.canceled && !c.arrived) { out.push(`<div class="pr-ln pr-ln-cx"><span>Cancelled</span><b>${esc(c.customer || c.kind)}</b></div>`); continue; }
@@ -26277,7 +26278,14 @@ async function openPayrollPerson(user, day) {
   document.querySelectorAll("[data-pu-day]").forEach(box => { const inp = box.querySelector("input"), btn = box.querySelector("[data-pu-save]"), was = inp.value;
     inp.addEventListener("input", () => { const ch = inp.value !== was; btn.textContent = ch ? "Save" : (btn.classList.contains("done") ? "✓ Approved" : "Approve"); btn.classList.toggle("save-go", ch); });
     btn.addEventListener("click", async () => { const m = Math.round(Number(inp.value)); if (!(m >= 0 && m <= 600)) return alertMsg("Type the minutes, 0 to 600.");
-      btn.disabled = true; const { error } = await db.rpc("payroll_extra_set", { p_user: user, p_day: box.dataset.puDay, p_kind: "pickup", p_minutes: m, p_approved: true });
+      // a time other than the 30 minutes: say why (kept with it, shown on the line)
+      let why = box.dataset.puWhy || "";
+      if (m !== 30 && String(m) !== was) { why = "";
+        while (!why.trim()) { let typed = "";
+          const pr = askChoice("Why is more time needed?", `Picking up equipment is usually 30 minutes. Say why it took ${m} minutes this day.<br><textarea id="pu-why" rows="3" style="width:100%;margin-top:8px" placeholder="e.g. two furnaces and an A/C to load, waited for the parts order"></textarea>`, [["save", "Save", true], ["", "Cancel"]]);
+          const ta = document.getElementById("pu-why"); ta?.focus(); ta?.addEventListener("input", () => { typed = ta.value; });
+          if (await pr !== "save") return; why = typed; if (!why.trim()) alertMsg("Type the reason first."); } }
+      btn.disabled = true; const { error } = await db.rpc("payroll_extra_set", { p_user: user, p_day: box.dataset.puDay, p_kind: "pickup", p_minutes: m, p_approved: true, p_reason: m === 30 ? null : why.trim() });
       if (error) { btn.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); } openPayrollPerson(user, p.from); }); });
   document.querySelectorAll("button[data-pr-open]").forEach(b => b.addEventListener("click", () => {
     const t = document.querySelector(`button[data-pr-day="${b.dataset.prOpen}"]`); if (!t) return;
