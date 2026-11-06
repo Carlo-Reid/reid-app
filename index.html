@@ -1562,6 +1562,14 @@
   .pr-tech .pr-jb.pr-jb-open { background: #fee2e2; border-color: #dc2626; border-left-color: #dc2626 !important; } .pr-tech .pr-jb.pr-jb-open .pr-jb-miss { color: #b91c1c; font-weight: 800; }
   #open-calls { position: fixed; left: 0; right: 0; bottom: 0; z-index: 9999; max-height: 40vh; overflow-y: auto; background: #dc2626; color: #fff; padding: 10px 16px; font-size: 14px; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
   #open-calls ul { margin: 4px 0; padding-left: 20px; } #open-calls small { opacity: .9; }
+  .od-done { display: block; width: 100%; margin: 0 0 10px; background: #1e3a8a; border-color: #1e3a8a; color: #fff; font-weight: 800; } .od-done:disabled { background: #64748b; border-color: #64748b; opacity: 1; }
+  #od-over { position: fixed; inset: 0; z-index: 10000; background: rgba(15, 23, 42, .72); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #od-over .od-card { background: var(--card, #fff); color: var(--ink, #1f2937); border-radius: 16px; padding: 26px 28px; max-width: 460px; width: 100%; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,.35); }
+  #od-over h2 { margin: 0 0 8px; } #od-over input[type=time] { font: inherit; padding: 4px 6px; } .od-big { font-size: 17px; padding: 10px 22px; margin: 8px 0; }
+  .od-tbl { width: 100%; border-collapse: collapse; font-size: 14px; } .od-tbl th, .od-tbl td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line, #e3e7eb); vertical-align: top; } .od-tbl .num { text-align: right; }
+  .od-wrap { overflow-x: auto; } .od-off td { color: var(--muted, #8a94a0); } .od-unv { background: #fff7ed; } .od-src { font-size: 11.5px; } .od-cut { font-size: 11.5px; color: #b45309; }
+  .od-sched { display: grid; gap: 6px; max-width: 420px; } .od-srow { display: flex; gap: 8px; align-items: center; } .od-srow > span { width: 100px; } .od-srow input { font: inherit; padding: 3px 6px; }
+  .od-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } .od-tag { font-size: 14px; font-weight: 600; }
   .pr-note { border: 1px solid #86efac; background: #f0fdf4; border-radius: 12px; padding: 10px 14px; margin: 6px 0 12px; } .pr-note label { display: block; font-weight: 700; color: #166534; margin-bottom: 6px; }
   .pr-note textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line, #d0d7de); resize: vertical; background: #fff; }
   .pr-note-row { display: flex; gap: 10px; align-items: center; margin-top: 6px; flex-wrap: wrap; } .pr-note-row .quiet { font-size: 12px; }
@@ -5948,6 +5956,7 @@ async function showApp() {
   $("#mycalls-link").classList.toggle("hidden", !ME.booking || !(ME.role === "technician" || ME.role === "owner"));   // My calls: techs (and owners) only
   $("#fu-link").classList.toggle("hidden", !ME.role);
   checkOpenCalls();
+  { let fl = false; try { fl = sessionStorage.getItem("reid.dayStartOnLogin") === "1"; sessionStorage.removeItem("reid.dayStartOnLogin"); } catch { } officeDayInit(fl); }
   $("#sales-link").classList.toggle("hidden", !(ME.role === "sales" || ME.role === "owner" || can("calls.dispatch")));
   $("#sdsp-link").classList.toggle("hidden", !(ME.role === "sales" || ME.role === "owner"));
   document.body.classList.toggle("sales-only", ME.role === "sales");
@@ -6035,7 +6044,7 @@ $("#signin-form").addEventListener("submit", async e => {
   e.preventDefault();
   $("#signin-error").textContent = "";
   const { error } = await db.auth.signInWithPassword({ email: $("#email").value.trim(), password: $("#password").value });
-  if (!error) try { sessionStorage.setItem("reid.justSignedIn", "1"); sessionStorage.removeItem("reid.loginId"); } catch (e) {}
+  if (!error) try { sessionStorage.setItem("reid.dayStartOnLogin", "1"); sessionStorage.setItem("reid.justSignedIn", "1"); sessionStorage.removeItem("reid.loginId"); } catch (e) {}
   if (error) { $("#signin-error").textContent = "That email and password didn't match. Check them and try again."; return; }
   showApp();
 });
@@ -24961,6 +24970,155 @@ async function pbLoadKit(id, r, edit) {
   }, 250); });
 }
 
+/* ---------------- office staff: the work day (time in / time out) ---------------- */
+// Work day turns over at 2 am. Time in: "Let's start the day" (or signing in in the morning). Time out: "Done work", or if they forget,
+// their last typing / click / scroll, which they're asked to verify. Pay: 15 min before the expected start to 15 min after the expected end.
+const OFFICE_ROLES = ["office", "admin", "accounting", "dispatcher", "warehouse"];
+const TOR = "America/Toronto";
+const torParts = v => Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: TOR, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+  .formatToParts(new Date(v)).map(x => [x.type, x.value]));
+const torDate = v => { const q = torParts(v); return `${q.year}-${q.month}-${q.day}`; };
+const torHM = v => { const q = torParts(v); return `${q.hour}:${q.minute}`; };
+const torISO = (d, hm) => { const [y, m, dd] = d.split("-").map(Number), [h, mi] = hm.split(":").map(Number), t = Date.UTC(y, m - 1, dd, h, mi), q = torParts(t);
+  return new Date(t - (Date.UTC(+q.year, +q.month - 1, +q.day, +q.hour, +q.minute) - t)).toISOString(); };
+const torTime = v => new Date(v).toLocaleTimeString("en-CA", { timeZone: TOR, hour: "numeric", minute: "2-digit" });
+const officeWorkDay = () => torDate(Date.now() - 2 * 3600000);
+let OD = { on: false, st: null, act: 0, pinged: 0 };
+async function officeDayInit(fromLogin) {
+  let st; try { const r = await db.rpc("office_day_status"); if (r.error) return; st = r.data; } catch { return; }
+  OD.st = st; OD.on = !!st?.office;
+  document.body.classList.toggle("is-office", OD.on);
+  if (!OD.on) { document.querySelector("#od-done")?.remove(); document.querySelector("#od-over")?.remove(); return; }
+  if (!document.querySelector("#od-done")) {
+    const b = document.createElement("button"); b.type = "button"; b.id = "od-done"; b.className = "btn od-done";
+    b.addEventListener("click", officeDone); document.querySelector("#side header")?.prepend(b);
+  }
+  if (!st.today && fromLogin) { const r = await db.rpc("office_day_start"); if (!r.error) OD.st = st = r.data; }
+  officeDraw();
+}
+function officeDraw() {
+  const st = OD.st, b = document.querySelector("#od-done"); if (!st) return;
+  if (b) { b.innerHTML = st.today?.time_out ? "✓ Done for the day" : "🏁 Done work"; b.disabled = !st.today || !!st.today.time_out;
+    b.title = st.today ? `Time in ${torTime(st.today.time_in)}${st.today.time_out ? " · time out " + torTime(st.today.time_out) : ""}` : ""; }
+  let o = document.querySelector("#od-over");
+  const show = html => { if (!o) { o = document.createElement("div"); o.id = "od-over"; o.setAttribute("role", "dialog"); document.body.append(o); } o.innerHTML = `<div class="od-card">${html}</div>`; return o; };
+  if (!st.today) {
+    show(`<h2>☀️ Good morning!</h2><p>Let's start the day.</p><button type="button" class="btn od-big" id="od-start">Let's start the day</button><p class="quiet">Pressing it starts your time for today.</p>`);
+    o.querySelector("#od-start").addEventListener("click", async e => { e.target.disabled = true; const r = await db.rpc("office_day_start"); if (r.error) { e.target.disabled = false; return alertMsg("Not started: " + rpcErr(r.error)); } OD.st = r.data; officeDraw(); });
+  } else if (st.today.time_out) {
+    show(`<h2>🏁 Done for the day</h2><p>Your time out is <b>${torTime(st.today.time_out)}</b> (time in ${torTime(st.today.time_in)}).</p><p>See you tomorrow!</p>
+      <button type="button" class="link" id="od-back">I'm not done yet: back to work</button>`);
+    o.querySelector("#od-back").addEventListener("click", async () => { const r = await db.rpc("office_day_done", { p_done: false }); if (!r.error) { OD.st = r.data; officeDraw(); } });
+  } else if (st.verify?.length) {
+    const v = st.verify[0];
+    show(`<h2>⏰ Please verify your time out</h2><p>You didn't press <b>Done work</b> on <b>${esc(longDate(String(v.day).slice(0, 10)))}</b>. The app used the last time you typed, clicked or scrolled.</p>
+      <p>Time in <b>${torTime(v.time_in)}</b> · time out <input type="time" id="od-vt" value="${torHM(v.time_out)}"></p>
+      <button type="button" class="btn od-big" id="od-vok">That's right</button> <span class="quiet" id="od-vmsg"></span>`);
+    const t = o.querySelector("#od-vt"), ok = o.querySelector("#od-vok");
+    t.addEventListener("input", () => { ok.textContent = t.value === torHM(v.time_out) ? "That's right" : "Save my time out"; });
+    ok.addEventListener("click", async () => {
+      const d = torDate(v.time_in); let out = torISO(d, t.value); if (Date.parse(out) <= Date.parse(v.time_in)) out = torISO(cvAddDays(d, 1), t.value);
+      const r = await db.rpc("office_verify", { p_id: v.id, p_time_out: out }); if (r.error) return (o.querySelector("#od-vmsg").textContent = "Not saved: " + rpcErr(r.error));
+      OD.st = r.data; officeDraw(); });
+  } else o?.remove();
+}
+async function officeDone() {
+  if (!OD.st?.today || OD.st.today.time_out) return;
+  if (!(await askChoice("Done work for today?", `Your time out will be <b>${torTime(Date.now())}</b>.`, [["yes", "Yes, I'm done", true], ["", "Not yet"]]))) return;
+  const r = await db.rpc("office_day_done", { p_done: true }); if (r.error) return alertMsg("Not saved: " + rpcErr(r.error)); OD.st = r.data; officeDraw();
+}
+["keydown", "click", "scroll", "wheel", "touchstart"].forEach(ev => document.addEventListener(ev, () => { OD.act = Date.now(); }, { capture: true, passive: true }));
+setInterval(() => {
+  if (!OD.on || !OD.st) return;
+  if (OD.st.day && officeWorkDay() !== String(OD.st.day).slice(0, 10)) return officeDayInit(false);   // after 2 am: a new day, "Let's start the day"
+  if (OD.st.today && !OD.st.today.time_out && OD.act > OD.pinged && Date.now() - OD.pinged > 120000) { OD.pinged = Date.now(); db.rpc("office_ping"); }
+}, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && OD.on) officeDayInit(false); });
+
+/* office staff on the Payroll page: expected hours, each day's time in / out, and what's paid */
+async function openOfficePayroll(user, p, seq) {
+  const { data, error } = await db.rpc("office_period", { p_user: user, p_from: p.from, p_to: p.to });
+  if (seq !== openPayrollPerson.seq) return;
+  if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load payroll</h2>${esc(error?.message || "Nothing came back.")}</div></div>`; return; }
+  const owner = ME.role === "owner", today = salesToday(), WD = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const sch = new Map((data.schedule || []).map(x => [Number(x.weekday), x])), byDay = new Map((data.days || []).map(x => [String(x.day).slice(0, 10), x]));
+  const mins = hm => { const [h, m] = String(hm).split(":").map(Number); return h * 60 + m; }, hm12 = hm => { if (!hm) return ""; const [h, m] = hm.split(":").map(Number); return `${(h % 12) || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "am" : "pm"}`; };
+  const wdOf = d => { const w = new Date(d + "T12:00:00Z").getUTCDay(); return w === 0 ? 7 : w; };
+  const minOn = (d, v) => { const q = torDate(v); let m = mins(torHM(v)); if (q > d) m += 1440; return m; };
+  let tot = 0, totRaw = 0, worked = 0;
+  const rows = []; for (let d = p.from; d <= p.to; d = cvAddDays(d, 1)) {
+    const x = byDay.get(d), s = sch.get(wdOf(d));
+    let paid = null, raw = null, note = "";
+    if (x?.time_in && x?.time_out) {
+      const a = minOn(d, x.time_in), b = minOn(d, x.time_out); raw = Math.max(0, b - a);
+      if (s) { const ps = Math.max(a, mins(s.starts) - 15), pe = Math.min(b, mins(s.ends) + 15); paid = Math.max(0, pe - ps);
+        const bits = []; if (a < mins(s.starts) - 15) bits.push(`in ${mins(s.starts) - a} min early`); if (b > mins(s.ends) + 15) bits.push(`out ${b - mins(s.ends)} min late`);
+        if (bits.length) note = `Not paid: ${bits.join(", ")} (only 15 min either side counts)`; }
+      else paid = raw;
+      tot += paid; totRaw += raw; worked++;
+    }
+    const src = !x?.time_out ? (x && d === today ? "working now" : "") : x.source === "button" ? "Done work" : x.source === "auto" ? "⚠️ last activity, not verified yet" : x.source === "verified" ? "verified by them" : x.source === "edited" ? "changed by " + (x.edited_by || "an owner") : "";
+    rows.push(`<tr class="${x ? "" : "od-off"}${x?.source === "auto" ? " od-unv" : ""}" data-od-day="${d}">
+      <td><b>${esc(longDate(d))}</b></td><td>${s ? `${hm12(s.starts)} – ${hm12(s.ends)}` : '<span class="quiet">day off</span>'}</td>
+      <td>${x ? torTime(x.time_in) : "—"}</td><td>${x?.time_out ? torTime(x.time_out) : "—"}${src ? `<div class="quiet od-src">${esc(src)}</div>` : ""}</td>
+      <td class="num">${paid != null ? prHrs(paid * 60000) : "—"}${note ? `<div class="od-cut">${esc(note)}</div>` : ""}</td>
+      ${owner ? `<td><button type="button" class="link" data-od-edit>${x ? "Change" : "Add"}</button></td>` : ""}</tr>`);
+  }
+  const prev = cvAddDays(p.from, -1), next = cvAddDays(p.to, 1);
+  $("#main").innerHTML = `<article class="staff pr-page pr-office"><p class="pr-back"${owner ? "" : " hidden"}><button type="button" class="link" id="pr-back">← Payroll</button></p>
+    <h1>${esc(data.name || "Payroll")} <span class="quiet od-tag">Office staff</span></h1>
+    <section class="pr-note" id="pr-note"><label for="pr-note-t">📝 Add a note for Payroll to see <span class="quiet">(${fmtDate(p.from)} – ${fmtDate(p.to)})</span></label>
+      <textarea id="pr-note-t" rows="2" placeholder="Anything payroll should know about this pay period…"></textarea>
+      <div class="pr-note-row"><button type="button" class="btn" id="pr-note-save" disabled>Save note</button><span class="quiet" id="pr-note-msg"></span></div></section>
+    <div class="pr-period"><button type="button" class="btn" data-od-go="${prev}">← Previous</button>
+      <div><b>${fmtDate(p.from)} – ${fmtDate(p.to)}</b><div class="muted">Paid on ${fmtDate(p.pay)}${p.from <= today && today <= p.to ? " · this period" : ""}</div></div>
+      <button type="button" class="btn" data-od-go="${next}"${p.from > today ? " disabled" : ""}>Next →</button></div>
+    <div class="pr-tiles od-tiles"><div class="pr-tile"><span>Days worked</span><b>${worked}</b></div><div class="pr-tile"><span>Hours paid</span><b>${prHrs(tot * 60000)}</b></div>
+      <div class="pr-tile"><span>Hours at work</span><b>${prHrs(totRaw * 60000)}</b><small>time in to time out</small></div><div class="pr-tile"><span>Not paid</span><b>${prHrs(Math.max(0, totRaw - tot) * 60000)}</b><small>more than 15 min outside expected hours</small></div></div>
+    <section class="block"><h2>🗓️ Days</h2><div class="od-wrap"><table class="od-tbl"><thead><tr><th>Day</th><th>Expected</th><th>Time in</th><th>Time out</th><th class="num">Paid</th>${owner ? "<th></th>" : ""}</tr></thead><tbody>${rows.join("")}</tbody></table></div>
+      <p class="quiet">Pay counts from 15 minutes before the expected start to 15 minutes after the expected end. Time in is when they press <b>Let's start the day</b> (or sign in in the morning); time out is <b>Done work</b>, or their last activity if they forget.</p></section>
+    <section class="block"><h2>⏰ Expected hours</h2>${owner ? "" : '<p class="quiet">Set by the owners.</p>'}
+      <div class="od-sched">${[1, 2, 3, 4, 5, 6, 7].map(w => { const s = sch.get(w); return `<div class="od-srow" data-wd="${w}"><span>${WD[w]}</span>${owner
+        ? `<input type="time" data-s value="${s?.starts || ""}" aria-label="${WD[w]} start"> – <input type="time" data-e value="${s?.ends || ""}" aria-label="${WD[w]} end">`
+        : s ? `<b>${hm12(s.starts)} – ${hm12(s.ends)}</b>` : '<span class="quiet">day off</span>'}</div>`; }).join("")}</div>
+      ${owner ? `<p class="quiet">Leave a day empty for a day off.</p><button type="button" class="btn" id="od-ssave" disabled>Save expected hours</button> <span class="quiet" id="od-smsg"></span>` : ""}</section>
+  </article>`;
+  $("#pr-back")?.addEventListener("click", () => openPayroll());
+  document.querySelectorAll("[data-od-go]").forEach(b => b.addEventListener("click", () => openPayrollPerson(user, b.dataset.odGo)));
+  prWireNote(user, p);
+  if (owner) {
+    const sv = $("#od-ssave"); document.querySelectorAll(".od-sched input").forEach(i => i.addEventListener("input", () => { sv.disabled = false; }));
+    sv.addEventListener("click", async () => {
+      const days = [...document.querySelectorAll(".od-srow")].map(r => ({ weekday: Number(r.dataset.wd), starts: r.querySelector("[data-s]").value, ends: r.querySelector("[data-e]").value })).filter(x => x.starts && x.ends);
+      const bad = days.find(x => x.ends <= x.starts); if (bad) return ($("#od-smsg").textContent = `${WD[bad.weekday]}: the end has to be after the start.`);
+      sv.disabled = true; const { error } = await db.rpc("office_schedule_set", { p_user: user, p_days: days }); if (error) { sv.disabled = false; return ($("#od-smsg").textContent = "Not saved: " + rpcErr(error)); }
+      openPayrollPerson(user, p.from); });
+    document.querySelectorAll("[data-od-edit]").forEach(b => b.addEventListener("click", () => {
+      const tr = b.closest("tr"), d = tr.dataset.odDay, x = byDay.get(d);
+      tr.cells[2].innerHTML = `<input type="time" data-in value="${x ? torHM(x.time_in) : ""}">`; tr.cells[3].innerHTML = `<input type="time" data-out value="${x?.time_out ? torHM(x.time_out) : ""}">`;
+      b.parentElement.innerHTML = `<button type="button" class="btn" data-od-save>Save times</button> <button type="button" class="link" data-od-cancel>Cancel</button>${x ? ' <button type="button" class="link danger" data-od-del>Remove day</button>' : ""}`;
+      const go = async (pin, pout) => { const { error } = await db.rpc("office_shift_set", { p_user: user, p_day: d, p_in: pin, p_out: pout }); if (error) return alertMsg("Not saved: " + rpcErr(error)); openPayrollPerson(user, p.from); };
+      tr.querySelector("[data-od-cancel]").addEventListener("click", () => openPayrollPerson(user, p.from));
+      tr.querySelector("[data-od-del]")?.addEventListener("click", async () => { if (await askChoice("Remove this day?", "Its time in and time out are taken off.", [["yes", "Remove it", true], ["", "Keep it"]])) go(null, null); });
+      tr.querySelector("[data-od-save]").addEventListener("click", () => { const i = tr.querySelector("[data-in]").value, o = tr.querySelector("[data-out]").value; if (!i) return alertMsg("Put in the time in.");
+        let out = o ? torISO(d, o) : null; const pin = torISO(d, i); if (out && Date.parse(out) <= Date.parse(pin)) out = torISO(cvAddDays(d, 1), o); go(pin, out); });
+    }));
+  }
+}
+// the note for payroll (techs' and office staff's payroll pages)
+async function prWireNote(user, p) {
+  const t = $("#pr-note-t"), b = $("#pr-note-save"), m = $("#pr-note-msg"); if (!t) return;
+  const who = v => `Last saved ${new Date(v.at).toLocaleString("en-CA", { timeZone: TOR, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}${v.by ? " by " + esc(v.by) : ""}`;
+  let saved = "";
+  try { const r = await db.rpc("payroll_note_get", { p_user: user, p_from: p.from }); if (!r.error && r.data) { saved = r.data.note || ""; t.value = saved; m.innerHTML = saved ? who(r.data) : ""; } } catch { }
+  t.addEventListener("input", () => { b.disabled = t.value.trim() === saved.trim(); });
+  b.addEventListener("click", async () => {
+    b.disabled = true; const { error } = await db.rpc("payroll_note_set", { p_user: user, p_from: p.from, p_note: t.value });
+    if (error) { b.disabled = false; m.textContent = "Not saved: " + rpcErr(error); return; }
+    saved = t.value.trim(); m.innerHTML = "✓ Saved. Payroll can see it.";
+  });
+}
+
 /* ---------------- calls not closed: a warning that stays on screen until the tech presses Done (in ServiceTitan) ---------------- */
 async function checkOpenCalls() {
   if (!ME.role || ME.role === "owner") return document.querySelector("#open-calls")?.remove();
@@ -26254,6 +26412,9 @@ async function openPayrollPerson(user, day) {
   if (ME.role !== "owner" && Number(user) !== Number(ME.id)) { if (ME.id) return openPayrollPerson(ME.id, day); $("#main").innerHTML = `<div class="empty"><div><h2>Payroll</h2>You can only see your own payroll.</div></div>`; return; }
   if (!$("#main .pr-tech")) $("#main").innerHTML = `<div class="loading">Loading…</div>`;
   const seq = openPayrollPerson.seq = (openPayrollPerson.seq || 0) + 1;
+  { let role = Number(user) === Number(ME.id) ? ME.role : null, tech = null;   // office staff: time in / time out instead of calls
+    if (ME.role === "owner") { if (!PR.people) { const r = await db.rpc("payroll_people"); PR.people = r.data || []; } const x = PR.people.find(q => Number(q.user) === Number(user)); if (x) { role = x.role; tech = x.tech; } }
+    if (OFFICE_ROLES.includes(role) && !tech) return openOfficePayroll(user, p, seq); }
   const { data, error } = await db.rpc("payroll_tech_period", { p_user: user, p_from: p.from, p_to: p.to });
   if (seq !== openPayrollPerson.seq) return;
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load payroll</h2>${esc(error?.message || "Nothing came back.")}</div></div>`; return; }
@@ -26393,18 +26554,7 @@ async function openPayrollPerson(user, day) {
     <div id="pr-dv-box">${PR.day && days.some(z => z.d === PR.day) ? dayView(PR.day) : ""}</div>
     <p class="muted pr-note">First call start is when he went <i>On the way</i> to his first call (or arrived, if that wasn't pressed). Last call end is when he pressed <i>Done</i> on his last call. Click a day to see it hour by hour.</p>
   </article>`;
-  (async () => {   // the note for payroll: load, then save when changed
-    const t = $("#pr-note-t"), b = $("#pr-note-save"), m = $("#pr-note-msg"); if (!t) return;
-    const who = v => `Last saved ${new Date(v.at).toLocaleString("en-CA", { timeZone: "America/Toronto", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}${v.by ? " by " + esc(v.by) : ""}`;
-    let saved = "";
-    try { const r = await db.rpc("payroll_note_get", { p_user: user, p_from: p.from }); if (!r.error && r.data) { saved = r.data.note || ""; t.value = saved; m.innerHTML = saved ? who(r.data) : ""; } } catch { }
-    t.addEventListener("input", () => { b.disabled = t.value.trim() === saved.trim(); });
-    b.addEventListener("click", async () => {
-      b.disabled = true; const { error } = await db.rpc("payroll_note_set", { p_user: user, p_from: p.from, p_note: t.value });
-      if (error) { b.disabled = false; m.textContent = "Not saved: " + rpcErr(error); return; }
-      saved = t.value.trim(); m.innerHTML = "✓ Saved. Payroll can see it.";
-    });
-  })();
+  prWireNote(user, p);
   $("#pr-back").addEventListener("click", () => openPayroll());
   document.querySelectorAll("[data-pr-go]").forEach(b => b.addEventListener("click", () => openPayrollPerson(user, b.dataset.prGo)));
   const wireDv = () => document.querySelector("[data-pr-close]")?.addEventListener("click", () => { PR.day = null; $("#pr-dv-box").innerHTML = ""; document.querySelectorAll(".pr-dt.on").forEach(b => { b.classList.remove("on"); b.setAttribute("aria-pressed", "false"); }); });
