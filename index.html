@@ -4404,6 +4404,9 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .bkw-btn b { font-size: 16px; } .bkw-btn small { color: var(--steel); font-size: 12px; line-height: 1.3; } .bkw-ic { font-size: 24px; line-height: 1; }
 .bkw-btn.big { min-height: 120px; } .bkw-btn.big b { font-size: 19px; } .bkw-btn.alt { border-style: dashed; }
 .bkw-btn.own { border-color: #74c0fc; } .bkw-own { position: absolute; top: 8px; right: 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; padding: 2px 6px; border-radius: 4px; background: #e7f5ff; color: #1864ab; }
+.bkw-tw { display: flex; flex-direction: column; gap: 6px; } .bkw-tw .bkw-btn { flex: 1; }
+.bkw-time { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border: 1px dashed var(--line); border-radius: 6px; font-size: 12px; }
+.bkw-time label { display: flex; align-items: center; gap: 4px; font-weight: 700; } .bkw-time input { width: 64px; padding: 3px 5px; font: inherit; }
 .bkw-foot { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
 .bkw-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .bkw-crumb { padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
@@ -9532,7 +9535,9 @@ async function bookLists(force) {
   if (BOOK && !force) return BOOK;
   const r = await db.rpc("booking_lists");
   if (r.error || !r.data) throw new Error(r.error && /function|schema/i.test(r.error.message) ? "Run RUN SETUP.bat to switch on booking and dispatch." : (r.error?.message || "Please sign in again."));
-  BOOK = r.data; return BOOK;
+  BOOK = r.data;
+  { const m = await db.rpc("job_type_minutes_get"); (m.data || []).forEach(x => { const t = (BOOK.job_types || []).find(j => j.id === x.id); if (t) t.duration = x.minutes; }); }   // the times set on Book a call
+  return BOOK;
 }
 const clock = t => {             // "13:30" or a date-time -> "1:30 pm"
   let h, m;
@@ -11613,8 +11618,10 @@ function bkWizard(msg) {
       <button type="button" class="bkw-btn big ah" data-bkw-hours="ah"><span class="bkw-ic">🌙</span><b>After hours</b><small>Emergency priority · after-hours rates</small></button>`; }
   else { const c = BKW_CATS.find(x => x[0] === F.cat); q = `Which ${esc((c?.[1] || "job").toLowerCase())}?`;
     const sc = types.filter(t => bkwCatOf(t, F) === F.cat && BKW_SC.test(t.name));
-    grid = (sc.length ? `<button type="button" class="bkw-btn" data-bkw-sc><b>Service Call</b><small>Regular hours or after hours: asked next</small></button>` : "") + types.filter(t => bkwCatOf(t, F) === F.cat && !(sc.length && BKW_SC.test(t.name))).map(t => `<button type="button" class="bkw-btn${t.own ? " own" : ""}" data-bkw-type="${t.id}"><b>${esc(t.name)}</b>
-      <small>${esc(bkwUnit(t.unit_id)?.name || "Pick the department next")}${t.duration ? " · " + durText(t.duration) : ""}</small>${t.own ? `<span class="bkw-own">${esc(who)}</span>` : ""}</button>`).join(""); }
+    const canTime = F.cat === "maintenance" && (ME.role === "owner" || can("calls.dispatch"));
+    const timeBox = t => F.cat !== "maintenance" ? "" : `<div class="bkw-time">${canTime ? `<label>⏱ Time given <input type="number" min="5" max="600" step="5" value="${Number(t.duration) || 60}" data-bkw-min="${t.id}" aria-label="Minutes for ${esc(t.name)}"> min</label><span class="quiet" data-bkw-mint="${t.id}">${durText(Number(t.duration) || 60)}</span>` : `⏱ ${durText(Number(t.duration) || 60)}`}</div>`;
+    grid = (sc.length ? `<button type="button" class="bkw-btn" data-bkw-sc><b>Service Call</b><small>Regular hours or after hours: asked next</small></button>` : "") + types.filter(t => bkwCatOf(t, F) === F.cat && !(sc.length && BKW_SC.test(t.name))).map(t => `${F.cat === "maintenance" ? `<div class="bkw-tw">` : ""}<button type="button" class="bkw-btn${t.own ? " own" : ""}" data-bkw-type="${t.id}"><b>${esc(t.name)}</b>
+      <small>${esc(bkwUnit(t.unit_id)?.name || "Pick the department next")}${t.duration ? " · " + durText(t.duration) : ""}</small>${t.own ? `<span class="bkw-own">${esc(who)}</span>` : ""}</button>${timeBox(t)}${F.cat === "maintenance" ? "</div>" : ""}`).join(""); }
   const back = step === "who" ? "" : step === "partner" ? "who" : step === "cat" ? (F.htinFixed ? "" : p ? "partner" : "who") : step === "hours" ? "type" : "cat";
   $("#main").innerHTML = `<article class="staff book">
     <h1>Book a call</h1>
@@ -11642,6 +11649,12 @@ function bkWizard(msg) {
     if (list.length === 1) return bkwPick(list[0]); go("type"); }));
   document.querySelectorAll("#main [data-bkw-type]").forEach(b => b.addEventListener("click", () => bkwPick((BOOK.job_types || []).find(t => String(t.id) === b.dataset.bkwType))));
   $("#main [data-bkw-sc]")?.addEventListener("click", () => go("hours"));
+  document.querySelectorAll("#main [data-bkw-min]").forEach(inp => inp.addEventListener("change", async () => {   // the time this kind of maintenance is given
+    const id = Number(inp.dataset.bkwMin), m = Math.round(Number(inp.value) / 5) * 5, t = (BOOK.job_types || []).find(j => j.id === id); if (!t || !(m >= 5)) return;
+    inp.disabled = true; const { error } = await db.rpc("job_type_minutes_set", { p_type: id, p_minutes: m }); inp.disabled = false;
+    if (error) { alertMsg("Not saved: " + rpcErr(error)); inp.value = t.duration || 60; return; }
+    t.duration = m; inp.value = m; const lbl = document.querySelector(`[data-bkw-mint="${id}"]`); if (lbl) lbl.textContent = "✓ Saved · " + durText(m);
+    const sm = document.querySelector(`[data-bkw-type="${id}"] small`); if (sm) sm.textContent = (bkwUnit(t.unit_id)?.name || "Pick the department next") + " · " + durText(m); }));
   document.querySelectorAll("#main [data-bkw-hours]").forEach(b => b.addEventListener("click", () => {
     const ah = b.dataset.bkwHours === "ah", list = bkwTypes(F).filter(t => bkwCatOf(t, F) === F.cat && BKW_SC.test(t.name));
     bkwPick(list.find(t => ah ? /after/i.test(t.name) : /regular/i.test(t.name)) || list[0]); }));

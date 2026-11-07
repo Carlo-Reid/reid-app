@@ -100,7 +100,7 @@ BEGIN
   IF v_unit IS NULL THEN
     SELECT id INTO v_unit FROM business_units ORDER BY (name ~* CASE t ->> 'job_class' WHEN 'maintenance' THEN 'maint' WHEN 'duct_cleaning' THEN 'duct' ELSE 'hvac service' END) DESC, id LIMIT 1;
   END IF;
-  v_dur := coalesce(nullif(t ->> 'default_duration_minutes', ''), '60')::int;
+  v_dur := coalesce((SELECT m.minutes FROM job_type_minutes m WHERE m.job_type_id = (t ->> 'id')::bigint), nullif(t ->> 'default_duration_minutes', '')::int, 60);   -- the time set on Book a call
   INSERT INTO jobs (job_number, customer_id, location_id, job_type_id, business_unit_id, status, priority, summary)
   VALUES ('new', c.id, l.id, (t ->> 'id')::bigint, v_unit, 'new', 'normal', left(coalesce(t ->> 'name', 'Maintenance') || ' (booked online by the customer)', 200))
   RETURNING * INTO j;
