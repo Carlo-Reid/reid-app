@@ -4868,11 +4868,18 @@ article.owing .ow-scopes .ow-scope-p span { -webkit-line-clamp: 2; line-height: 
 .creq-pop { pointer-events: auto; display: flex; align-items: center; gap: 14px; margin: 0 auto; width: min(760px, 100%); box-sizing: border-box; padding: 14px 18px; border-radius: 12px; background: #1864ab; color: #fff; box-shadow: 0 10px 30px rgba(0,0,0,.4); animation: creq-in .35s ease-out; }
 .creq-pop .creq-big { font-size: 22px; font-weight: 900; line-height: 1.2; } .creq-pop .creq-ic { font-size: 30px; }
 .creq-pop .creq-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; } .creq-pop small { opacity: .85; font-size: 13px; }
-.creq-pop a { color: #fff; font-weight: 800; } .creq-pop button { flex: none; padding: 10px 16px; border: 0; border-radius: 8px; background: #fff; color: #1864ab; font: inherit; font-weight: 900; cursor: pointer; }
+.creq-pop a { color: #fff; font-weight: 800; } .creq-pop.acc { background: #1c3d5a; } .creq-pop.done { background: #2b8a3e; } .creq-pop.done button { color: #2b8a3e; }
+.creq-age { flex: none; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,.18); font-weight: 900; font-size: 15px; white-space: nowrap; }
+.creq-pop.warn .creq-age { background: #fab005; color: #3b2a00; } .creq-pop.late .creq-age { background: #e03131; color: #fff; }
+.creq-btns { display: flex; gap: 8px; flex: none; }
+.creq-logbox { max-height: 60vh; overflow: auto; margin: 10px 0; } .creq-log { width: 100%; border-collapse: collapse; font-size: 13px; }
+.creq-log th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--steel); padding: 6px 8px; border-bottom: 2px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+.creq-log td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; } .creq-wait { color: #c92a2a; font-weight: 800; }
+@media (max-width: 640px) { .creq-log thead { display: none; } .creq-log tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--line); } .creq-log td { display: block; border: 0; padding: 2px 4px; } } .creq-pop button { flex: none; padding: 10px 16px; border: 0; border-radius: 8px; background: #fff; color: #1864ab; font: inherit; font-weight: 900; cursor: pointer; }
 .toast.creq-ok { background: #e7f5ff; color: #0b3d6e; border: 1px solid #1c7ed6; padding: 10px 14px; border-radius: 8px; max-width: 360px; font-weight: 700; }
 body[data-side="mini"] .creq-btn { width: 44px; margin: 8px auto; justify-content: center; padding: 10px 0; } body[data-side="mini"] .creq-lbl { display: none; }
 @keyframes creq-in { from { transform: translateY(-30px); opacity: 0; } to { transform: none; opacity: 1; } }
-@media (max-width: 640px) { .creq-pop { flex-wrap: wrap; } .creq-pop .creq-big { font-size: 19px; } .creq-pop button { width: 100%; } }
+@media (max-width: 640px) { .creq-pop { flex-wrap: wrap; } .creq-pop .creq-big { font-size: 19px; } .creq-btns { width: 100%; } .creq-btns button, .creq-pop.done button { flex: 1; } }
 .dp-opt { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding: 10px 12px; border: 2px solid #8ce99a; border-radius: 8px; background: #ebfbee; color: #1b4d2a; font-size: 13px; }
 .dp-opt b { font-size: 14px; } .dp-opt .btn { align-self: flex-start; } .dp-opt.none { border-color: #ffd43b; background: #fff9db; color: #5c3c00; }
 .opt-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
@@ -6475,7 +6482,7 @@ function startCallReq() {
   b.addEventListener("click", openContact);
   try {
     db.channel("call-requests")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "call_requests" }, p => { if (p.new?.to_user_id === ME.id) loadCallReqs(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "call_requests" }, p => { if (p.new?.to_user_id === ME.id || p.new?.from_user_id === ME.id) loadCallReqs(); })
       .subscribe(st => { CREQ.live = st === "SUBSCRIBED"; });
   } catch {}
   loadCallReqs();
@@ -6485,20 +6492,66 @@ function startCallReq() {
 async function loadCallReqs() {
   const { data, error } = await db.rpc("my_call_requests"); if (error) return;
   let bar = $("#creq-bar"); if (!bar) { bar = document.createElement("div"); bar.id = "creq-bar"; bar.setAttribute("aria-live", "assertive"); document.body.append(bar); }
-  const ids = new Set((data || []).map(x => x.id));
-  bar.querySelectorAll(".creq-pop").forEach(el => { if (!ids.has(Number(el.dataset.id))) el.remove(); });
+  const key = x => x.box + x.id, keys = new Set((data || []).map(key));
+  bar.querySelectorAll(".creq-pop").forEach(el => { if (!keys.has(el.dataset.key)) el.remove(); });
+  const tm = v => new Date(v).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
   for (const x of data || []) {
-    if (bar.querySelector(`.creq-pop[data-id="${x.id}"]`)) continue;
-    const t = new Date(x.at).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }), tel = x.phone ? x.phone.replace(/[^\d+]/g, "") : "";
-    const big = x.kind === "call_office" ? `Call ${esc(x.from)} at the office` : `${esc(x.from)} wants you to call him`;
-    const el = document.createElement("div"); el.className = "creq-pop"; el.dataset.id = x.id; el.setAttribute("role", "alert");
-    el.innerHTML = `<span class="creq-ic" aria-hidden="true">📞</span><span class="creq-txt"><span class="creq-big">${big}</span>
-      ${x.note ? `<span>${esc(x.note)}</span>` : ""}<small>Sent at ${t}${x.kind === "call_me" && x.phone ? ` · <a href="tel:${esc(tel)}">${esc(x.phone)}</a>` : ""}</small></span>
-      <button type="button">Got it</button>`;
-    el.querySelector("button").addEventListener("click", async () => { el.remove(); await db.rpc("call_request_seen", { p_id: x.id }); });
-    bar.append(el);
-    if (!CREQ.shown.has(x.id)) { CREQ.shown.add(x.id); try { navigator.vibrate?.([300, 150, 300]); } catch {} creqBeep(); }
+    const k = key(x), old = bar.querySelector(`.creq-pop[data-key="${k}"]`);
+    if (old && old.dataset.acc === String(!!x.accepted)) continue;
+    const el = document.createElement("div"); el.dataset.key = k; el.dataset.acc = String(!!x.accepted); el.setAttribute("role", "alert");
+    if (x.box === "done") {
+      el.className = "creq-pop done";
+      el.innerHTML = `<span class="creq-ic" aria-hidden="true">✅</span><span class="creq-txt"><span class="creq-big">${esc(x.to)} called you back</span>
+        ${x.note ? `<span>${esc(x.note)}</span>` : ""}<small>Sent ${tm(x.at)} · Got it ${x.accepted ? tm(x.accepted) : "–"} · Called back ${tm(x.done)} (${creqAge(new Date(x.done) - new Date(x.at))} after you sent it)</small></span>
+        <button type="button">OK</button>`;
+      el.querySelector("button").addEventListener("click", async () => { el.remove(); await db.rpc("call_request_ack", { p_id: x.id }); });
+    } else {
+      const tel = x.phone ? x.phone.replace(/[^\d+]/g, "") : "";
+      const big = x.kind === "call_office" ? `Call ${esc(x.from)} at the office` : `${esc(x.from)} wants you to call him`;
+      el.className = "creq-pop" + (x.accepted ? " acc" : ""); el.dataset.at = x.at;
+      el.innerHTML = `<span class="creq-ic" aria-hidden="true">📞</span><span class="creq-txt"><span class="creq-big">${big}</span>
+        ${x.note ? `<span>${esc(x.note)}</span>` : ""}<small>Sent at ${tm(x.at)}${x.accepted ? ` · Got it at ${tm(x.accepted)}` : ""}${x.kind === "call_me" && x.phone ? ` · <a href="tel:${esc(tel)}">${esc(x.phone)}</a>` : ""}</small></span>
+        <span class="creq-age" title="How long it's been waiting"></span>
+        <span class="creq-btns">${x.accepted ? "" : `<button type="button" data-acc>Got it</button>`}<button type="button" data-done>Call back done</button></span>`;
+      el.querySelector("[data-acc]")?.addEventListener("click", async e => { e.target.disabled = true; await db.rpc("call_request_seen", { p_id: x.id }); loadCallReqs(); });
+      el.querySelector("[data-done]").addEventListener("click", async e => { e.target.disabled = true;
+        const { error } = await db.rpc("call_request_done", { p_id: x.id }); if (error) { e.target.disabled = false; alertMsg(rpcErr(error)); return; }
+        el.remove(); const m = document.createElement("div"); m.className = "toast creq-ok"; m.textContent = `✅ Done. ${x.from} gets a note that you called back.`; $("#toasts").appendChild(m); setTimeout(() => m.remove(), 5000); });
+    }
+    if (old) old.replaceWith(el); else bar.append(el);
+    if (!CREQ.shown.has(k)) { CREQ.shown.add(k); try { navigator.vibrate?.([300, 150, 300]); } catch {} creqBeep(); }
   }
+  creqTick();
+}
+// how old each waiting call request is getting: yellow after 10 min, red after 30
+const creqAge = ms => { const m = Math.max(0, Math.floor(ms / 60000)); return m < 1 ? "under a minute" : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
+function creqTick() {
+  document.querySelectorAll("#creq-bar .creq-pop[data-at]").forEach(el => { const ms = Date.now() - new Date(el.dataset.at), m = ms / 60000, a = el.querySelector(".creq-age");
+    if (a) a.textContent = `⏱ ${creqAge(ms)}`; el.classList.toggle("warn", m >= 10 && m < 30); el.classList.toggle("late", m >= 30); });
+}
+setInterval(creqTick, 15000);
+// the log: each request, when it was sent, when they pressed Got it, and when they called back
+async function openCallLog() {
+  document.querySelector(".creq-wrap")?.remove();
+  const d = document.createElement("div"); d.className = "opt-wrap creq-wrap"; d.setAttribute("role", "dialog");
+  d.innerHTML = `<div class="opt" style="width:min(900px,100%)"><h3>📋 Call request log</h3><p class="quiet">${ME.role === "owner" ? "Everyone's" : "The ones you sent and got"}, last 30 days. Times are how long after it was sent.</p>
+    <div class="creq-logbox"><div class="quiet">Loading…</div></div>
+    <div class="opt-btns"><button type="button" class="btn quiet-btn" id="creq-back" style="margin-right:auto">📞 Send one</button><button type="button" class="btn quiet-btn" id="creq-x">Close</button></div></div>`;
+  document.body.append(d);
+  const close = () => d.remove(); d.addEventListener("click", e => { if (e.target === d) close(); }); d.querySelector("#creq-x").addEventListener("click", close);
+  d.querySelector("#creq-back").addEventListener("click", () => { d.remove(); openContact(); });
+  const { data, error } = await db.rpc("call_request_log", { p_days: 30 }), box = d.querySelector(".creq-logbox");
+  if (error) { box.innerHTML = `<div class="staff-msg err">${esc(rpcErr(error))}</div>`; return; }
+  if (!data?.length) { box.innerHTML = `<div class="quiet">Nothing yet.</div>`; return; }
+  const when = v => { const t = new Date(v), today = t.toDateString() === new Date().toDateString();
+    return (today ? "" : t.toLocaleDateString("en-CA", { month: "short", day: "numeric" }) + ", ") + t.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }); };
+  const after = (a, b) => `<span class="quiet">${creqAge(new Date(b) - new Date(a))} after</span>`;
+  box.innerHTML = `<table class="creq-log"><thead><tr><th>Sent</th><th>From → To</th><th>What about</th><th>Got it</th><th>Called back</th></tr></thead><tbody>${data.map(x => `<tr>
+      <td>${when(x.at)}</td>
+      <td><b>${esc(x.from)}</b> → <b>${esc(x.to)}</b><div class="quiet">${x.kind === "call_office" ? "Call the office" : "Call him back"}</div></td>
+      <td>${esc(x.note || "")}</td>
+      <td>${x.accepted ? `${when(x.accepted)}<div>${after(x.at, x.accepted)}</div>` : `<span class="creq-wait">Not yet</span>`}</td>
+      <td>${x.done ? `✅ ${when(x.done)}<div>${after(x.at, x.done)}</div>` : `<span class="creq-wait">⏱ Waiting ${creqAge(Date.now() - new Date(x.at))}</span>`}</td></tr>`).join("")}</tbody></table>`;
 }
 function creqBeep() {
   try { const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain();
@@ -6513,8 +6566,9 @@ async function openContact() {
     <div class="creq-list"><div class="quiet">Loading…</div></div>
     <label class="quiet" style="display:block;margin-top:6px">What about? <span class="quiet">(optional)</span><input class="creq-note" maxlength="300" placeholder="${tech ? "e.g. need a part number, customer question" : "e.g. about the Smith call"}"></label>
     <div class="creq-preview hidden"></div>
-    <div class="opt-btns"><button type="button" class="btn" id="creq-go" disabled>Pick someone</button><button type="button" class="btn quiet-btn" id="creq-x">Cancel</button></div></div>`;
+    <div class="opt-btns"><button type="button" class="btn quiet-btn" id="creq-log" style="margin-right:auto">📋 Log</button><button type="button" class="btn" id="creq-go" disabled>Pick someone</button><button type="button" class="btn quiet-btn" id="creq-x">Cancel</button></div></div>`;
   document.body.append(d);
+  d.querySelector("#creq-log").addEventListener("click", () => { d.remove(); openCallLog(); });
   const close = () => d.remove(); d.addEventListener("click", e => { if (e.target === d) close(); }); d.querySelector("#creq-x").addEventListener("click", close);
   const { data, error } = await db.rpc("call_people"); const list = d.querySelector(".creq-list");
   if (error) { list.innerHTML = `<div class="staff-msg err">${esc(rpcErr(error))}</div>`; return; }
