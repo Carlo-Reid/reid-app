@@ -61,6 +61,7 @@ CREATE OR REPLACE FUNCTION public.public_book_info(p_token text, p_type bigint D
 DECLARE c customers; l locations; t jsonb; cfg online_booking; b online_bookings; v_today date := (now() AT TIME ZONE 'America/Toronto')::date; v_slots jsonb;
 BEGIN
   SELECT * INTO cfg FROM online_booking WHERE id = 1;
+  IF cfg.phone IS NULL THEN SELECT nullif(btrim(to_jsonb(cs) ->> 'phone'), '') INTO cfg.phone FROM company_settings cs LIMIT 1; END IF;   -- the company phone unless one is set for online booking
   IF coalesce(btrim(p_token), '') = '' THEN RETURN jsonb_build_object('ok', false, 'phone', cfg.phone); END IF;
   SELECT * INTO c FROM customers WHERE marketing_token::text = p_token AND merged_into_id IS NULL;
   IF c.id IS NULL OR coalesce(c.do_not_contact, false) THEN RETURN jsonb_build_object('ok', false, 'phone', cfg.phone); END IF;
