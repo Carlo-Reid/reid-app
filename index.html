@@ -5926,6 +5926,28 @@ article.mkt tr.mkt-t-booked td:first-child { box-shadow: inset 4px 0 0 #2e7d32; 
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
+/* ---------------- dispatch areas: the one way addresses are coloured (customer page, dispatch board, map, Calls nearby) ----------------
+   Built from the postal code's first 3 characters. Rural K0A (and any postal area not listed) goes to the nearest area by map location;
+   more than 35 km from all of them is "Out of town". Agreed with Carlo, Nov 7, 2026. */
+const DISPATCH_AREAS = [
+  { name: "West: Kanata & Stittsville", short: "West", color: "#1c7ed6", fsa: ["K2S", "K2V", "K2K", "K2M", "K2L", "K2T", "K2W"], c: [45.2893, -75.8991] },
+  { name: "Nepean", short: "Nepean", color: "#37b24d", fsa: ["K2G", "K2H", "K2E", "K2C", "K2B"], c: [45.3378, -75.7585] },
+  { name: "Barrhaven, Riverside South & Manotick", short: "Barrhaven", color: "#f76707", fsa: ["K2J", "K2R", "K4M", "K4P"], c: [45.2601, -75.735] },
+  { name: "Central", short: "Central", color: "#ae3ec9", fsa: ["K1Z", "K1Y", "K2A", "K1S", "K1R", "K2P", "K1N"], c: [45.3973, -75.7201] },
+  { name: "South Ottawa", short: "South", color: "#e03131", fsa: ["K1V", "K1G", "K1H", "K1T", "K1X"], c: [45.3494, -75.6481] },
+  { name: "Gloucester & Vanier", short: "Gloucester", color: "#0c8599", fsa: ["K1B", "K1J", "K1K", "K1L", "K1M"], c: [45.4227, -75.5684] },
+  { name: "Orléans & east", short: "Orléans", color: "#f59f00", fsa: ["K4A", "K1C", "K1E", "K1W", "K4C", "K4B", "K4K", "K4R", "K0C"], c: [45.462, -75.4884] },
+  { name: "Out of town", short: "Out of town", color: "#868e96", fsa: ["K7C", "K7S", "K7A", "K0G", "K0E", "K8H", "K8A", "K9V"], c: null }];
+const AREA_BY_FSA = new Map(DISPATCH_AREAS.flatMap((a, i) => a.fsa.map(f => [f, i])));
+function areaOf(x) {   // x: anything with a postal code and/or map location
+  if (!x) return null;
+  const fsa = String(x.postal_code || "").toUpperCase().replace(/\s/g, "").slice(0, 3), i = AREA_BY_FSA.get(fsa);
+  if (i != null) return { i, ...DISPATCH_AREAS[i] };
+  const la = Number(x.latitude ?? x.lat), lo = Number(x.longitude ?? x.lng);
+  if (!isFinite(la) || !isFinite(lo) || (!la && !lo)) return fsa ? { i: 7, ...DISPATCH_AREAS[7] } : null;
+  let b = 7, bd = 35; DISPATCH_AREAS.forEach((a, k) => { if (!a.c) return; const d = Math.hypot((lo - a.c[1]) * 111.32 * Math.cos(la * Math.PI / 180), (la - a.c[0]) * 110.57); if (d < bd) { bd = d; b = k; } });
+  return { i: b, ...DISPATCH_AREAS[b] };
+}
 const CONFIG = Object.assign({
   url: "https://hplvhfkvwcwackyauirw.supabase.co",
   key: "sb_publishable_HNOn3RjBOJbXeoWHnGKKYQ_7leKNuXk"
@@ -11430,9 +11452,10 @@ function loadLeaflet() {
   });
   return LEAFLET;
 }
-const saveDspMap = () => { try { localStorage.setItem("reid.dispatchMap", JSON.stringify({ map: !!DSP.map, colorBy: DSP.colorBy || "hood", mapWait: !!DSP.mapWait, mapLines: !!DSP.mapLines, ov: DSP.ov || "fit", ovSet: !!DSP.ovSet, ovWarn: DSP.ovWarn !== false, hrs: dspHrs(), mapTab: DSP.mapTab || "calls", mapW: DSP.mapW || null, mapWp: DSP.mapWp || null, mapFill: !!DSP.mapFill, mapCNames: !!DSP.mapCNames })); } catch {} };
+const saveDspMap = () => { try { localStorage.setItem("reid.dispatchMap", JSON.stringify({ map: !!DSP.map, colorBy: DSP.colorBy || "area", mapWait: !!DSP.mapWait, mapLines: !!DSP.mapLines, ov: DSP.ov || "fit", ovSet: !!DSP.ovSet, ovWarn: DSP.ovWarn !== false, hrs: dspHrs(), mapTab: DSP.mapTab || "calls", mapW: DSP.mapW || null, mapWp: DSP.mapWp || null, mapFill: !!DSP.mapFill, mapCNames: !!DSP.mapCNames })); } catch {} };
 try { Object.assign(DSP, JSON.parse(localStorage.getItem("reid.dispatchMap") || "{}")); } catch {}
-if (!DSP.ovSet) DSP.ov = "fit";   // calls at the same time: Side by side is standard unless the person picks another
+if (!DSP.ovSet) DSP.ov = "fit";
+if (!DSP.colorBy || ["hood", "town", "zone", "community"].includes(DSP.colorBy)) DSP.colorBy = "area";   // places are coloured one way: the dispatch area   // calls at the same time: Side by side is standard unless the person picks another
 function dspTechColor(id) { const i = (BOOK.techs || []).findIndex(t => t.id === id); return i < 0 ? MAP_GREY : MAP_PALETTE[i % MAP_PALETTE.length]; }
 function dspMarkColor(r) { return dspKey(r).color; }
 async function mountDspMap() {
@@ -11485,7 +11508,7 @@ async function mountDspMap() {
     document.addEventListener("fullscreenchange", () => { el.querySelector("#dm-fs").textContent = document.fullscreenElement === el ? "✕ Exit full screen" : "Full screen"; setTimeout(() => DSP.lmap?.invalidateSize(), 50); });
     el.addEventListener("keydown", e => { if (e.key === "Escape" && DSP.page !== "map") { e.stopPropagation(); DSP.map = false; saveDspMap(); renderDispatch(); } });
   }
-  DSP.mapEl.querySelector("#dm-by").value = DSP.colorBy || "hood";
+  DSP.mapEl.querySelector("#dm-by").value = DSP.colorBy || "area";
   DSP.mapEl.querySelector("#dm-lines").checked = !!DSP.mapLines;
   DSP.mapEl.querySelector("#dm-fill").checked = !!DSP.mapFill;
   DSP.mapEl.querySelector("#dm-cnames").checked = !!DSP.mapCNames;
@@ -11655,15 +11678,15 @@ function drawDspMap(fit) {
     const g = groups.get(key) || { key, label, color, n: 0 }; g.n++; groups.set(key, g);
   });
   const missing = list.filter(({ r }) => r.lat == null).length;
-  const canPaint = (can("calls.dispatch") || ME.role === "owner") && ["hood", "zone", "town", "community"].includes(DSP.colorBy || "hood");
+  const canPaint = (can("calls.dispatch") || ME.role === "owner") && ["hood", "zone", "town", "community"].includes(DSP.colorBy || "area");
   const selR = DSP.sel ? list.find(x => x.r.visit_id === DSP.sel)?.r : null, selK = selR ? dspKey(selR) : null;
   const cpBtns = k => canPaint && mapPaintTarget(k.key) ? `<span class="dm-cp">${k.color !== MAP_GREY ? `<button class="link" type="button" data-dm-copy="${esc(k.color)}" title="Copy this colour">Copy</button>` : ""}${MAPZ.clip ? ` <button class="link" type="button" data-dm-paste="${esc(k.key)}" title="Give this zone the copied colour (saved everywhere)">Paste</button>` : ""}</span>` : "";
   $("#dm-legend").innerHTML = `${DSP.techSel != null ? `<div class="dm-route" id="dm-route"></div>` : ""}${MAPZ.clip ? `<div class="dm-clip"><span class="dm-dot" style="background:${esc(MAPZ.clip)}"></span> Colour copied. Press Paste on a zone to give it this colour. <button class="link" type="button" id="dm-clip-x">✕ Done</button></div>` : ""}
     ${selK ? `<div class="dm-sel"><span class="quiet">Selected call:</span> <b>${esc(selR.customer_name)}</b><div class="dm-leg"><span class="dm-dot" style="background:${esc(selK.color)}"></span>${esc(selK.label)} ${cpBtns(selK)}</div></div>` : ""}
-    <strong>${DSP_BY_TITLE[DSP.colorBy || "hood"] || "Calls"}</strong>${[...groups.values()].sort((a, b) => b.n - a.n).map(g =>
+    <strong>${DSP_BY_TITLE[DSP.colorBy || "area"] || "Calls"}</strong>${[...groups.values()].sort((a, b) => b.n - a.n).map(g =>
       `<div class="dm-leg"><span class="dm-dot" style="background:${esc(g.color)}"></span>${esc(g.label)} <span class="quiet">${g.n}</span> ${cpBtns(g)}</div>`).join("") || `<div class="quiet">No calls.</div>`}
     ${canPaint ? "" : (can("calls.dispatch") || ME.role === "owner") ? `<p class="quiet">Colour by Neighbourhood, Town or Postal code area to copy and paste zone colours here.</p>` : ""}
-    ${(DSP.colorBy || "hood") === "hood" && !(MAPH.list || []).length ? `<p class="quiet">Neighbourhoods aren't loaded yet. ${can("calls.dispatch") || ME.role === "owner" ? "Press Map colours… to load them." : "Ask the office to load them."}</p>` : ""}
+    ${(DSP.colorBy || "area") === "hood" && !(MAPH.list || []).length ? `<p class="quiet">Neighbourhoods aren't loaded yet. ${can("calls.dispatch") || ME.role === "owner" ? "Press Map colours… to load them." : "Ask the office to load them."}</p>` : ""}
     ${DSP.colorBy === "zone" && (MAPZ.zones || []).length === 0 ? `<p class="quiet">No colours yet. ${can("calls.dispatch") || ME.role === "owner" ? "Press Map colours… to pick a colour for each postal code area." : "Ask the office to set up the map colours."}</p>` : ""}`;
   if (placesOn) $("#dm-legend").insertAdjacentHTML("beforeend", `<div class="dm-places">${placesLegend(inView)}</div>`);
   dmLegendWrap();
@@ -11713,16 +11736,9 @@ async function dspGeocode() {
 // The map zone an address is in: its neighbourhood (with that colour, or its postal area's) or its postal code area
 // An address's zone colour: exactly what its dot shows on the dispatch map (same "Colour by" choice);
 // when the map is coloured by something that isn't a place (tech, job type…), the neighbourhood / postal / town colour
-function zoneOf2(l) {
-  if (!l || (!l.city && !l.postal_code && !l.neighbourhood_id)) return null;
-  const h = l.neighbourhood_id && MAPH.by ? MAPH.by.get(l.neighbourhood_id) : null;
-  const cm = l.community_id && MAPC.by ? MAPC.by.get(l.community_id) : null;
-  const r = { hood_id: l.neighbourhood_id || null, hood: h?.name || null, city: l.city, postal_code: l.postal_code, techs: [], lat: l.latitude, lng: l.longitude, border_zone: l.border_zone,
-              community_id: l.community_id || null, community: cm?.name || null };
-  const by = ["hood", "town", "zone", "community"].includes(DSP.colorBy || "hood") ? (DSP.colorBy || "hood") : "hood";
-  const k = dspKey(r, by), c = k.color && k.color !== MAP_GREY ? k.color : null;
-  const keep = DSP.colorBy; DSP.colorBy = by === "community" ? "community" : by; const two = c ? dspColor2(r, c) : null; DSP.colorBy = keep;
-  return { name: k.label, color: c, color2: two?.color || null, name2: two?.name || null };
+function zoneOf2(l) {   // the address's dispatch area: its name and colour (one colour, no second "border" colour)
+  if (!l || (!l.city && !l.postal_code && l.latitude == null)) return null;
+  const a = areaOf(l); return a ? { name: a.name, color: a.color, color2: null, name2: null, area: a.i } : null;
 }
 // is a colour dark enough that white writing reads better on it?
 function isDark(hex) { const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || ""); if (!m) return false;
@@ -11934,7 +11950,7 @@ function zoneBox(l) {
   const z = zoneOf2(l) || {};
   const cls = !z.color ? "nozone" : (isDark(z.color) && (!z.color2 || isDark(z.color2)) ? "zone-dark" : "") + (z.color2 ? " zoned2" : "");
   return `<div class="zone-box ${cls}" style="--zc:${esc(z.color || "")};--zc2:${esc(z.color2 || "")}">
-    <div class="zx-head"><span class="zx-lab">Zone</span><span class="zx-name">${esc(z.name || "No zone yet")}${z.color2 && z.name2 ? ` <small>/ ${esc(z.name2)}</small>` : ""}</span></div>
+    <div class="zx-head"><span class="zx-lab">Area</span><span class="zx-name">${esc(z.name || "No zone yet")}${z.color2 && z.name2 ? ` <small>/ ${esc(z.name2)}</small>` : ""}</span></div>
     ${zoneBar(l)}</div>`;
 }
 function zoneBar(l) {
@@ -12301,9 +12317,9 @@ function renderMapColours(msg) {
 }
 
 /* ---------------- every way to colour / group calls on the map ---------------- */
-const DSP_BY = [["community", "Community (Half Moon Bay, Chapman Mills…)"], ["hood", "Neighbourhood"], ["town", "Town (Nepean, Ottawa, Kanata…)"], ["zone", "Postal code area"], ["tech", "Tech"],
+const DSP_BY = [["area", "Dispatch area"], ["tech", "Tech"],
   ["jobtype", "Job type"], ["status", "Status"], ["priority", "Priority"], ["unit", "Business unit"]];
-const DSP_BY_TITLE = { community: "Communities", hood: "Neighbourhoods", town: "Towns", zone: "Postal areas", tech: "Techs", jobtype: "Job types", status: "Status", priority: "Priority", unit: "Business units" };
+const DSP_BY_TITLE = { area: "Dispatch areas", community: "Communities", hood: "Neighbourhoods", town: "Towns", zone: "Postal areas", tech: "Techs", jobtype: "Job types", status: "Status", priority: "Priority", unit: "Business units" };
 const techCol = t => hashCol("tech" + (t?.id ?? "") + (t?.name || ""));
 const hashCol = s => { let h = 7; for (const ch of String(s || "")) h = (h * 31 + ch.charCodeAt(0)) | 0; return MAP_PALETTE[Math.abs(h) % MAP_PALETTE.length]; };
 const STATUS_COL = { unscheduled: "#8a96a3", scheduled: "#1f6fd1", dispatched: "#e67700", en_route: "#f08c00", on_site: "#7048e8", completed: "#2b8a3e", needs_return: "#c2255c", cancelled: "#495057" };
@@ -12317,7 +12333,8 @@ async function loadTowns(force) {
   MAPT.list = error || !data ? [] : data.towns; MAPT.by = new Map(MAPT.list.map(t => [t.key, t])); MAPT.err = error ? rpcErr(error) : "";
 }
 function dspKey(r, by) {
-  by = by || DSP.colorBy || "hood";
+  by = by || DSP.colorBy || "area";
+  if (by === "area" || ["hood", "town", "zone", "community"].includes(by)) { const a = areaOf(r); return a ? { key: "a" + a.i, label: a.name, color: a.color } : { key: "a?", label: "No address", color: MAP_GREY }; }   // one way to colour places: the dispatch area
   const fsa = pcKey(r.postal_code).slice(0, 3), z = zoneOf(r.postal_code);
   const tc = MAPT.by?.get(townKey(r.city))?.color, hc = r.hood_id ? MAPH.by?.get(r.hood_id)?.color : null;
   if (by === "hood") {   // its neighbourhood's colour; if that has none, its postal area's, then its town's
@@ -12509,7 +12526,7 @@ async function openDispatchMap(date, focus) {
 const DMP_SORT = [["time", "Time"], ["customer", "Customer A–Z"], ["tech", "Tech"], ["town", "Town"], ["hood", "Neighbourhood"], ["postal", "Postal code"], ["jobtype", "Job type"], ["status", "Status"]];
 function renderDispatchMapPage() {
   const V = DSP.mp || (DSP.mp = (() => { try { return JSON.parse(localStorage.getItem("reid.dmapView") || "null"); } catch { return null; } })() || {});
-  V.group = V.group || DSP.colorBy || "hood"; V.sort = V.sort || "time"; V.q = V.q || "";
+  V.group = V.group || DSP.colorBy || "area"; V.sort = V.sort || "time"; V.q = V.q || "";
   const isToday = DSP.date === ymd(new Date()), top = $(".dmp-list")?.scrollTop || 0;
   let rows = DSP.rows.filter(r => r.status !== "cancelled" && focusNear(r));
   if (DSP.mapWait) rows = rows.concat(DSP.waiting);
@@ -12876,7 +12893,7 @@ async function loadDispatch() {
 }
 // the colours on the board, with how many calls each, and a hint when they're all one colour
 function dspLegendRow(rows) {
-  const by = DSP.colorBy || "hood", g = new Map();
+  const by = DSP.colorBy || "area", g = new Map();
   rows.forEach(r => { const k = dspKey(r, by); const x = g.get(k.key) || { ...k, n: 0 }; x.n++; g.set(k.key, x); });
   const list = [...g.values()].sort((a, b) => b.n - a.n), cols = new Set(list.filter(x => x.color !== MAP_GREY).map(x => x.color));
   const greyN = list.filter(x => x.color === MAP_GREY).reduce((t, x) => t + x.n, 0);
@@ -12920,7 +12937,7 @@ function hoodNearby(lat, lng, hid) {   // another neighbourhood within 250 m of 
   HOOD_NEAR.set(k, best); return best;
 }
 function dspColor2(r, c1) {
-  const by = DSP.colorBy || "hood"; if (!["hood", "zone", "town", "community"].includes(by)) return null;
+  const by = DSP.colorBy || "area"; if (!["hood", "zone", "town", "community"].includes(by)) return null;
   let z = r.border_zone ? zoneByKey(r.border_zone) : null;
   if (!z && by === "hood" && r.hood_id && r.lat != null) { const n = hoodNearby(Number(r.lat), Number(r.lng), r.hood_id); if (n) z = zoneByKey("h" + n); }
   const c = z?.color; return c && c !== c1 && c !== MAP_GREY ? { color: c, name: z.name } : null;
