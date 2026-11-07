@@ -91,8 +91,15 @@ BEGIN
   SELECT * INTO c FROM customers WHERE marketing_token::text = p_token;
   SELECT * INTO l FROM locations WHERE customer_id = c.id ORDER BY (active IS NOT FALSE) DESC, id LIMIT 1;
   t := public._ob_type(p_type);
-  v_unit := coalesce(nullif(t ->> 'unit_id', ''), nullif(t ->> 'business_unit_id', ''), nullif(t ->> 'default_business_unit_id', ''))::bigint;
-  v_dur := coalesce(nullif(t ->> 'duration', ''), nullif(t ->> 'duration_minutes', ''), nullif(t ->> 'est_duration_minutes', ''), '60')::int;
+  v_unit := nullif(t ->> 'business_unit_id', '')::bigint;
+  IF v_unit IS NULL THEN   -- the department this kind of job usually goes to
+    SELECT j2.business_unit_id INTO v_unit FROM jobs j2 WHERE j2.job_type_id = (t ->> 'id')::bigint AND j2.business_unit_id IS NOT NULL
+    GROUP BY j2.business_unit_id ORDER BY count(*) DESC LIMIT 1;
+  END IF;
+  IF v_unit IS NULL THEN
+    SELECT id INTO v_unit FROM business_units ORDER BY (name ~* CASE t ->> 'job_class' WHEN 'maintenance' THEN 'maint' WHEN 'duct_cleaning' THEN 'duct' ELSE 'hvac service' END) DESC, id LIMIT 1;
+  END IF;
+  v_dur := coalesce(nullif(t ->> 'default_duration_minutes', ''), '60')::int;
   INSERT INTO jobs (job_number, customer_id, location_id, job_type_id, business_unit_id, status, priority, summary)
   VALUES ('new', c.id, l.id, (t ->> 'id')::bigint, v_unit, 'new', 'normal', left(coalesce(t ->> 'name', 'Maintenance') || ' (booked online by the customer)', 200))
   RETURNING * INTO j;
