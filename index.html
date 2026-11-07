@@ -4873,6 +4873,8 @@ article.owing .ow-scopes .ow-scope-p span { -webkit-line-clamp: 2; line-height: 
 body[data-side="mini"] .creq-btn { width: 44px; margin: 8px auto; justify-content: center; padding: 10px 0; } body[data-side="mini"] .creq-lbl { display: none; }
 @keyframes creq-in { from { transform: translateY(-30px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (max-width: 640px) { .creq-pop { flex-wrap: wrap; } .creq-pop .creq-big { font-size: 19px; } .creq-pop button { width: 100%; } }
+.dp-opt { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding: 10px 12px; border: 2px solid #8ce99a; border-radius: 8px; background: #ebfbee; color: #1b4d2a; font-size: 13px; }
+.dp-opt b { font-size: 14px; } .dp-opt .btn { align-self: flex-start; } .dp-opt.none { border-color: #ffd43b; background: #fff9db; color: #5c3c00; }
 .opt-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
 /* call cards fill their row from top to bottom (no empty space above and below) */
 .dsp .tl-track > .tl-card:not(.thin):not(.lane), .dsp .tl-track > .dc-pile { top: 3px !important; bottom: 3px !important; height: auto !important; }
@@ -13601,14 +13603,33 @@ async function dspOptOpen() {
   d.querySelectorAll("[data-opt]").forEach(c => c.addEventListener("change", count)); count();
   go.addEventListener("click", async () => {
     const pick = [...d.querySelectorAll("[data-opt]:checked")].map(c => O.sugg[Number(c.dataset.opt)]);
-    const moves = pick.flatMap(x => x.swap ? [{ r: x.r, from: x.from, to: x.to }, { r: x.r2, from: x.to, to: x.from }] : [{ r: x.r, from: x.from, to: x.to }]);
-    if (!(await askChoice(`Move ${moves.length} call${moves.length === 1 ? "" : "s"}?`, pick.map(x => x.swap ? `⇄ Swap: ${esc(x.r.customer_name)} ${esc(x.from.name)} → <b>${esc(x.to.name)}</b>, ${esc(x.r2.customer_name)} ${esc(x.to.name)} → <b>${esc(x.from.name)}</b>` : `${esc(x.r.customer_name)}: ${esc(x.from.name)} → <b>${esc(x.to.name)}</b>`).join("<br>"), [["yes", "Yes, make them", true], ["", "Not yet"]]))) return;
-    go.disabled = true; go.textContent = "Changing…"; let bad = 0; const done = [];
-    for (const x of moves) { const { error } = await db.rpc("set_call_techs", { p_visit_id: x.r.visit_id, p_techs: [x.to.id] }); if (error) bad++; else done.push({ vid: x.r.visit_id, techs: x.r.techs.map(t => t.id), name: x.r.customer_name }); }
-    dspUndoPush(`Optimize: ${done.length} call${done.length === 1 ? "" : "s"}`, done);
-    close(); dspToast(bad ? `${moves.length - bad} changed, ${bad} not changed.` : `Done: ${moves.length} call${moves.length === 1 ? "" : "s"} moved.`); await loadDispatch();
+    if (await dspOptApply(pick, go)) close();
   });
 }
+// make the picked Optimize changes (after Carlo says yes); true when they were made
+async function dspOptApply(pick, go) {
+    const moves = pick.flatMap(x => x.swap ? [{ r: x.r, from: x.from, to: x.to }, { r: x.r2, from: x.to, to: x.from }] : [{ r: x.r, from: x.from, to: x.to }]);
+    if (!(await askChoice(`Move ${moves.length} call${moves.length === 1 ? "" : "s"}?`, pick.map(x => x.swap ? `⇄ Swap: ${esc(x.r.customer_name)} ${esc(x.from.name)} → <b>${esc(x.to.name)}</b>, ${esc(x.r2.customer_name)} ${esc(x.to.name)} → <b>${esc(x.from.name)}</b>` : `${esc(x.r.customer_name)}: ${esc(x.from.name)} → <b>${esc(x.to.name)}</b>`).join("<br>"), [["yes", "Yes, make them", true], ["", "Not yet"]]))) return false;
+    if (go) { go.disabled = true; go.textContent = "Changing…"; } let bad = 0; const done = [];
+    for (const x of moves) { const { error } = await db.rpc("set_call_techs", { p_visit_id: x.r.visit_id, p_techs: [x.to.id] }); if (error) bad++; else done.push({ vid: x.r.visit_id, techs: x.r.techs.map(t => t.id), name: x.r.customer_name }); }
+    dspUndoPush(`Optimize: ${done.length} call${done.length === 1 ? "" : "s"}`, done);
+    dspToast(bad ? `${moves.length - bad} changed, ${bad} not changed.` : `Done: ${moves.length} call${moves.length === 1 ? "" : "s"} moved. ↩ Undo puts ${moves.length === 1 ? "it" : "them"} back.`); await loadDispatch();
+    return true;
+}
+// the call's own Optimize suggestion, for its details panel
+function dspOptBox(r) {
+  const O = DSP.opt; if (!O || !O.flags?.has(r.visit_id) && !O.sugg.some(x => x.r2?.visit_id === r.visit_id)) return "";
+  const k = O.sugg.findIndex(x => x.r.visit_id === r.visit_id || x.r2?.visit_id === r.visit_id), x = O.sugg[k];
+  if (!x) return `<div class="dp-opt none"><b>⚠ Outside ${esc(r.techs[0]?.name || "the tech")}'s area today</b><span>No better tech has room for it.</span></div>`;
+  if (x.swap) { const mineFirst = x.r.visit_id === r.visit_id, me = mineFirst ? x.from : x.to, them = mineFirst ? x.to : x.from, other = mineFirst ? x.r2 : x.r;
+    return `<div class="dp-opt"><b>✨ Better: swap with ${esc(them.name)}</b><span>This call goes to <b>${esc(them.name)}</b>, and his ${esc(other.customer_name)} call goes to <b>${esc(me.name)}</b>. Each ends up in his own area.</span>
+      <button class="btn" type="button" data-dp-opt="${k}">⇄ Make this swap</button></div>`; }
+  return `<div class="dp-opt"><b>✨ Better: ${esc(x.to.name)}</b><span>${esc(x.from.name)} is mostly in ${esc(x.fromArea?.short || "another area")} today. ${esc(x.to.name)} is ${x.empty ? "free (no calls yet)" : "mostly in " + esc(x.area.short)}${x.dist != null ? ", " + x.dist.toFixed(1) + " km from his nearest call" : ""}, and has room then.</span>
+    <button class="btn" type="button" data-dp-opt="${k}">Move it to ${esc(x.to.name)}</button></div>`;
+}
+document.addEventListener("click", async e => { const b = e.target.closest("[data-dp-opt]"); if (!b) return;
+  const x = DSP.opt?.sugg[Number(b.dataset.dpOpt)]; if (!x) return; b.disabled = true;
+  if (!(await dspOptApply([x], null))) b.disabled = false; });
 
 // Undo on the dispatch board: the last changes of techs (✨ Optimize, or dragging a call to another tech), most recent first
 const DSP_UNDO = [];
@@ -13801,6 +13822,7 @@ function renderDspPanel() {
     ${r.summary && r.summary.trim().toLowerCase() !== String(r.job_type || "").trim().toLowerCase() ? `<div>${esc(r.summary)}</div>` : ""}
     <div class="dp-when"><span class="vstat ${r.status}">${esc(VISIT_STATUS[r.status] || r.status)}</span>
       ${r.scheduled_date ? esc(dayText(r.scheduled_date)) + ", " + esc(winText(r.arrival_start, r.arrival_end)) : "Not booked yet"}${r.duration ? " · " + durText(r.duration) : ""}</div>
+    ${done ? "" : dspOptBox(r)}
     ${(() => { const k = dspKey(r), two = dspColor2(r, k.color), b = r.border_zone ? zoneByKey(r.border_zone) : null;
       return `<details class="dp-zonebox" ${DSP.zoneOpen === r.visit_id || DSP.zoneEdit === r.visit_id ? "open" : ""}><summary class="dp-zone"><span class="dm-dot" style="background:${esc(k.color)}"></span>${two ? `<span class="dm-dot" style="background:${esc(two.color)}"></span>` : ""}
         <span>Zone: <b>${esc(k.label)}</b>${two ? ` · ↔ ${esc(two.name)}` : ""}</span></summary><div class="dp-zonein">

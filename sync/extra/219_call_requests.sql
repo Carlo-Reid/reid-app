@@ -21,7 +21,7 @@ DO $$ BEGIN
 END $$;
 
 CREATE OR REPLACE FUNCTION public._app_user_name(p_user bigint) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
-  SELECT coalesce(nullif(public._emp_name(u.employee_id), ''), split_part(u.login_email::text, '@', 1)) FROM app_users u WHERE u.id = p_user $f$;
+  SELECT coalesce(nullif(public._emp_name(u.employee_id), ''), initcap(split_part(u.login_email::text, '@', 1))) FROM app_users u WHERE u.id = p_user $f$;
 CREATE OR REPLACE FUNCTION public._app_user_phone(p_user bigint) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT nullif(btrim(coalesce(to_jsonb(e) ->> 'mobile_phone', to_jsonb(e) ->> 'mobile', to_jsonb(e) ->> 'cell', to_jsonb(e) ->> 'phone', to_jsonb(e) ->> 'phone_number', '')), '')
   FROM app_users u JOIN employees e ON e.id = u.employee_id WHERE u.id = p_user $f$;
