@@ -26,4 +26,23 @@ with conn.cursor() as cur:   # timesheets: carry on from where the last run (thi
         conn.commit(); print(f"Job timesheets: {n} brought in", flush=True)
     except Exception as e:
         conn.rollback(); print(f"Job timesheets not brought in this time: {str(e)[:300]}", flush=True)
+with conn.cursor() as cur:   # once: ServiceTitan's own tax for invoices saved before it was kept (sync/extra/217), starting with those that have discounts
+    try:
+        cur.execute("SELECT to_regclass('public.invoices') IS NOT NULL AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'invoices' AND column_name = 'tax_st')")
+        if cur.fetchone()[0]:
+            cur.execute("""SELECT i.id FROM invoices i WHERE i.tax_st IS NULL AND i.st_id IS NOT NULL AND i.app_edited_at IS NULL AND i.status NOT IN ('void', 'draft')
+                           AND EXISTS (SELECT 1 FROM invoice_lines l WHERE l.invoice_id = i.id AND l.line_type = 'discount') ORDER BY i.id DESC LIMIT 2000""")
+            ids = [r[0] for r in cur.fetchall()]; fixed = 0
+            for k in range(0, len(ids), 50):
+                part = ids[k:k + 50]
+                o = st.get("accounting/v2/tenant/{t}/invoices", {"ids": ",".join(map(str, part)), "pageSize": 50}) or {}
+                for r in o.get("data") or []:
+                    tax = r.get("salesTax")
+                    if tax is None: continue
+                    cur.execute("UPDATE invoices SET tax_st = %s WHERE id = %s", (round(float(tax), 2), int(r["id"])))
+                    cur.execute("SELECT public.recalc_invoice(%s)", (int(r["id"]),)); fixed += 1
+                conn.commit()
+            if ids: print(f"ServiceTitan tax brought in for {fixed} of {len(ids)} invoices with discounts", flush=True)
+    except Exception as e:
+        conn.rollback(); print(f"ServiceTitan tax not brought in this time: {str(e)[:300]}", flush=True)
 conn.close()

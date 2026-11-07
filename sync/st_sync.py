@@ -431,6 +431,11 @@ def save(cur, out_dir, manifest):
             cur.execute(f"INSERT INTO {table} ({collist}) SELECT {sel} FROM {tmp}")
         elif how == "sold":
             cur.execute(f"UPDATE jobs j SET sold_estimate_id = s.estimate_id FROM {tmp} s WHERE s.job_id = j.id")
+        if table == "invoices" and "tax_total" in cols:   # ServiceTitan's own tax, kept as is (sync/extra/217)
+            cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'invoices' AND column_name = 'tax_st')")
+            if cur.fetchone()[0]:
+                cur.execute(f"UPDATE invoices i SET tax_st = t.tax_total FROM {tmp} t WHERE i.id = t.id AND i.tax_st IS DISTINCT FROM t.tax_total")
+                cur.execute(f"SELECT public.recalc_invoice(t.id) FROM {tmp} t JOIN invoices i ON i.id = t.id WHERE i.app_edited_at IS NULL AND i.tax_total IS DISTINCT FROM t.tax_total")
         counts[table] = n
         if time.time() - t0 > 5: log(f"  {table}: {n} rows in {time.time() - t0:.0f}s")
     return counts
