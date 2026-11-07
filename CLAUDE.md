@@ -50,3 +50,7 @@
 ## Online booking from marketing emails
 
 - `{book_link}` fill-in (and the "Book your tune-up online" template) gives each customer their own link (`?book=<marketing_token>`) to a public calendar page (`showOnlineBook`, no sign-in). It offers the best arrival windows (8–11, 11–2, 2–5) from 14 days out to 60 days (Marketing → Email → Online booking settings): free techs of the right kind (maintenance or service techs), minus calls with no tech yet in that window, plus a bonus for a call within 5 km that day; at most 2 per day, 12 offers. None work → "please call the office" with the phone. The booking makes the job + visit with no tech (assign on Dispatch) and a job note. `sync/extra/223_online_booking.sql` (`public_book_info`, `public_book`; `p_dry` checks it and rolls back).
+
+## On call (dispatch board)
+
+- Who is on call each day: `on_call` table (`sync/extra/224_on_call.sql`), loaded with Nov–Dec 2026 from Carlo's Shifter calendar screenshots (top name = on call, bottom name, Adam or Dave = 2nd on call). Seed rows only fill empty days, so changes made in the app stay. Day view shows an orange "📟 On call … · 2nd: …" strip above Waiting for a day (Change = pick from drop-downs, owners/dispatch) and a 📟 tag on those people's lines. January isn't in yet.
