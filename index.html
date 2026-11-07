@@ -4836,6 +4836,14 @@ article.owing .ow-scopes .ow-scope-p span { -webkit-line-clamp: 2; line-height: 
 .dsp .dsp-bar > .dsp-legend-d { display: none !important; }
 /* the front and back edges of a call: the area colour of the tech's call before and after it, so you can see if the next call is in the right area */
 .dsp .tl-card.nb { box-shadow: inset 6px 0 0 var(--nb-prev), inset -6px 0 0 var(--nb-next) !important; padding-left: 9px !important; padding-right: 9px !important; }
+.dsp .dsp-bar > .dsp-sum .dsp-optbtn2 { order: -1; width: 112px; flex: none; margin-right: 8px; text-align: center; } .dsp-optbtn2.has { background: #fff3bf !important; border-color: #f59f00 !important; color: #7c5800 !important; font-weight: 800; }
+.dc-oz { color: #d9480f; font-weight: 900; margin-right: 3px; }
+.opt-wrap { position: fixed; inset: 0; z-index: 9500; background: rgba(15,23,42,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.opt { background: var(--panel); color: var(--ink); border-radius: 14px; padding: 18px 20px; width: min(760px, 100%); max-height: 86vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+.opt h3 { margin: 0 0 6px; } .opt-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.opt-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; } .opt-row input { margin-top: 4px; }
+.opt-dot { width: 12px; height: 12px; border-radius: 3px; flex: none; margin-top: 4px; } .opt-from { text-decoration: line-through; color: var(--steel); }
+.opt-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
 /* call cards fill their row from top to bottom (no empty space above and below) */
 .dsp .tl-track > .tl-card:not(.thin):not(.lane), .dsp .tl-track > .dc-pile { top: 3px !important; bottom: 3px !important; height: auto !important; }
 /* DI 1 even shorter, with "Show 6 hours" first */
@@ -13410,15 +13418,69 @@ function dspArrive(r) {
   if (["scheduled", "dispatched"].includes(r.status) && past && r.techs.length) return { cls: "dc-late", text: `Late: not there yet (window ended ${dspTm(end)})` };
   return null;
 }
+/* ---------------- Optimize the day: calls in the wrong area, and a better tech for each (applied only after Carlo approves) ----------------
+   A tech's area for the day = the area most of their calls are in. A call outside it is flagged (⚠ on the board).
+   For each flagged call: another tech with the right trade, whose day is mostly in that call's area (or who has no calls yet), free at that time. */
+function dspOptimize(rows, techs) {
+  const KIND = new Map((TKIND || []).map(t => [t.name, t.kind]));
+  const fits = (kind, cls) => !kind ? false : cls === "install" ? kind === "installs" : cls === "maintenance" ? kind === "maintenance" || kind === "service"
+    : cls === "security" ? kind === "security" : cls === "service" ? kind === "service" : kind !== "security";
+  const movable = r => r.arrival_start && r.techs.length === 1 && !r.arrived_at && !r.en_route_at && !["working", "done", "completed", "cancelled", "canceled", "on_hold", "arrived"].includes(String(r.status || "").toLowerCase());
+  const span = r => { const a = Date.parse(r.arrival_start), z = r.arrival_end ? Date.parse(r.arrival_end) : a + (r.duration || 60) * 60000; return [a, Math.max(z, a + 30 * 60000)]; };
+  const km = (x, y) => (x.lat == null || y.lat == null) ? null : Math.hypot((Number(y.lng) - Number(x.lng)) * 111.32 * Math.cos(Number(x.lat) * Math.PI / 180), (Number(y.lat) - Number(x.lat)) * 110.57);
+  const live = rows.filter(r => r.status !== "cancelled" && r.arrival_start);
+  const byTech = new Map(techs.map(t => [t.id, []])); live.forEach(r => r.techs.forEach(t => byTech.get(t.id)?.push(r)));
+  const home = new Map(); byTech.forEach((L, id) => { if (!L.length) return; const n = new Map(); L.forEach(r => { const a = areaOf(r)?.i; if (a != null) n.set(a, (n.get(a) || 0) + 1); });
+    const best = [...n.entries()].sort((x, y) => y[1] - x[1])[0]; if (best && best[1] >= 2) home.set(id, best[0]); });
+  const busy = new Map([...byTech.entries()].map(([id, L]) => [id, L.map(span)]));
+  const free = (id, w) => !(busy.get(id) || []).some(([a, z]) => a < w[1] && z > w[0]);
+  const flags = new Set(), sugg = [];
+  for (const t of techs) { const L = byTech.get(t.id) || [], h = home.get(t.id); if (h == null) continue;
+    for (const r of L) { const ar = areaOf(r); if (!ar || ar.i === h || ar.out) continue; flags.add(r.visit_id); if (!movable(r)) continue;
+      const w = span(r), cls = String(r.job_class || "").toLowerCase(), myKind = KIND.get(t.name);
+      const cands = techs.filter(o => o.id !== t.id && fits(KIND.get(o.name), cls || "") && (cls || KIND.get(o.name) === myKind) && free(o.id, w))
+        .map(o => { const OL = byTech.get(o.id) || [], oh = home.get(o.id), d = OL.map(x => km(r, x)).filter(x => x != null).sort((a, b) => a - b)[0];
+          const sc = (oh === ar.i ? 20 : OL.length ? -100 : 4) + (d != null ? Math.max(0, 10 - d) : 0) - OL.length * 0.5; return { o, sc, d, empty: !OL.length, same: oh === ar.i }; })
+        .filter(c => c.sc > 0).sort((a, b) => b.sc - a.sc);
+      const c = cands[0]; if (!c) continue;
+      busy.get(c.o.id)?.push(w);
+      sugg.push({ r, from: t, to: c.o, area: ar, fromArea: DISPATCH_AREAS[h], dist: c.d, empty: c.empty }); } }
+  return { flags, sugg };
+}
+async function dspOptOpen() {
+  const O = DSP.opt || { sugg: [] }, tm = v => new Date(v).toLocaleTimeString("en-CA", { timeZone: "America/Toronto", hour: "numeric", minute: "2-digit" });
+  document.querySelector(".opt-wrap")?.remove();
+  const d = document.createElement("div"); d.className = "opt-wrap"; d.setAttribute("role", "dialog");
+  d.innerHTML = `<div class="opt"><h3>Optimize ${esc(dayText(DSP.date))}</h3>
+    <p class="quiet">${O.flags?.size || 0} call${O.flags?.size === 1 ? "" : "s"} outside the tech's area for the day (⚠ on the board). ${O.sugg.length ? "These changes would put them with a tech already working in that area. Untick any you don't want; nothing changes until you press Apply." : "No better tech is free for any of them."}</p>
+    ${O.sugg.length ? `<div class="opt-list">${O.sugg.map((x, k) => `<label class="opt-row"><input type="checkbox" data-opt="${k}" checked>
+      <span class="opt-dot" style="background:${esc(x.area.color)}"></span><span class="opt-t"><b>${esc(x.r.customer_name)}</b> <span class="quiet">${tm(x.r.arrival_start)} · ${esc(x.r.job_type || "")} · ${esc(x.area.short)}</span><br>
+      <span class="opt-mv"><span class="opt-from">${esc(x.from.name)}</span> <span class="quiet">(mostly ${esc(x.fromArea?.short || "")})</span> → <b>${esc(x.to.name)}</b> <span class="quiet">(${x.empty ? "no calls yet that day" : "mostly " + esc(x.area.short)}${x.dist != null ? ", " + x.dist.toFixed(1) + " km from his nearest call" : ""}, free then)</span></span></span></label>`).join("")}</div>` : ""}
+    <div class="opt-btns">${O.sugg.length ? `<button type="button" class="btn" id="opt-go">Apply the ticked changes</button>` : ""}<button type="button" class="btn quiet-btn" id="opt-x">Close</button></div></div>`;
+  document.body.append(d);
+  const close = () => d.remove();
+  d.addEventListener("click", e => { if (e.target === d) close(); }); d.querySelector("#opt-x").addEventListener("click", close);
+  const go = d.querySelector("#opt-go"); if (!go) return;
+  const count = () => { const n = d.querySelectorAll("[data-opt]:checked").length; go.textContent = n ? `Apply ${n} change${n === 1 ? "" : "s"}` : "Nothing ticked"; go.disabled = !n; };
+  d.querySelectorAll("[data-opt]").forEach(c => c.addEventListener("change", count)); count();
+  go.addEventListener("click", async () => {
+    const pick = [...d.querySelectorAll("[data-opt]:checked")].map(c => O.sugg[Number(c.dataset.opt)]);
+    if (!(await askChoice(`Make ${pick.length} change${pick.length === 1 ? "" : "s"}?`, pick.map(x => `${esc(x.r.customer_name)}: ${esc(x.from.name)} → <b>${esc(x.to.name)}</b>`).join("<br>"), [["yes", "Yes, make them", true], ["", "Not yet"]]))) return;
+    go.disabled = true; go.textContent = "Changing…"; let bad = 0;
+    for (const x of pick) { const { error } = await db.rpc("set_call_techs", { p_visit_id: x.r.visit_id, p_techs: [x.to.id] }); if (error) bad++; }
+    close(); dspToast(bad ? `${pick.length - bad} changed, ${bad} not changed.` : `Done: ${pick.length} call${pick.length === 1 ? "" : "s"} moved.`); await loadDispatch();
+  });
+}
+
 const DSP_NB = new Map();
 function dspTlCard(r, from, style = "", cls = "") {
   const nb = DSP_NB.get(r.visit_id), nbStyle = nb ? `;--nb-prev:${nb.prev || "transparent"};--nb-next:${nb.next || "transparent"};` : "";
   const helpers = r.techs.filter(t => t.id !== from).map(t => t.name);
   const tip = [winText(r.arrival_start, r.arrival_end), r.customer_name, [r.city, r.job_type].filter(Boolean).join(" · "), r.summary, helpers.length ? "With " + helpers.join(", ") : "", VISIT_STATUS[r.status] || r.status, dspArrive(r)?.text || ""].filter(Boolean).join("\n");
   const tint = dspTint(r), arr = dspArrive(r);
-  return `<div class="dc tl-card ${cls} ${arr?.cls || ""} st-${r.status} pr-${r.priority} ${DSP.sel === r.visit_id ? "sel" : ""} ${tint[0]}${nb ? " nb" : ""}" style="${style}${tint[2]}${nbStyle}" draggable="true" tabindex="0"
+  return `<div class="dc tl-card ${cls} ${arr?.cls || ""} st-${r.status} pr-${r.priority} ${DSP.sel === r.visit_id ? "sel" : ""} ${tint[0]}${nb ? " nb" : ""}${DSP.opt?.flags?.has(r.visit_id) ? " oz" : ""}" style="${style}${tint[2]}${nbStyle}" draggable="true" tabindex="0"
       data-visit="${r.visit_id}" data-from="${from}" title="${esc(tip)}">
-    <div class="dc-name">${r.priority !== "normal" ? `<span class="dc-prio">${r.priority === "emergency" ? "!!" : "!"}</span>` : ""}${esc(r.customer_name)}</div>
+    <div class="dc-name">${DSP.opt?.flags?.has(r.visit_id) ? `<span class="dc-oz" title="Outside this tech's area for the day: see ✨ Optimize">⚠</span>` : ""}${r.priority !== "normal" ? `<span class="dc-prio">${r.priority === "emergency" ? "!!" : "!"}</span>` : ""}${esc(r.customer_name)}</div>
     ${arr ? `<div class="dc-arr">${esc(arr.text)}</div>` : `<div class="dc-sub">${esc(winText(r.arrival_start, r.arrival_end))} · ${esc(r.city || "")}</div>`}
     <div class="dc-sub">${esc(r.job_type)}${helpers.length ? ` · +${esc(helpers.join(", "))}` : ""}</div>
   </div>`;
@@ -13439,6 +13501,7 @@ function renderDispatch() {
   const colOf = id => rows.filter(r => r.techs.some(t => t.id === id));
   techs.sort((a, b) => (colOf(b.id).length > 0) - (colOf(a.id).length > 0) || a.name.localeCompare(b.name));
   const none = rows.filter(r => !r.techs.length);
+  try { DSP.opt = dspOptimize(rows, (BOOK.techs || []).filter(t => (TKIND || []).find(x => x.name === t.name)?.kind)); } catch { DSP.opt = null; }
   const mins = list => list.reduce((s, r) => s + (r.duration || 60), 0);
   const isToday = DSP.date === ymd(new Date());
   const scroll = $("#dsp-board")?.scrollLeft || 0;
@@ -13459,6 +13522,7 @@ function renderDispatch() {
         <label class="dsp-hrs dsp-hrs-top" title="How many hours fit on the screen; scroll sideways to go back or forward in time. On today, the board moves along with the time.">Show <select id="dsp-hrs">${[3, 4, 6, 8, 10, 12, 24].map(h => `<option value="${h}" ${h === dspHrs() ? "selected" : ""}>${h === 24 ? "the whole day" : h + " hours"}</option>`).join("")}</select>
           ${isToday ? `<button class="link dsp-hrs-reset" type="button" id="dsp-now" title="Go back to the time now (the board follows the time again)">Now</button>` : ""}</label>
       <div class="dsp-sum quiet">${callsWord(rows.length)}${none.length ? ` · <span class="owe">${none.length} without a tech</span>` : ""}${cancelled ? ` · ${cancelled} cancelled` : ""}
+        <button class="btn quiet-btn dsp-optbtn2 ${DSP.opt?.flags?.size ? "has" : ""}" type="button" id="dsp-optimize" title="Calls outside the tech's area for the day, and a better tech for each">✨ Optimize${DSP.opt?.flags?.size ? ` (${DSP.opt.flags.size})` : ""}</button>
         <button class="btn ${DSP.map ? "" : "quiet-btn"} dsp-mapbtn" type="button" id="dsp-map" aria-pressed="${!!DSP.map}">${DSP.map ? "Hide map" : "Map"}</button>
         <span class="live-dot ${callsLive ? "on" : ""}" title="${callsLive ? "Live: changes show up by themselves" : "Checks for changes every 30 seconds"}"></span></div>
       ${dspLegendRow(rows)}
@@ -13482,6 +13546,7 @@ function renderDispatch() {
   $("[data-dtoday]")?.addEventListener("click", () => { if (DSP.date === ymd(new Date())) return; DSP.date = ymd(new Date()); DSP.sel = null; loadDispatch(); });
   dspRangeWire();
   $("#dsp-date").addEventListener("change", e => { if (e.target.value) { DSP.date = e.target.value; DSP.sel = null; loadDispatch(); } });
+  $("#dsp-optimize")?.addEventListener("click", dspOptOpen);
   $("#dsp-all")?.addEventListener("change", e => { DSP.all = e.target.checked; saveDsp(); renderDispatch(); });
   $(".dsp-legend-d")?.addEventListener("toggle", e => { DSP.legendOpen = e.currentTarget.open; try { localStorage.setItem("reid.dspLegend", DSP.legendOpen ? "1" : ""); } catch {} });
   $("#dsp-opts")?.addEventListener("click", e => { DSP.optsOpen = !DSP.optsOpen; try { localStorage.setItem("reid.dspOpts", DSP.optsOpen ? "1" : ""); } catch {}
