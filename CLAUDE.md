@@ -33,4 +33,4 @@
 ## Contact tech / Ask the office to call me
 
 - Blue 📞 button in the left side bar. Office/owners: "Contact tech" (pick a tech) → his screen shows "Call Carlo at the office". Techs: "Ask the office to call me" (pick an office person or owner) → their screen shows "Nick wants you to call him" with his phone if we have it. Optional "What about?" note.
-- The pop-up sits at the top of the screen (beeps, vibrates on phones) until they press Got it. `sync/extra/219_call_requests.sql`, `startCallReq` / `openContact` in `index.html`.
+- The pop-up sits at the top of the screen (beeps, vibrates on phones) with a ⏱ timer of how long it's been waiting (yellow at 10 min, red at 30). Got it = accepted (logged); it stays until they press Call back done, then the sender gets a green "Nick called you back" pop-up (OK closes it). 📋 Log in the Contact dialog: sent / Got it / called back times (owners see everyone's). `220_call_requests_log.sql`. `sync/extra/219_call_requests.sql`, `startCallReq` / `openContact` in `index.html`.
