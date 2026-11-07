@@ -11552,8 +11552,15 @@ const bkSales = () => !BK?.walk && salesBooking();
 /* ---- Book a call, one question at a time: Reid or a partner → kind of call → which one; the department fills itself in ---- */
 const BKW_CATS = [["service", "Service", "🔧", "Something's wrong: no heat, no AC, a noise, a leak"], ["maintenance", "Maintenance", "🧰", "Tune-ups and plan visits"],
   ["warranty", "Warranty", "🛡️", "Under warranty: no charge for covered parts"], ["sales", "Estimate", "📝", "A quote or a walk of the site"],
-  ["install", "Install", "🏗️", "Putting in new equipment"], ["duct_cleaning", "Duct cleaning", "🌬️", "Duct cleaning"], ["security", "Security", "🔒", "Alarms, cameras, monitoring"],
+  ["install", "Install", "🏗️", "Putting in new equipment"], ["nonrev", "Non Revenue", "📦", "Picking up parts and other trips we don't charge for"], ["duct_cleaning", "Duct cleaning", "🌬️", "Duct cleaning"], ["security", "Security", "🔒", "Alarms, cameras, monitoring"],
   ["inspection", "Inspection", "🔍", "Inspections"], ["project_phase", "Project", "📐", "A phase of a bigger project"], ["other", "Other", "•", "Anything else"]];
+// which button a job type sits under: pick up parts = Non Revenue; Phone Call Request is on the first step; for Reid, warranty sits under Service
+function bkwCatOf(t, F) {
+  if (/pick\s*up\s*parts/i.test(t.name)) return "nonrev";
+  if (/phone call request/i.test(t.name)) return null;
+  if (t.job_class === "warranty" && !Number(F.forP)) return "service";
+  return t.job_class;
+}
 const BKW_SC = /^service call\s*-\s*(regular|after)/i;   // Service Call - Regular Hours / After Hours: one button, then "Regular or after hours?"
 const bkAfterHours = F => /after\s*hours/i.test((BOOK?.job_types || []).find(x => String(x.id) === String(F.type))?.name || "");
 const bkwPName = p => String(p?.name || "").replace(/\s*\(.*\)\s*$/, "");
@@ -11571,7 +11578,7 @@ const bkwUnit = id => (BOOK.units || []).find(u => String(u.id) === String(id));
 function bkCrumbs(F) {
   if (F.mode === "visit") return `<span class="bkw-crumbs"><b>Another visit on an open job</b>${F.walk ? "" : `<button class="link" type="button" data-bkw-go="who">Change</button>`}</span>`;
   const p = Number(F.forP) ? (BK_PARTNERS || []).find(x => x.id === Number(F.forP)) : null, t = (BOOK.job_types || []).find(x => String(x.id) === String(F.type));
-  const cat = BKW_CATS.find(c => c[0] === (t?.job_class || F.cat)), u = bkwUnit(F.unit);
+  const cat = BKW_CATS.find(c => c[0] === (t ? bkwCatOf(t, F) : F.cat)), u = bkwUnit(F.unit);
   return `<span class="bkw-crumbs">
     <button type="button" class="bkw-crumb" data-bkw-go="${F.htinFixed ? "cat" : "who"}" title="Change who it's for">${p ? "🤝 " + esc(bkwPName(p)) : "🏠 Reid"}</button><span class="bkw-arr">›</span>
     <button type="button" class="bkw-crumb" data-bkw-go="cat" title="Change the kind of call">${cat ? cat[2] + " " + esc(cat[1]) : "Kind of call"}</button><span class="bkw-arr">›</span>
@@ -11582,13 +11589,14 @@ function bkCrumbs(F) {
 function bkWizard(msg) {
   const F = BK, step = F.step;
   const p = Number(F.forP) ? (BK_PARTNERS || []).find(x => x.id === Number(F.forP)) : null, who = p ? bkwPName(p) : "Reid";
-  const types = bkwTypes(F), cats = BKW_CATS.filter(c => types.some(t => t.job_class === c[0]));
+  const types = bkwTypes(F), cats = BKW_CATS.filter(c => types.some(t => bkwCatOf(t, F) === c[0]));
   const crumb = [step !== "who" && step !== "partner" ? `<button type="button" class="bkw-crumb" data-bkw="${F.htinFixed ? "cat" : "who"}">${p ? "🤝 " + esc(who) : "🏠 Reid"}</button>` : "",
     step === "type" || step === "hours" ? `<span class="bkw-arr">›</span><button type="button" class="bkw-crumb" data-bkw="cat">${esc(BKW_CATS.find(c => c[0] === F.cat)?.[1] || "")}</button>` : ""].join("");
   let q = "", grid = "";
   if (step === "who") { q = "Who is this call for?";
     grid = `<button type="button" class="bkw-btn big" data-bkw-who="0"><span class="bkw-ic">🏠</span><b>Reid</b><small>Our own customer</small></button>
       <button type="button" class="bkw-btn big" data-bkw-who="p"><span class="bkw-ic">🤝</span><b>A Partner</b><small>Costco, Rona, Vista, Lennox…</small></button>
+      ${(BOOK.job_types || []).some(t => /phone call request/i.test(t.name)) ? `<button type="button" class="bkw-btn big" data-bkw-phone><span class="bkw-ic">📞</span><b>Phone Call Request</b><small>Someone needs to call the customer</small></button>` : ""}
       ${F.jobs.length ? `<button type="button" class="bkw-btn big alt" data-bkw-visit><span class="bkw-ic">↻</span><b>Another visit</b><small>On a job that's still open (${F.jobs.length})</small></button>` : ""}`; }
   else if (step === "partner") { q = "Which partner?";
     grid = BK_PARTNERS ? BK_PARTNERS.map(x => `<button type="button" class="bkw-btn" data-bkw-p="${x.id}"><span class="bkw-ic">🤝</span><b>${esc(bkwPName(x))}</b></button>`).join("") || `<div class="quiet">No partners yet (Partners page).</div>`
@@ -11599,8 +11607,8 @@ function bkWizard(msg) {
     grid = `<button type="button" class="bkw-btn big" data-bkw-hours="reg"><span class="bkw-ic">☀️</span><b>Regular hours</b><small>Normal priority</small></button>
       <button type="button" class="bkw-btn big ah" data-bkw-hours="ah"><span class="bkw-ic">🌙</span><b>After hours</b><small>Emergency priority · after-hours rates</small></button>`; }
   else { const c = BKW_CATS.find(x => x[0] === F.cat); q = `Which ${esc((c?.[1] || "job").toLowerCase())}?`;
-    const sc = types.filter(t => t.job_class === F.cat && BKW_SC.test(t.name));
-    grid = (sc.length ? `<button type="button" class="bkw-btn" data-bkw-sc><b>Service Call</b><small>Regular hours or after hours: asked next</small></button>` : "") + types.filter(t => t.job_class === F.cat && !(sc.length && BKW_SC.test(t.name))).map(t => `<button type="button" class="bkw-btn${t.own ? " own" : ""}" data-bkw-type="${t.id}"><b>${esc(t.name)}</b>
+    const sc = types.filter(t => bkwCatOf(t, F) === F.cat && BKW_SC.test(t.name));
+    grid = (sc.length ? `<button type="button" class="bkw-btn" data-bkw-sc><b>Service Call</b><small>Regular hours or after hours: asked next</small></button>` : "") + types.filter(t => bkwCatOf(t, F) === F.cat && !(sc.length && BKW_SC.test(t.name))).map(t => `<button type="button" class="bkw-btn${t.own ? " own" : ""}" data-bkw-type="${t.id}"><b>${esc(t.name)}</b>
       <small>${esc(bkwUnit(t.unit_id)?.name || "Pick the department next")}${t.duration ? " · " + durText(t.duration) : ""}</small>${t.own ? `<span class="bkw-own">${esc(who)}</span>` : ""}</button>`).join(""); }
   const back = step === "who" ? "" : step === "partner" ? "who" : step === "cat" ? (F.htinFixed ? "" : p ? "partner" : "who") : step === "hours" ? "type" : "cat";
   $("#main").innerHTML = `<article class="staff book">
@@ -11620,21 +11628,22 @@ function bkWizard(msg) {
   document.querySelectorAll("#main [data-bkw-who]").forEach(b => b.addEventListener("click", () => {
     if (b.dataset.bkwWho === "p") return go("partner");
     F.forP = 0; F.tank = null; F.isHtin = false; F.htin = null; F.type = ""; F.unit = ""; go("cat"); }));
+  $("#main [data-bkw-phone]")?.addEventListener("click", () => { F.forP = 0; F.tank = null; F.isHtin = false; F.htin = null; bkwPick((BOOK.job_types || []).find(t => /phone call request/i.test(t.name))); });
   $("#main [data-bkw-visit]")?.addEventListener("click", () => { F.mode = "visit"; F.jobId = F.jobs.length === 1 ? F.jobs[0].job_id : null; bkVisitFill(F); go("done"); });
   document.querySelectorAll("#main [data-bkw-p]").forEach(b => b.addEventListener("click", () => {
     const id = Number(b.dataset.bkwP); if (id !== Number(F.forP)) { F.tank = null; F.isHtin = false; F.htin = null; F.type = ""; F.unit = ""; } F.forP = id; go("cat"); }));
   document.querySelectorAll("#main [data-bkw-cat]").forEach(b => b.addEventListener("click", () => {
-    F.cat = b.dataset.bkwCat; const list = bkwTypes(F).filter(t => t.job_class === F.cat);
+    F.cat = b.dataset.bkwCat; const list = bkwTypes(F).filter(t => bkwCatOf(t, F) === F.cat);
     if (list.length === 1) return bkwPick(list[0]); go("type"); }));
   document.querySelectorAll("#main [data-bkw-type]").forEach(b => b.addEventListener("click", () => bkwPick((BOOK.job_types || []).find(t => String(t.id) === b.dataset.bkwType))));
   $("#main [data-bkw-sc]")?.addEventListener("click", () => go("hours"));
   document.querySelectorAll("#main [data-bkw-hours]").forEach(b => b.addEventListener("click", () => {
-    const ah = b.dataset.bkwHours === "ah", list = bkwTypes(F).filter(t => t.job_class === F.cat && BKW_SC.test(t.name));
+    const ah = b.dataset.bkwHours === "ah", list = bkwTypes(F).filter(t => bkwCatOf(t, F) === F.cat && BKW_SC.test(t.name));
     bkwPick(list.find(t => ah ? /after/i.test(t.name) : /regular/i.test(t.name)) || list[0]); }));
 }
 function bkwPick(t) {   // the job is picked: its department and length fill in, and the rest of the booking opens
   const F = BK; if (!t) return;
-  F.mode = "new"; F.jobId = null; F.type = String(t.id); F.cat = t.job_class; F.prio = /after\s*hours/i.test(t.name) ? "emergency" : "normal"; F.dur = String(t.duration || F.dur || 60); F.unit = t.unit_id ? String(t.unit_id) : ""; F.unitEdit = !t.unit_id;
+  F.mode = "new"; F.jobId = null; F.type = String(t.id); F.cat = bkwCatOf(t, F) || t.job_class; F.prio = /after\s*hours/i.test(t.name) ? "emergency" : "normal"; F.dur = String(t.duration || F.dur || 60); F.unit = t.unit_id ? String(t.unit_id) : ""; F.unitEdit = !t.unit_id;
   if (t.job_class === "sales" && /walk/i.test(t.name) && !F.summary) F.summary = "Walk the site";
   F.step = "done"; renderBooking();
   if (bkIsVista(F.forP) && F.isHtin && !F.htin) bkLoadHtin();
