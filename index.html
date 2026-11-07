@@ -13426,14 +13426,16 @@ function dspOptimize(rows, techs) {
   const fits = (kind, cls) => !kind ? false : cls === "install" ? kind === "installs" : cls === "maintenance" ? kind === "maintenance" || kind === "service"
     : cls === "security" ? kind === "security" : cls === "service" ? kind === "service" : kind !== "security";
   const movable = r => r.arrival_start && r.techs.length === 1 && !r.arrived_at && !r.en_route_at && !["working", "done", "completed", "cancelled", "canceled", "on_hold", "arrived"].includes(String(r.status || "").toLowerCase());
-  const span = r => { const a = Date.parse(r.arrival_start), z = r.arrival_end ? Date.parse(r.arrival_end) : a + (r.duration || 60) * 60000; return [a, Math.max(z, a + 30 * 60000)]; };
+  const span = r => { const a = Date.parse(r.arrival_start), z = r.arrival_end ? Date.parse(r.arrival_end) : a + (r.duration || 60) * 60000; return [a, Math.max(z, a + 30 * 60000), (r.duration || 60) * 60000]; };
   const km = (x, y) => (x.lat == null || y.lat == null) ? null : Math.hypot((Number(y.lng) - Number(x.lng)) * 111.32 * Math.cos(Number(x.lat) * Math.PI / 180), (Number(y.lat) - Number(x.lat)) * 110.57);
   const live = rows.filter(r => r.status !== "cancelled" && r.arrival_start);
   const byTech = new Map(techs.map(t => [t.id, []])); live.forEach(r => r.techs.forEach(t => byTech.get(t.id)?.push(r)));
   const home = new Map(); byTech.forEach((L, id) => { if (!L.length) return; const n = new Map(); L.forEach(r => { const a = areaOf(r)?.i; if (a != null) n.set(a, (n.get(a) || 0) + 1); });
     const best = [...n.entries()].sort((x, y) => y[1] - x[1])[0]; if (best && best[1] >= 2) home.set(id, best[0]); });
   const busy = new Map([...byTech.entries()].map(([id, L]) => [id, L.map(span)]));
-  const free = (id, w) => !(busy.get(id) || []).some(([a, z]) => a < w[1] && z > w[0]);
+  // room in the arrival window: the window, less the time their other calls in it take, fits this job plus 30 min of driving
+  const free = (id, w) => { const used = (busy.get(id) || []).reduce((t, [a, z, d]) => t + (a < w[1] && z > w[0] ? Math.min(d, Math.min(z, w[1]) - Math.max(a, w[0])) + 30 * 60000 : 0), 0);
+    return (w[1] - w[0]) - used >= w[2] + 30 * 60000; };
   const flags = new Set(), sugg = [];
   for (const t of techs) { const L = byTech.get(t.id) || [], h = home.get(t.id); if (h == null) continue;
     for (const r of L) { const ar = areaOf(r); if (!ar || ar.i === h || ar.out) continue; flags.add(r.visit_id); if (!movable(r)) continue;
@@ -13455,7 +13457,7 @@ async function dspOptOpen() {
     <p class="quiet">${O.flags?.size || 0} call${O.flags?.size === 1 ? "" : "s"} outside the tech's area for the day (⚠ on the board). ${O.sugg.length ? "These changes would put them with a tech already working in that area. Untick any you don't want; nothing changes until you press Apply." : "No better tech is free for any of them."}</p>
     ${O.sugg.length ? `<div class="opt-list">${O.sugg.map((x, k) => `<label class="opt-row"><input type="checkbox" data-opt="${k}" checked>
       <span class="opt-dot" style="background:${esc(x.area.color)}"></span><span class="opt-t"><b>${esc(x.r.customer_name)}</b> <span class="quiet">${tm(x.r.arrival_start)} · ${esc(x.r.job_type || "")} · ${esc(x.area.short)}</span><br>
-      <span class="opt-mv"><span class="opt-from">${esc(x.from.name)}</span> <span class="quiet">(mostly ${esc(x.fromArea?.short || "")})</span> → <b>${esc(x.to.name)}</b> <span class="quiet">(${x.empty ? "no calls yet that day" : "mostly " + esc(x.area.short)}${x.dist != null ? ", " + x.dist.toFixed(1) + " km from his nearest call" : ""}, free then)</span></span></span></label>`).join("")}</div>` : ""}
+      <span class="opt-mv"><span class="opt-from">${esc(x.from.name)}</span> <span class="quiet">(mostly ${esc(x.fromArea?.short || "")})</span> → <b>${esc(x.to.name)}</b> <span class="quiet">(${x.empty ? "no calls yet that day" : "mostly " + esc(x.area.short)}${x.dist != null ? ", " + x.dist.toFixed(1) + " km from his nearest call" : ""}, has room in that window)</span></span></span></label>`).join("")}</div>` : ""}
     <div class="opt-btns">${O.sugg.length ? `<button type="button" class="btn" id="opt-go">Apply the ticked changes</button>` : ""}<button type="button" class="btn quiet-btn" id="opt-x">Close</button></div></div>`;
   document.body.append(d);
   const close = () => d.remove();
