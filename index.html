@@ -4837,6 +4837,7 @@ article.owing .ow-scopes .ow-scope-p span { -webkit-line-clamp: 2; line-height: 
 /* the front and back edges of a call: the area colour of the tech's call before and after it, so you can see if the next call is in the right area */
 .dsp .tl-card.nb { box-shadow: inset 6px 0 0 var(--nb-prev), inset -6px 0 0 var(--nb-next) !important; padding-left: 9px !important; padding-right: 9px !important; }
 .dsp .dsp-bar > .dsp-sum .dsp-optbtn2 { order: -1; width: 112px; flex: none; margin-right: 8px; text-align: center; } .dsp-optbtn2.has { background: #fff3bf !important; border-color: #f59f00 !important; color: #7c5800 !important; font-weight: 800; }
+.dsp .dsp-bar > .dsp-sum .dsp-undo { order: -2; width: 74px; flex: none; margin-right: 8px; text-align: center; } .dsp-undo:not(:disabled) { background: #e7f5ff !important; border-color: #1c7ed6 !important; color: #1864ab !important; font-weight: 800; }
 .dc-oz { color: #d9480f; font-weight: 900; margin-right: 3px; }
 .opt-wrap { position: fixed; inset: 0; z-index: 9500; background: rgba(15,23,42,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
 .opt { background: var(--panel); color: var(--ink); border-radius: 14px; padding: 18px 20px; width: min(760px, 100%); max-height: 86vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
@@ -13468,12 +13469,22 @@ async function dspOptOpen() {
   go.addEventListener("click", async () => {
     const pick = [...d.querySelectorAll("[data-opt]:checked")].map(c => O.sugg[Number(c.dataset.opt)]);
     if (!(await askChoice(`Make ${pick.length} change${pick.length === 1 ? "" : "s"}?`, pick.map(x => `${esc(x.r.customer_name)}: ${esc(x.from.name)} → <b>${esc(x.to.name)}</b>`).join("<br>"), [["yes", "Yes, make them", true], ["", "Not yet"]]))) return;
-    go.disabled = true; go.textContent = "Changing…"; let bad = 0;
-    for (const x of pick) { const { error } = await db.rpc("set_call_techs", { p_visit_id: x.r.visit_id, p_techs: [x.to.id] }); if (error) bad++; }
+    go.disabled = true; go.textContent = "Changing…"; let bad = 0; const done = [];
+    for (const x of pick) { const { error } = await db.rpc("set_call_techs", { p_visit_id: x.r.visit_id, p_techs: [x.to.id] }); if (error) bad++; else done.push({ vid: x.r.visit_id, techs: x.r.techs.map(t => t.id), name: x.r.customer_name }); }
+    dspUndoPush(`Optimize: ${done.length} call${done.length === 1 ? "" : "s"}`, done);
     close(); dspToast(bad ? `${pick.length - bad} changed, ${bad} not changed.` : `Done: ${pick.length} call${pick.length === 1 ? "" : "s"} moved.`); await loadDispatch();
   });
 }
 
+// Undo on the dispatch board: the last changes of techs (✨ Optimize, or dragging a call to another tech), most recent first
+const DSP_UNDO = [];
+function dspUndoPush(label, items) { if (!items.length) return; DSP_UNDO.push({ label, items, at: Date.now() }); if (DSP_UNDO.length > 20) DSP_UNDO.shift(); }
+async function dspUndo() {
+  const u = DSP_UNDO[DSP_UNDO.length - 1]; if (!u) return;
+  if (!(await askChoice("Undo this?", `${esc(u.label)}<br>${u.items.map(x => esc(x.name)).join(", ")} go${u.items.length === 1 ? "es" : ""} back to the tech${u.items.length === 1 ? "" : "s"} they had before.`, [["yes", "Undo it", true], ["", "Cancel"]]))) return;
+  let bad = 0; for (const x of u.items) { const { error } = await db.rpc("set_call_techs", { p_visit_id: x.vid, p_techs: x.techs }); if (error) bad++; }
+  DSP_UNDO.pop(); dspToast(bad ? `${u.items.length - bad} put back, ${bad} not.` : "Undone: put back as it was."); await loadDispatch();
+}
 const DSP_NB = new Map();
 function dspTlCard(r, from, style = "", cls = "") {
   const nb = DSP_NB.get(r.visit_id), nbStyle = nb ? `;--nb-prev:${nb.prev || "transparent"};--nb-next:${nb.next || "transparent"};` : "";
@@ -13524,6 +13535,7 @@ function renderDispatch() {
         <label class="dsp-hrs dsp-hrs-top" title="How many hours fit on the screen; scroll sideways to go back or forward in time. On today, the board moves along with the time.">Show <select id="dsp-hrs">${[3, 4, 6, 8, 10, 12, 24].map(h => `<option value="${h}" ${h === dspHrs() ? "selected" : ""}>${h === 24 ? "the whole day" : h + " hours"}</option>`).join("")}</select>
           ${isToday ? `<button class="link dsp-hrs-reset" type="button" id="dsp-now" title="Go back to the time now (the board follows the time again)">Now</button>` : ""}</label>
       <div class="dsp-sum quiet">${callsWord(rows.length)}${none.length ? ` · <span class="owe">${none.length} without a tech</span>` : ""}${cancelled ? ` · ${cancelled} cancelled` : ""}
+        <button class="btn quiet-btn dsp-undo" type="button" id="dsp-undo" ${DSP_UNDO.length ? "" : "disabled"} title="${DSP_UNDO.length ? "Undo: " + esc(DSP_UNDO[DSP_UNDO.length - 1].label) : "Nothing to undo"}">↩ Undo</button>
         <button class="btn quiet-btn dsp-optbtn2 ${DSP.opt?.flags?.size ? "has" : ""}" type="button" id="dsp-optimize" title="Calls outside the tech's area for the day, and a better tech for each">✨ Optimize${DSP.opt?.flags?.size ? ` (${DSP.opt.flags.size})` : ""}</button>
         <button class="btn ${DSP.map ? "" : "quiet-btn"} dsp-mapbtn" type="button" id="dsp-map" aria-pressed="${!!DSP.map}">${DSP.map ? "Hide map" : "Map"}</button>
         <span class="live-dot ${callsLive ? "on" : ""}" title="${callsLive ? "Live: changes show up by themselves" : "Checks for changes every 30 seconds"}"></span></div>
@@ -13548,7 +13560,7 @@ function renderDispatch() {
   $("[data-dtoday]")?.addEventListener("click", () => { if (DSP.date === ymd(new Date())) return; DSP.date = ymd(new Date()); DSP.sel = null; loadDispatch(); });
   dspRangeWire();
   $("#dsp-date").addEventListener("change", e => { if (e.target.value) { DSP.date = e.target.value; DSP.sel = null; loadDispatch(); } });
-  $("#dsp-optimize")?.addEventListener("click", dspOptOpen);
+  $("#dsp-optimize")?.addEventListener("click", dspOptOpen); $("#dsp-undo")?.addEventListener("click", dspUndo);
   $("#dsp-all")?.addEventListener("change", e => { DSP.all = e.target.checked; saveDsp(); renderDispatch(); });
   $(".dsp-legend-d")?.addEventListener("toggle", e => { DSP.legendOpen = e.currentTarget.open; try { localStorage.setItem("reid.dspLegend", DSP.legendOpen ? "1" : ""); } catch {} });
   $("#dsp-opts")?.addEventListener("click", e => { DSP.optsOpen = !DSP.optsOpen; try { localStorage.setItem("reid.dspOpts", DSP.optsOpen ? "1" : ""); } catch {}
@@ -13595,8 +13607,10 @@ async function dropCall(vid, from, to) {
     const m = await db.rpc("move_call", { p_visit_id: vid, p_date: DSP.date, p_start: null, p_end: null, p_method: "drag" });
     if (m.error) return dspToast("Not moved: " + rpcErr(m.error));
   }
+  const before = r.techs.map(t => t.id);
   const { error } = await db.rpc("set_call_techs", { p_visit_id: vid, p_techs: techs });
   if (error) dspToast("Not changed: " + rpcErr(error));
+  else if (!waiting) dspUndoPush(`Moved ${r.customer_name}`, [{ vid, techs: before, name: r.customer_name }]);
   DSP.sel = vid;
   await loadDispatch();
 }
