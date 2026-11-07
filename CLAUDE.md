@@ -38,7 +38,8 @@
 ## Book a call (office)
 
 - One question at a time (`bkWizard`): Reid or a Partner (→ pick the partner) → kind of call (Service, Maintenance, Warranty, Estimate, Install…) → which job type. The department fills in from the job type (`unit_id`), then the rest of the booking shows with "Reid › Service › Service Call - Regular Hours · Department" crumbs to change any step. A partner sees its own job types first ("Vista - Maintenance"); other partners' types are hidden. Vista asks who pays for the tank only for installs / water heaters. "Another visit" (open job) is on the first step.
+- Picking the tech: every office booking (new call or another visit) uses the same Best techs to send squares + Calls nearby board as the customer page (`bkNearHtml`, `nearCallsHtml(..., { pick: true, bkAll: true })`). The tech's kind comes from the job type. Pick fills the tech, day and window, so the Day and Arrival window rows are gone there (`bkNearOnly`); "Pick by hand" brings back the chips, and "Not booked yet" is in the Picked line.
 
 ## HSG Pro logo (bottom of the Customers page)
 
-- Big HSG Pro badge; clicking it shows one of 20 kind messages (`HSG_MSGS`), some using how long they've been with us from the Staff page "Started working here" date (`sync/extra/221_staff_started.sql`).
+- HSG Pro badge with a "👆 Click me" tag; clicking it shows one of 200 kind messages (`HSG_MSGS`), going through all 200 before any repeats (kept in localStorage), some using how long they've been with us from the Staff page "Started working here" date (`sync/extra/221_staff_started.sql`).
