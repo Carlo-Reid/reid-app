@@ -13011,6 +13011,7 @@ async function loadDispatch() {
   { const n = await db.rpc("board_notes_for", { p_date: d }); DSP.notes = n.error ? [] : n.data || []; if (DSP.date !== d) return; }
   { const b = await db.rpc("staff_blocks_list", { p_from: d, p_to: d }); DSP.blocks = b.error ? [] : b.data || []; if (DSP.date !== d) return; }
   { const b = await db.rpc("install_holds_list", { p_from: d, p_to: d }); DSP.holds = b.error ? [] : b.data || []; if (DSP.date !== d) return; }
+  { const b = await db.rpc("dispatch_parts_held", { p_date: d }); DSP.parts = new Map((b.error ? [] : b.data || []).map(x => [x.visit_id + ":" + x.employee_id, x.what])); if (DSP.date !== d) return; }
   DSP.sig = JSON.stringify([DSP.rows, DSP.waiting]);
   renderDispatch();
 }
@@ -13462,9 +13463,11 @@ function dspOptimize(rows, techs) {
       sugg.push({ r, from: t, to: c.o, area: ar, fromArea: DISPATCH_AREAS[h], dist: c.d, empty: c.empty }); } }
   // swaps: a call nobody has room for, traded with a call of a tech working in its area who has one in this tech's area.
   // Both techs must do both jobs and have room for the call they take once the other one is gone; each call ends up in its tech's area.
-  for (const A of stuck) { if (used.has(A.r.visit_id)) continue;
+  // a call whose tech already has its parts in his truck stays with him (never swapped)
+  const hasParts = A => DSP.parts?.has(A.r.visit_id + ":" + A.t.id);
+  for (const A of stuck) { if (used.has(A.r.visit_id) || hasParts(A)) continue;
     let best = null;
-    for (const B of stuck) { if (B === A || used.has(B.r.visit_id) || B.t.id === A.t.id) continue;
+    for (const B of stuck) { if (B === A || used.has(B.r.visit_id) || B.t.id === A.t.id || hasParts(B)) continue;
       if (B.h !== A.ar.i || B.ar.i !== A.h) continue;
       const aKind = KIND.get(A.t.name), bKind = KIND.get(B.t.name);
       if (!fits(bKind, A.cls || "") || !fits(aKind, B.cls || "")) continue;
