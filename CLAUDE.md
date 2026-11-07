@@ -45,3 +45,8 @@
 ## HSG Pro logo (bottom of the Customers page)
 
 - HSG Pro badge with a "👆 Click me" tag; clicking it shows one of 200 kind messages (`HSG_MSGS`), going through all 200 before any repeats (kept in localStorage), some using how long they've been with us from the Staff page "Started working here" date (`sync/extra/221_staff_started.sql`).
+- Service → "Service Call" is one button, then "Regular hours or after hours?" (`BKW_SC`). Priority is never picked by hand: after hours = Emergency, everything else Normal. An after-hours call is clearly marked: orange AFTER HOURS CALL banner on the booking and on the invoice editor (orange header), and an "After-hours service call" tag + orange top on the invoice paper.
+
+## Online booking from marketing emails
+
+- `{book_link}` fill-in (and the "Book your tune-up online" template) gives each customer their own link (`?book=<marketing_token>`) to a public calendar page (`showOnlineBook`, no sign-in). It offers the best arrival windows (8–11, 11–2, 2–5) from 14 days out to 60 days (Marketing → Email → Online booking settings): free techs of the right kind (maintenance or service techs), minus calls with no tech yet in that window, plus a bonus for a call within 5 km that day; at most 2 per day, 12 offers. None work → "please call the office" with the phone. The booking makes the job + visit with no tech (assign on Dispatch) and a job note. `sync/extra/223_online_booking.sql` (`public_book_info`, `public_book`; `p_dry` checks it and rolls back).
