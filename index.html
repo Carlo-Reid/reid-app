@@ -959,7 +959,14 @@
   /* best 3 techs: square buttons at the top of the customer's file */
   .near-top3:empty { display: none; } .near-top3 { margin-top: 14px; }
   .nt3-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 108px)); gap: 8px; }
-  #bk-near { flex-direction: column; align-items: stretch; gap: 14px; } #bk-near .nc-sug { width: auto; max-width: none; } #bk-near .nt3-grid { grid-template-columns: repeat(4, 108px); }
+  #bk-near { flex-direction: column; align-items: stretch; gap: 14px; } #bk-near .nc-sug { width: auto; max-width: none; } #bk-near .nt3-grid { grid-template-columns: repeat(5, 108px); }
+  .nt3-last { border-color: #7048e8 !important; background: color-mix(in srgb, #7048e8 7%, var(--panel)) !important; } .nt3-last .nt3-t, .nt3-last .nt3-n { color: #5f3dc4; } .nt3-last.on { box-shadow: 0 0 0 3px rgba(112,72,232,.3) !important; }
+  .bk-last10 { margin-top: 12px; padding: 10px 12px; border: 2px solid #b197fc; border-radius: 10px; background: color-mix(in srgb, #7048e8 4%, var(--panel)); }
+  .bk-last-days { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+  .bk-lday { display: flex; flex-direction: column; gap: 2px; padding: 8px; border: 2px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: 12px; text-align: left; }
+  button.bk-lday { cursor: pointer; } button.bk-lday:hover { border-color: #7048e8; } .bk-lday b { font-size: 13px; } .bk-lday .f { font-weight: 700; color: #2b8a3e; } .bk-lday .go { margin-top: 3px; font-weight: 800; color: #5f3dc4; }
+  .bk-lday.over { opacity: .55; } .bk-lday.over .f { color: #c92a2a; } .bk-lday.on { border-color: #2f9e44; background: #ebfbee; }
+  @media (max-width: 700px) { #bk-near .nt3-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bk-last-days { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .nt3-w { position: relative; } .nt3-x { position: absolute; top: 6px; right: 6px; border: 0; background: transparent; color: var(--steel); font-size: 12px; cursor: pointer; padding: 2px 4px; border-radius: 6px; } .nt3-x:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
   .nt3 { width: 100%; aspect-ratio: 1 / 1; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px; border-radius: 13px; text-align: left; cursor: pointer; font: inherit; overflow: hidden;
     border: 3px solid color-mix(in srgb, var(--blue) 55%, var(--ink) 30%); background: var(--panel); color: var(--ink); box-shadow: 0 2px 4px rgba(15,23,42,.22), 0 8px 18px rgba(15,23,42,.24); }
@@ -11636,9 +11643,35 @@ function bkKindOf(F) {
   const t = F.mode === "visit" ? (BOOK.job_types || []).find(x => x.name === F.jobs.find(j => j.job_id === F.jobId)?.job_type) : (BOOK.job_types || []).find(x => String(x.id) === String(F.type));
   return ({ install: "installs", maintenance: "maintenance", security: "security", service: "service", warranty: "service" })[t?.job_class] || "";
 }
+// Another visit: a 4th box with the last tech who was there, and when he's free over the next 10 working days
+function bkLastTech() {
+  const F = BK; if (F.mode !== "visit") return {};
+  const key = (F.jobId || "") + "|" + (bkNearLoc()?.id || "");
+  if (F.lastKey !== key) { F.lastKey = key; F.last = "loading";
+    db.rpc("last_tech_there", { p_job: F.jobId || null, p_location: bkNearLoc()?.id || null }).then(({ data, error }) => { if (BK !== F || F.lastKey !== key) return; F.last = error ? null : data; bkNearDraw(); }); }
+  if (F.last === "loading") return { extraTile: `<div class="nt3-w"><div class="nt3 nt3-last"><span class="nt3-t">Last tech there</span><span class="nt3-k">checking…</span></div></div>` };
+  if (!F.last?.name) return { extraTile: `<div class="nt3-w"><div class="nt3 nt3-last"><span class="nt3-t">Last tech there</span><span class="nt3-k">${F.jobId ? "Nobody has been to this job yet" : "Nobody has been here yet"}</span></div></div>` };
+  const L = F.last, rows = NEAR.rows || [], t = (BOOK.techs || []).find(x => x.id === L.id), nm = t?.name || L.name, first = nm.split(" ")[0];
+  const mine = v => v.techs && v.techs.split(/,\s*/).some(n => n === nm || n === first || n.split(" ")[0] === first);
+  const HH = x => { const d = new Date(x); return d.getHours() + d.getMinutes() / 60; }, WINS = [[8, 11, "8–11a"], [11, 14, "11a–2p"], [14, 17, "2–5p"]];
+  const days = []; for (let i = 0; days.length < 10 && i < 21; i++) { const dt = new Date(); dt.setDate(dt.getDate() + i); const wd = dt.getDay(); if (wd === 0 || wd === 6) continue; days.push(ymd(dt)); }
+  const info = days.map(d => { const cs = rows.filter(v => v.d === d && mine(v) && v.from), sp = cs.map(v => [HH(v.from), v.to ? HH(v.to) : HH(v.from) + 1]);
+    return { d, n: cs.length, free: WINS.filter(([a, b]) => !sp.some(([x, y]) => x < b && y > a)) }; });
+  const nextFree = info.find(x => x.free.length), dayS = d => new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }).replace(/\./g, "");
+  const was = L.date ? new Date(String(L.date).slice(0, 10) + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }).replace(/\./g, "") : "";
+  const tile = `<div class="nt3-w"><button type="button" class="nt3 nt3-last${F.lastOpen ? " on" : ""}" data-bk-lastopen title="${esc(nm)} was the last tech there${was ? " (" + esc(was) + ")" : ""}. Click to see when he's free.">
+      <span class="nt3-n">↻</span><span class="nt3-t">${esc(first)}</span><span class="nt3-d">Last tech there</span><span class="nt3-k">${was ? "Was there " + esc(was) : ""}</span>
+      <span class="nt3-f">${nextFree ? "Next free " + esc(dayS(nextFree.d)) : "No free window in 10 days"}</span><span class="nt3-go">${F.lastOpen ? "Hide ↑" : "His 10 days ↓"}</span></button></div>`;
+  const row = !F.lastOpen ? "" : `<div class="bk-last10"><div class="nc-h">${esc(nm)}: the next 10 working days <span class="quiet nc-sub">last at this ${L.same_job ? "job" : "address"}${was ? " on " + esc(was) : ""}${L.job_number && !L.same_job ? " (job " + esc(L.job_number) + ")" : ""}</span></div>
+    <div class="bk-last-days">${info.map(x => x.free.length
+      ? `<button type="button" class="bk-lday room${F.date === x.d && F.techs[0] === L.id ? " on" : ""}" data-bk-pick="${x.d}" data-near-tech="${esc(nm)}" data-near-time="${String(x.free[0][0]).padStart(2, "0")}:00"><b>${esc(dayS(x.d))}</b><span>${x.n ? x.n + " call" + (x.n === 1 ? "" : "s") : "No calls yet"}</span><span class="f">${x.free.length === 3 ? "Free all day" : "Free " + esc(x.free.map(w => w[2]).join(", "))}</span><span class="go">Pick ${esc(first)}</span></button>`
+      : `<div class="bk-lday over"><b>${esc(dayS(x.d))}</b><span>${x.n} calls</span><span class="f">Booked full</span></div>`).join("")}</div></div>`;
+  return { extraTile: tile, extraRow: row };
+}
+document.addEventListener("click", e => { if (!e.target.closest("[data-bk-lastopen]") || !BK) return; e.preventDefault(); BK.lastOpen = !BK.lastOpen; bkNearDraw(); });
 function bkNearHtml() {
   const l = bkNearLoc();
-  if (!BK.walk) return nearCallsHtml(l || {}, { kind: bkKindOf(BK), pick: true, elId: "bk-near", bkAll: true, allOpen: !!BK.nearAll });
+  if (!BK.walk) return nearCallsHtml(l || {}, { kind: bkKindOf(BK), pick: true, elId: "bk-near", bkAll: true, allOpen: !!BK.nearAll, ...bkLastTech() });
   if (!l) return `<span class="quiet">This customer has no address on file.</span>`;
   const hr = t => { const [h, m] = String(t || "").split(":").map(Number); return isNaN(h) ? null : h + (m || 0) / 60; };
   const W = Array.isArray(BK.win) ? BK.win : BK.win === "other" ? [BK.start, BK.end] : null;
@@ -12498,9 +12531,9 @@ function nearCallsHtml(l, o = {}) {   // o.kind: only that kind of tech; o.pick:
       <span class="nt3-go">${p.full ? (o.pick ? "Pick anyway" : "Book anyway") : (o.pick ? "Pick" : "Book")} ${esc(p.tech)} →</span></button>
       <button type="button" class="nt3-x" data-near-hide="${esc(p.d + "|" + p.tech)}" title="Take ${esc(p.tech)} off ${esc(day(p.d))} for now">✕</button></div>`;
   const top3Html = `<div class="nc-sug"><div class="nc-h">Best techs to send ${KND ? `<span class="nc-kindnote">· ${kindNm}techs</span>` : ""} <span class="quiet nc-sub">${near.length} booked call${near.length === 1 ? "" : "s"} nearby in the next 2 weeks</span></div>
-    <div class="nt3-grid">${top3.length ? top3.map(tile).join("") : `<div class="quiet">No ${kindNm}tech free in the next 10 working days.</div>`}${o.pick ? (o.bkAll ? `<div class="nt3-w"><button type="button" class="nt3 nt3-all${o.allOpen ? " on" : ""}" data-bk-nearall title="Every tech, the next 10 working days">
+    <div class="nt3-grid">${top3.length ? top3.map(tile).join("") : `<div class="quiet">No ${kindNm}tech free in the next 10 working days.</div>`}${o.extraTile || ""}${o.pick ? (o.bkAll ? `<div class="nt3-w"><button type="button" class="nt3 nt3-all${o.allOpen ? " on" : ""}" data-bk-nearall title="Every tech, the next 10 working days">
       <span class="nt3-t">Calls nearby</span><span class="nt3-k">${near.length} booked call${near.length === 1 ? "" : "s"} nearby</span><span class="nt3-k">All techs, next 10 days</span><span class="nt3-go">${o.allOpen ? "Hide ↑" : "Open ↓"}</span></button></div>` : "") : `<div class="nt3-w"><button type="button" class="nt3 nt3-all" data-near-pop title="Open Calls nearby: every tech, the next 10 working days">
-      <span class="nt3-t">Calls nearby</span><span class="nt3-k">${near.length} booked call${near.length === 1 ? "" : "s"} nearby</span><span class="nt3-k">All techs, next 10 days</span><span class="nt3-go">Open →</span></button></div>`}</div></div>`;
+      <span class="nt3-t">Calls nearby</span><span class="nt3-k">${near.length} booked call${near.length === 1 ? "" : "s"} nearby</span><span class="nt3-k">All techs, next 10 days</span><span class="nt3-go">Open →</span></button></div>`}</div>${o.extraRow || ""}</div>`;
   if (!o.pick) setTimeout(() => { const h = document.getElementById("near-top3"); if (h && Number(document.getElementById(elId)?.dataset.nearLoc) === l.id) h.innerHTML = top3Html; }, 0);
   return `${o.pick ? top3Html : ""}<div class="nc-ten10${o.bkAll && !o.allOpen ? " hidden" : ""}">
     <div class="nc-best"><div class="nc-h">The next 10 working days <span class="nc-kindnote">${KND ? ` · showing ${esc(TECH_KINDS.find(k => k[0] === KND)?.[1] || "")} techs` : ""}</span><span class="nc-legend">· <b style="color:#2f9e44">green box = one of the best 3</b> · point at a tech and press ✕ to hide them for now</span>${hidden ? ` <button type="button" class="link nc-reset" data-near-reset>↺ Reset (${hidden} taken off)</button>` : ""}</div>
