@@ -23,3 +23,8 @@
 - Places are coloured ONE way everywhere (customer page, dispatch board, map, Calls nearby): 8 dispatch areas from the postal code's first 3 characters (`DISPATCH_AREAS` / `areaOf()` at the top of the main script in `index.html`). Rural K0A and unlisted postal areas go to the nearest area by map location; over 35 km from all of them is "Out of town". Agreed with Carlo Nov 7, 2026.
 - West: Kanata & Stittsville (blue) · Nepean (green) · Barrhaven, Riverside South & Manotick (orange) · Central (purple) · South Ottawa (red) · Gloucester & Vanier (teal) · Orléans & east (yellow) · Out of town (grey).
 - Neighbourhoods, communities and towns are text only now, not colours. Don't bring back a second "border" colour.
+
+## Dispatch ✨ Optimize
+
+- Flags calls outside the tech's area for the day, then suggests a move to a tech with room in that area, or, if nobody has room, a swap of two calls between two techs (ticked/unticked and undone together). Nothing changes until Carlo approves.
+- Never swap a call whose tech already has its parts in his truck (`dispatch_parts_held`, `sync/extra/218_parts_on_truck.sql`: a received PO he ordered for the job, or stock received/transferred into his truck for the job). Carlo's rule, Nov 7, 2026.
