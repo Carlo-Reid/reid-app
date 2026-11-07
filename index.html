@@ -11431,21 +11431,30 @@ document.addEventListener("click", e => { const b = e.target.closest("[data-bk-m
   BK.keep?.(); BK.date = b.dataset.bkMine; BK.later = false; renderBooking(); loadTechLoad(); });
 // the walk's Installers box: the same as Calls nearby on the customer page (Section 1B), installers only
 const bkNearLoc = () => { const F = BK; return F && (F.locs.find(x => x.id === (F.jobs.find(j => j.job_id === F.jobId)?.location_id || F.loc)) || F.locs[0]); };
+// every office booking picks its tech the same way as the customer page (Best techs to send + Calls nearby); a walk only shows installers
+const bkUseNear = F => !!F && !bkSales() && (F.walk ? !!F.kind : true);
+function bkKindOf(F) {
+  if (F.walk) return F.kind;
+  const t = F.mode === "visit" ? (BOOK.job_types || []).find(x => x.name === F.jobs.find(j => j.job_id === F.jobId)?.job_type) : (BOOK.job_types || []).find(x => String(x.id) === String(F.type));
+  return ({ install: "installs", maintenance: "maintenance", security: "security", service: "service", warranty: "service" })[t?.job_class] || "";
+}
 function bkNearHtml() {
   const l = bkNearLoc();
+  if (!BK.walk) return nearCallsHtml(l || {}, { kind: bkKindOf(BK), pick: true, elId: "bk-near", bkAll: true, allOpen: !!BK.nearAll });
   if (!l) return `<span class="quiet">This customer has no address on file.</span>`;
   const hr = t => { const [h, m] = String(t || "").split(":").map(Number); return isNaN(h) ? null : h + (m || 0) / 60; };
   const W = Array.isArray(BK.win) ? BK.win : BK.win === "other" ? [BK.start, BK.end] : null;
   const win = W && hr(W[0]) != null ? [hr(W[0]), hr(W[1]) ?? hr(W[0]) + 1] : null;   // Any time: no filter
   return nearCallsHtml(l, { kind: BK.kind, pick: true, elId: "bk-near", win });
 }
-function bkNearDraw() { const el = document.getElementById("bk-near"); if (el && BK?.walk) el.innerHTML = bkNearHtml(); }
+function bkNearDraw() { const el = document.getElementById("bk-near"); if (el && bkUseNear(BK)) el.innerHTML = bkNearHtml(); }
+document.addEventListener("click", e => { if (!e.target.closest("[data-bk-nearall]") || !BK) return; e.preventDefault(); BK.nearAll = !BK.nearAll; bkNearDraw(); });
 document.addEventListener("click", async e => { const b = e.target.closest("[data-bk-pick]"); if (!b || !BK) return;
   e.preventDefault(); const F = BK; F.keep?.();
   const name = b.dataset.nearTech, t = (BOOK.techs || []).find(x => x.name === name || x.name.split(" ")[0] === name);
   if (!t) return renderBooking({ text: `${name} isn't in the list of techs that can be booked.`, err: true });
   F.date = b.dataset.bkPick; F.later = false; F.techs = [t.id];
-  const tm = b.dataset.nearTime, w = F.win === "any" && tm && (BOOK.windows || []).find(([a]) => a === tm); if (w) F.win = w;
+  const tm = b.dataset.nearTime, w = (F.win === "any" || !F.walk) && tm && (BOOK.windows || []).find(([a]) => a === tm); if (w) F.win = w;
   const ws = Array.isArray(F.win) ? winText(F.win[0], F.win[1]) : F.win === "other" ? winText(F.start, F.end) : "any time";
   renderBooking({ text: `${t.name} picked for ${dayText(F.date)}, ${ws}. Check it, then press Book it.` });
   loadTechLoad(); document.getElementById("bk-save")?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -11615,11 +11624,11 @@ function renderBooking(msg) {
         ${F.win === "other" ? `<span class="bk-times"><input type="time" id="bk-start" value="${esc(F.start)}" step="900" aria-label="From"> to <input type="time" id="bk-end" value="${esc(F.end)}" step="900" aria-label="To"></span>` : ""}</span></div>`}
       <label class="bk-row"><span class="bk-label">How long</span><select id="bk-dur">${[30, 45, 60, 90, 120, 150, 180, 240, 300, 360, 480].map(m =>
           `<option value="${m}" ${Number(F.dur || t?.duration || 60) === m ? "selected" : ""}>${durText(m)}</option>`).join("")}</select></label>
-      ${F.walk && F.kind && !F.later ? `<section class="block nc-sec bk-near"><h2>Installers <span class="quiet bk-hint">calls nearby and who's free, the next 10 working days · Pick fills in the day, the window and the installer</span></h2>
+      ${bkUseNear(F) && !F.later ? `<section class="block nc-sec bk-near"><h2>${F.walk ? "Installers" : "Pick the tech"} <span class="quiet bk-hint">calls nearby and who's free, the next 10 working days · Pick fills in the day, the window and the ${F.walk ? "installer" : "tech"}</span></h2>
         <div class="near-calls" id="bk-near" data-near-loc="${bkNearLoc()?.id || ""}">${bkNearHtml()}</div>
         <div class="bk-picked"><span class="bk-label">Picked</span> ${F.techs.length ? F.techs.map((id, n) => `<b>${esc(techName(id))}</b>${n === 0 ? " (lead)" : " (helper)"}`).join(", ") + ` · ${esc(dayText(F.date))}` : `<span class="quiet">no one yet</span>`}
           <button class="link" type="button" data-bk-byhand>${F.byHand ? "Hide the list" : "Pick by hand (or add a helper)"}</button></div></section>` : ""}
-      ${F.later || bkSales() || (F.walk && F.kind && !F.byHand) ? "" : `<div class="bk-row top"><span class="bk-label">${F.walk && F.kind === "installs" ? "Installers" : "Techs"}<span class="quiet bk-hint">${F.walk && F.kind === "installs" ? "Free ones first. " : ""}The first one you pick leads. Numbers are what they already have that day.</span></span>
+      ${F.later || bkSales() || (bkUseNear(F) && !F.byHand) ? "" : `<div class="bk-row top"><span class="bk-label">${F.walk && F.kind === "installs" ? "Installers" : "Techs"}<span class="quiet bk-hint">${F.walk && F.kind === "installs" ? "Free ones first. " : ""}The first one you pick leads. Numbers are what they already have that day.</span></span>
         <span class="bk-chips" id="bk-techs">${bookTechChips()}</span></div>`}`}
       <div class="bk-actions"><button class="btn" type="submit" id="bk-save">${bkSales() && F.sk === "est" ? "Create the proposal" : bkSales() && F.sk === "phone" ? "Start the proposal" : F.later ? "Save the job" : "Book it"}</button>
         <button class="link" type="button" data-open-cust="${F.cust.id}">Cancel</button>
@@ -11658,7 +11667,7 @@ function renderBooking(msg) {
     renderBooking(); }));
   document.querySelectorAll("[data-bk-seller]").forEach(b => b.addEventListener("click", () => { F.seller = Number(F.seller) === Number(b.dataset.bkSeller) ? null : Number(b.dataset.bkSeller); redraw(); }));
   document.querySelectorAll("[data-bk-sk]").forEach(b => b.addEventListener("click", () => { F.sk = b.dataset.bkSk; F.later = F.sk === "est" || F.sk === "phone"; redraw(); if (F.sk === "walk") loadTechLoad(); }));
-  $("#bk-job")?.addEventListener("change", e => { F.jobId = Number(e.target.value) || null; });
+  $("#bk-job")?.addEventListener("change", e => { F.jobId = Number(e.target.value) || null; bkNearDraw(); });
   $("#bk-loc")?.addEventListener("change", e => { F.loc = Number(e.target.value); });
   $("#bk-type")?.addEventListener("change", e => {
     F.type = e.target.value; const x = BOOK.job_types.find(j => String(j.id) === F.type);
@@ -12288,10 +12297,11 @@ function nearCallsHtml(l, o = {}) {   // o.kind: only that kind of tech; o.pick:
       <span class="nt3-go">${p.full ? (o.pick ? "Pick anyway" : "Book anyway") : (o.pick ? "Pick" : "Book")} ${esc(p.tech)} →</span></button>
       <button type="button" class="nt3-x" data-near-hide="${esc(p.d + "|" + p.tech)}" title="Take ${esc(p.tech)} off ${esc(day(p.d))} for now">✕</button></div>`;
   const top3Html = `<div class="nc-sug"><div class="nc-h">Best techs to send ${KND ? `<span class="nc-kindnote">· ${kindNm}techs</span>` : ""} <span class="quiet nc-sub">${near.length} booked call${near.length === 1 ? "" : "s"} nearby in the next 2 weeks</span></div>
-    <div class="nt3-grid">${top3.length ? top3.map(tile).join("") : `<div class="quiet">No ${kindNm}tech free in the next 10 working days.</div>`}${o.pick ? "" : `<div class="nt3-w"><button type="button" class="nt3 nt3-all" data-near-pop title="Open Calls nearby: every tech, the next 10 working days">
+    <div class="nt3-grid">${top3.length ? top3.map(tile).join("") : `<div class="quiet">No ${kindNm}tech free in the next 10 working days.</div>`}${o.pick ? (o.bkAll ? `<div class="nt3-w"><button type="button" class="nt3 nt3-all${o.allOpen ? " on" : ""}" data-bk-nearall title="Every tech, the next 10 working days">
+      <span class="nt3-t">Calls nearby</span><span class="nt3-k">${near.length} booked call${near.length === 1 ? "" : "s"} nearby</span><span class="nt3-k">All techs, next 10 days</span><span class="nt3-go">${o.allOpen ? "Hide ↑" : "Open ↓"}</span></button></div>` : "") : `<div class="nt3-w"><button type="button" class="nt3 nt3-all" data-near-pop title="Open Calls nearby: every tech, the next 10 working days">
       <span class="nt3-t">Calls nearby</span><span class="nt3-k">${near.length} booked call${near.length === 1 ? "" : "s"} nearby</span><span class="nt3-k">All techs, next 10 days</span><span class="nt3-go">Open →</span></button></div>`}</div></div>`;
   if (!o.pick) setTimeout(() => { const h = document.getElementById("near-top3"); if (h && Number(document.getElementById(elId)?.dataset.nearLoc) === l.id) h.innerHTML = top3Html; }, 0);
-  return `${o.pick ? top3Html : ""}<div class="nc-ten10">
+  return `${o.pick ? top3Html : ""}<div class="nc-ten10${o.bkAll && !o.allOpen ? " hidden" : ""}">
     <div class="nc-best"><div class="nc-h">The next 10 working days <span class="nc-kindnote">${KND ? ` · showing ${esc(TECH_KINDS.find(k => k[0] === KND)?.[1] || "")} techs` : ""}</span><span class="nc-legend">· <b style="color:#2f9e44">green box = one of the best 3</b> · point at a tech and press ✕ to hide them for now</span>${hidden ? ` <button type="button" class="link nc-reset" data-near-reset>↺ Reset (${hidden} taken off)</button>` : ""}</div>
       <div class="nc-days10">${days10.map(box).join("")}</div>
       ${KND && !best.length ? `<div class="quiet">No ${esc(TECH_KINDS.find(k => k[0] === KND)?.[1] || "")} techs to suggest. Check that they're set on the Staff page, under Technicians.</div>` : ""}</div>
