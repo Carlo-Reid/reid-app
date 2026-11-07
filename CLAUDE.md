@@ -17,3 +17,9 @@
 - Office staff = app role office, admin, accounting, dispatcher or warehouse (not techs, even if ServiceTitan says technician). Their payroll page is time in / time out, not calls (`openOfficePayroll`, `sync/extra/212_office_time.sql`).
 - Work day turns over at 2 am. Time in: "Let's start the day" screen, or signing in in the morning. Time out: the "Done work" button at the top of the side bar; if they forget, their last typing/click/scroll, and they must verify it next time.
 - Pay counts only from 15 min before the expected start to 15 min after the expected end. Owners set expected hours per weekday on the person's payroll page.
+
+## Dispatch areas (how places are coloured)
+
+- Places are coloured ONE way everywhere (customer page, dispatch board, map, Calls nearby): 8 dispatch areas from the postal code's first 3 characters (`DISPATCH_AREAS` / `areaOf()` at the top of the main script in `index.html`). Rural K0A and unlisted postal areas go to the nearest area by map location; over 35 km from all of them is "Out of town". Agreed with Carlo Nov 7, 2026.
+- West: Kanata & Stittsville (blue) · Nepean (green) · Barrhaven, Riverside South & Manotick (orange) · Central (purple) · South Ottawa (red) · Gloucester & Vanier (teal) · Orléans & east (yellow) · Out of town (grey).
+- Neighbourhoods, communities and towns are text only now, not colours. Don't bring back a second "border" colour.
