@@ -4848,9 +4848,12 @@ article.owing .ow-scopes .ow-scope-p span { -webkit-line-clamp: 2; line-height: 
 .opt-call, .opt-box { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13px; } .opt-call b, .opt-box b { font-size: 14px; }
 .opt-box { padding: 8px 10px; border-radius: 8px; border: 1.5px solid var(--line); } .opt-box.from { background: #fff5f5; border-color: #ffc9c9; } .opt-box.from b { text-decoration: line-through; color: #a51111; }
 .opt-box.to { background: #ebfbee; border-color: #8ce99a; } .opt-box.to b { color: #2b8a3e; }
+.opt-swap { grid-template-columns: 22px minmax(0, 1fr); align-items: start; border-color: #91a7ff; background: #f8f9ff; } .opt-swap > input { margin-top: 3px; }
+.opt-pairs { display: flex; flex-direction: column; gap: 8px; min-width: 0; } .opt-tag { font-size: 12px; font-weight: 800; color: #364fc7; }
+.opt-pair { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 30px minmax(0, 1fr); gap: 10px; align-items: center; } .opt-pair + .opt-pair { padding-top: 8px; border-top: 1px dashed #bac8ff; }
 .opt-arrow { font-size: 22px; font-weight: 900; color: var(--steel); text-align: center; }
 .opt-area { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; } .opt-area i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-@media (max-width: 640px) { .opt-head { display: none; } .opt-row { grid-template-columns: 22px 1fr; } .opt-row > .opt-from, .opt-row > .opt-box, .opt-row > .opt-arrow { grid-column: 2; } .opt-arrow { text-align: left; } }
+@media (max-width: 640px) { .opt-pair { grid-template-columns: 1fr; } .opt-head { display: none; } .opt-row { grid-template-columns: 22px 1fr; } .opt-row > .opt-from, .opt-row > .opt-box, .opt-row > .opt-arrow { grid-column: 2; } .opt-arrow { text-align: left; } }
 .opt-dot { width: 12px; height: 12px; border-radius: 3px; flex: none; margin-top: 4px; } .opt-from { text-decoration: line-through; color: var(--steel); }
 .opt-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
 /* call cards fill their row from top to bottom (no empty space above and below) */
@@ -13441,11 +13444,12 @@ function dspOptimize(rows, techs) {
   const byTech = new Map(techs.map(t => [t.id, []])); live.forEach(r => r.techs.forEach(t => byTech.get(t.id)?.push(r)));
   const home = new Map(); byTech.forEach((L, id) => { if (!L.length) return; const n = new Map(); L.forEach(r => { const a = areaOf(r)?.i; if (a != null) n.set(a, (n.get(a) || 0) + 1); });
     const best = [...n.entries()].sort((x, y) => y[1] - x[1])[0]; if (best && best[1] >= 2) home.set(id, best[0]); });
-  const busy = new Map([...byTech.entries()].map(([id, L]) => [id, L.map(span)]));
-  // room in the arrival window: the window, less the time their other calls in it take, fits this job plus 30 min of driving
-  const free = (id, w) => { const used = (busy.get(id) || []).reduce((t, [a, z, d]) => t + (a < w[1] && z > w[0] ? Math.min(d, Math.min(z, w[1]) - Math.max(a, w[0])) + 30 * 60000 : 0), 0);
+  const busy = new Map([...byTech.entries()].map(([id, L]) => [id, L.map(r => [...span(r), r.visit_id])]));
+  // room in the arrival window: the window, less the time their other calls in it take (leaving out `skip`, a call they'd give away), fits this job plus 30 min of driving
+  const free = (id, w, skip) => { const used = (busy.get(id) || []).reduce((t, [a, z, d, v]) => t + (v !== skip && a < w[1] && z > w[0] ? Math.min(d, Math.min(z, w[1]) - Math.max(a, w[0])) + 30 * 60000 : 0), 0);
     return (w[1] - w[0]) - used >= w[2] + 30 * 60000; };
-  const flags = new Set(), sugg = [];
+  const moveBusy = (v, fromId, toId, w) => { const B = busy.get(fromId); if (B) busy.set(fromId, B.filter(x => x[3] !== v)); busy.get(toId)?.push([...w, v]); };
+  const flags = new Set(), sugg = [], used = new Set(), stuck = [];
   for (const t of techs) { const L = byTech.get(t.id) || [], h = home.get(t.id); if (h == null) continue;
     for (const r of L) { const ar = areaOf(r); if (!ar || ar.i === h || ar.out) continue; flags.add(r.visit_id); if (!movable(r)) continue;
       const w = span(r), cls = String(r.job_class || "").toLowerCase(), myKind = KIND.get(t.name);
@@ -13453,9 +13457,26 @@ function dspOptimize(rows, techs) {
         .map(o => { const OL = byTech.get(o.id) || [], oh = home.get(o.id), d = OL.map(x => km(r, x)).filter(x => x != null).sort((a, b) => a - b)[0];
           const sc = (oh === ar.i ? 20 : OL.length ? -100 : 4) + (d != null ? Math.max(0, 10 - d) : 0) - OL.length * 0.5; return { o, sc, d, empty: !OL.length, same: oh === ar.i }; })
         .filter(c => c.sc > 0).sort((a, b) => b.sc - a.sc);
-      const c = cands[0]; if (!c) continue;
-      busy.get(c.o.id)?.push(w);
+      const c = cands[0]; if (!c) { stuck.push({ r, t, h, ar, w, cls }); continue; }
+      moveBusy(r.visit_id, t.id, c.o.id, w); used.add(r.visit_id);
       sugg.push({ r, from: t, to: c.o, area: ar, fromArea: DISPATCH_AREAS[h], dist: c.d, empty: c.empty }); } }
+  // swaps: a call nobody has room for, traded with a call of a tech working in its area who has one in this tech's area.
+  // Both techs must do both jobs and have room for the call they take once the other one is gone; each call ends up in its tech's area.
+  for (const A of stuck) { if (used.has(A.r.visit_id)) continue;
+    let best = null;
+    for (const B of stuck) { if (B === A || used.has(B.r.visit_id) || B.t.id === A.t.id) continue;
+      if (B.h !== A.ar.i || B.ar.i !== A.h) continue;
+      const aKind = KIND.get(A.t.name), bKind = KIND.get(B.t.name);
+      if (!fits(bKind, A.cls || "") || !fits(aKind, B.cls || "")) continue;
+      if ((!A.cls || !B.cls) && aKind !== bKind) continue;
+      if (!free(B.t.id, A.w, B.r.visit_id) || !free(A.t.id, B.w, A.r.visit_id)) continue;
+      const gap = Math.abs(A.w[0] - B.w[0]); if (!best || gap < best.gap) best = { B, gap }; }
+    if (!best) continue; const B = best.B;
+    moveBusy(A.r.visit_id, A.t.id, B.t.id, A.w); moveBusy(B.r.visit_id, B.t.id, A.t.id, B.w); used.add(A.r.visit_id); used.add(B.r.visit_id);
+    const dA = (byTech.get(B.t.id) || []).filter(x => x !== B.r).map(x => km(A.r, x)).filter(x => x != null).sort((a, b) => a - b)[0];
+    const dB = (byTech.get(A.t.id) || []).filter(x => x !== A.r).map(x => km(B.r, x)).filter(x => x != null).sort((a, b) => a - b)[0];
+    sugg.push({ swap: true, r: A.r, from: A.t, to: B.t, area: A.ar, fromArea: DISPATCH_AREAS[A.h], dist: dA,
+      r2: B.r, area2: B.ar, dist2: dB }); }
   return { flags, sugg };
 }
 async function dspOptOpen() {
@@ -13463,9 +13484,16 @@ async function dspOptOpen() {
   document.querySelector(".opt-wrap")?.remove();
   const d = document.createElement("div"); d.className = "opt-wrap"; d.setAttribute("role", "dialog");
   d.innerHTML = `<div class="opt"><h3>Optimize ${esc(dayText(DSP.date))}</h3>
-    <p class="quiet">${O.flags?.size || 0} call${O.flags?.size === 1 ? "" : "s"} outside the tech's area for the day (⚠ on the board). ${O.sugg.length ? "These changes would put them with a tech already working in that area. Untick any you don't want; nothing changes until you press Apply." : "No better tech is free for any of them."}</p>
+    <p class="quiet">${O.flags?.size || 0} call${O.flags?.size === 1 ? "" : "s"} outside the tech's area for the day (⚠ on the board). ${O.sugg.length ? "These changes would put them with a tech already working in that area, by moving a call to a tech with room or by swapping two calls between techs. Untick any you don't want; nothing changes until you press Apply." : "No better tech is free for any of them."}</p>
     ${O.sugg.length ? `<div class="opt-list"><div class="opt-head"><span></span><span>Call</span><span>Now</span><span></span><span>Change to</span></div>${O.sugg.map((x, k) => {
       const fromArea = x.fromArea || {}, toLine = x.empty ? "No calls yet that day" : "Mostly in " + esc(x.area.short);
+      if (x.swap) { const half = (r, ca, ft, fa, tt, dist) => `<span class="opt-call"><b>${esc(r.customer_name)}</b><span class="quiet">${tm(r.arrival_start)} · ${esc(r.job_type || "")}</span><span class="opt-area"><i style="background:${esc(ca.color)}"></i>${esc(ca.short)}</span></span>
+          <span class="opt-box from"><b>${esc(ft.name)}</b><span class="opt-area"><i style="background:${esc(fa.color)}"></i>Mostly in ${esc(fa.short)}</span><span class="quiet">Wrong area for this call</span></span>
+          <span class="opt-arrow" aria-hidden="true">→</span>
+          <span class="opt-box to"><b>${esc(tt.name)}</b><span class="opt-area"><i style="background:${esc(ca.color)}"></i>Mostly in ${esc(ca.short)}</span><span class="quiet">${dist != null ? dist.toFixed(1) + " km from his nearest call · " : ""}room once his call goes</span></span>`;
+        return `<label class="opt-row opt-swap"><input type="checkbox" data-opt="${k}" checked><span class="opt-pairs"><span class="opt-tag">⇄ Swap: ${esc(x.from.name)} and ${esc(x.to.name)} trade these two calls (ticked or unticked together)</span>
+          <span class="opt-pair">${half(x.r, x.area, x.from, x.area2, x.to, x.dist)}</span>
+          <span class="opt-pair">${half(x.r2, x.area2, x.to, x.area, x.from, x.dist2)}</span></span></label>`; }
       return `<label class="opt-row"><input type="checkbox" data-opt="${k}" checked>
       <span class="opt-call"><b>${esc(x.r.customer_name)}</b><span class="quiet">${tm(x.r.arrival_start)} · ${esc(x.r.job_type || "")}</span><span class="opt-area"><i style="background:${esc(x.area.color)}"></i>${esc(x.area.short)}</span></span>
       <span class="opt-box from"><b>${esc(x.from.name)}</b><span class="opt-area"><i style="background:${esc(fromArea.color || "#adb5bd")}"></i>Mostly in ${esc(fromArea.short || "")}</span><span class="quiet">Wrong area for this call</span></span>
@@ -13476,15 +13504,16 @@ async function dspOptOpen() {
   const close = () => d.remove();
   d.addEventListener("click", e => { if (e.target === d) close(); }); d.querySelector("#opt-x").addEventListener("click", close);
   const go = d.querySelector("#opt-go"); if (!go) return;
-  const count = () => { const n = d.querySelectorAll("[data-opt]:checked").length; go.textContent = n ? `Apply ${n} change${n === 1 ? "" : "s"}` : "Nothing ticked"; go.disabled = !n; };
+  const count = () => { const n = [...d.querySelectorAll("[data-opt]:checked")].reduce((t, c) => t + (O.sugg[Number(c.dataset.opt)].swap ? 2 : 1), 0); go.textContent = n ? `Apply ${n} change${n === 1 ? "" : "s"}` : "Nothing ticked"; go.disabled = !n; };
   d.querySelectorAll("[data-opt]").forEach(c => c.addEventListener("change", count)); count();
   go.addEventListener("click", async () => {
     const pick = [...d.querySelectorAll("[data-opt]:checked")].map(c => O.sugg[Number(c.dataset.opt)]);
-    if (!(await askChoice(`Make ${pick.length} change${pick.length === 1 ? "" : "s"}?`, pick.map(x => `${esc(x.r.customer_name)}: ${esc(x.from.name)} → <b>${esc(x.to.name)}</b>`).join("<br>"), [["yes", "Yes, make them", true], ["", "Not yet"]]))) return;
+    const moves = pick.flatMap(x => x.swap ? [{ r: x.r, from: x.from, to: x.to }, { r: x.r2, from: x.to, to: x.from }] : [{ r: x.r, from: x.from, to: x.to }]);
+    if (!(await askChoice(`Move ${moves.length} call${moves.length === 1 ? "" : "s"}?`, pick.map(x => x.swap ? `⇄ Swap: ${esc(x.r.customer_name)} ${esc(x.from.name)} → <b>${esc(x.to.name)}</b>, ${esc(x.r2.customer_name)} ${esc(x.to.name)} → <b>${esc(x.from.name)}</b>` : `${esc(x.r.customer_name)}: ${esc(x.from.name)} → <b>${esc(x.to.name)}</b>`).join("<br>"), [["yes", "Yes, make them", true], ["", "Not yet"]]))) return;
     go.disabled = true; go.textContent = "Changing…"; let bad = 0; const done = [];
-    for (const x of pick) { const { error } = await db.rpc("set_call_techs", { p_visit_id: x.r.visit_id, p_techs: [x.to.id] }); if (error) bad++; else done.push({ vid: x.r.visit_id, techs: x.r.techs.map(t => t.id), name: x.r.customer_name }); }
+    for (const x of moves) { const { error } = await db.rpc("set_call_techs", { p_visit_id: x.r.visit_id, p_techs: [x.to.id] }); if (error) bad++; else done.push({ vid: x.r.visit_id, techs: x.r.techs.map(t => t.id), name: x.r.customer_name }); }
     dspUndoPush(`Optimize: ${done.length} call${done.length === 1 ? "" : "s"}`, done);
-    close(); dspToast(bad ? `${pick.length - bad} changed, ${bad} not changed.` : `Done: ${pick.length} call${pick.length === 1 ? "" : "s"} moved.`); await loadDispatch();
+    close(); dspToast(bad ? `${moves.length - bad} changed, ${bad} not changed.` : `Done: ${moves.length} call${moves.length === 1 ? "" : "s"} moved.`); await loadDispatch();
   });
 }
 
