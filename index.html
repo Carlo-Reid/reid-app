@@ -11892,14 +11892,18 @@ function nearCallsHtml(l, o = {}) {   // o.kind: only that kind of tech; o.pick:
   const KIND = new Map((TKIND || []).map(t => [t.name, t.kind]));
   if (ME.role === "sales" && !o.kind) NEAR_KIND = "installs";
   const KND = o.kind || NEAR_KIND;
+  // how good a tech is for this customer on a day: +2 per booked call nearby, closeness counts 3x (up to 5 km), sooner days a little better,
+  // over-booked far down; calls that overlap in time no longer count against them (Carlo, Nov 7)
+  const nearDaysOut = d => Math.max(0, Math.round((Date.parse(d + "T12:00:00") - Date.parse(ymd(new Date()) + "T12:00:00")) / 864e5));
+  const nearScore = (p, dd) => p.calls.length * 2 + Math.max(0, 5 - (p.min ?? 4)) * 3 - nearDaysOut(p.d) * 0.3 - (dd.full ? 20 : 0);
   const okKind = n => !KND ? !!KIND.get(n) && KIND.get(n) !== "security" : KIND.get(n) === KND || (KND === "maintenance" && KIND.get(n) === "service");   // techs only (no owners, sales or office); service techs do maintenance too; security techs only under Security
-  const near2 = [...pairs.values()].filter(p => okKind(p.tech)).map(p => { const dd = dayOf(p); return { ...p, ...dd, score: p.calls.length * 2 + (5 - (p.min ?? 4)) - (dd.full ? 20 : 0) - (dd.clash ? 5 : 0) }; })
+  const near2 = [...pairs.values()].filter(p => okKind(p.tech)).map(p => { const dd = dayOf(p); return { ...p, ...dd, score: nearScore(p, dd) }; })
     .filter(p => !o.pick || ((!o.win || p.fits) && !(ME.role === "sales" && p.full)));   // booking a walk: only installers free for the window; a sales person never sees over-booked ones
   // techs with nothing booked that day: available, no calls yet (weekdays in the next 2 weeks)
   const busy = new Set(NEAR.rows.flatMap(v => (v.techs ? v.techs.split(/,\s*/) : []).map(n => v.d + "|" + n)));
   const free = [];
   for (let i = 0; i < 14; i++) { const dt = new Date(); dt.setDate(dt.getDate() + i); const wd = dt.getDay(); if (wd === 0 || wd === 6) continue;
-    const d = ymd(dt); (TKIND || []).filter(t => (t.recent || o.kind) && okKind(t.name) && !busy.has(d + "|" + t.name)).forEach(t => free.push({ d, tech: t.name, calls: [], min: null, n: 0, free: WINS, clash: null, full: false, none: true, score: 3 - i * 0.05 })); }
+    const d = ymd(dt); (TKIND || []).filter(t => (t.recent || o.kind) && okKind(t.name) && !busy.has(d + "|" + t.name)).forEach(t => free.push({ d, tech: t.name, calls: [], min: null, n: 0, free: WINS, clash: null, full: false, none: true, score: 3 - nearDaysOut(d) * 0.3 })); }
   // ten day boxes (the next 10 working days): every tech worth sending that day, best first
   const opts = [...near2, ...free].sort((a, b) => b.score - a.score);
   const days10 = []; for (let i = 0; days10.length < 10 && i < 21; i++) { const dt = new Date(); dt.setDate(dt.getDate() + i); const wd = dt.getDay(); if (wd === 0 || wd === 6) continue; days10.push(ymd(dt)); }
