@@ -28,3 +28,9 @@
 
 - Flags calls outside the tech's area for the day, then suggests a move to a tech with room in that area, or, if nobody has room, a swap of two calls between two techs (ticked/unticked and undone together). Nothing changes until Carlo approves.
 - Never swap a call whose tech already has its parts in his truck (`dispatch_parts_held`, `sync/extra/218_parts_on_truck.sql`: a received PO he ordered for the job, or stock received/transferred into his truck for the job). Carlo's rule, Nov 7, 2026.
+- Clicking a call on the board shows its own Optimize suggestion in the details panel ("Move it to Scott" / "Make this swap"), which makes just that one change after a yes; Undo puts it back.
+
+## Contact tech / Ask the office to call me
+
+- Blue 📞 button in the left side bar. Office/owners: "Contact tech" (pick a tech) → his screen shows "Call Carlo at the office". Techs: "Ask the office to call me" (pick an office person or owner) → their screen shows "Nick wants you to call him" with his phone if we have it. Optional "What about?" note.
+- The pop-up sits at the top of the screen (beeps, vibrates on phones) until they press Got it. `sync/extra/219_call_requests.sql`, `startCallReq` / `openContact` in `index.html`.
