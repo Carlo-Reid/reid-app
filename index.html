@@ -407,6 +407,19 @@
   /* simpler notes */
   #note-add.na-closed { display: none; } .na-open { margin: 0 0 12px; }
   .note-tabs .nt-extra { display: none; } .note-tabs.nt-showall .nt-extra { display: inline-flex; } .note-range-foot { display: none !important; }
+  /* Dispatch areas page */
+  .ar-page { max-width: 1200px; } .ar-help { max-width: 820px; } .ar-msg { margin: 8px 0; }
+  .ar-bar { display: flex; gap: 10px; align-items: center; margin: 10px 0 16px; flex-wrap: wrap; }
+  .ar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+  .ar-card { border: 1px solid var(--line); border-left: 6px solid var(--ac); border-radius: 12px; background: var(--panel); padding: 12px 14px; box-shadow: 0 1px 3px rgba(15,23,42,.08); }
+  .ar-head { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; } .ar-col { width: 40px; height: 40px; border: 0; padding: 0; background: none; cursor: pointer; } .ar-sw { width: 28px; height: 28px; border-radius: 6px; background: var(--ac); }
+  .ar-names { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; } .ar-names input { font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); }
+  .ar-name { font-weight: 800 !important; } .ar-short { font-size: 13px !important; width: 60%; }
+  .ar-tag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: color-mix(in srgb, var(--ac) 18%, var(--panel)); }
+  .ar-fsas { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .ar-fsa { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 8px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--ac) 45%, var(--line)); background: color-mix(in srgb, var(--ac) 10%, var(--panel)); font-size: 13px; }
+  .ar-fsa select { font: inherit; font-size: 11px; max-width: 22px; border: 0; background: transparent; cursor: pointer; color: var(--steel); } .ar-x { border: 0; background: none; cursor: pointer; color: var(--steel); font-size: 11px; padding: 0 3px; }
+  .ar-addrow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; } .ar-new { font: inherit; width: 160px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); text-transform: uppercase; }
   .sec-t { margin-right: auto; text-align: left; }
   .sec-dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; background: var(--acc); margin-right: 7px; vertical-align: 1px; flex: none; }
   .file > section.block > h2::before { content: var(--ico, ""); display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; border-radius: 9px; font-size: 17px; line-height: 1; align-self: center;
@@ -5938,14 +5951,28 @@ const DISPATCH_AREAS = [
   { name: "Gloucester & Vanier", short: "Gloucester", color: "#0c8599", fsa: ["K1B", "K1J", "K1K", "K1L", "K1M"], c: [45.4227, -75.5684] },
   { name: "Orléans & east", short: "Orléans", color: "#f59f00", fsa: ["K4A", "K1C", "K1E", "K1W", "K4C", "K4B", "K4K", "K4R", "K0C"], c: [45.462, -75.4884] },
   { name: "Out of town", short: "Out of town", color: "#868e96", fsa: ["K7C", "K7S", "K7A", "K0G", "K0E", "K8H", "K8A", "K9V"], c: null }];
+DISPATCH_AREAS[DISPATCH_AREAS.length - 1].out = true;
 const AREA_BY_FSA = new Map(DISPATCH_AREAS.flatMap((a, i) => a.fsa.map(f => [f, i])));
+const areaOut = () => { const i = DISPATCH_AREAS.findIndex(a => a.out); return i < 0 ? DISPATCH_AREAS.length - 1 : i; };
+function applyAreas(list) {   // the saved areas (Dispatch areas page) replace the built-in ones
+  if (!Array.isArray(list) || !list.length) return false;
+  const was = JSON.stringify(DISPATCH_AREAS);
+  DISPATCH_AREAS.splice(0, DISPATCH_AREAS.length, ...list.map(a => ({ name: String(a.name || "Area"), short: String(a.short || a.name || "Area"), color: a.color || "#868e96", fsa: (a.fsa || []).map(f => String(f).toUpperCase().slice(0, 3)), c: Array.isArray(a.c) ? a.c : null, out: !!a.out })));
+  AREA_BY_FSA.clear(); DISPATCH_AREAS.forEach((a, i) => a.fsa.forEach(f => AREA_BY_FSA.set(f, i)));
+  return was !== JSON.stringify(DISPATCH_AREAS);
+}
+try { applyAreas(JSON.parse(localStorage.getItem("reid.areas") || "null")); } catch { }
+async function loadAreas() {
+  try { const r = await db.rpc("dispatch_areas_get"); const list = r.data?.areas; if (r.error || !list) return false;
+    try { localStorage.setItem("reid.areas", JSON.stringify(list)); } catch { } return applyAreas(list); } catch { return false; }
+}
 function areaOf(x) {   // x: anything with a postal code and/or map location
   if (!x) return null;
   const fsa = String(x.postal_code || "").toUpperCase().replace(/\s/g, "").slice(0, 3), i = AREA_BY_FSA.get(fsa);
-  if (i != null) return { i, ...DISPATCH_AREAS[i] };
+  if (i != null && DISPATCH_AREAS[i]) return { i, ...DISPATCH_AREAS[i] };
   const la = Number(x.latitude ?? x.lat), lo = Number(x.longitude ?? x.lng);
-  if (!isFinite(la) || !isFinite(lo) || (!la && !lo)) return fsa ? { i: 7, ...DISPATCH_AREAS[7] } : null;
-  let b = 7, bd = 35; DISPATCH_AREAS.forEach((a, k) => { if (!a.c) return; const d = Math.hypot((lo - a.c[1]) * 111.32 * Math.cos(la * Math.PI / 180), (la - a.c[0]) * 110.57); if (d < bd) { bd = d; b = k; } });
+  const O = areaOut(); if (!isFinite(la) || !isFinite(lo) || (!la && !lo)) return fsa ? { i: O, ...DISPATCH_AREAS[O] } : null;
+  let b = O, bd = 35; DISPATCH_AREAS.forEach((a, k) => { if (!a.c || a.out) return; const d = Math.hypot((lo - a.c[1]) * 111.32 * Math.cos(la * Math.PI / 180), (la - a.c[0]) * 110.57); if (d < bd) { bd = d; b = k; } });
   return { i: b, ...DISPATCH_AREAS[b] };
 }
 const CONFIG = Object.assign({
@@ -6116,6 +6143,7 @@ async function showApp() {
   $("#mycalls-link").classList.toggle("hidden", !ME.booking || !(ME.role === "technician" || ME.role === "owner"));   // My calls: techs (and owners) only
   $("#fu-link").classList.toggle("hidden", !ME.role);
   checkOpenCalls();
+  loadAreas().then(ch => { if (ch) routeTo(location.hash); });
   { let fl = false; try { fl = sessionStorage.getItem("reid.dayStartOnLogin") === "1"; sessionStorage.removeItem("reid.dayStartOnLogin"); } catch { } officeDayInit(fl); }
   $("#sales-link").classList.toggle("hidden", !(ME.role === "sales" || ME.role === "owner" || can("calls.dispatch")));
   $("#sdsp-link").classList.toggle("hidden", !(ME.role === "sales" || ME.role === "owner"));
@@ -7603,6 +7631,7 @@ function routeTo(h) {
   { const m = /^#est=(\d+)$/.exec(h); if (m) return openEstEdit(Number(m[1])); }
   { const m = /^#scall=(\d+)$/.exec(h); if (m) return openSalesCall(Number(m[1])); }
   if (h === "#staff") return openStaff();
+  if (h === "#areas") return openAreasPage();
   if (h === "#payroll" || /^#payroll=\d+(&\d{4}-\d\d-\d\d)?$/.test(h)) return openPayrollHash(h);
   if (h === "#settings") return openSettings();
   if (h === "#history") return openHistory();
@@ -11541,8 +11570,8 @@ function dmApplySize(art) {
 }
 function dspTopBar() {   // Map colours… in the black top bar
   const pba = document.getElementById("page-bar-act"); if (!pba || !(can("calls.dispatch") || ME.role === "owner")) return;
-  pba.innerHTML = `<span class="pb-bar-tools"><button class="btn" type="button" id="pb-mapcol" title="Pick the colour of each neighbourhood, town and area">Map colours…</button></span>`;
-  $("#pb-mapcol").addEventListener("click", () => openMapColours());
+  pba.innerHTML = `<span class="pb-bar-tools"><button class="btn" type="button" id="pb-mapcol" title="Which postal areas are in each dispatch area, and their colours">Dispatch areas…</button></span>`;
+  $("#pb-mapcol").addEventListener("click", () => { location.hash = "#areas"; });
 }
 function dmTabs() { const cb = DSP.mapEl?.querySelector("#dm-places"); if (cb) cb.checked = DSP.mapTab === "places";
   DSP.mapEl?.classList.toggle("dm-places-on", DSP.mapTab === "places"); }
@@ -12905,7 +12934,7 @@ function dspLegendRow(rows) {
     else hint = "All calls today fall in one colour. Try colouring by something else.";
   } else if (greyN && by !== "tech") hint = `${greyN} call${greyN === 1 ? " has" : "s have"} no colour picked yet (grey).`;
   return `<details class="dsp-legend-d" ${DSP.legendOpen ? "open" : ""}><summary>Colours on the board <span class="quiet">(${list.length})</span>${hint ? "" : ""}</summary><div class="dsp-legend">${list.slice(0, 14).map(x => `<span class="dsp-leg"><span class="dm-dot" style="background:${esc(x.color)}"></span>${esc(x.label)} <b>${x.n}</b></span>`).join("")}${list.length > 14 ? `<span class="quiet">+${list.length - 14} more</span>` : ""}
-    ${hint ? `<span class="dsp-leg-hint">${esc(hint)} ${can("calls.dispatch") || ME.role === "owner" ? `<button class="link" type="button" onclick="openMapColours()">Map colours…</button>` : ""}</span>` : ""}</div></details>`;
+    ${hint ? `<span class="dsp-leg-hint">${esc(hint)} ${can("calls.dispatch") || ME.role === "owner" ? `<button class="link" type="button" onclick="location.hash='#areas'">Dispatch areas…</button>` : ""}</span>` : ""}</div></details>`;
 }
 // each call card is filled with its map colour (same as its dot on the map)
 
@@ -25144,6 +25173,59 @@ async function pbLoadKit(id, r, edit) {
     res.innerHTML = (found || []).filter(x => x.id !== id).map(x => `<button class="pb-kopt" type="button" data-pb-kadd="${x.id}"><span>${esc(pbName(x.name))}<span class="quiet"> · ${esc(x.sku)}</span></span><span class="num">${money(x.unit_price)}</span></button>`).join("") || `<div class="quiet">Nothing matches.</div>`;
     res.querySelectorAll("[data-pb-kadd]").forEach(b => b.addEventListener("click", () => save(Number(b.dataset.pbKadd), 1)));
   }, 250); });
+}
+
+/* ---------------- Dispatch areas page: which postal areas are in each area, the names and colours (saved for everyone) ---------------- */
+let AREDIT = null;
+async function openAreasPage(msg) {
+  setPage("areas", "dispatch", "Dispatch areas");
+  if (!AREDIT || !msg) { $("#main").innerHTML = `<div class="loading">Loading the dispatch areas…</div>`; await loadAreas(); AREDIT = { list: JSON.parse(JSON.stringify(DISPATCH_AREAS)), changed: false, msg: "" }; }
+  if (msg && msg.trim()) AREDIT.msg = msg;
+  const canEdit = ["owner", "office", "admin", "dispatcher"].includes(ME.role), L = AREDIT.list;
+  const opts = cur => L.map((a, k) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(a.short || a.name)}</option>`).join("");
+  $("#main").innerHTML = `<article class="staff ar-page"><h1>Dispatch areas</h1>
+    <p class="quiet ar-help">Every address is coloured by its area on the dispatch board, the map, customer pages and Calls nearby. An address goes to the area that has its postal code's first 3 characters (K2J…).
+      Rural postal areas that aren't listed (like K0A) go to the closest area on the map; anything more than 35 km from all of them goes to <b>${esc(L.find(a => a.out)?.name || "Out of town")}</b>.</p>
+    ${AREDIT.msg ? `<div class="staff-msg ar-msg" role="status">${esc(AREDIT.msg)}</div>` : ""}
+    ${canEdit ? `<div class="ar-bar"><button type="button" class="btn" id="ar-save" ${AREDIT.changed ? "" : "disabled"}>Save the areas</button><button type="button" class="btn quiet-btn" id="ar-add">＋ Add an area</button>${AREDIT.changed ? `<button type="button" class="link" id="ar-undo">Undo my changes</button>` : ""}</div>` : `<p class="quiet">Only owners and the office can change the areas.</p>`}
+    <div class="ar-grid">${L.map((a, k) => `<section class="ar-card" style="--ac:${esc(a.color)}" data-ak="${k}">
+      <div class="ar-head">${canEdit ? `<input type="color" class="ar-col" value="${esc(a.color)}" title="The area's colour">` : `<span class="ar-sw"></span>`}
+        <div class="ar-names">${canEdit ? `<input class="ar-name" value="${esc(a.name)}" aria-label="Area name"><input class="ar-short" value="${esc(a.short || "")}" aria-label="Short name" title="Short name (on the customer page square)">` : `<b>${esc(a.name)}</b><span class="quiet">${esc(a.short || "")}</span>`}</div>
+        ${a.out ? `<span class="ar-tag" title="Addresses far from every other area go here">Far away</span>` : ""}</div>
+      <div class="ar-fsas">${a.fsa.length ? a.fsa.map(f => `<span class="ar-fsa"><b>${esc(f)}</b>${canEdit ? `<select data-fsa="${esc(f)}" title="Move ${esc(f)} to another area" aria-label="Move ${esc(f)}">${opts(k)}</select><button type="button" class="ar-x" data-rm="${esc(f)}" title="Take ${esc(f)} out (it then goes to the closest area on the map)">✕</button>` : ""}</span>`).join("") : `<span class="quiet">No postal areas yet.</span>`}</div>
+      ${canEdit ? `<div class="ar-addrow"><input class="ar-new" maxlength="3" placeholder="Add a postal area (K2J)" aria-label="Add a postal area"><button type="button" class="btn quiet-btn ar-addf">Add</button>
+        ${!a.out && !a.fsa.length ? `<button type="button" class="link danger ar-del">Remove this area</button>` : ""}</div>` : ""}
+    </section>`).join("")}</div></article>`;
+  if (!canEdit) return;
+  const changed = m => { AREDIT.changed = true; AREDIT.msg = m || ""; openAreasPage(" "); };   // redraw (no reload) with the change
+  const where = f => L.findIndex(a => a.fsa.includes(f));
+  document.querySelectorAll(".ar-card").forEach(card => { const k = Number(card.dataset.ak), a = L[k];
+    card.querySelector(".ar-col").addEventListener("change", e => { a.color = e.target.value; changed(); });
+    card.querySelector(".ar-name").addEventListener("change", e => { a.name = e.target.value.trim() || a.name; changed(); });
+    card.querySelector(".ar-short").addEventListener("change", e => { a.short = e.target.value.trim(); changed(); });
+    card.querySelectorAll("[data-fsa]").forEach(sel => sel.addEventListener("change", () => { const f = sel.dataset.fsa, to = Number(sel.value); a.fsa = a.fsa.filter(x => x !== f); L[to].fsa.push(f); L[to].fsa.sort(); delete L[to].cfix; L[to].moved = a.moved = true; changed(`${f} moved to ${L[to].name}. Press Save the areas to keep it.`); }));
+    card.querySelectorAll("[data-rm]").forEach(b => b.addEventListener("click", () => { a.fsa = a.fsa.filter(x => x !== b.dataset.rm); a.moved = true; changed(`${b.dataset.rm} taken out. Press Save the areas to keep it.`); }));
+    const add = () => { const f = card.querySelector(".ar-new").value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
+      if (!/^[A-Z]\d[A-Z]$/.test(f)) return alertMsg("Type a postal area like K2J (letter, number, letter).");
+      const w = where(f); if (w === k) return; if (w >= 0) { L[w].fsa = L[w].fsa.filter(x => x !== f); L[w].moved = true; }
+      a.fsa.push(f); a.fsa.sort(); a.moved = true; changed(`${f} added to ${a.name}${w >= 0 ? ` (taken from ${L[w].name})` : ""}. Press Save the areas to keep it.`); };
+    card.querySelector(".ar-addf").addEventListener("click", add); card.querySelector(".ar-new").addEventListener("keydown", e => { if (e.key === "Enter") add(); });
+    card.querySelector(".ar-del")?.addEventListener("click", () => { L.splice(k, 1); changed(); });
+  });
+  $("#ar-add").addEventListener("click", () => { const out = L.findIndex(a => a.out); L.splice(out < 0 ? L.length : out, 0, { name: "New area", short: "New", color: "#5c7cfa", fsa: [], c: null, moved: true }); changed("New area added: give it a name, a colour and its postal areas."); });
+  $("#ar-undo")?.addEventListener("click", () => { AREDIT = null; openAreasPage(); });
+  $("#ar-save").addEventListener("click", async () => {
+    const b = $("#ar-save"); b.disabled = true; b.textContent = "Saving…";
+    // the middle of each changed area (used to place rural addresses): the average spot of its addresses
+    for (const a of L) if (a.moved && !a.out && a.fsa.length) { let la = 0, lo = 0, n = 0;
+      for (const f of a.fsa) { const { data } = await db.from("locations").select("latitude,longitude").ilike("postal_code", f + "%").not("latitude", "is", null).limit(300); (data || []).forEach(x => { la += +x.latitude; lo += +x.longitude; n++; }); }
+      if (n) a.c = [+(la / n).toFixed(4), +(lo / n).toFixed(4)]; }
+    const clean = L.map(a => ({ name: a.name, short: a.short, color: a.color, fsa: a.fsa, c: a.c || null, out: !!a.out }));
+    const { error } = await db.rpc("dispatch_areas_set", { p_areas: clean });
+    if (error) { b.disabled = false; b.textContent = "Save the areas"; return alertMsg("Not saved: " + rpcErr(error)); }
+    try { localStorage.setItem("reid.areas", JSON.stringify(clean)); } catch { } applyAreas(clean);
+    AREDIT = { list: JSON.parse(JSON.stringify(DISPATCH_AREAS)), changed: false, msg: "" }; openAreasPage("Saved. Everyone sees the new areas the next time their page loads.");
+  });
 }
 
 /* ---------------- customer page layout: Tabs (one section at a time) or One page (sections start closed); every feature stays ---------------- */
