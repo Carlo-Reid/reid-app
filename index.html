@@ -4959,6 +4959,9 @@ body[data-side="mini"] .creq-btn { width: 44px; margin: 8px auto; justify-conten
 .dsp-oncall { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 6px 0; padding: 6px 12px; border-radius: 8px; background: #fff4e6; border: 1px solid #ffc078; color: #5c2e00; font-size: 13px; }
 .dsp-oncall .oc-ic { font-size: 16px; } .dsp-oncall .oc-n { font-weight: 900; font-size: 15px; } .dsp-oncall .oc-2 b { font-weight: 800; }
 .oc-tag { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: #e8590c; color: #fff; font-size: 10px; font-weight: 800; vertical-align: middle; white-space: nowrap; } .oc-tag.two { background: #fd7e14; }
+.bk-oc { border: 3px solid #d9480f !important; } .bk-ocs { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0 12px; }
+.bk-ocb { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 170px; padding: 12px 16px; border: 2px solid #ffc078; border-radius: 6px; background: #fff4e6; color: #5c2e00; font: inherit; cursor: pointer; text-align: left; }
+.bk-ocb span { font-size: 20px; } .bk-ocb b { font-size: 17px; } .bk-ocb small { font-size: 12px; } .bk-ocb.on { background: #d9480f; border-color: #d9480f; color: #fff; } .bk-ocb.off { opacity: .55; cursor: default; }
 .dp-opt { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding: 10px 12px; border: 2px solid #8ce99a; border-radius: 8px; background: #ebfbee; color: #1b4d2a; font-size: 13px; }
 .dp-opt b { font-size: 14px; } .dp-opt .btn { align-self: flex-start; } .dp-opt.none { border-color: #ffd43b; background: #fff9db; color: #5c3c00; }
 .opt-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
@@ -11645,7 +11648,8 @@ function bkwPick(t) {   // the job is picked: its department and length fill in,
   const F = BK; if (!t) return;
   F.mode = "new"; F.jobId = null; F.type = String(t.id); F.cat = bkwCatOf(t, F) || t.job_class; F.prio = /after\s*hours/i.test(t.name) ? "emergency" : "normal"; F.dur = String(t.duration || F.dur || 60); F.unit = t.unit_id ? String(t.unit_id) : ""; F.unitEdit = !t.unit_id;
   if (t.job_class === "sales" && /walk/i.test(t.name) && !F.summary) F.summary = "Walk the site";
-  F.step = "done"; renderBooking();
+  F.step = "done"; if (bkAH(F)) bkAHSetup(F); else if (F.oc) { F.oc = null; F.win = ["08:00", "11:00"]; F.techs = []; F.date = ymd(addDays(new Date(), 1)); }
+  renderBooking();
   if (bkIsVista(F.forP) && F.isHtin && !F.htin) bkLoadHtin();
 }   // a walk booked after a sale is a normal visit on the install job
 async function openBooking(custId, opt = {}) {
@@ -11753,7 +11757,30 @@ document.addEventListener("click", e => { const b = e.target.closest("[data-bk-m
 const bkNearLoc = () => { const F = BK; return F && (F.locs.find(x => x.id === (F.jobs.find(j => j.job_id === F.jobId)?.location_id || F.loc)) || F.locs[0]); };
 // every office booking picks its tech the same way as the customer page (Best techs to send + Calls nearby); a walk only shows installers
 const bkUseNear = F => !!F && !bkSales() && (F.walk ? !!F.kind : true);
-const bkNearOnly = F => bkUseNear(F) && !F.walk && !F.byHand;   // the tech, day and window all come from the Best techs / Calls nearby boxes
+const bkNearOnly = F => bkUseNear(F) && !F.walk && !F.byHand && !bkAH(F);
+// after hours: it goes to whoever is on call (or the 2nd on call), nobody else; today, arriving from now
+const bkAH = F => !!F && !bkSales() && F.mode === "new" && bkAfterHours(F);
+const bkOcDay = () => { const n = new Date(); if (n.getHours() < 7) n.setDate(n.getDate() - 1); return ymd(n); };   // before 7 am it's still last night's on call
+async function bkAHSetup(F) {
+  const now = new Date(), m = Math.ceil((now.getHours() * 60 + now.getMinutes()) / 15) * 15, f = x => String(Math.floor(x / 60) % 24).padStart(2, "0") + ":" + String(x % 60).padStart(2, "0");
+  F.later = false; F.byHand = false; F.date = ymd(now); F.win = "other"; F.start = f(m); F.end = f(Math.min(m + 180, 23 * 60 + 45)); F.techs = []; F.oc = "loading";
+  const { data } = await db.rpc("on_call_range", { p_from: bkOcDay(), p_to: bkOcDay() }); if (BK !== F) return;
+  const o = (data || [])[0] || {}, find = n => n && (BOOK.techs || []).find(t => t.name.split(" ")[0].toLowerCase() === String(n).trim().split(/\s+/)[0].toLowerCase());
+  F.oc = { day: bkOcDay(), first: o.first, second: o.second, a: find(o.first), b: find(o.second) };
+  if (F.oc.a) F.techs = [F.oc.a.id]; else if (F.oc.b) F.techs = [F.oc.b.id];
+  if (document.body.dataset.page === "book") renderBooking();
+}
+function bkAHBox(F) {
+  const O = F.oc;
+  if (!O || O === "loading") return `<section class="block nc-sec bk-oc"><h2>🌙 On call</h2><div class="quiet">Finding who's on call…</div></section>`;
+  const btn = (t, n, lbl) => t ? `<button type="button" class="bk-ocb${F.techs[0] === t.id ? " on" : ""}" data-bk-oc="${t.id}"><span>📟</span><b>${esc(t.name)}</b><small>${lbl}</small></button>`
+    : `<div class="bk-ocb off"><span>📟</span><b>${esc(n || "Nobody")}</b><small>${lbl}${n ? " · not in the tech list" : " · not set"}</small></div>`;
+  return `<section class="block nc-sec bk-oc"><h2>🌙 After hours: it goes to whoever is on call</h2>
+    <div class="bk-ocs">${btn(O.a, O.first, "On call")}${btn(O.b, O.second, "2nd on call")}</div>
+    ${!O.a && !O.b ? `<div class="staff-msg err">Nobody is set as on call for ${esc(dayText(O.day))}. Set it on the Dispatch board (the 📟 strip), then come back.</div>` : ""}
+    <div class="bk-row"><span class="bk-label">Today, arriving</span><span class="bk-times"><input type="time" id="bk-start" value="${esc(F.start)}" step="900" aria-label="From"> to <input type="time" id="bk-end" value="${esc(F.end)}" step="900" aria-label="To"></span></div></section>`;
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-bk-oc]"); if (!b || !BK) return; e.preventDefault(); BK.keep?.(); BK.techs = [Number(b.dataset.bkOc)]; renderBooking(); });   // the tech, day and window all come from the Best techs / Calls nearby boxes
 function bkKindOf(F) {
   if (F.walk) return F.kind;
   const t = F.mode === "visit" ? (BOOK.job_types || []).find(x => x.name === F.jobs.find(j => j.job_id === F.jobId)?.job_type) : (BOOK.job_types || []).find(x => String(x.id) === String(F.type));
@@ -11958,7 +11985,7 @@ function renderBooking(msg) {
         <label class="bk-row"><span class="bk-label">${bkSales() ? (F.sk === "est" ? "What are you quoting?" : "Reason for Call") : "What's wrong / what's needed"}</span><input id="bk-summary" maxlength="200" value="${esc(F.summary)}" placeholder="${esc(bkSales() ? (F.sk === "est" ? "e.g. New furnace and AC, 2-storey house" : "e.g. Measure venting") : t ? t.name : "e.g. No heat, furnace making a noise")}"></label>`}
       <label class="bk-row top"><span class="bk-label">${bkSales() ? (F.sk === "est" ? "Job notes for site visit" : "Job Notes") : "Notes for the tech"}</span><textarea id="bk-note" rows="3" maxlength="4000" placeholder="${bkSales() ? (F.sk === "est" ? "What you saw at the site: where the equipment is, sizes, access, what the customer wants…" : "Anything about the visit: parking, side door, what the customer wants…") : "Anything the tech should know: parking, side door, dog, what the customer said…"}">${esc(F.note)}</textarea></label>
 
-      ${bkSales() && (F.sk === "est" || F.sk === "phone") ? "" : `${(F.walk && !F.byHand) || (bkSellerName(F) && !F.later) || bkNearOnly(F) ? "" : `<div class="bk-row"><span class="bk-label">Day</span><span class="bk-chips">
+      ${bkSales() && (F.sk === "est" || F.sk === "phone") ? "" : `${(F.walk && !F.byHand) || (bkSellerName(F) && !F.later) || bkNearOnly(F) || bkAH(F) ? "" : `<div class="bk-row"><span class="bk-label">Day</span><span class="bk-chips">
         <input type="date" id="bk-date" value="${esc(F.date)}" ${F.later ? "disabled" : ""}>
         ${bkSellerName(F) ? "" : bkDayChips(F)}
         <button class="chip small" type="button" data-bk-later aria-pressed="${F.later}" title="Save the job now and pick the day later from the Dispatch page">Not booked yet</button></span></div>`}
@@ -11966,19 +11993,20 @@ function renderBooking(msg) {
         <button class="chip small" type="button" data-bk-later aria-pressed="false" title="Save the job now and pick the day later">Not booked yet</button></div><div class="near-calls" id="bk-mine">${bkMineHtml(F)}</div></section>` : ""}
       ${bkNearOnly(F) && F.later ? `<div class="bk-row"><span class="bk-label">Day</span><span class="bk-chips"><b>Not booked yet</b> <span class="quiet">It goes on the waiting list on the Dispatch board.</span>
         <button class="chip small" type="button" data-bk-later aria-pressed="true">Pick a day and a tech instead</button></span></div>` : ""}
-      ${F.later || bkNearOnly(F) ? "" : `<div class="bk-row"><span class="bk-label">Arrival window</span><span class="bk-chips">
+      ${F.later || bkNearOnly(F) || bkAH(F) ? "" : `<div class="bk-row"><span class="bk-label">Arrival window</span><span class="bk-chips">
         ${L.windows.map(([a, b]) => `<button class="chip small" type="button" data-bk-win="${a}-${b}" aria-pressed="${F.win && F.win[0] === a && F.win[1] === b}">${winText(a, b)}</button>`).join("")}
         <button class="chip small" type="button" data-bk-win="any" aria-pressed="${F.win === "any"}">Any time</button>
         <button class="chip small" type="button" data-bk-win="other" aria-pressed="${F.win === "other"}">Other…</button>
         ${F.win === "other" ? `<span class="bk-times"><input type="time" id="bk-start" value="${esc(F.start)}" step="900" aria-label="From"> to <input type="time" id="bk-end" value="${esc(F.end)}" step="900" aria-label="To"></span>` : ""}</span></div>`}
       <label class="bk-row"><span class="bk-label">How long</span><select id="bk-dur">${[30, 45, 60, 90, 120, 150, 180, 240, 300, 360, 480].map(m =>
           `<option value="${m}" ${Number(F.dur || t?.duration || 60) === m ? "selected" : ""}>${durText(m)}</option>`).join("")}</select></label>
-      ${bkUseNear(F) && !F.later ? `<section class="block nc-sec bk-near"><h2>${F.walk ? "Installers" : "Pick the tech"} <span class="quiet bk-hint">calls nearby and who's free, the next 10 working days · Pick fills in the day, the window and the ${F.walk ? "installer" : "tech"}</span></h2>
+      ${bkAH(F) ? bkAHBox(F) : ""}
+      ${bkUseNear(F) && !F.later && !bkAH(F) ? `<section class="block nc-sec bk-near"><h2>${F.walk ? "Installers" : "Pick the tech"} <span class="quiet bk-hint">calls nearby and who's free, the next 10 working days · Pick fills in the day, the window and the ${F.walk ? "installer" : "tech"}</span></h2>
         <div class="near-calls" id="bk-near" data-near-loc="${bkNearLoc()?.id || ""}">${bkNearHtml()}</div>
         <div class="bk-picked"><span class="bk-label">Picked</span> ${F.techs.length ? F.techs.map((id, n) => `<b>${esc(techName(id))}</b>${n === 0 ? " (lead)" : " (helper)"}`).join(", ") + ` · ${esc(dayText(F.date))}${F.walk ? "" : ", " + esc(Array.isArray(F.win) ? winText(F.win[0], F.win[1]) : F.win === "other" ? winText(F.start, F.end) : "any time")}` : `<span class="quiet">no one yet</span>`}
           <button class="link" type="button" data-bk-byhand>${F.byHand ? "Hide the list" : "Pick by hand (or add a helper)"}</button>${F.walk ? "" : ` · <button class="link" type="button" data-bk-later>Not booked yet (pick the day later)</button>`}</div>
         ${F.walk ? "" : `<div class="bk-board-go"><button class="btn quiet-btn" type="button" data-bk-board>🗓 Go to the dispatch board and pick by hand</button><span class="quiet">Click a free spot on any day and any tech; it asks you, then books it with everything above.</span></div>`}</section>` : ""}
-      ${F.later || bkSales() || (bkUseNear(F) && !F.byHand) ? "" : `<div class="bk-row top"><span class="bk-label">${F.walk && F.kind === "installs" ? "Installers" : "Techs"}<span class="quiet bk-hint">${F.walk && F.kind === "installs" ? "Free ones first. " : ""}The first one you pick leads. Numbers are what they already have that day.</span></span>
+      ${F.later || bkSales() || bkAH(F) || (bkUseNear(F) && !F.byHand) ? "" : `<div class="bk-row top"><span class="bk-label">${F.walk && F.kind === "installs" ? "Installers" : "Techs"}<span class="quiet bk-hint">${F.walk && F.kind === "installs" ? "Free ones first. " : ""}The first one you pick leads. Numbers are what they already have that day.</span></span>
         <span class="bk-chips" id="bk-techs">${bookTechChips()}</span></div>`}`}
       <div class="bk-actions"><button class="btn" type="submit" id="bk-save">${bkSales() && F.sk === "est" ? "Create the proposal" : bkSales() && F.sk === "phone" ? "Start the proposal" : F.later ? "Save the job" : "Book it"}</button>
         <button class="link" type="button" data-open-cust="${F.cust.id}">Cancel</button>
@@ -12057,6 +12085,7 @@ function renderBooking(msg) {
     const say = (t, err) => { const m = $("#bk-msg"); m.className = "staff-msg " + (err ? "err" : ""); m.textContent = t; };
     if (F.mode === "visit" && !F.jobId) return say("Pick the job this visit is for.", true);
     if (F.walk && !F.later && !F.techs.length) return say("Pick an installer (and the day) in the Installers box first.", true);
+    if (bkAH(F) && !F.techs.length) return say("Pick the on-call tech (or the 2nd on call).", true);
     if (bkNearOnly(F) && !F.later && !F.techs.length) return say("Pick a tech (and the day) in the Pick the tech box first, or press Not booked yet.", true);
     if (F.mode !== "visit" && !F.loc) return say("This customer has no address yet. Add one with the pencil on their file first.", true);
     if (F.mode !== "visit" && !F.type) return say("Pick the type of job.", true);
