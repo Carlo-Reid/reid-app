@@ -4834,6 +4834,8 @@ article.owing .ow-scopes .ow-scope-p span { -webkit-line-clamp: 2; line-height: 
 .dsp .dsp-bar > .dsp-sum .dsp-mapbtn { width: 82px; text-align: center; flex: none; order: -1; margin-right: 8px; }   /* the Map button first, so the count beside it can grow without moving it */
 .dsp .dsp-bar .dsp-daybox .dsp-title, .dsp .dsp-bar > .dsp-day .dsp-title { display: inline-block; min-width: 15.5em; }
 .dsp .dsp-bar > .dsp-legend-d { display: none !important; }
+/* the front and back edges of a call: the area colour of the tech's call before and after it, so you can see if the next call is in the right area */
+.dsp .tl-card.nb { box-shadow: inset 6px 0 0 var(--nb-prev), inset -6px 0 0 var(--nb-next) !important; padding-left: 9px !important; padding-right: 9px !important; }
 /* call cards fill their row from top to bottom (no empty space above and below) */
 .dsp .tl-track > .tl-card:not(.thin):not(.lane), .dsp .tl-track > .dc-pile { top: 3px !important; bottom: 3px !important; height: auto !important; }
 /* DI 1 even shorter, with "Show 6 hours" first */
@@ -13097,6 +13099,8 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
       let a = hourOf(r.arrival_start), z = Math.max(a + 0.75, r.arrival_end ? hourOf(r.arrival_end) : a + (r.duration || 60) / 60);
       if (z <= h0 + 0.01) { a = h0; z = h0 + 0.75; } else if (a >= h1 - 0.01) { a = h1 - 0.75; z = h1; }   // outside the hours shown: at the edge
       return { r, a, z }; }).sort((x, y) => x.a - y.a);
+    // each call's front edge shows the area colour of the tech's call before it, the back edge the call after it (Carlo, Nov 7)
+    DSP_NB.clear(); timed.forEach((p, k) => { const c = x => x ? dspKey(x.r, "area").color : null; DSP_NB.set(p.r.visit_id, { prev: c(timed[k - 1]), next: c(timed[k + 1]) }); });
     const anyTime = list.filter(r => !r.arrival_start);
     // groups of calls whose times overlap
     const clusters = []; timed.forEach(p => { const c = clusters[clusters.length - 1]; if (c && p.a < c.z - 0.01) { c.list.push(p); c.z = Math.max(c.z, p.z); } else clusters.push({ a: p.a, z: p.z, list: [p] }); });
@@ -13406,11 +13410,13 @@ function dspArrive(r) {
   if (["scheduled", "dispatched"].includes(r.status) && past && r.techs.length) return { cls: "dc-late", text: `Late: not there yet (window ended ${dspTm(end)})` };
   return null;
 }
+const DSP_NB = new Map();
 function dspTlCard(r, from, style = "", cls = "") {
+  const nb = DSP_NB.get(r.visit_id), nbStyle = nb ? `--nb-prev:${nb.prev || "transparent"};--nb-next:${nb.next || "transparent"};` : "";
   const helpers = r.techs.filter(t => t.id !== from).map(t => t.name);
   const tip = [winText(r.arrival_start, r.arrival_end), r.customer_name, [r.city, r.job_type].filter(Boolean).join(" · "), r.summary, helpers.length ? "With " + helpers.join(", ") : "", VISIT_STATUS[r.status] || r.status, dspArrive(r)?.text || ""].filter(Boolean).join("\n");
   const tint = dspTint(r), arr = dspArrive(r);
-  return `<div class="dc tl-card ${cls} ${arr?.cls || ""} st-${r.status} pr-${r.priority} ${DSP.sel === r.visit_id ? "sel" : ""} ${tint[0]}" style="${style}${tint[2]}" draggable="true" tabindex="0"
+  return `<div class="dc tl-card ${cls} ${arr?.cls || ""} st-${r.status} pr-${r.priority} ${DSP.sel === r.visit_id ? "sel" : ""} ${tint[0]}${nb ? " nb" : ""}" style="${style}${tint[2]}${nbStyle}" draggable="true" tabindex="0"
       data-visit="${r.visit_id}" data-from="${from}" title="${esc(tip)}">
     <div class="dc-name">${r.priority !== "normal" ? `<span class="dc-prio">${r.priority === "emergency" ? "!!" : "!"}</span>` : ""}${esc(r.customer_name)}</div>
     ${arr ? `<div class="dc-arr">${esc(arr.text)}</div>` : `<div class="dc-sub">${esc(winText(r.arrival_start, r.arrival_end))} · ${esc(r.city || "")}</div>`}
