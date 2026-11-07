@@ -34,3 +34,11 @@
 
 - Blue 📞 button in the left side bar. Office/owners: "Contact tech" (pick a tech) → his screen shows "Call Carlo at the office". Techs: "Ask the office to call me" (pick an office person or owner) → their screen shows "Nick wants you to call him" with his phone if we have it. Optional "What about?" note.
 - The pop-up sits at the top of the screen (beeps, vibrates on phones) with a ⏱ timer of how long it's been waiting (yellow at 10 min, red at 30). Got it = accepted (logged); it stays until they press Call back done, then the sender gets a green "Nick called you back" pop-up (OK closes it). 📋 Log in the Contact dialog: sent / Got it / called back times (owners see everyone's). `220_call_requests_log.sql`. `sync/extra/219_call_requests.sql`, `startCallReq` / `openContact` in `index.html`.
+
+## Book a call (office)
+
+- One question at a time (`bkWizard`): Reid or a Partner (→ pick the partner) → kind of call (Service, Maintenance, Warranty, Estimate, Install…) → which job type. The department fills in from the job type (`unit_id`), then the rest of the booking shows with "Reid › Service › Service Call - Regular Hours · Department" crumbs to change any step. A partner sees its own job types first ("Vista - Maintenance"); other partners' types are hidden. Vista asks who pays for the tank only for installs / water heaters. "Another visit" (open job) is on the first step.
+
+## HSG Pro logo (bottom of the Customers page)
+
+- Big HSG Pro badge; clicking it shows one of 20 kind messages (`HSG_MSGS`), some using how long they've been with us from the Staff page "Started working here" date (`sync/extra/221_staff_started.sql`).
