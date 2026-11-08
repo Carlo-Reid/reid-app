@@ -4434,6 +4434,7 @@ body.pb-dragmode, body.pb-dragmode * { cursor: grabbing !important; }
 .bkw-cbs { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; max-height: 60vh; overflow: auto; }
 .bkw-cb { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 12px; border: 2px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; text-align: left; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.12); }
 .bkw-cb:hover { border-color: var(--acc, #1c7ed6); } .bkw-cb b { font-size: 15px; } .bkw-cb .quiet { font-size: 12px; }
+.bkw-cb.scratch { border-style: dashed; border-color: var(--acc, #1c7ed6); }
 .bkw-tw { display: flex; flex-direction: column; gap: 6px; } .bkw-tw .bkw-btn { flex: 1; }
 .bkw-time { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border: 1px dashed var(--line); border-radius: 6px; font-size: 12px; }
 .bkw-time label { display: flex; align-items: center; gap: 4px; font-weight: 700; } .bkw-time input { width: 64px; padding: 3px 5px; font: inherit; }
@@ -11628,6 +11629,7 @@ function bkwTypes(F) {   // the job types for who the call is for: the partner's
 const bkNeedTank = F => bkIsVista(F.forP) && (() => { const t = (BOOK.job_types || []).find(x => String(x.id) === String(F.type)); return !t || t.job_class === "install" || /water heater|tank/i.test(t.name); })();
 const bkwUnit = id => (BOOK.units || []).find(u => String(u.id) === String(id));
 function bkCrumbs(F) {
+  if (F.mode === "visit" && F.instEst) return `<span class="bkw-crumbs"><button type="button" class="bkw-crumb" data-bkw-go="who">🏠 Reid</button><span class="bkw-arr">›</span><button type="button" class="bkw-crumb" data-bkw-go="cat">🏗️ Install</button><span class="bkw-arr">›</span><button type="button" class="bkw-crumb on" data-bkw-go="inst">Sold estimate ${esc(F.instEst.number)}${F.instEst.option ? " · " + esc(F.instEst.option) : ""}</button></span>`;
   if (F.mode === "visit") return `<span class="bkw-crumbs"><b>Another visit on an open job</b>${F.walk ? "" : `<button class="link" type="button" data-bkw-go="who">Change</button>`}</span>`;
   const p = Number(F.forP) ? (BK_PARTNERS || []).find(x => x.id === Number(F.forP)) : null, t = (BOOK.job_types || []).find(x => String(x.id) === String(F.type));
   const cat = BKW_CATS.find(c => c[0] === (t ? bkwCatOf(t, F) : F.cat)), u = bkwUnit(F.unit);
@@ -11643,7 +11645,7 @@ function bkWizard(msg) {
   const p = Number(F.forP) ? (BK_PARTNERS || []).find(x => x.id === Number(F.forP)) : null, who = p ? bkwPName(p) : "Reid";
   const types = bkwTypes(F), cats = BKW_CATS.filter(c => types.some(t => bkwCatOf(t, F) === c[0]));
   const crumb = [step !== "who" && step !== "partner" ? `<button type="button" class="bkw-crumb" data-bkw="${F.htinFixed ? "cat" : "who"}">${p ? "🤝 " + esc(who) : "🏠 Reid"}</button>` : "",
-    step === "type" || step === "hours" || step === "maint" || step === "cb" ? `<span class="bkw-arr">›</span><button type="button" class="bkw-crumb" data-bkw="cat">${esc(BKW_CATS.find(c => c[0] === F.cat)?.[1] || "")}</button>` : ""].join("");
+    step === "type" || step === "hours" || step === "maint" || step === "cb" || step === "inst" ? `<span class="bkw-arr">›</span><button type="button" class="bkw-crumb" data-bkw="cat">${esc(BKW_CATS.find(c => c[0] === F.cat)?.[1] || "")}</button>` : ""].join("");
   let q = "", grid = "";
   if (step === "who") { q = "Who is this call for?";
     grid = `<button type="button" class="bkw-btn big" data-bkw-who="0"><span class="bkw-ic">🏠</span><b>Reid</b><small>Our own customer</small></button>
@@ -11668,6 +11670,12 @@ function bkWizard(msg) {
         ${canTime ? `<button type="button" class="link" data-bkw-medit>Change this list</button>` : ""}</div>
       <div class="bkw-mtimes"><b>⏱ Time given</b>${[1, 2, 3, 4].map(n => { const t = BKW_MT(n); if (!t) return ""; const cur = on.length === n;
         return `<div class="bkw-time${cur ? " cur" : ""}">${esc(t.name)}${canTime ? ` <input type="number" min="5" max="600" step="5" value="${Number(t.duration) || 60}" data-bkw-min="${t.id}" aria-label="Minutes for ${esc(t.name)}"> min` : ""}<span class="quiet" data-bkw-mint="${t.id}">${durText(Number(t.duration) || 60)}</span></div>`; }).join("")}</div>`; }
+  else if (step === "inst") { q = "Install: book a sold estimate, or start from scratch?";
+    const opt = e => (e.estimate_options || []).find(o => o.id === e.accepted_option_id) || (e.estimate_options || [])[0];
+    grid = `<div class="bkw-cbs"><button type="button" class="bkw-cb scratch" data-bkw-scratch><b>✏️ Start from scratch</b><span>Pick the kind of install</span></button>
+      ${!F.estList ? `<div class="quiet">Getting their sold estimates…</div>` : !F.estList.length ? `<div class="quiet">No sold estimates for this customer.</div>`
+      : F.estList.map(e => `<button type="button" class="bkw-cb" data-bkw-est="${e.id}"><b>📝 Estimate ${esc(e.estimate_number || e.id)}</b><span>${esc(opt(e)?.name || "Sold option")}</span>
+          <span class="quiet">${e.accepted_at ? "Sold " + esc(fmtDate(String(e.accepted_at).slice(0, 10))) : "Sold"}</span></button>`).join("")}</div>`; }
   else if (step === "cb") { q = "Call back: which call is it for?";
     grid = !F.cbList ? `<div class="quiet">Getting their calls…</div>` : !F.cbList.length ? `<div class="quiet">No earlier calls for this customer.</div>`
       : `<div class="bkw-cbs">${F.cbList.map(j => `<button type="button" class="bkw-cb" data-bkw-cb="${j.id}"><b>${esc(j.job_type || "Job")}</b><span>Job ${esc(j.job_number)}${j.summary ? " · " + esc(j.summary) : ""}</span>
@@ -11684,13 +11692,13 @@ function bkWizard(msg) {
       + (wc ? `<button type="button" class="bkw-btn" data-bkw-wc><b>Warranty Call</b><small>Regular hours or after hours: asked next</small></button>` : "")
       + types.filter(t => bkwCatOf(t, F) === F.cat && !(sc.length && BKW_SC.test(t.name)) && t !== wc).map(t => `${F.cat === "maintenance" ? `<div class="bkw-tw">` : ""}<button type="button" class="bkw-btn${t.own ? " own" : ""}" data-bkw-type="${t.id}"><b>${esc(bkwLabel(t.name))}</b>
       <small>${esc(bkwUnit(t.unit_id)?.name || "Pick the department next")}${t.duration ? " · " + durText(t.duration) : ""}</small>${t.own ? `<span class="bkw-own">${esc(who)}</span>` : ""}</button>${timeBox(t)}${F.cat === "maintenance" ? "</div>" : ""}`).join(""); }
-  const back = step === "who" ? "" : step === "partner" ? "who" : step === "cat" ? (F.htinFixed ? "" : p ? "partner" : "who") : step === "hours" || step === "cb" ? "type" : "cat";
+  const back = step === "who" ? "" : step === "partner" ? "who" : step === "cat" ? (F.htinFixed ? "" : p ? "partner" : "who") : step === "hours" || step === "cb" ? "type" : step === "inst" ? "cat" : step === "type" && F.cat === "install" && !Number(F.forP) ? "inst" : "cat";
   $("#main").innerHTML = `<article class="staff book">
     <h1>Book a call</h1>
     <p class="lead"><button class="link" type="button" data-open-cust="${F.cust.id}">${esc(F.cust.display_name)}</button> · Customer ${esc(F.cust.customer_number)}${F.cust.do_not_contact ? ` · <strong class="owe">Marked do not contact</strong>` : ""}</p>
     ${F.htin && F.htinFixed ? `<div class="staff-msg ok bk-htin">For <b>${esc(F.htin.partnerName)}</b> · ${esc(F.htin.list)} booking <b>#${esc(F.htin.ref || "")}</b>.</div>` : ""}
     <section class="bkw">
-      <div class="bkw-top">${crumb ? `<span class="bkw-crumbs">${crumb}</span>` : ""}<span class="bkw-steps">${["who", "cat", "type"].map((x, i) => `<i class="${x === step || (step === "partner" && x === "who") || ((step === "hours" || step === "maint" || step === "cb") && x === "type") ? "on" : ""}">${i + 1}</i>`).join("")}</span></div>
+      <div class="bkw-top">${crumb ? `<span class="bkw-crumbs">${crumb}</span>` : ""}<span class="bkw-steps">${["who", "cat", "type"].map((x, i) => `<i class="${x === step || (step === "partner" && x === "who") || ((step === "hours" || step === "maint" || step === "cb" || step === "inst") && x === "type") ? "on" : ""}">${i + 1}</i>`).join("")}</span></div>
       <h2 class="bkw-q">${q}</h2>
       <div class="bkw-grid${step === "type" ? " types" : ""}">${grid}</div>
       <div class="bkw-foot">${back ? `<button class="btn quiet-btn" type="button" data-bkw="${back}">← Back</button>` : ""}<button class="link" type="button" data-open-cust="${F.cust.id}">Cancel</button>
@@ -11708,6 +11716,10 @@ function bkWizard(msg) {
     const id = Number(b.dataset.bkwP); if (id !== Number(F.forP)) { F.tank = null; F.isHtin = false; F.htin = null; F.type = ""; F.unit = ""; } F.forP = id; go("cat"); }));
   document.querySelectorAll("#main [data-bkw-cat]").forEach(b => b.addEventListener("click", () => {
     F.cat = b.dataset.bkwCat; const list = bkwTypes(F).filter(t => bkwCatOf(t, F) === F.cat);
+    if (F.cat === "install" && !Number(F.forP)) { F.estList = null;
+      db.from("estimates").select("id, estimate_number, accepted_at, accepted_option_id, location_id, estimate_options!estimate_options_estimate_id_fkey(id, name)").eq("customer_id", F.cust.id).eq("status", "accepted").order("accepted_at", { ascending: false }).limit(30)
+        .then(({ data, error }) => { F.estList = error ? [] : data || []; if (BK === F && F.step === "inst") renderBooking(); });
+      return go("inst"); }
     if (F.cat === "maintenance" && !Number(F.forP) && BKW_MT(1)) { F.mpick = []; if (!BKW_MOPT) db.rpc("maint_options_get").then(({ data }) => { BKW_MOPT = data || []; if (BK === F && F.step === "maint") renderBooking(); }); return go("maint"); }
     if (list.length === 1) return bkwPick(list[0]); go("type"); }));
   document.querySelectorAll("#main [data-bkw-type]").forEach(b => b.addEventListener("click", () => { const t = (BOOK.job_types || []).find(x => String(x.id) === b.dataset.bkwType);
@@ -11723,6 +11735,20 @@ function bkWizard(msg) {
     if (!ok) return; const L = (window._bkwM ?? (BKW_MOPT || []).join("\n")).split("\n").map(x => x.trim()).filter(Boolean);
     const { error } = await db.rpc("maint_options_set", { p_names: L }); if (error) return alertMsg("Not saved: " + rpcErr(error));
     BKW_MOPT = L; F.mpick = (F.mpick || []).filter(x => L.includes(x)); renderBooking(); });
+  $("#main [data-bkw-scratch]")?.addEventListener("click", () => go("type"));
+  document.querySelectorAll("#main [data-bkw-est]").forEach(b => b.addEventListener("click", async () => {   // a sold estimate: its install job gets the visit
+    const e = F.estList.find(x => String(x.id) === b.dataset.bkwEst); if (!e) return; b.disabled = true; b.querySelector(".quiet").textContent = "Opening its install job…";
+    let IJ = (await db.rpc("est_install_job", { p_id: e.id })).data;
+    if (!IJ?.id) { const { error } = await db.rpc("est_ensure_install_job", { p_id: e.id }); if (error) { b.disabled = false; return alertMsg("Couldn't make the install job: " + rpcErr(error)); }
+      IJ = (await db.rpc("est_install_job", { p_id: e.id })).data; }
+    if (!IJ?.id) { b.disabled = false; return alertMsg("The install job for this sale isn't there."); }
+    const o = (e.estimate_options || []).find(x => x.id === e.accepted_option_id) || (e.estimate_options || [])[0];
+    if (!F.jobs.some(j => j.job_id === IJ.id)) F.jobs.unshift({ job_id: IJ.id, job_number: IJ.number, job_type: IJ.job_type || "Install", summary: o?.name || "the sold estimate", location_id: IJ.location_id || e.location_id, last_visit: null });
+    F.mode = "visit"; F.jobId = IJ.id; F.instEst = { id: e.id, number: e.estimate_number || e.id, option: o?.name || "" }; F.lastKey = null; F.lastOpen = false;
+    if ((IJ.location_id || e.location_id) && F.locs.some(l => l.id === (IJ.location_id || e.location_id))) F.loc = IJ.location_id || e.location_id;
+    const sum = `Install: ${o?.name || "sold estimate"} (estimate ${F.instEst.number})`.slice(0, 200); F.summary = sum; F.autoSum = sum;
+    const pre = `Install for sold estimate ${F.instEst.number}${o?.name ? " (" + o.name + ")" : ""}, job ${IJ.number}. `; F.note = pre + (F.autoPre && (F.note || "").startsWith(F.autoPre) ? F.note.slice(F.autoPre.length) : F.note || ""); F.autoPre = pre;
+    go("done"); }));
   document.querySelectorAll("#main [data-bkw-cb]").forEach(b => b.addEventListener("click", () => { const j = F.cbList.find(x => String(x.id) === b.dataset.bkwCb); if (!j) return;
     bkwPick(F.cbType); F.cbJob = j; F.lastKey = null; F.lastOpen = true;
     const sum = `Call back for Job ${j.job_number}: ${j.job_type || ""}${j.summary ? " – " + j.summary : ""}`.slice(0, 200), pre = `Call back for job ${j.job_number} (${j.job_type || ""}${j.last ? ", " + fmtDate(String(j.last).slice(0, 10)) : ""}${j.tech ? ", " + j.tech : ""}). `;
@@ -11882,6 +11908,7 @@ function bkAHBox(F) {
 document.addEventListener("click", e => { const b = e.target.closest("[data-bk-oc]"); if (!b || !BK) return; e.preventDefault(); BK.keep?.(); BK.techs = [Number(b.dataset.bkOc)]; renderBooking(); });   // the tech, day and window all come from the Best techs / Calls nearby boxes
 function bkKindOf(F) {
   if (F.walk) return F.kind;
+  if (F.instEst) return "installs";   // an install from a sold estimate: installers
   const t = F.mode === "visit" ? (BOOK.job_types || []).find(x => x.name === F.jobs.find(j => j.job_id === F.jobId)?.job_type) : (BOOK.job_types || []).find(x => String(x.id) === String(F.type));
   if (t && /walk\s*site/i.test(t.name)) return "installs";   // a tech walking the site for a job: installers only
   return ({ install: "installs", maintenance: "maintenance", security: "security", service: "service", warranty: "service" })[t?.job_class] || "";
@@ -12144,7 +12171,8 @@ function renderBooking(msg) {
   document.querySelectorAll("[data-bk-for]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.bkFor); if (id === Number(F.forP || 0)) return;
     F.forP = id; if (!bkIsVista(id)) { F.tank = null; if (!F.htinFixed) { F.isHtin = false; F.htin = null; } } redraw(); }));
   document.querySelectorAll("[data-bk-tank]").forEach(b => b.addEventListener("click", () => { keep(); F.tank = b.dataset.bkTank; if (!F.type) bkVistaFill(F); renderBooking(); }));
-  document.querySelectorAll("[data-bkw-go]").forEach(b => b.addEventListener("click", () => { keep(); F.step = b.dataset.bkwGo === "type" && F.cat === "maintenance" && !Number(F.forP) && BKW_MOPT ? "maint" : b.dataset.bkwGo; if (F.step === "who") { F.mode = "new"; F.jobId = null; } renderBooking(); }));
+  document.querySelectorAll("[data-bkw-go]").forEach(b => b.addEventListener("click", () => { keep(); F.step = b.dataset.bkwGo === "type" && F.cat === "maintenance" && !Number(F.forP) && BKW_MOPT ? "maint" : b.dataset.bkwGo;
+    if (F.instEst) { F.instEst = null; F.mode = "new"; F.jobId = null; F.cat = "install"; } if (F.step === "who") { F.mode = "new"; F.jobId = null; } renderBooking(); }));
   $("[data-bk-unitedit]")?.addEventListener("click", () => { keep(); F.unitEdit = true; renderBooking(); });
   document.querySelectorAll("[data-bk-ishtin]").forEach(b => b.addEventListener("click", () => { F.isHtin = b.dataset.bkIshtin === "true"; if (!F.isHtin) F.htin = null; redraw(); if (F.isHtin && !F.htin) bkLoadHtin(); }));
   document.querySelectorAll("[data-bk-htin]").forEach(b => b.addEventListener("click", () => { const r = (F.htinRows || []).find(x => x.id === Number(b.dataset.bkHtin)); if (!r) return;
