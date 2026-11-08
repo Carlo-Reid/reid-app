@@ -11601,7 +11601,8 @@ let BKW_MOPT = null, BKW_PLOGO = null;   // BKW_PLOGO: partner logos (Partners p
 const BKW_MT = n => (BOOK?.job_types || []).find(t => new RegExp("^maintenance\\s*" + n + "$", "i").test(t.name));
 document.addEventListener("input", e => { if (e.target.id === "bkw-mlist") window._bkwM = e.target.value; });
 const BKW_SC = /^service call\s*-\s*(regular|after)/i;   // Service Call - Regular Hours / After Hours: one button, then "Regular or after hours?"
-const bkAfterHours = F => /after\s*hours/i.test((BOOK?.job_types || []).find(x => String(x.id) === String(F.type))?.name || "");
+const bkAfterHours = F => !!F.ah || /after\s*hours/i.test((BOOK?.job_types || []).find(x => String(x.id) === String(F.type))?.name || "");
+const BKW_WC = /^warranty\s*-\s*hvac/i;   // Reid's "Warranty Call" (regular or after hours)
 const bkwPName = p => String(p?.name || "").replace(/\s*\(.*\)\s*$/, "");
 const bkwPfx = name => ((String(name).match(/^([A-Za-z]+)\s*-\s*/) || [])[1] || "").toLowerCase();
 function bkwTypes(F) {   // the job types for who the call is for: the partner's own ones first; other partners' ones are left out
@@ -11655,14 +11656,17 @@ function bkWizard(msg) {
         ${canTime ? `<button type="button" class="link" data-bkw-medit>Change this list</button>` : ""}</div>
       <div class="bkw-mtimes"><b>⏱ Time given</b>${[1, 2, 3, 4].map(n => { const t = BKW_MT(n); if (!t) return ""; const cur = on.length === n;
         return `<div class="bkw-time${cur ? " cur" : ""}">${esc(t.name)}${canTime ? ` <input type="number" min="5" max="600" step="5" value="${Number(t.duration) || 60}" data-bkw-min="${t.id}" aria-label="Minutes for ${esc(t.name)}"> min` : ""}<span class="quiet" data-bkw-mint="${t.id}">${durText(Number(t.duration) || 60)}</span></div>`; }).join("")}</div>`; }
-  else if (step === "hours") { q = "Regular hours or after hours?";
+  else if (step === "hours") { q = `${F.hoursFor === "warranty" ? "Warranty call: r" : "R"}egular hours or after hours?`;
     grid = `<button type="button" class="bkw-btn big" data-bkw-hours="reg"><span class="bkw-ic">☀️</span><b>Regular hours</b><small>Normal priority</small></button>
       <button type="button" class="bkw-btn big ah" data-bkw-hours="ah"><span class="bkw-ic">🌙</span><b>After hours</b><small>Emergency priority · after-hours rates</small></button>`; }
   else { const c = BKW_CATS.find(x => x[0] === F.cat); q = `Which ${esc((c?.[1] || "job").toLowerCase())}?`;
     const sc = types.filter(t => bkwCatOf(t, F) === F.cat && BKW_SC.test(t.name));
     const canTime = F.cat === "maintenance" && (ME.role === "owner" || can("calls.dispatch"));
     const timeBox = t => F.cat !== "maintenance" ? "" : `<div class="bkw-time">${canTime ? `<label>⏱ Time given <input type="number" min="5" max="600" step="5" value="${Number(t.duration) || 60}" data-bkw-min="${t.id}" aria-label="Minutes for ${esc(t.name)}"> min</label><span class="quiet" data-bkw-mint="${t.id}">${durText(Number(t.duration) || 60)}</span>` : `⏱ ${durText(Number(t.duration) || 60)}`}</div>`;
-    grid = (sc.length ? `<button type="button" class="bkw-btn" data-bkw-sc><b>Service Call</b><small>Regular hours or after hours: asked next</small></button>` : "") + types.filter(t => bkwCatOf(t, F) === F.cat && !(sc.length && BKW_SC.test(t.name))).map(t => `${F.cat === "maintenance" ? `<div class="bkw-tw">` : ""}<button type="button" class="bkw-btn${t.own ? " own" : ""}" data-bkw-type="${t.id}"><b>${esc(t.name)}</b>
+    const wc = !Number(F.forP) && F.cat === "service" ? types.find(t => BKW_WC.test(t.name)) : null;
+    grid = (sc.length ? `<button type="button" class="bkw-btn" data-bkw-sc><b>Service Call</b><small>Regular hours or after hours: asked next</small></button>` : "")
+      + (wc ? `<button type="button" class="bkw-btn" data-bkw-wc><b>Warranty Call</b><small>Regular hours or after hours: asked next</small></button>` : "")
+      + types.filter(t => bkwCatOf(t, F) === F.cat && !(sc.length && BKW_SC.test(t.name)) && t !== wc).map(t => `${F.cat === "maintenance" ? `<div class="bkw-tw">` : ""}<button type="button" class="bkw-btn${t.own ? " own" : ""}" data-bkw-type="${t.id}"><b>${esc(t.name)}</b>
       <small>${esc(bkwUnit(t.unit_id)?.name || "Pick the department next")}${t.duration ? " · " + durText(t.duration) : ""}</small>${t.own ? `<span class="bkw-own">${esc(who)}</span>` : ""}</button>${timeBox(t)}${F.cat === "maintenance" ? "</div>" : ""}`).join(""); }
   const back = step === "who" ? "" : step === "partner" ? "who" : step === "cat" ? (F.htinFixed ? "" : p ? "partner" : "who") : step === "hours" ? "type" : "cat";
   $("#main").innerHTML = `<article class="staff book">
@@ -11702,7 +11706,8 @@ function bkWizard(msg) {
     if (!ok) return; const L = (window._bkwM ?? (BKW_MOPT || []).join("\n")).split("\n").map(x => x.trim()).filter(Boolean);
     const { error } = await db.rpc("maint_options_set", { p_names: L }); if (error) return alertMsg("Not saved: " + rpcErr(error));
     BKW_MOPT = L; F.mpick = (F.mpick || []).filter(x => L.includes(x)); renderBooking(); });
-  $("#main [data-bkw-sc]")?.addEventListener("click", () => go("hours"));
+  $("#main [data-bkw-sc]")?.addEventListener("click", () => { F.hoursFor = "service"; go("hours"); });
+  $("#main [data-bkw-wc]")?.addEventListener("click", () => { F.hoursFor = "warranty"; go("hours"); });
   document.querySelectorAll("#main [data-bkw-min]").forEach(inp => inp.addEventListener("change", async () => {   // the time this kind of maintenance is given
     const id = Number(inp.dataset.bkwMin), m = Math.round(Number(inp.value) / 5) * 5, t = (BOOK.job_types || []).find(j => j.id === id); if (!t || !(m >= 5)) return;
     inp.disabled = true; const { error } = await db.rpc("job_type_minutes_set", { p_type: id, p_minutes: m }); inp.disabled = false;
@@ -11710,12 +11715,14 @@ function bkWizard(msg) {
     t.duration = m; inp.value = m; if (F.step === "maint") return renderBooking(); const lbl = document.querySelector(`[data-bkw-mint="${id}"]`); if (lbl) lbl.textContent = "✓ Saved · " + durText(m);
     const sm = document.querySelector(`[data-bkw-type="${id}"] small`); if (sm) sm.textContent = (bkwUnit(t.unit_id)?.name || "Pick the department next") + " · " + durText(m); }));
   document.querySelectorAll("#main [data-bkw-hours]").forEach(b => b.addEventListener("click", () => {
-    const ah = b.dataset.bkwHours === "ah", list = bkwTypes(F).filter(t => bkwCatOf(t, F) === F.cat && BKW_SC.test(t.name));
+    const ah = b.dataset.bkwHours === "ah";
+    if (F.hoursFor === "warranty") return bkwPick(bkwTypes(F).find(t => BKW_WC.test(t.name)), ah);   // one warranty type; after hours is marked on the call
+    const list = bkwTypes(F).filter(t => bkwCatOf(t, F) === F.cat && BKW_SC.test(t.name));
     bkwPick(list.find(t => ah ? /after/i.test(t.name) : /regular/i.test(t.name)) || list[0]); }));
 }
-function bkwPick(t) {   // the job is picked: its department and length fill in, and the rest of the booking opens
+function bkwPick(t, ah = false) {   // the job is picked: its department and length fill in, and the rest of the booking opens
   const F = BK; if (!t) return;
-  F.mode = "new"; F.jobId = null; F.type = String(t.id); F.cat = bkwCatOf(t, F) || t.job_class; F.prio = /after\s*hours/i.test(t.name) ? "emergency" : "normal"; F.dur = String(t.duration || F.dur || 60); F.unit = t.unit_id ? String(t.unit_id) : ""; F.unitEdit = !t.unit_id;
+  F.mode = "new"; F.jobId = null; F.type = String(t.id); F.cat = bkwCatOf(t, F) || t.job_class; F.ah = !!ah; F.prio = /after\s*hours/i.test(t.name) || F.ah ? "emergency" : "normal"; F.dur = String(t.duration || F.dur || 60); F.unit = t.unit_id ? String(t.unit_id) : ""; F.unitEdit = !t.unit_id;
   if (t.job_class === "sales" && /walk/i.test(t.name) && !F.summary) F.summary = "Walk the site";
   F.step = "done"; if (bkAH(F)) bkAHSetup(F); else if (F.oc) { F.oc = null; F.win = ["08:00", "11:00"]; F.techs = []; F.date = ymd(addDays(new Date(), 1)); }
   renderBooking();
@@ -12193,8 +12200,9 @@ function renderBooking(msg) {
 }
 // make the booking (the form, or a spot picked on the dispatch board): the job, then who it's for (partner, HTIN booking, Vista tank)
 async function bkDoBook(F, start, end) {
+  const sumAH = F.ah && F.mode === "new" && !/after\s*hours/i.test(F.summary || "") ? "AFTER HOURS – " + (F.summary || "Warranty call").trim() : (F.summary || "").trim();
   const p = { customer_id: F.cust.id, location_id: F.loc, job_type_id: Number(F.type) || null, business_unit_id: Number(F.unit) || null,
-    summary: (F.summary || "").trim(), note: (F.note || "").trim(), priority: F.prio, date: F.later ? null : F.date, start, end,
+    summary: sumAH, note: (F.note || "").trim(), priority: F.prio, date: F.later ? null : F.date, start, end,
     duration: Number(F.dur) || null, techs: F.later ? [] : F.techs };
   if (F.mode === "visit") p.job_id = F.jobId;
   const { data, error } = await db.rpc("book_call", { p });
@@ -22816,7 +22824,7 @@ function renderInvoiceEditor(msg) {
   const kids = l => IE.lines.filter(x => x.kit_parent === l.id);
   const I = IE, draft = I.status === "draft", edit = I.can_edit && (draft || I.st_edit), top = $("#main").scrollTop;
   const st = { draft: ["Not finished", "ie-draft"], posted: ["Finished, not paid", "ie-open"], partially_paid: ["Part paid", "ie-part"], paid: ["Paid", "ie-paid"], void: ["Void", "ie-void"] }[I.status] || [I.status, ""];
-  const ah = /after\s*hours/i.test(I.job_type || "");
+  const ah = /after\s*hours/i.test([I.job_type, I.summary, I.job_summary].filter(Boolean).join(" "));
   $("#main").innerHTML = `<article class="staff ie${ah ? " ie-ah" : ""}">
     ${ah ? `<div class="ah-banner" role="status"><span>🌙</span><div><b>AFTER HOURS CALL</b><small>Charge after-hours rates on this invoice</small></div></div>` : ""}
     <div class="ie-topbar"><button class="btn quiet-btn ie-close" type="button" data-ie-close>✕ Close</button>
@@ -29147,13 +29155,13 @@ async function openInvoice(id, keep) {
   const bp = i.bill_partner?.bill_to_ok || (i.store_copy_of && i.bill_partner) ? i.bill_partner : null;   // billed to a partner who pays us (Vista), or the store's copy (-C) of a Costco sale
   const storeName = brand?.branding_name || brand?.name || i.bill_partner?.name || "the store";
   const bpAddr = bp ? [bp.street, [bp.city, bp.province, bp.postal_code].filter(Boolean).join(", ")].filter(Boolean) : [];
-  $("#inv-paper").classList.toggle("inv-ah", /after\s*hours/i.test(i.jobs?.job_types?.name || ""));
+  $("#inv-paper").classList.toggle("inv-ah", /after\s*hours/i.test((i.jobs?.job_types?.name || "") + " " + (i.jobs?.summary || "")));
   $("#inv-paper").innerHTML = `
     <div class="inv-top">
       <div>${brand ? `<div class="inv-brand">${brand.branding_logo_url ? `<img src="${esc(brand.branding_logo_url)}" alt="${esc(brand.branding_name || brand.name)}">` : `<div class="inv-co">${esc(brand.branding_name || brand.name)}</div>`}</div>
           <div class="inv-installed">Installed by <strong>${esc(coName)}</strong></div>` : `<div class="inv-co">${esc(coName)}</div>`}
         <div class="inv-small">${coAddr.map(esc).join("<br>")}${c.phone ? "<br>" + esc(phoneFmt(c.phone)) : ""}${c.email ? "<br>" + esc(c.email) : ""}${c.website ? "<br>" + esc(c.website.replace(/^https?:\/\//, "")) : ""}</div></div>
-      <div class="inv-title"><div>INVOICE</div>${/after\s*hours/i.test(i.jobs?.job_types?.name || "") ? `<div class="inv-ah-tag">🌙 After-hours service call</div>` : ""}<table class="inv-meta">
+      <div class="inv-title"><div>INVOICE</div>${/after\s*hours/i.test((i.jobs?.job_types?.name || "") + " " + (i.jobs?.summary || "")) ? `<div class="inv-ah-tag">🌙 After-hours service call</div>` : ""}<table class="inv-meta">
         <tr><td>Invoice #</td><td>${esc(i.invoice_number)}</td></tr>
         <tr><td>Date</td><td>${fmtDate(i.invoice_date)}</td></tr>
         ${i.due_date ? `<tr><td>Due</td><td>${fmtDate(i.due_date)}</td></tr>` : ""}
