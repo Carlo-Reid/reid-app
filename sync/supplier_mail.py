@@ -186,7 +186,7 @@ def reread_shaded(cur):
                      AND sent_at IS NULL AND status IN ('imported', 'nothing', 'unread', 'needs_supplier')
                      AND NOT EXISTS (SELECT 1 FROM supplier_mail_pos x WHERE x.mail_id = m.id)
                      AND coalesce(received_at, created_at) > now() - interval '60 days'
-                   ORDER BY id DESC LIMIT 6""", (OCR_MARK,))
+                   ORDER BY id DESC LIMIT 15""", (OCR_MARK,))
     n = 0
     for mid, data in cur.fetchall():
         text = ocr_pdf(bytes(data))
