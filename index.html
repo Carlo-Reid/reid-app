@@ -4675,6 +4675,8 @@ body[data-page="customer"] .file .tn-kind { display: block; font-size: calc(12.5
 .smb { width: min(460px, 92vw); height: min(460px, 92vh); background: var(--panel); color: var(--ink); border: 3px solid var(--line); border-radius: 18px; box-shadow: 0 24px 60px rgba(0, 0, 0, .35); display: flex; flex-direction: column; padding: 22px 24px 20px; text-align: center; }
 .smb.smb-ok { border-color: #1f9d4a; } .smb.smb-wait { border-color: #f08c00; } .smb.smb-bad { border-color: #c92a2a; }
 .smb-ic { font-size: 44px; line-height: 1; } .smb h3 { margin: 10px 0 4px; font-size: calc(21px * var(--fs, 1)); font-weight: 800; } .smb.smb-ok h3 { color: #1f9d4a; } .smb.smb-wait h3 { color: #d9480f; } .smb.smb-bad h3 { color: #c92a2a; }
+.smb-tries { display: inline-block; margin-top: 6px; padding: 2px 10px; border-radius: 999px; background: var(--blue-wash); color: var(--blue); font-weight: 750; font-size: calc(14px * var(--fs, 1)); } .smb-tries:empty { display: none; }
+.sm-tries { display: inline-block; padding: 0 8px; border-radius: 999px; background: var(--blue-wash); color: var(--blue); font-weight: 700; font-size: 12px; white-space: nowrap; }
 .smb-file { font-size: 13px; color: var(--steel); overflow-wrap: anywhere; }
 .smb-mid { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; justify-content: center; gap: 4px; font-size: calc(15.5px * var(--fs, 1)); } .smb-mid p { margin: 4px 0; overflow-wrap: anywhere; }
 .smb-clock { font-size: calc(34px * var(--fs, 1)); font-weight: 800; font-variant-numeric: tabular-nums; color: var(--blue); margin-bottom: 6px; }
@@ -24976,12 +24978,16 @@ const SMB_BREATH = `<svg class="smb-breath" viewBox="0 0 120 120" role="img" ari
   <path d="M36 44 l14 3 M84 44 l-14 3" stroke="#3b2a6b" stroke-width="4" stroke-linecap="round"/>
   <path d="M51 82 q9 -5 18 0" fill="none" stroke="#3b2a6b" stroke-width="5" stroke-linecap="round"/>
   <path d="M104 36 q5 -8 0 -14 M112 44 q8 -6 6 -15" fill="none" stroke="#4dabf7" stroke-width="3.5" stroke-linecap="round"/><path d="M12 30 c-4 6 -4 10 0 12 c4 -2 4 -6 0 -12z" fill="#4dabf7"/></svg>`;
+// how many times a paper has been read (kept with its result): one already read before the counter started counts as 1
+const smTriesOf = row => Number((row?.result || {}).tries) || (row && row.status !== "new" ? 1 : 0);
+const smTried = (row, res) => { res.result = { ...(res.result || {}), tries: smTriesOf(row) + 1 }; return res; };
+const smTriesTxt = n => n > 0 ? `Tried ${n} time${n === 1 ? "" : "s"}` : "";
 async function smReadAgain(id) {
   const rows = (MAIL.data?.rows || []).filter(r => r.file && !MAIL.sentIds?.has(r.id)), row = rows.find(r => r.id === id); if (!row) return;
   const order = rows.map(r => r.id), tr = document.querySelector(`[data-sm="${id}"]`), sup = tr?.querySelector(".sm-sup")?.value || null, again = row.status !== "new";
   document.querySelector(".smb-wrap")?.remove();
   const w = document.createElement("div"); w.className = "smb-wrap"; w.setAttribute("role", "dialog"); w.setAttribute("aria-label", "Reading a supplier paper");
-  w.innerHTML = `<div class="smb"><div class="smb-top"><div class="smb-ic">⏳</div><h3>Reading it${again ? " again" : ""}…</h3><div class="smb-file">${esc(row.file || row.subject || "")}</div></div>
+  w.innerHTML = `<div class="smb"><div class="smb-top"><div class="smb-ic">⏳</div><h3>Reading it${again ? " again" : ""}…</h3><div class="smb-file">${esc(row.file || row.subject || "")}</div><div class="smb-tries">Try number ${smTriesOf(row) + 1}</div></div>
     <div class="smb-mid"><div class="smb-clock" data-smb-clock aria-label="Time so far">⏱ 0:00</div><p data-smb-say>${again ? "If it's a scan, the page is scanned again: about half a minute a page." : "Reading the paper…"}</p><p class="smb-still" data-smb-still aria-live="polite"></p></div><div class="smb-btns"></div></div>`;
   document.body.append(w);
   // a clock while it works; every 10 seconds it says it's still working (Carlo, Nov 9)
@@ -24996,6 +25002,7 @@ async function smReadAgain(id) {
         void st.offsetWidth; st.classList.add("smb-pop"); } } }, 1000);
   const say = t => { const m = w.querySelector("[data-smb-say]"); if (m) m.textContent = t; };
   let res; try { res = await supMailRead({ ...row, supplier: sup || row.supplier }, sup, { rescan: again, say }); } catch (er) { res = { status: "error", result: { note: er.message } }; }
+  smTried(row, res);
   await db.rpc("supplier_mail_set", { p_id: id, p_status: res.status, p_supplier: res.supplier || sup, p_result: res.result });
   await supMailLoad(); await loadPbUpdates(); auRender(); clearInterval(tick);
   const left = (MAIL.data?.rows || []).filter(r => r.file && !MAIL.sentIds?.has(r.id)), gone = !left.some(x => x.id === id), R = res.result || {}, pos = R.pos || [], c = R.counts || {}, sn = res.supplier || sup || "its supplier";
@@ -25004,7 +25011,7 @@ async function smReadAgain(id) {
     c.same ? `${c.same} price${c.same > 1 ? "s" : ""} read: same as the price book` : "", c.older ? `${c.older} price${c.older > 1 ? "s" : ""} read: a newer paper's price is already in` : ""].filter(Boolean).join(" · ");
   const ok = gone, bad = res.status === "error";
   w.querySelector(".smb").classList.add(ok ? "smb-ok" : bad ? "smb-bad" : "smb-wait");
-  w.querySelector(".smb-top").innerHTML = `<div class="smb-ic">${ok ? "✅" : bad ? "⚠️" : "🟠"}</div><h3>${ok ? `Found it and sent it to ${esc(sn)}` : bad ? "It couldn't be read" : pos.length ? "Found its PO, but it still needs something" : "No PO found on it"}</h3><div class="smb-file">${esc(row.file || row.subject || "")}</div>`;
+  w.querySelector(".smb-top").innerHTML = `<div class="smb-ic">${ok ? "✅" : bad ? "⚠️" : "🟠"}</div><h3>${ok ? `Found it and sent it to ${esc(sn)}` : bad ? "It couldn't be read" : pos.length ? "Found its PO, but it still needs something" : "No PO found on it"}</h3><div class="smb-file">${esc(row.file || row.subject || "")}</div><div class="smb-tries">${smTriesTxt(Number(R.tries) || 0)}</div>`;
   w.querySelector(".smb-mid").innerHTML = `${pos.length ? `<p><b>PO ${pos.map(esc).join(", ")}</b></p>` : ok ? "" : `<p>No number on the page matches a PO in the app. It stays on the list: make a PO for it, or attach one yourself.</p>`}
     ${ok ? `<p>It's now on ${esc(sn)}'s list (📤 Sent to suppliers, and the supplier's page).</p>` : ""}${price ? `<p>${esc(price)}</p>` : ""}${R.note ? `<p class="quiet">${esc(R.note)}</p>` : ""}`;
   w.querySelector(".smb-btns").innerHTML = `${next != null ? `<button type="button" class="btn" data-smb-next>Let's do the next one</button>` : `<span class="quiet">That was the last one on the list.</span>`}<button type="button" class="btn quiet-btn" data-smb-exit>Exit</button>`;
@@ -25023,6 +25030,7 @@ async function supMailRun(force) {
   MAIL.busy = true; supMailShow(`Reading ${todo.length} supplier email${todo.length > 1 ? "s" : ""}…`);
   for (const r of todo) {
     let res; try { res = await supMailRead(r); } catch (e) { res = { status: "error", result: { note: e.message } }; }
+    smTried(r, res);
     await db.rpc("supplier_mail_set", { p_id: r.id, p_status: res.status, p_supplier: res.supplier || null, p_result: res.result });
   }
   const went = await supMailAutoFile();
@@ -25043,7 +25051,7 @@ function supMailHtml(msg) {
         <td class="sm-who">${scan ? `<b>🖨 Office scanner</b><div class="quiet">sent straight from the copier</div>` : `<b>${esc(r.from || r.from_addr || "?")}</b>${r.from_addr && r.from_addr !== r.from ? `<div class="quiet">${esc(r.from_addr)}</div>` : ""}`}</td>
         <td><b>${esc(r.subject || "(no subject)")}</b><div class="quiet">${r.file ? esc(r.file) : ""}</div></td>
         <td>${r.file ? `<select class="sm-sup" aria-label="Supplier"><option value="">?</option>${sups.map(s => `<option ${String(r.supplier || "").toLowerCase() === s.toLowerCase() ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>` : ""}</td>
-        <td><span class="sm-st sm-${st[1]}">${st[0]}</span>${c.added || c["new item waiting"] ? ` <span class="quiet">${c.added || 0} new costs · ${c["new item waiting"] || 0} new items</span>` : ""}${c.same ? ` <span class="quiet">· ${c.same} price${c.same > 1 ? "s" : ""} read: same as the price book</span>` : ""}${c["already there"] ? ` <span class="quiet">· ${c["already there"]} already in</span>` : ""}${c["not matched"] ? ` <span class="quiet">· ${c["not matched"]} price${c["not matched"] > 1 ? "s" : ""} read for a part number that isn't in the price book</span>` : ""}${c.older ? ` <span class="quiet">· ${c.older} price${c.older > 1 ? "s" : ""} read: a newer paper's price for ${c.older > 1 ? "them" : "it"} is already in</span>` : ""}
+        <td><span class="sm-st sm-${st[1]}">${st[0]}</span>${smTriesOf(r) ? ` <span class="sm-tries" title="How many times this paper has been read">🔁 ${smTriesTxt(smTriesOf(r))}</span>` : ""}${c.added || c["new item waiting"] ? ` <span class="quiet">${c.added || 0} new costs · ${c["new item waiting"] || 0} new items</span>` : ""}${c.same ? ` <span class="quiet">· ${c.same} price${c.same > 1 ? "s" : ""} read: same as the price book</span>` : ""}${c["already there"] ? ` <span class="quiet">· ${c["already there"]} already in</span>` : ""}${c["not matched"] ? ` <span class="quiet">· ${c["not matched"]} price${c["not matched"] > 1 ? "s" : ""} read for a part number that isn't in the price book</span>` : ""}${c.older ? ` <span class="quiet">· ${c.older} price${c.older > 1 ? "s" : ""} read: a newer paper's price for ${c.older > 1 ? "them" : "it"} is already in</span>` : ""}
           ${(r.result || {}).note ? `<div class="quiet">${esc(r.result.note)}</div>` : ""}
           ${((r.result || {}).pos || []).length ? `<div class="sm-pos">Attached to ${r.result.pos.map(n => `<button class="link" type="button" data-sm-po="${esc(n)}">PO ${esc(n)}</button>`).join(", ")}</div>` : r.file && r.status !== "ignored" ? `<div class="sm-guess" data-sm-guess><span class="quiet">Looking for its PO…</span></div>` : ""}
           ${((r.result || {}).unknown || []).filter(u => !u.done).map((u, ui) => `<div class="sm-unk" data-sm-unk="${ui}"><span><b>${esc(u.code)}</b> ${esc(u.description || "")} <span class="quiet">${money(u.cost)}</span></span>
@@ -25129,6 +25137,7 @@ function supMailShow(msg) {
     tr.querySelector(".sm-sup")?.addEventListener("change", e => { row.supplier = e.target.value || null; });
     const reread = async (note) => { const sup = tr.querySelector(".sm-sup")?.value || row.supplier; supMailShow(note || "Reading it again…");
       let res; try { res = await supMailRead({ ...row, supplier: sup }, sup); } catch (er) { res = { status: "error", result: { note: er.message } }; }
+      smTried(row, res);
       const keep = (row.result || {}).unknown || [], done = keep.filter(u => u.done).map(u => u.code);
       if (res.result && res.result.unknown) res.result.unknown = res.result.unknown.map(u => done.includes(u.code) ? { ...u, done: true } : u);
       if (res.result && res.result.unknown && !res.result.unknown.some(u => !u.done) && res.status === "unread") res.status = "nothing";
