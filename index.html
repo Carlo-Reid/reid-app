@@ -8398,7 +8398,7 @@ async function openCustomer(id) {
   const invIds = (invoices.data || []).map(i => i.id);
   const [allNotes, move, tp] = await Promise.all([fetchNotes(noteFilter, jobIds), custMoveLoad(c).catch(() => null),
     invIds.length ? Promise.resolve(db.rpc("invoice_tank_pairs", { p_invoices: invIds })).catch(() => ({})) : Promise.resolve({})]);
-  current = { c, noteFilter, jobIds, notes: allNotes, move, tankPairs: tp?.data || [], emails, dupes: await dupeHint, plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
+  current = { c, noteFilter, jobIds, notes: allNotes, move, tankPairs: tp?.data || [], emails, dupes: [], plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
               estimates: estimates.data || [], equipment: eq.data || [],
               loc: (c.locations || []).find(l => l.active)?.id ?? locIds[0] };
   if (MV_TAB) { current.notesTab = MV_TAB; MV_TAB = null; }
@@ -8406,6 +8406,7 @@ async function openCustomer(id) {
   if (place) { const sec = place.tag && [...mainEl.querySelectorAll(".file [data-tag]")].find(x => x.dataset.tag === place.tag && x.offsetParent);
     mainEl.scrollTop = sec ? mainEl.scrollTop + sec.getBoundingClientRect().top - mainEl.getBoundingClientRect().top - place.off : place.top; }
   if (mapReady) mapReady.then(() => { if (current?.c?.id === c.id && document.querySelector(".sec1a")) redrawKeepingPlace(); });
+  dupeHint.then(d => { if (d?.length && current?.c?.id === c.id) { current.dupes = d; redrawKeepingPlace(); } });   // "might be the same as…" shows up when it's ready
   if (!FU.off) loadFollowKeys();   // make sure finished tasks are gone from Section 1A
 }
 
@@ -12468,9 +12469,18 @@ const saveDsp = () => { try { localStorage.setItem("reid.dispatch", JSON.stringi
 const MAPZ = { zones: null, areas: null, can: false };
 const MAP_GREY = "#8a96a3";
 const MAP_PALETTE = ["#1f6fd1", "#e8590c", "#2b8a3e", "#c2255c", "#7048e8", "#0c8599", "#e67700", "#5c940d", "#d6336c", "#364fc7", "#a61e4d", "#087f5b", "#862e9c", "#f08c00", "#495057"];
+// slow lists that hardly change (map zones, towns, communities, neighbourhoods): kept in this browser and used straight away;
+// a fresh copy is fetched in the background a few seconds later (at most every 10 min), so they never slow a page down
+async function rpcCache(fn, args, force) {
+  const k = "reid.rc." + (ME?.id || 0) + "." + fn + (args ? JSON.stringify(args) : "");
+  const fetchNow = async () => { const r = await db.rpc(fn, args || {}); if (!r.error && r.data) try { localStorage.setItem(k, JSON.stringify({ t: Date.now(), data: r.data })); } catch { } return r; };
+  if (!force) { let c = null; try { c = JSON.parse(localStorage.getItem(k) || "null"); } catch { }
+    if (c?.data) { if (Date.now() - c.t > 10 * 60e3) setTimeout(() => fetchNow().catch(() => { }), 8000); return { data: c.data, error: null }; } }
+  return fetchNow();
+}
 async function loadMapZones(force) {
   if (MAPZ.zones && !force) return;
-  const { data, error } = await db.rpc("postal_zone_list");
+  const { data, error } = await rpcCache("postal_zone_list", null, force);
   if (error || !data) { MAPZ.zones = []; MAPZ.areas = []; MAPZ.err = error ? rpcErr(error) : ""; return; }
   MAPZ.zones = data.zones.sort((a, b) => b.prefix.length - a.prefix.length); MAPZ.areas = data.areas; MAPZ.can = data.can_edit; MAPZ.err = "";
 }
@@ -13055,7 +13065,7 @@ const HOOD_URL = "https://maps.ottawa.ca/arcgis/rest/services/Neighbourhoods/Map
 const MAPH = { list: null, shapes: null };
 async function loadHoods(force, shapes) {
   if (MAPH.list && !force && (!shapes || MAPH.shapes)) return;
-  const { data, error } = await db.rpc("neighbourhood_list", { p_shapes: !!shapes });
+  const { data, error } = await rpcCache("neighbourhood_list", { p_shapes: !!shapes }, force);
   if (error || !data) { MAPH.list = []; MAPH.err = error ? rpcErr(error) : ""; return; }
   MAPH.info = data; MAPH.list = data.hoods; MAPH.by = new Map(data.hoods.map(h => [h.id, h]));
   if (shapes) MAPH.shapes = data.hoods.filter(h => h.shape).map(h => ({ id: h.id, shape: h.shape, box: hoodBox(h.shape) }));
@@ -13372,7 +13382,7 @@ const townName = c => String(c || "").trim().toLowerCase().replace(/(^|[\s'-])\p
 const MAPT = { list: null, by: new Map() };
 async function loadTowns(force) {
   if (MAPT.list && !force) return;
-  const { data, error } = await db.rpc("town_list");
+  const { data, error } = await rpcCache("town_list", null, force);
   MAPT.list = error || !data ? [] : data.towns; MAPT.by = new Map(MAPT.list.map(t => [t.key, t])); MAPT.err = error ? rpcErr(error) : "";
 }
 function dspKey(r, by) {
@@ -13434,7 +13444,7 @@ function wireMapPaint() {
 const MAPC = { list: null, by: new Map() };
 async function loadComms(force) {
   if (MAPC.list && !force) return;
-  const { data, error } = await db.rpc("community_list");
+  const { data, error } = await rpcCache("community_list", null, force);
   if (error || !data) { MAPC.list = []; MAPC.by = new Map(); MAPC.info = {}; MAPC.err = error ? ((error.code === "PGRST202" || /could not find the function|does not exist/i.test(error.message || "")) ? "setup" : rpcErr(error)) : ""; return; }
   MAPC.err = ""; MAPC.info = data; MAPC.ptowns = data.ptowns || {}; MAPC.areaOf = new Map(); MAPC.list = data.communities; MAPC.by = new Map(MAPC.list.map(c => [c.id, c]));
 }
