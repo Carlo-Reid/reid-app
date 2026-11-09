@@ -4677,6 +4677,7 @@ body[data-page="customer"] .file .tn-kind { display: block; font-size: calc(12.5
 .sm-t.sm-main .sm-sup { width: 100%; max-width: 100%; } .sm-t.sm-main .sm-send { white-space: normal; width: 100%; padding-left: 6px; padding-right: 6px; }
 .sm-main th:nth-child(1) { width: 8%; } .sm-main th:nth-child(2) { width: 12%; } .sm-main th:nth-child(3) { width: 17%; } .sm-main th:nth-child(4) { width: 10%; } .sm-main th:nth-child(5) { width: 38%; } .sm-main th:nth-child(6) { width: 15%; }
 .sm-sentt th:nth-child(1) { width: 12%; } .sm-sentt th:nth-last-child(1) { width: 19%; } .sm-sentt th:nth-last-child(2) { width: 15%; } .sm-sentt th:nth-last-child(3) { width: 13%; } .sm-sentt.sm-ws th:nth-child(2) { width: 10%; }
+.sm-guess .sm-pofound { flex: 1 1 100%; margin-top: 0; max-height: 300px; } .sm-guess .sm-pofound .stk-pick { padding: 6px 9px; font-size: calc(13px * var(--fs, 1)); } .sm-guess .sm-pofound .stk-pick .quiet { display: block; }
 .sm-guess .sm-g3 input { flex: 1 1 130px; width: auto !important; min-width: 0; max-width: 100%; } .sm-unk-find input { max-width: 100%; }
 @media (max-width: 760px) { .sm-t.sm-main, .sm-t.sm-sentt { table-layout: auto; } }
 .file .eq-apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; align-items: stretch; margin: 6px 0 12px; }
@@ -24898,7 +24899,8 @@ function supMailShow(msg) {
           <button class="btn sm-gbtn" type="button" data-sm-att="${esc(g.po_number)}">Attach</button></div>`).join("") + `<div class="sm-g2"><button class="link" type="button" data-sm-byhand>Attach a PO by number</button> · <button class="link" type="button" data-sm-mkpo>+ Make a PO for it</button></div>`
         : `<div class="sm-ask"><div><b>❓ No PO found for this one.</b> <span data-sm-askq>Do you want me to make one?</span></div>
           <div class="sm-ask-b"><button class="btn sm-gbtn" type="button" data-sm-mkpo>Yes, make the PO</button> <button class="btn quiet-btn sm-gbtn" type="button" data-sm-byhand>No, I'll attach it myself</button></div></div>`}
-        <div class="sm-g3 hidden" data-sm-hand><input placeholder="PO number" aria-label="PO number" style="width:150px"> <button class="btn" type="button">Attach</button></div>
+        <div class="sm-g3 hidden" data-sm-hand><input placeholder="Start typing the PO number (or job, customer)" aria-label="PO number" style="width:150px" autocomplete="off"> <button class="btn" type="button">Attach</button>
+          <div class="stk-found sm-pofound" data-sm-pofound></div></div>
         <div class="sm-g3 hidden" data-sm-mk><input data-mk-job placeholder="Job number (blank = shop stock)" aria-label="Job number" style="width:210px"> <input data-mk-what placeholder="What for" aria-label="What for" style="width:200px" value="${esc((row.file || "").replace(/\.[a-z]+$/i, ""))}"> <button class="btn" type="button">Make the PO and attach it</button></div>`;
       const attach = async (no, b) => { if (b) b.disabled = true; const { data: pos, error: e2 } = await db.rpc("supplier_mail_set_po", { p_id: id, p_po_number: no, p_remove: false });
         if (e2) { if (b) b.disabled = false; return alertMsg("Not attached: " + rpcErr(e2)); }
@@ -24909,6 +24911,18 @@ function supMailShow(msg) {
       const hand = gb.querySelector("[data-sm-hand]"), mk = gb.querySelector("[data-sm-mk]");
       gb.querySelector("[data-sm-byhand]").addEventListener("click", () => { hand.classList.toggle("hidden"); mk.classList.add("hidden"); hand.querySelector("input").focus(); });
       hand.querySelector("button").addEventListener("click", e => { const v = hand.querySelector("input").value.trim(); if (v) attach(v, e.target); });
+      // as the number is typed, our POs that match show under it (this supplier's first); click one to attach it (Carlo, Nov 9)
+      { const hi = hand.querySelector("input"), hf = hand.querySelector("[data-sm-pofound]"); let ht;
+        hi.addEventListener("input", () => { clearTimeout(ht); ht = setTimeout(async () => { const q = hi.value.trim(); if (q.length < 2) { hf.innerHTML = ""; return; }
+          hf.innerHTML = `<span class="quiet">Looking…</span>`;
+          const { data, error } = await db.rpc("po_list", { p_search: q, p_status: "all", p_supplier: null, p_from: null, p_to: null, p_limit: 40 }); if (hi.value.trim() !== q || !hf.isConnected) return;
+          const sn = String(sup() || "").toLowerCase(), mine = r => sn && String(r.supplier || "").toLowerCase().startsWith(sn) ? 0 : 1, ql = q.toLowerCase(), num = r => String(r.po_number || "").toLowerCase().startsWith(ql) ? 0 : String(r.po_number || "").toLowerCase().includes(ql) ? 1 : 2;
+          const L = (error ? [] : data || []).filter(r => r.status !== "cancelled").sort((a, b) => num(a) - num(b) || mine(a) - mine(b) || String(b.created_at).localeCompare(String(a.created_at))).slice(0, 8);
+          hf.innerHTML = error ? `<span class="quiet">Couldn't look: ${esc(rpcErr(error))}</span>` : L.length ? L.map(r => `<button type="button" class="stk-pick" data-sm-pick="${esc(r.po_number)}"><b>PO ${esc(r.po_number)}</b> · ${esc(sinvShort(r.supplier || ""))}${r.job_number ? ` · job ${esc(r.job_number)}` : ""}${r.customer_name ? ` · ${esc(r.customer_name)}` : ""}
+              <span class="quiet">${esc(fmtDate(String(r.created_at).slice(0, 10)))}${r.amount != null ? " · " + money(r.amount) : ""}${r.description ? " · " + esc(String(r.description).slice(0, 60)) : ""}</span></button>`).join("")
+            : `<span class="quiet">No PO in the app matches "${esc(q)}". Check the number, or press Yes, make the PO.</span>`;
+          hf.querySelectorAll("[data-sm-pick]").forEach(b => b.addEventListener("click", () => attach(b.dataset.smPick, b))); }, 250); });
+        hi.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); const one = hf.querySelectorAll("[data-sm-pick]"); if (one.length === 1) one[0].click(); else if (hi.value.trim()) attach(hi.value.trim()); } }); }
       // no PO found: when a job number is printed on the paper, "Yes" makes the PO for that job right away; otherwise it asks which job (blank = shop stock)
       let jobG = null;
       if (!G.length) db.rpc("supplier_mail_job_guess", { p_id: id }).then(({ data: J }) => { if (!gb.isConnected || (J || []).length !== 1) return; jobG = J[0];
