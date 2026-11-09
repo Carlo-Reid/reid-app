@@ -24666,8 +24666,11 @@ function invoiceRefDate(lines) {
     const t = String(lines[i + 1] || "").split(/\s+/).map(w => w.replace(/^\$(?=\d)/, "S")).filter(w => /\d{5,}/.test(w.replace(/\D/g, "")) && !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(w)); if (t.length) ref = t[t.length - 1]; } }
   if (!ref) for (const l of lines.slice(0, 12)) { const w = String(l).split(/\s+/).map(x => x.replace(/^\$(?=\d)/, "S")).find(x => /^[A-Z]{0,2}\d{6,}([.-]\d{1,3})?$/.test(x)); if (w) { ref = w; break; } }
   let date = null, m;
-  if ((m = all.match(/\b(20\d\d)-(\d\d)-(\d\d)\b/))) date = `${m[1]}-${m[2]}-${m[3]}`;
-  else if ((m = all.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/))) { const y = Number(m[3]) < 100 ? 2000 + Number(m[3]) : Number(m[3]); date = `${y}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`; }
+  // 20/10/2026 is day first (Master prints its dates that way): a paper that has any date with a first number over 12 is read day first all through
+  const sl = [...all.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/g)].filter(x => Number(x[1]) >= 1 && Number(x[2]) >= 1 && Number(x[1]) <= 31 && Number(x[2]) <= 31 && (Number(x[1]) <= 12 || Number(x[2]) <= 12));
+  if ((m = all.match(/\b(20\d\d)-(\d\d)-(\d\d)\b/)) && Number(m[2]) >= 1 && Number(m[2]) <= 12 && Number(m[3]) >= 1 && Number(m[3]) <= 31) date = `${m[1]}-${m[2]}-${m[3]}`;
+  else if (sl.length) { m = sl[0]; const y = Number(m[3]) < 100 ? 2000 + Number(m[3]) : Number(m[3]), dayFirst = Number(m[1]) > 12 || (sl.some(x => Number(x[1]) > 12) && !sl.some(x => Number(x[2]) > 12));
+    date = `${y}-${(dayFirst ? m[2] : m[1]).padStart(2, "0")}-${(dayFirst ? m[1] : m[2]).padStart(2, "0")}`; }
   else if ((m = all.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2}),?\s+(20\d\d)\b/i))) { const d = new Date(`${m[1]} ${m[2]} ${m[3]}`); if (!isNaN(d)) date = ymd(d); }
   return { ref, date };
 }
@@ -24961,9 +24964,12 @@ async function supMailRead(row, supplierPick, opts) {
   if (slipNote) return { supplier: sup, status: n ? "imported" : "nothing", result: { counts: totals, refs, unread: [], unknown: [], pos, note: slipNote + (pos.length ? "" : " No PO number on it was found in the app.") } };
   if (!any && noPricesOn(doc.lines)) return { supplier: sup, status: "nothing", result: { counts: {}, refs: [], unread: [], unknown: [], pos,
     note: `No prices on it: it's a ${/pick(ing)? (ticket|list)|cueillette/i.test(doc.lines.join(" ")) ? "picking ticket" : /packing list/i.test(doc.lines.join(" ")) ? "packing list" : "packing slip"}, so there are no costs to update. ${sup}'s invoice for this order will have the prices.${pos.length ? "" : " No PO number on it was found in the app."}` } };
-  return { supplier: sup, status: n ? "imported" : any ? "nothing" : "unread",
+  // "couldn't read" only when there's something left for a person to do: parts to match, or no PO. With its PO attached and
+  // nothing to match, it's done (it files itself), and the note says no costs were checked (Carlo, Nov 9)
+  const done = !n && !any && !unknown.length && pos.length;
+  return { supplier: sup, status: n ? "imported" : any || done ? "nothing" : "unread",
     result: { counts: totals, refs, unread: unread.slice(0, 30), unknown, ref: refUsed, date: dateUsed, pos,
-      note: any ? "" : unknown.length ? `${unknown.length} line${unknown.length > 1 ? "s" : ""} with a part number this app doesn't know yet: match ${unknown.length > 1 ? "each" : "it"} to a price book item once (or add it as a new item), and next time it's automatic.` : "No lines with a part number we know were found" } };
+      note: any ? "" : done ? `Attached to its PO. No part number on it is in the price book, so no costs were checked.` : unknown.length ? `${unknown.length} line${unknown.length > 1 ? "s" : ""} with a part number this app doesn't know yet: match ${unknown.length > 1 ? "each" : "it"} to a price book item once (or add it as a new item), and next time it's automatic.` : "No lines with a part number we know were found" } };
 }
 // a paper that's done (read, and its PO attached) goes to its supplier's list by itself (Carlo, Nov 9); one put back by hand stays put
 async function supMailAutoFile() { try { const { data, error } = await db.rpc("supplier_mail_autofile"); return error ? [] : (data || []); } catch { return []; } }
