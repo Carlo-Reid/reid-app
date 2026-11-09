@@ -58,3 +58,8 @@
 ## On call (dispatch board)
 
 - Who is on call each day: `on_call` table (`sync/extra/224_on_call.sql`), loaded with Nov–Dec 2026 from Carlo's Shifter calendar screenshots (top name = on call, bottom name, Adam or Dave = 2nd on call). Seed rows only fill empty days, so changes made in the app stay. Day view shows an orange "📟 On call … · 2nd: …" strip above Waiting for a day (Change = pick from drop-downs, owners/dispatch) and a 📟 tag on those people's lines. January isn't in yet.
+
+## Auto update: supplier mail → supplier lists and POs
+
+- Each document has "📤 Send to <supplier> list": it leaves the main supplier mail list and goes to "📤 Sent to suppliers" (under it, with Put back) and to the supplier's page tile "📨 Sent from Auto update" (`supplier_mail_send`, `supplier_mail_sent`, `supplier_doc_file`, `sync/extra/229_supplier_mail_sent.sql`).
+- A document with no PO attached shows its likely PO (`supplier_mail_po_guess`): a printed PO number, or one digit off because scans misread (a highlighter made 106607062 read as 406607062), this supplier first, with Attach. Also "Attach a PO by number" and "+ Make a PO for it" (job number → `get_po_number`, blank → shop stock `new_stock_po`), then attached with `supplier_mail_set_po`.
