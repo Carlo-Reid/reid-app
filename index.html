@@ -4673,6 +4673,11 @@ body[data-page="customer"] .file .tn-kind { display: block; font-size: calc(12.5
 /* Auto update supplier mail: the message about what just happened is big, bold and green, and stays in view while the list scrolls (Carlo, Nov 9) */
 #sm-box > .staff-msg:not(.err) { font-size: calc(18px * var(--fs, 1)); font-weight: 800; line-height: 1.35; color: #1f9d4a; border: 2px solid #1f9d4a; border-radius: 8px; padding: 10px 14px; margin: 8px 0;
   background: linear-gradient(rgba(31, 157, 74, .12), rgba(31, 157, 74, .12)), var(--panel); position: sticky; top: 6px; z-index: 3; }
+/* "Sent from Auto update" with documents waiting: orange, and it flashes 3 times every 10 seconds (Carlo, Nov 9) */
+.sinv-app.sa-act.sa-view.sa-wait, .sinv-app.sa-wait { background: linear-gradient(180deg, #ff922b, #e8590c) !important; border-color: #d9480f !important; color: #fff !important;
+  box-shadow: 0 2px 4px rgba(16, 24, 40, .06), 0 8px 18px rgba(232, 89, 12, .40) !important; animation: sa-wait-flash 10s linear infinite; }
+@keyframes sa-wait-flash { 0%, 6%, 12%, 18%, 100% { opacity: 1; filter: none; } 3%, 9%, 15% { opacity: .15; filter: brightness(1.6); } }
+@media (prefers-reduced-motion: reduce) { .sinv-app.sa-wait { animation: none; } }
 /* Auto update supplier mail: everything fits the width of the page, no sideways scrolling (Carlo, Nov 9) */
 .sm-t.sm-main, .sm-t.sm-sentt { width: 100%; table-layout: fixed; font-size: calc(13px * var(--fs, 1)); }
 .sm-t.sm-main th, .sm-t.sm-main td, .sm-t.sm-sentt th, .sm-t.sm-sentt td { padding: 6px 7px; white-space: normal; overflow-wrap: anywhere; }
@@ -24758,7 +24763,7 @@ const noPricesOn = lines => /\b(packing (slip|list)|pick(ing)? (ticket|list)|shi
   || !lines.some(l => /\b\d{1,3}(,\d{3})*\.\d{2}(?!\d|\s?%)/.test(l));
 const MAIL = { busy: false, data: null };
 async function supMailLoad() { if (!(seeCost() && can("pricebook.edit"))) return null; const [l, sn] = await Promise.all([db.rpc("supplier_mail_list", { p_limit: 80 }), db.rpc("supplier_mail_sent", { p_supplier: null, p_limit: 200 })]);
-  MAIL.data = l.error ? null : l.data; MAIL.sent = sn.error ? null : (sn.data || []); MAIL.sentIds = new Set((MAIL.sent || []).map(x => x.id)); return MAIL.data; }
+  SMW.at = 0; MAIL.data = l.error ? null : l.data; MAIL.sent = sn.error ? null : (sn.data || []); MAIL.sentIds = new Set((MAIL.sent || []).map(x => x.id)); return MAIL.data; }
 // the supplier in the app for a short name ("Trane" → "Trane 613-744-5396")
 const supIdOf = n => { n = String(n || "").trim().toLowerCase(); if (!n) return null; const L = (SUPPLIERS || []).filter(s => { const m = String(s.name).toLowerCase(); return m === n || m.startsWith(n + " ") || m.startsWith(n + "("); }); return L[0]?.id || null; };
 async function smOpenFile(rpc, id) { const w = window.open("", "_blank"); const f = await db.rpc(rpc, { p_id: id });
@@ -24803,6 +24808,19 @@ async function openSupDocs(sup) {
   SMS_ROWS = data || []; box.innerHTML = smSentTable(data || [], !sup); smSentWire(box);
 }
 document.addEventListener("click", e => { const b = e.target.closest?.("[data-sinv-maildocs]"); if (!b) return; e.preventDefault(); openSupDocs(b.dataset.sinvMaildocs ? Number(b.dataset.sinvMaildocs) : null); });
+// the "Sent from Auto update" tile turns orange and flashes 3 times every 10 seconds while documents are waiting there
+// (sent to that supplier's list, not loaded into Supplier invoices yet) (Carlo, Nov 9)
+const SMW = { at: 0, by: new Map(), busy: null };
+async function smWaitCounts() { if (Date.now() - SMW.at < 20000) return SMW.by; if (SMW.busy) return SMW.busy;
+  SMW.busy = (async () => { try { const { data, error } = await db.rpc("supplier_mail_sent", { p_supplier: null, p_limit: 1000 });
+      if (!error) { const by = new Map(); for (const r of data || []) { const k = Number(r.supplier_id) || 0; by.set(k, (by.get(k) || 0) + 1); } SMW.by = by; SMW.at = Date.now(); } } catch {}
+    SMW.busy = null; return SMW.by; })();
+  return SMW.busy; }
+async function smWaitTiles() { const T = [...document.querySelectorAll("[data-sinv-maildocs]")]; if (!T.length) return; const by = await smWaitCounts();
+  for (const b of T) { const id = b.dataset.sinvMaildocs ? Number(b.dataset.sinvMaildocs) : null, n = id ? (by.get(id) || 0) : [...by.values()].reduce((a, c) => a + c, 0);
+    b.classList.toggle("sa-wait", n > 0); b.title = n ? `${n} document${n > 1 ? "s" : ""} waiting here: sent from Auto update, not loaded into Supplier invoices yet` : "Nothing waiting here"; } }
+(() => { let t; const run = () => { clearTimeout(t); t = setTimeout(() => smWaitTiles().catch(() => {}), 200); };
+  new MutationObserver(run).observe(document.body, { childList: true, subtree: true }); setInterval(() => { if (document.querySelector("[data-sinv-maildocs]")) { SMW.at = 0; run(); } }, 60000); })();
 // ---------- "Read it again" on a scan: the page is scanned again here in the browser (Carlo, Nov 9) ----------
 // Same steps as the mailbox reader (sync/supplier_mail.py): turn the page the right way up, read it, then read it again with
 // grey shading washed out and once more as loose words, and add the PO-like numbers the first reading missed.
