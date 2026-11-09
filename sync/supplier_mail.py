@@ -82,7 +82,7 @@ def ocr_pdf(data):
         return "\n\f\n".join(pages) + "\n" + OCR_MARK
 
 
-OCR_MARK = "[read v4]"   # pages read the way below (turned the right way up first; numbers on shaded bands read again)
+OCR_MARK = "[read v5]"   # pages read the way below (turned the right way up first; numbers on shaded bands read again)
 WORDS = re.compile(r"\b(invoice|order|total|qty|quantity|ship|sold|date|price|amount|customer|terms|description|phone|tax|hst|gst|unit|each|subtotal|picking|packing|account|branch)\b", re.I)
 
 
@@ -141,10 +141,36 @@ def shaded_numbers(img, have, read):
             bare.append(set(PO_BARE.findall(t)))
         # numbers typed into the boxes of a form (Daikin/Goodman's pick ticket: the Customer P.O. Number box) are skipped when the
         # page is read as lines of text; reading it as loose words finds them
-        loose = subprocess.run(["tesseract", img, "stdout", "--psm", "11"], capture_output=True, timeout=180).stdout.decode("utf-8", "replace")
-        full.append({a + "-" + b for a, b in PO_FULL.findall(loose)})
+        sparse = lambda *more: subprocess.run(["tesseract", img, "stdout", "--psm", "11", *more], capture_output=True, timeout=180).stdout.decode("utf-8", "replace")
+        loose = sparse()
+        # the same page at other sizes: a boxed number one size misses, another finds (Boone packing slip C448260: PO 116877176-001)
+        full.append({a + "-" + b for a, b in PO_FULL.findall(loose + "\n" + sparse("--dpi", "200") + "\n" + sparse("--dpi", "70"))})
         new = sorted(x for x in (full[0] | full[1] | full[2]) if x not in flat) + sorted(x for x in ((bare[0] & bare[1]) | set(PO_BARE.findall(loose))) if x not in flat)
-        return ("\n[shaded parts read again] " + " ".join(new) + "\n") if new else ""
+        return (("\n[shaded parts read again] " + " ".join(new) + "\n") if new else "") + unlined_prices(img, read)
+    except Exception:
+        return ""
+
+
+def unlined_prices(img, read):
+    """Boone's packing slips rule a box round every number: the discount beside the price comes out as letters ("BO" for 30).
+    Wipe the form's ruled lines (any dark run half an inch or longer), read the page again, and add its price lines (Boone's
+    unit prices have 5 decimals) so the app can work out what each item really cost."""
+    try:
+        import numpy as np
+        from PIL import Image
+        g = np.array(Image.open(img).convert("L")); dark = g < 140; minlen = max(g.shape) // 22
+
+        def runs(m):
+            out = np.zeros_like(m); pad = np.zeros((m.shape[0], 1), bool)
+            d = np.diff(np.concatenate([pad, m, pad], 1).astype(np.int8), axis=1)
+            ys, s = np.where(d == 1); _, e = np.where(d == -1); keep = (e - s) >= minlen
+            for y, i, j in zip(ys[keep], s[keep], e[keep]):
+                out[y, i:j] = True
+            return out
+        g = g.copy(); g[runs(dark) | runs(dark.T).T] = 255
+        out = img[:-4] + "_nolines.png"; Image.fromarray(g).save(out)
+        lines = [re.sub(r"\s+", " ", l).strip() for l in read(out).split("\n") if re.search(r"\d\.\d{5}(?!\d)", l)]
+        return ("\n[lines read again without the form's lines]\n" + "\n".join(lines) + "\n") if lines else ""
     except Exception:
         return ""
 
