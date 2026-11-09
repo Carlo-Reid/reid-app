@@ -4658,6 +4658,7 @@ body[data-page="customer"] .file .tn-kind { display: block; font-size: calc(12.5
 .file .tech-card .miss-chip { font-size: calc(13px * var(--fs, 1)); padding: 3px 6px 3px 10px; }
 .file .tech-card .tech-status, .file .tech-card .tech-btns, .file .tech-card > .msg, .file .tech-card > .link { margin-left: 14px; margin-right: 14px; } .file .tech-card .tech-btns { margin-bottom: 12px; } .file .tech-card > .tech-status:last-of-type { margin-bottom: 12px; }
 /* equipment as app squares; a square opens its details */
+.srp-credit { margin: 8px 0; padding: 8px 12px; border: 1px dashed #6b3fa0; border-radius: 8px; background: #f6f0fc; color: #4a2a75; }
 .srp-row { cursor: pointer; } .srp-row:hover td { background: rgba(47,111,179,.08); }
 .srp-fixbox { border: 2px solid #2f6fb3; border-radius: 8px; padding: 10px 12px; background: #f3f8fd; } .srp-fixrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
 .srp-fixbox input[type=number] { width: 120px; }
@@ -17057,10 +17058,11 @@ function srpOurs(D) {
   const pos = inv.filter(x => x.total > 0).sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.number).localeCompare(String(b.number)));
   const credits = inv.filter(x => x.total < 0), paid = pays.reduce((t, p) => t + p.amount, 0), creditSum = credits.reduce((t, x) => t - x.total, 0);
   let pool = Math.round((paid + creditSum) * 100) / 100;
-  pos.forEach(x => { const take = Math.min(pool, x.total); x.applied = Math.round(take * 100) / 100; x.due = Math.round((x.total - take) * 100) / 100; pool = Math.round((pool - take) * 100) / 100; });
+  // oldest first, whole invoices only: money that would only part-pay an invoice is kept aside as a credit with them (shown below the statement, not taken off a line)
+  let stop = false; pos.forEach(x => { const take = !stop && pool + 0.004 >= x.total ? x.total : 0; if (!take) stop = true; x.applied = Math.round(take * 100) / 100; x.due = Math.round((x.total - take) * 100) / 100; pool = Math.round((pool - take) * 100) / 100; });
   const open = pos.filter(x => x.due > 0.004), ag = { current: 0, d31_60: 0, d61_90: 0, d91_120: 0, over120: 0 };
   open.forEach(x => { const d = x.date ? srpDays(x.date, asOf) : 0, k = d <= 30 ? "current" : d <= 60 ? "d31_60" : d <= 90 ? "d61_90" : d <= 120 ? "d91_120" : "over120"; ag[k] = Math.round((ag[k] + x.due) * 100) / 100; });
-  const due = Math.round((open.reduce((t, x) => t + x.due, 0) - pool) * 100) / 100;
+  const due = Math.round(open.reduce((t, x) => t + x.due, 0) * 100) / 100;   // the credit kept aside (pool) isn't taken off
   return { pos, open, credits, pays, paid, creditSum, unapplied: pool, ag, due };
 }
 async function openOurStatement(sup, asOf) {
@@ -17107,9 +17109,10 @@ async function openOurStatement(sup, asOf) {
         <td>${esc(x.number)}${cr ? ` <span class="quiet">credit</span>` : ""}${x.fromSt ? ` <span class="quiet">· from their statement</span>` : ""}${/^Made by the app from their statement/.test(RW(x.id).read_notes || "") ? `<div class="srp-made">🤖 made by the app from their statement: our copy was missing</div>` : ""}${x.late ? (T && T.date > x.late && theirs.has(norm(x.number)) ? `<div class="srp-late ok">✓ missed their ${esc(fmtDate(x.late))} statement, now on their ${esc(fmtDate(T.date))} one</div>` : `<div class="srp-late">⏳ not on their ${esc(fmtDate(x.late))} statement: carried here, waiting for their next one</div>`) : ""}${Number(x.total) === 0 && !x.fromSt ? `<div class="srp-late">📦 packing slip only (no prices): the amount comes with ${esc(D.supplier ? sinvShort(D.supplier) : "their")} invoice</div>` : ""}</td><td>${esc(r.po_number || x.po || r.po_text || "")}${r.po_customer ? `<div class="quiet">${esc(r.po_customer)}</div>` : ""}</td>
         <td class="r num">${r.subtotal != null ? money(r.subtotal) : ""}</td><td class="r num">${r.hst != null ? money(r.hst) : ""}</td><td class="r num">${money(x.total)}</td>
         <td class="r num">${cr ? "" : money(x.applied)}</td><td class="r num">${cr ? "" : money(x.due)}</td></tr>`; }).join("") : `<tr><td colspan="8" class="quiet">Nothing owing by our records.</td></tr>`}
-      ${O.unapplied > 0.004 ? `<tr class="srp-cr"><td></td><td colspan="6">Payments and credits not used up yet</td><td class="r num">−${money(O.unapplied)}</td></tr>` : ""}
+
       <tr class="srp-totrow"><td colspan="3">${all ? "Total" : "Total owing"}</td><td class="r num">${money(sumOf(rowsShow, x => RW(x.id).subtotal))}</td><td class="r num">${money(sumOf(rowsShow, x => RW(x.id).hst))}</td><td class="r num">${money(sumOf(rowsShow, x => x.total))}</td><td></td><td class="r num">${money(O.due)}</td></tr></tbody></table>
     <div class="srp-age">${[["current", "Current"], ["d31_60", "31–60 days"], ["d61_90", "61–90 days"], ["d91_120", "91–120 days"], ["over120", "Over 120 days"]].map(([k, t]) => `<div><span>${t}</span><b>${money(O.ag[k])}</b></div>`).join("")}<div class="srp-agt"><span>Balance due</span><b>${money(O.due)}</b></div></div>
+    ${O.unapplied > 0.004 ? `<div class="srp-credit">💳 <b>Credit with ${esc(srpName(sup))}: ${money(O.unapplied)}</b> <span class="quiet">· we paid more than the invoices it would fully pay (${(D.payments || []).map(p => `${esc(fmtDate(p.date))} ${money(p.amount)}`).join(", ") || "payments and credits"}). Kept here, not taken off any line above or the balance due. If it shouldn't be a credit, click a line above and fix the payment.</span></div>` : ""}
     ${base ? `<p class="quiet srp-note">Starts from what was owing on their ${esc(fmtDate(base.date))} statement (${money(base.total)}, its lines marked “from their statement”), then our invoices and credits after it, less our payments after it.${base.late ? ` Also ${base.late} invoice${base.late === 1 ? "" : "s"} of ours from before it that ${base.late === 1 ? "wasn't" : "weren't"} on it (⏳): carried here to be checked against their next statement.` : ""}</p>` : ""}
     <p class="quiet srp-note">Our invoices and credits to ${esc(fmtDate(date))}: ${money(O.pos.reduce((t, x) => t + x.total, 0))} invoiced, ${money(O.creditSum)} credited, ${money(O.paid)} paid (${O.pays.length} payment${O.pays.length === 1 ? "" : "s"}). Payments and credits are taken off the oldest invoices first.</p>
     ${T ? `<div class="srp-cmp"><h3>Matched against their statement of ${esc(fmtDate(T.date))}</h3>
