@@ -61,7 +61,7 @@
 
 ## Auto update: supplier mail → supplier lists and POs
 
-- Each document has "📤 Send to <supplier> list": it leaves the main supplier mail list and goes to "📤 Sent to suppliers" (under it, with Put back) and to the supplier's page tile "📨 Sent from Auto update" (`supplier_mail_send`, `supplier_mail_sent`, `supplier_doc_file`, `sync/extra/229_supplier_mail_sent.sql`).
+- Each document has "📤 Send to <supplier> list": it opens straight into that supplier's invoice reader (Supplier invoices drop-in, `smLoadToInvoices`) to check and Save, so it lands in View Supplier Invoices by month; sent ones also have "📥 Load into Supplier invoices". It leaves the main supplier mail list and goes to "📤 Sent to suppliers" (under it, with Put back) and to the supplier's page tile "📨 Sent from Auto update" (`supplier_mail_send`, `supplier_mail_sent`, `supplier_doc_file`, `sync/extra/229_supplier_mail_sent.sql`).
 - A document with no PO attached shows its likely PO (`supplier_mail_po_guess`): a printed PO number, or one digit off because scans misread (a highlighter made 106607062 read as 406607062), this supplier first, with Attach. Also "Attach a PO by number" and "+ Make a PO for it" (job number → `get_po_number`, blank → shop stock `new_stock_po`), then attached with `supplier_mail_set_po`.
 
 ## Our statement (suppliers): invoices that miss their statement
