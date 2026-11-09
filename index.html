@@ -8397,13 +8397,20 @@ async function openCustomer(id) {
   const mapReady = MAPH.list && (MAPH.shapes || !MAPH.list.length) && MAPZ.zones && MAPT.list && MAPC.list ? null : Promise.all([loadHoods(false, true), loadMapZones(), loadTowns(), loadComms()]).catch(() => {});
   // everything that only needs the customer number is fetched at the same time
   const dupeHint = can("customers.edit") ? db.rpc("customer_dupe_hint", { p_customer: id }).then(r => r.error ? [] : r.data || [], () => []) : Promise.resolve([]);
+  // the notes, the move/links and the tank pairs start right away too (they used to wait for everything above): the file opens sooner
+  const custQ = db.from("customers").select("*, customer_contacts(*), locations(*), customer_flags(*)").eq("id", id).single();
+  const earlyNotes = Promise.all([db.from("locations").select("id").eq("customer_id", id), db.from("jobs").select("id").eq("customer_id", id).order("created_at", { ascending: false }).limit(300)])
+    .then(([lo, jo]) => { const lids = (lo.data || []).map(l => l.id), f = [`and(entity_type.eq.customer,entity_id.eq.${id})`].concat(lids.length ? [`and(entity_type.eq.location,entity_id.in.(${lids.join(",")}))`] : []).join(",");
+      return fetchNotes(f, (jo.data || []).map(j => j.id)); }).catch(() => null);
+  const earlyMove = Promise.resolve(custQ).then(r => r.data ? custMoveLoad(r.data) : null).catch(() => null);
+  const invQ = db.from("invoices").select("*").eq("customer_id", id).order("invoice_date", { ascending: false }).limit(300);
+  const earlyTp = Promise.resolve(invQ).then(r => { const ids = (r.data || []).map(i => i.id); return ids.length ? db.rpc("invoice_tank_pairs", { p_invoices: ids }) : {}; }).catch(() => ({}));
   const [cust, plans, jobs, invoices, estimates, eq, emails] = await Promise.all([
-    db.from("customers").select("*, customer_contacts(*), locations(*), customer_flags(*)").eq("id", id).single(),
+    custQ,
     db.from("memberships").select("*, plan_types(name)").eq("customer_id", id).order("start_date", { ascending: false }),
     db.from("jobs").select("id, job_number, status, summary, description, priority, created_at, completed_at, location_id, tank_payer, job_types(name), business_units(name), partners(name), visits(id, visit_number, scheduled_date, status, visit_assignments(role, employees(first_name, last_name)))")
       .eq("customer_id", id).order("created_at", { ascending: false }).limit(300),
-    db.from("invoices").select("*")
-      .eq("customer_id", id).order("invoice_date", { ascending: false }).limit(300),
+    invQ,
     db.from("estimates").select("id, estimate_number, status, created_at, job_id, location_id, st_id, cancelled_at, sold_by_employee_id, estimate_options!estimate_options_estimate_id_fkey(name, estimate_lines(line_total))")
       .eq("customer_id", id).order("created_at", { ascending: false }).limit(100),
     db.from("equipment").select("*, equipment_types(name), manufacturers(name), warranty_coverages(*), locations!inner(customer_id)")
@@ -8418,8 +8425,8 @@ async function openCustomer(id) {
     .concat(locIds.length ? [`and(entity_type.eq.location,entity_id.in.(${locIds.join(",")}))`] : []).join(",");
   const jobIds = (jobs.data || []).map(j => j.id);
   const invIds = (invoices.data || []).map(i => i.id);
-  const [allNotes, move, tp] = await Promise.all([fetchNotes(noteFilter, jobIds), custMoveLoad(c).catch(() => null),
-    invIds.length ? Promise.resolve(db.rpc("invoice_tank_pairs", { p_invoices: invIds })).catch(() => ({})) : Promise.resolve({})]);
+  let [allNotes, move, tp] = await Promise.all([earlyNotes, earlyMove, earlyTp]);
+  if (!allNotes) allNotes = await fetchNotes(noteFilter, jobIds);   // the early fetch failed: the usual way
   current = { c, noteFilter, jobIds, notes: allNotes, move, tankPairs: tp?.data || [], emails, dupes: [], plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
               estimates: estimates.data || [], equipment: eq.data || [],
               loc: (c.locations || []).find(l => l.active)?.id ?? locIds[0] };
