@@ -82,7 +82,7 @@ def ocr_pdf(data):
         return "\n\f\n".join(pages) + "\n" + OCR_MARK
 
 
-OCR_MARK = "[read v5]"   # pages read the way below (turned the right way up first; numbers on shaded bands read again)
+OCR_MARK = "[read v6]"   # pages read the way below (turned the right way up first; numbers on shaded bands read again)
 WORDS = re.compile(r"\b(invoice|order|total|qty|quantity|ship|sold|date|price|amount|customer|terms|description|phone|tax|hst|gst|unit|each|subtotal|picking|packing|account|branch)\b", re.I)
 
 
@@ -143,6 +143,9 @@ def shaded_numbers(img, have, read):
         # page is read as lines of text; reading it as loose words finds them
         sparse = lambda *more: subprocess.run(["tesseract", img, "stdout", "--psm", "11", *more], capture_output=True, timeout=180).stdout.decode("utf-8", "replace")
         loose = sparse()
+        # a number on a shaded band inside a narrow box (Boone invoice C357451: PO 110452200) only shows washed out AND read as loose words
+        for cut in (120, 150):   # (one cut-off can misread a digit where the other doesn't)
+            loose += "\n" + subprocess.run(["tesseract", img[:-4] + f"_bw{cut}.png", "stdout", "--psm", "11", "--dpi", "200"], capture_output=True, timeout=180).stdout.decode("utf-8", "replace")
         # the same page at other sizes: a boxed number one size misses, another finds (Boone packing slip C448260: PO 116877176-001)
         full.append({a + "-" + b for a, b in PO_FULL.findall(loose + "\n" + sparse("--dpi", "200") + "\n" + sparse("--dpi", "70"))})
         new = sorted(x for x in (full[0] | full[1] | full[2]) if x not in flat) + sorted(x for x in ((bare[0] & bare[1]) | set(PO_BARE.findall(loose))) if x not in flat)

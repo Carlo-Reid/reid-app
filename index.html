@@ -4682,6 +4682,8 @@ body[data-page="customer"] .file .tn-kind { display: block; font-size: calc(12.5
 .smb-clock { font-size: calc(34px * var(--fs, 1)); font-weight: 800; font-variant-numeric: tabular-nums; color: var(--blue); margin-bottom: 6px; }
 .smb-still { min-height: 1.4em; font-weight: 750; color: #d9480f; }
 .smb-still.smb-l2 { font-size: calc(21px * var(--fs, 1)); font-weight: 800; color: #1f9d4a; } .smb-still.smb-l3 { font-size: calc(24px * var(--fs, 1)); font-weight: 800; color: #7048e8; line-height: 1.25; }
+.smb.smb-t2 { border-color: #1f9d4a; background: linear-gradient(rgba(31, 157, 74, .16), rgba(31, 157, 74, .16)), var(--panel); } .smb.smb-t3 { border-color: #7048e8; background: linear-gradient(rgba(112, 72, 232, .17), rgba(112, 72, 232, .17)), var(--panel); }
+.smb { transition: background .5s, border-color .5s; } .smb.smb-t2 .smb-ic, .smb.smb-t3 .smb-ic { display: none; } .smb.smb-t2 .smb-mid, .smb.smb-t3 .smb-mid { overflow: hidden; } .smb-giveq { font-weight: 800; font-size: calc(17px * var(--fs, 1)); color: #d9480f; }
 .smb-breath { display: block; width: 136px; height: 136px; margin: 8px auto 0; animation: smb-puff 1.6s ease-in-out infinite; } @keyframes smb-puff { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.09); } } .smb-still.smb-pop { animation: smb-pop .6s ease-out; } @keyframes smb-pop { 0% { transform: scale(.85); opacity: 0; } 60% { transform: scale(1.06); opacity: 1; } 100% { transform: scale(1); } }
 .smb-btns { display: flex; flex-direction: column; gap: 8px; align-items: stretch; } .smb-btns .btn { font-size: calc(17px * var(--fs, 1)); padding: 12px 14px; font-weight: 750; }
 /* Auto update supplier mail: the message about what just happened is big, bold and green, and stays in view while the list scrolls (Carlo, Nov 9) */
@@ -24868,31 +24870,55 @@ function smNoLines(c) {   // the ruled lines of a form are wiped (any dark run h
   for (let x = 0; x < w; x++) { let s = -1; for (let y = 0; y <= h; y++) { const on = y < h && dark[y * w + x]; if (on && s < 0) s = y; else if (!on && s >= 0) { if (y - s >= min) for (let k = s; k < y; k++) kill[k * w + x] = 1; s = -1; } } }
   for (let i = 0, p = 0; i < kill.length; i++, p += 4) if (kill[i]) { d[p] = d[p + 1] = d[p + 2] = 255; }
   g.putImageData(im, 0, 0); return o; }
-async function smScanAgain(blob, name, say) {
+// the page readers are kept ready between papers (up to 3 at once, so the extra readings of a page run side by side) and let go after 3 idle minutes
+const SM_OCR = { ws: null, free: [], wait: [], idle: null };
+async function smOcrPool() {
+  clearTimeout(SM_OCR.idle); SM_OCR.idle = setTimeout(() => { const ws = SM_OCR.ws || []; SM_OCR.ws = null; SM_OCR.free = []; ws.forEach(w => w.terminate().catch(() => {})); }, 180000);
+  if (SM_OCR.ws) return SM_OCR.ws;
+  if (!SM_OCR.making) SM_OCR.making = (async () => { const n = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1)), ws = [];
+      for (let k = 0; k < n; k++) ws.push(await window.Tesseract.createWorker("eng")); SM_OCR.ws = ws; SM_OCR.free = ws.slice(); SM_OCR.making = null; return ws; })();
+  return SM_OCR.making; }
+async function smOcr(c, psm = "6", dpi = "0") {   // one reading of one picture, on whichever reader is free
+  await smOcrPool(); const w = SM_OCR.free.length ? SM_OCR.free.pop() : await new Promise(r => SM_OCR.wait.push(r));
+  try { await w.setParameters({ tessedit_pageseg_mode: psm, user_defined_dpi: dpi }).catch(() => {}); return (await w.recognize(c)).data.text || ""; }
+  finally { const nx = SM_OCR.wait.shift(); if (nx) nx(w); else SM_OCR.free.push(w); } }
+// enough(text so far) -> true once the paper's PO has been found: the slower extra readings are then skipped (Carlo, Nov 9: it took too long)
+async function smScanAgain(blob, name, say, enough, stopped) {
   await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"); await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  const cv = [];
+  const warm = smOcrPool().catch(() => {}), cv = [];
   if (/\.(png|jpe?g)$/i.test(name || "") || /^image\//.test(blob.type || "")) { const img = await createImageBitmap(blob), c = document.createElement("canvas"); c.width = img.width; c.height = img.height; c.getContext("2d").drawImage(img, 0, 0); cv.push(c); }
   else { const pdf = await window.pdfjsLib.getDocument({ data: await blob.arrayBuffer() }).promise;
     for (let n = 1; n <= Math.min(pdf.numPages, 8); n++) { say?.(`Opening page ${n} of ${Math.min(pdf.numPages, 8)}…`); const pg = await pdf.getPage(n), vp = pg.getViewport({ scale: 3 }), c = document.createElement("canvas"); c.width = vp.width; c.height = vp.height;
       const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: g, viewport: vp }).promise; cv.push(c); } }
-  const worker = await window.Tesseract.createWorker("eng"), psm = m => worker.setParameters({ tessedit_pageseg_mode: m }).catch(() => {}), read = async c => (await worker.recognize(c)).data.text || "";
+  await warm;
   const full = t => [...t.matchAll(/(?<![\d-])(\d{6,12})\s?-\s?(\d{3})(?!\d)/g)].map(m => m[1] + "-" + m[2]), bare = t => t.match(/(?<![\d-])\d{7,12}(?![\d-])/g) || [];
-  const pages = [];
-  try {
-    for (let k = 0; k < cv.length; k++) {
-      say?.(`Scanning page ${k + 1} of ${cv.length} again…`); await psm("6");
-      let c = cv[k], text = await read(c), best = smOcrScore(text);
-      if (best < 60) for (const deg of [90, 270, 180]) { const c2 = smTurn(cv[k], deg), t2 = await read(c2), s2 = smOcrScore(t2); if (s2 > best) { c = c2; text = t2; best = s2; } if (best >= 60) break; }   // sideways or upside down
-      say?.(`Page ${k + 1} of ${cv.length}: looking for numbers on shaded bands and in boxes…`);
-      const flat = text.replace(/\s/g, ""), wash = await read(smWash(c, 150)), bare0 = smNoLines(c), clean = await read(bare0);
-      await psm("11"); const loose = await read(c); let loose2 = "";
-      for (const dpi of ["70", "200"]) { await worker.setParameters({ user_defined_dpi: dpi }).catch(() => {}); loose2 += "\n" + await read(c); }   // the same page at other sizes: a number one size misses, another finds
-      const extra = [...new Set([...full(wash), ...full(loose), ...full(loose2), ...bare(loose), ...bare(wash).filter(x => loose.replace(/\s/g, "").includes(x))])].filter(x => !flat.includes(x));
-      const priced = clean.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(l => /\d\.\d{5}(?!\d)/.test(l));   // Boone's lines: the unit price has 5 decimals
-      pages.push(text + (extra.length ? "\n[numbers read again] " + extra.join(" ") + "\n" : "") + (priced.length ? "\n[lines read again without the form's lines]\n" + priced.join("\n") + "\n" : ""));
-    }
-  } finally { await worker.terminate().catch(() => {}); }
+  const halt = () => { if (stopped && stopped()) throw new Error("stopped"); };
+  const pages = [], ok = async () => { halt(); try { return !!(enough && await enough(pages.join("\n"))); } catch { return false; } };
+  let found = false;
+  // every page's plain reading first, side by side
+  const first = await Promise.all(cv.map(async (c0, k) => { say?.(cv.length > 1 ? `Scanning ${cv.length} pages again…` : "Scanning the page again…");
+    let c = c0, text = await smOcr(c0), best = smOcrScore(text);
+    if (best < 60) for (const deg of [90, 270, 180]) { const c2 = smTurn(c0, deg), t2 = await smOcr(c2), s2 = smOcrScore(t2); if (s2 > best) { c = c2; text = t2; best = s2; } if (best >= 60) break; }   // sideways or upside down
+    return { c, text }; }));
+  first.forEach(p => pages.push(p.text)); found = await ok();
+  for (let k = 0; k < first.length; k++) { const { c, text } = first[k], flat = text.replace(/\s/g, ""), boone = /\d\.\d{5}(?!\d)/.test(text);   // Boone's lines: the unit price has 5 decimals
+    if (found && !boone) continue;
+    say?.(found ? `Page ${k + 1}: reading the prices again without the form's lines…` : `Page ${k + 1} of ${first.length}: looking for numbers on shaded bands and in boxes…`);
+    // side by side: the price lines with the form's ruled lines wiped (Boone), the shading washed out, and the page as loose words
+    // (a number on a shaded band inside a narrow box, Boone invoice C357451's PO 110452200, only shows washed out AND read as loose words)
+    const washed = found ? null : smWash(c, 150);
+    const [clean, wash, loose, wl] = await Promise.all([boone ? smOcr(smNoLines(c)) : "", found ? "" : smOcr(washed), found ? "" : smOcr(c, "11"), found ? "" : smOcr(washed, "11", "200")]);
+    halt();
+    const add = (extra, priced) => { pages[k] = text + (extra.length ? "\n[numbers read again] " + extra.join(" ") + "\n" : "") + (priced.length ? "\n[lines read again without the form's lines]\n" + priced.join("\n") + "\n" : ""); };
+    const priced = clean.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(l => /\d\.\d{5}(?!\d)/.test(l));
+    const ex1 = [...new Set([...full(wash), ...full(loose), ...full(wl), ...bare(loose), ...bare(wl), ...bare(wash).filter(x => loose.replace(/\s/g, "").includes(x))])].filter(x => !flat.includes(x));
+    add(ex1, priced); if (found) continue;
+    found = await ok(); if (found) continue;
+    say?.(`Page ${k + 1} of ${first.length}: one more look at other sizes…`);   // a boxed number one size misses, another finds
+    const loose2 = (await Promise.all([smOcr(c, "11", "200"), smOcr(c, "11", "70"), smOcr(smWash(c, 120), "11", "200")])).join("\n");
+    add([...new Set([...ex1, ...full(loose2), ...bare(loose2)])].filter(x => !flat.includes(x)), priced); found = await ok();
+  }
   return pages.join("\n\f\n");
 }
 // Boone's packing slips and pick tickets print each line's list price (5 decimals) and the discount, but no net amount:
@@ -24927,7 +24953,10 @@ async function supMailRead(row, supplierPick, opts) {
   let doc = await invoiceRows(blob, f.data.name);
   if (doc.kind === "pdf" && doc.lines.filter(l => l !== "\f" && l.trim()).length < 3) {
     let ocr = f.data.ocr;
-    if (opts?.rescan) { try { const t = await smScanAgain(blob, f.data.name, opts.say); if (t && t.replace(/\s/g, "").length > 40) ocr = t; } catch (e) { if (!ocr) throw new Error("the page couldn't be scanned here (" + e.message + ")"); } }   // "Read it again": a fresh scan, not the saved words
+    if (opts?.rescan) { try { const t = await smScanAgain(blob, f.data.name, opts.say,
+          async txt => { const lp = await db.rpc("supplier_mail_link_pos", { p_id: row.id, p_text: txt.slice(0, 100000), p_supplier: supplierPick || row.supplier || null }); return !lp.error && (lp.data || []).length > 0; },
+          opts.stopped);
+        if (t && t.replace(/\s/g, "").length > 40) ocr = t; } catch (e) { if (e.message === "stopped") throw e; if (!ocr) throw new Error("the page couldn't be scanned here (" + e.message + ")"); } }   // "Read it again": a fresh scan, not the saved words
     if (!ocr) return { status: "unread", result: { note: "This is a scanned copy. Its words are read at the next mailbox check (about 10 minutes), then it's read again by itself." } };
     const ls = ocr.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
     doc = { kind: "ocr", lines: ls, rows: ls.map(l => l.split(" ")) };
@@ -24990,6 +25019,12 @@ const SMB_BREATH = `<svg class="smb-breath" viewBox="0 0 120 120" role="img" ari
 const smTriesOf = row => Number((row?.result || {}).tries) || (row && row.status !== "new" ? 1 : 0);
 const smTried = (row, res) => { res.result = { ...(res.result || {}), tries: smTriesOf(row) + 1 }; return res; };
 const smTriesTxt = n => n > 0 ? `Tried ${n} time${n === 1 ? "" : "s"}` : "";
+// someone trying hard: teeth gritted, eyebrows down, sweating (drawn here, no picture file)
+const SMB_TRYING = `<svg class="smb-breath" viewBox="0 0 120 120" role="img" aria-label="A person trying hard"><circle cx="60" cy="62" r="42" fill="#b2f2bb" stroke="#1f9d4a" stroke-width="4"/>
+  <path d="M34 24 q26 -20 52 0" fill="none" stroke="#1b4d2b" stroke-width="7" stroke-linecap="round"/>
+  <path d="M34 44 l18 7 M86 44 l-18 7" stroke="#1b4d2b" stroke-width="5" stroke-linecap="round"/><circle cx="45" cy="58" r="5" fill="#1b4d2b"/><circle cx="75" cy="58" r="5" fill="#1b4d2b"/>
+  <rect x="40" y="74" width="40" height="15" rx="5" fill="#fff" stroke="#1b4d2b" stroke-width="4"/><path d="M50 74 v15 M60 74 v15 M70 74 v15 M40 81.5 h40" stroke="#1b4d2b" stroke-width="2.5"/>
+  <path d="M100 30 c-5 8 -5 13 0 15 c5 -2 5 -7 0 -15z M16 40 c-4 7 -4 11 0 13 c4 -2 4 -6 0 -13z M108 56 c-3 5 -3 9 0 10 c3 -1 3 -5 0 -10z" fill="#4dabf7"/></svg>`;
 async function smReadAgain(id) {
   const rows = (MAIL.data?.rows || []).filter(r => r.file && !MAIL.sentIds?.has(r.id)), row = rows.find(r => r.id === id); if (!row) return;
   const order = rows.map(r => r.id), tr = document.querySelector(`[data-sm="${id}"]`), sup = tr?.querySelector(".sm-sup")?.value || null, again = row.status !== "new";
@@ -24998,18 +25033,25 @@ async function smReadAgain(id) {
   w.innerHTML = `<div class="smb"><div class="smb-top"><div class="smb-ic">⏳</div><h3>Reading it${again ? " again" : ""}…</h3><div class="smb-file">${esc(row.file || row.subject || "")}</div><div class="smb-tries">Try number ${smTriesOf(row) + 1}</div></div>
     <div class="smb-mid"><div class="smb-clock" data-smb-clock aria-label="Time so far">⏱ 0:00</div><p data-smb-say>${again ? "If it's a scan, the page is scanned again: about half a minute a page." : "Reading the paper…"}</p><p class="smb-still" data-smb-still aria-live="polite"></p></div><div class="smb-btns"></div></div>`;
   document.body.append(w);
-  // a clock while it works; every 10 seconds it says it's still working (Carlo, Nov 9)
+  // a clock while it works, and it talks every 10 seconds (Carlo, Nov 9): 10 s still working (orange) · 20 s bigger, green, a picture, the box turns
+  // green · 30 s bigger again, purple, holding its breath, the box turns purple · 40 s "Do you want to give up for now?" with an Exit that ends it
+  let gaveUp = false;
   const t0 = Date.now(), tick = setInterval(() => { const ck = w.querySelector("[data-smb-clock]"); if (!ck || !w.isConnected) return clearInterval(tick);
     const sec = Math.floor((Date.now() - t0) / 1000); ck.textContent = `⏱ ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
-    // 10 s: still working (orange) · 20 s: bigger and green · 30 s and on: bigger again, purple, with someone holding their breath
-    if (sec && sec % 10 === 0) { const st = w.querySelector("[data-smb-still]"); if (st) { const lv = sec >= 30 ? 3 : sec >= 20 ? 2 : 1;
-        st.className = `smb-still smb-l${lv}`;
-        st.innerHTML = lv === 1 ? "I know it's taking long, but I am still working." : lv === 2 ? "Wow, this is taking long, but I am trying!"
-          : `I hope you know this is not easy. Let me try holding my breath…${SMB_BREATH}`;
-        w.querySelector("[data-smb-say]")?.classList.toggle("hidden", lv === 3);   // room for the picture
-        void st.offsetWidth; st.classList.add("smb-pop"); } } }, 1000);
+    const lv = sec >= 30 ? 3 : sec >= 20 ? 2 : sec >= 10 ? 1 : 0, st = w.querySelector("[data-smb-still]"), box = w.querySelector(".smb");
+    if (lv && st && st.dataset.lv !== String(lv)) { st.dataset.lv = lv; st.className = `smb-still smb-l${lv}`; box.classList.remove("smb-t2", "smb-t3"); if (lv >= 2) box.classList.add("smb-t" + lv);
+      st.innerHTML = lv === 1 ? "I know it's taking long, but I am still working." : lv === 2 ? `Wow, this is taking long, but I am trying!${SMB_TRYING}`
+        : `I hope you know this is not easy. Let me try holding my breath…${SMB_BREATH}`;
+      w.querySelector("[data-smb-say]")?.classList.toggle("hidden", lv >= 2);   // room for the picture
+      void st.offsetWidth; st.classList.add("smb-pop"); }
+    if (sec >= 40 && !w.querySelector("[data-smb-giveup]")) { w.querySelector(".smb-btns").innerHTML = `<div class="smb-giveq">Do you want to give up for now?</div><button type="button" class="btn" data-smb-giveup>Exit</button>`;
+      w.querySelector("[data-smb-giveup]").addEventListener("click", () => { gaveUp = true; clearInterval(tick); w.remove();
+        const ws = SM_OCR.ws || []; SM_OCR.ws = null; SM_OCR.free = []; SM_OCR.wait = []; SM_OCR.making = null; ws.forEach(x => x.terminate().catch(() => {}));   // stop the readers
+        document.querySelector(`[data-sm="${id}"] [data-sm-read]`)?.removeAttribute("disabled");
+        supMailShow(`Stopped reading ${row.file || "it"} for now. Nothing about it was changed; it's still on the list.`); }); } }, 1000);
   const say = t => { const m = w.querySelector("[data-smb-say]"); if (m) m.textContent = t; };
-  let res; try { res = await supMailRead({ ...row, supplier: sup || row.supplier }, sup, { rescan: again, say }); } catch (er) { res = { status: "error", result: { note: er.message } }; }
+  let res; try { res = await supMailRead({ ...row, supplier: sup || row.supplier }, sup, { rescan: again, say, stopped: () => gaveUp }); } catch (er) { res = { status: "error", result: { note: er.message } }; }
+  if (gaveUp) return;   // Exit was pressed: leave the paper as it was
   smTried(row, res);
   await db.rpc("supplier_mail_set", { p_id: id, p_status: res.status, p_supplier: res.supplier || sup, p_result: res.result });
   await supMailLoad(); await loadPbUpdates(); auRender(); clearInterval(tick);
