@@ -72,3 +72,4 @@
 - Credits are their own minus lines on Our statement (like theirs), matched to their credit lines; only payments are taken off invoices. Payments are taken off whole invoices only, oldest first; money left that would only part-pay an invoice is a "💳 Credit with <supplier>" box under Our statement (Carlo, Nov 9: it confused us on the lines), not taken off any line or the balance due.
 - Lines carried from their last statement that are gone from their next one were paid: if we have no payment, a green "💵 Record the payment" box (date, how, amount; note "Made by the app…") adds it with `supplier_payment_add`.
 - View Supplier Invoices (by month): click an invoice to change its 📅 date (it moves to that month) or amount (`openMonthInvoices`).
+- Once a sent document is saved into Supplier invoices from the reader it leaves the Sent lists and can't be loaded again (`loaded_at`, `supplier_mail_loaded`, `233_supplier_mail_loaded.sql`).
