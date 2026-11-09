@@ -17219,11 +17219,26 @@ async function openMonthInvoices(sup, month) {
     <div class="srp-sheet"><div class="srp-head"><div><div class="srp-co">${esc((COMPANY || {}).company_name || "Reid Heating & Cooling")}</div><div class="quiet">Invoices from</div><h2>${esc(srpName(sup))}</h2></div>
       <div class="srp-hr"><div><b>${month ? esc(mName(month)) : "No invoices"}</b></div><div class="srp-big">${money(sum("total"))}</div><div class="quiet">${L.length} invoice${L.length === 1 ? "" : "s"} and credits</div></div></div>
     <table class="srp-t"><thead><tr><th>Date</th><th>Invoice #</th><th>PO / job</th><th class="r">Before tax</th><th class="r">HST</th><th class="r">Total</th></tr></thead><tbody>
-      ${L.map(r => `<tr class="${Number(r.total) < 0 ? "srp-cr" : ""}"><td>${esc(fmtDate(r.invoice_date))}</td><td>${esc(r.number)}${r.doc_type === "credit" || Number(r.total) < 0 ? ` <span class="quiet">credit</span>` : ""}</td>
+      ${L.map((r, ri) => `<tr class="srp-row ${Number(r.total) < 0 ? "srp-cr" : ""}" data-srp-mi="${ri}" title="Click to change its date or amount" tabindex="0"><td>${esc(fmtDate(r.invoice_date))}</td><td>${esc(r.number)}${r.doc_type === "credit" || Number(r.total) < 0 ? ` <span class="quiet">credit</span>` : ""}</td>
         <td>${esc(r.po_number || r.po_text || "")}${r.po_customer ? `<div class="quiet">${esc(r.po_customer)}</div>` : ""}</td><td class="r num">${r.subtotal != null ? money(r.subtotal) : ""}</td><td class="r num">${r.hst != null ? money(r.hst) : ""}</td><td class="r num">${money(r.total)}</td></tr>`).join("")}
       <tr class="srp-totrow"><td colspan="3">Total for the month</td><td class="r num">${money(sum("subtotal"))}</td><td class="r num">${money(sum("hst"))}</td><td class="r num">${money(sum("total"))}</td></tr></tbody></table></div>
     ${copies ? `<div class="srp-copies"><p class="quiet no-print">Loading the copies…</p></div>` : ""}`);
   P.querySelector("[data-srp-month]")?.addEventListener("change", e => openMonthInvoices(sup, e.target.value));
+  // click an invoice: change its date (it moves to that month) or amount
+  P.querySelectorAll("tr[data-srp-mi]").forEach(tr => { const go = e => { if (e.target.closest("button,input,a")) return; const nx = tr.nextElementSibling;
+      P.querySelectorAll("tr.srp-fix").forEach(f => f.remove()); if (nx?.classList.contains("srp-fix")) return; const r = L[Number(tr.dataset.srpMi)]; if (!r) return;
+      tr.insertAdjacentHTML("afterend", `<tr class="srp-fix no-print"><td colspan="6"><div class="srp-fixbox"><b>${Number(r.total) < 0 ? "Credit" : "Invoice"} ${esc(r.number)}</b> <button class="link" type="button" data-fx-x>Close</button>
+        <div class="srp-fixrow"><label>📅 Date <input type="date" data-fx-date value="${esc(r.invoice_date || "")}"></label> <button class="btn" type="button" data-fx-sd>Save date</button>
+        <label>Amount (with tax) <input type="number" step="0.01" data-fx-total value="${r.total ?? ""}"></label> <button class="btn" type="button" data-fx-st>Save amount</button>
+        <button class="link" type="button" data-fx-open>Open it (scanned pages) ›</button> <span class="quiet" role="status"></span></div></div></td></tr>`);
+      const f = tr.nextElementSibling, m = f.querySelector("[role=status]");
+      f.querySelector("[data-fx-x]").addEventListener("click", () => f.remove());
+      const set = async (p, b, nm) => { b.disabled = true; const { error } = await db.rpc("supplier_invoice_set", { p_id: r.id, p }); b.disabled = false;
+        if (error) { m.textContent = "Not saved: " + rpcErr(error); return; } SINV.data = null; SRP.rowsFor = null; openMonthInvoices(sup, nm || month); };
+      f.querySelector("[data-fx-sd]").addEventListener("click", e2 => { const v = f.querySelector("[data-fx-date]").value; if (v) set({ invoice_date: v }, e2.target, v.slice(0, 7)); });
+      f.querySelector("[data-fx-st]").addEventListener("click", e2 => { const v = f.querySelector("[data-fx-total]").value; if (v !== "") set({ total: Number(v) }, e2.target); });
+      f.querySelector("[data-fx-open]").addEventListener("click", () => { closeInvoice(); SINV.sup = sup; SINV.st = 0; SINV.f = "all"; SINV.q = r.number; SINV.open = r.id; sinvSaveTab(); openSupInv(); }); };
+    tr.addEventListener("click", go); tr.addEventListener("keydown", e => { if (e.key === "Enter") go(e); }); });
   P.querySelector("[data-srp-copies]")?.addEventListener("change", e => { SRP.copies = e.target.checked; openMonthInvoices(sup, month); });
   if (copies) { const box = P.querySelector(".srp-copies"); let out = "", n = 0;
     for (const r of L) { const g = await db.rpc("supplier_invoice_get", { p_id: r.id }); const pages = g.data?.pages || [];
