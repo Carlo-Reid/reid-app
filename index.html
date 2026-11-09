@@ -4670,6 +4670,14 @@ body[data-page="customer"] .file .tn-kind { display: block; font-size: calc(12.5
 .sm-ask { display: flex; flex-direction: column; gap: 6px; } .sm-ask-b { display: flex; flex-wrap: wrap; gap: 6px; }
 .sm-guess .sm-g1 { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 2px 0; } .sm-guess .sm-g3 { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
 .sm-send { margin-top: 6px; white-space: nowrap; } .sm-sent-h { margin-top: 18px; }
+/* Read it again: a square box in the middle of the screen, with Let's do the next one / Exit (Carlo, Nov 9) */
+.smb-wrap { position: fixed; inset: 0; z-index: 2147483000; background: rgba(10, 20, 25, .5); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.smb { width: min(460px, 92vw); height: min(460px, 92vh); background: var(--panel); color: var(--ink); border: 3px solid var(--line); border-radius: 18px; box-shadow: 0 24px 60px rgba(0, 0, 0, .35); display: flex; flex-direction: column; padding: 22px 24px 20px; text-align: center; }
+.smb.smb-ok { border-color: #1f9d4a; } .smb.smb-wait { border-color: #f08c00; } .smb.smb-bad { border-color: #c92a2a; }
+.smb-ic { font-size: 44px; line-height: 1; } .smb h3 { margin: 10px 0 4px; font-size: calc(21px * var(--fs, 1)); font-weight: 800; } .smb.smb-ok h3 { color: #1f9d4a; } .smb.smb-wait h3 { color: #d9480f; } .smb.smb-bad h3 { color: #c92a2a; }
+.smb-file { font-size: 13px; color: var(--steel); overflow-wrap: anywhere; }
+.smb-mid { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; justify-content: center; gap: 4px; font-size: calc(15.5px * var(--fs, 1)); } .smb-mid p { margin: 4px 0; overflow-wrap: anywhere; }
+.smb-btns { display: flex; flex-direction: column; gap: 8px; align-items: stretch; } .smb-btns .btn { font-size: calc(17px * var(--fs, 1)); padding: 12px 14px; font-weight: 750; }
 /* Auto update supplier mail: the message about what just happened is big, bold and green, and stays in view while the list scrolls (Carlo, Nov 9) */
 #sm-box > .staff-msg:not(.err) { font-size: calc(18px * var(--fs, 1)); font-weight: 800; line-height: 1.35; color: #1f9d4a; border: 2px solid #1f9d4a; border-radius: 8px; padding: 10px 14px; margin: 8px 0;
   background: linear-gradient(rgba(31, 157, 74, .12), rgba(31, 157, 74, .12)), var(--panel); position: sticky; top: 6px; z-index: 3; }
@@ -24954,6 +24962,38 @@ async function supMailRead(row, supplierPick, opts) {
 // a paper that's done (read, and its PO attached) goes to its supplier's list by itself (Carlo, Nov 9); one put back by hand stays put
 async function supMailAutoFile() { try { const { data, error } = await db.rpc("supplier_mail_autofile"); return error ? [] : (data || []); } catch { return []; } }
 const supMailFiledMsg = went => `${went.length} paper${went.length > 1 ? "s" : ""} with a PO went to ${went.length > 1 ? "their supplier's list by themselves" : "its supplier's list by itself"}: ${went.slice(0, 4).map(x => `${x.file || "a document"} → ${sinvShort(x.supplier || "")}`).join(", ")}${went.length > 4 ? ` and ${went.length - 4} more` : ""}. They're under 📤 Sent to suppliers below.`;
+// Read it (again): a square box in the middle of the screen shows it working, then what it found, with
+// "Let's do the next one" (the next paper down the list) and Exit (Carlo, Nov 9)
+async function smReadAgain(id) {
+  const rows = (MAIL.data?.rows || []).filter(r => r.file && !MAIL.sentIds?.has(r.id)), row = rows.find(r => r.id === id); if (!row) return;
+  const order = rows.map(r => r.id), tr = document.querySelector(`[data-sm="${id}"]`), sup = tr?.querySelector(".sm-sup")?.value || null, again = row.status !== "new";
+  document.querySelector(".smb-wrap")?.remove();
+  const w = document.createElement("div"); w.className = "smb-wrap"; w.setAttribute("role", "dialog"); w.setAttribute("aria-label", "Reading a supplier paper");
+  w.innerHTML = `<div class="smb"><div class="smb-top"><div class="smb-ic">⏳</div><h3>Reading it${again ? " again" : ""}…</h3><div class="smb-file">${esc(row.file || row.subject || "")}</div></div>
+    <div class="smb-mid"><p data-smb-say>${again ? "If it's a scan, the page is scanned again: about half a minute a page." : "Reading the paper…"}</p></div><div class="smb-btns"></div></div>`;
+  document.body.append(w);
+  const say = t => { const m = w.querySelector("[data-smb-say]"); if (m) m.textContent = t; };
+  let res; try { res = await supMailRead({ ...row, supplier: sup || row.supplier }, sup, { rescan: again, say }); } catch (er) { res = { status: "error", result: { note: er.message } }; }
+  await db.rpc("supplier_mail_set", { p_id: id, p_status: res.status, p_supplier: res.supplier || sup, p_result: res.result });
+  await supMailLoad(); await loadPbUpdates(); auRender();
+  const left = (MAIL.data?.rows || []).filter(r => r.file && !MAIL.sentIds?.has(r.id)), gone = !left.some(x => x.id === id), R = res.result || {}, pos = R.pos || [], c = R.counts || {}, sn = res.supplier || sup || "its supplier";
+  const next = order.slice(order.indexOf(id) + 1).find(n => left.some(x => x.id === n)) ?? order.find(n => n !== id && left.some(x => x.id === n));
+  const price = [c.added ? `${c.added} new price${c.added > 1 ? "s" : ""} sent to Approvals` : "", c["new item waiting"] ? `${c["new item waiting"]} new item${c["new item waiting"] > 1 ? "s" : ""} sent to Approvals` : "",
+    c.same ? `${c.same} price${c.same > 1 ? "s" : ""} read: same as the price book` : "", c.older ? `${c.older} price${c.older > 1 ? "s" : ""} read: a newer paper's price is already in` : ""].filter(Boolean).join(" · ");
+  const ok = gone, bad = res.status === "error";
+  w.querySelector(".smb").classList.add(ok ? "smb-ok" : bad ? "smb-bad" : "smb-wait");
+  w.querySelector(".smb-top").innerHTML = `<div class="smb-ic">${ok ? "✅" : bad ? "⚠️" : "🟠"}</div><h3>${ok ? `Found it and sent it to ${esc(sn)}` : bad ? "It couldn't be read" : pos.length ? "Found its PO, but it still needs something" : "No PO found on it"}</h3><div class="smb-file">${esc(row.file || row.subject || "")}</div>`;
+  w.querySelector(".smb-mid").innerHTML = `${pos.length ? `<p><b>PO ${pos.map(esc).join(", ")}</b></p>` : ok ? "" : `<p>No number on the page matches a PO in the app. It stays on the list: make a PO for it, or attach one yourself.</p>`}
+    ${ok ? `<p>It's now on ${esc(sn)}'s list (📤 Sent to suppliers, and the supplier's page).</p>` : ""}${price ? `<p>${esc(price)}</p>` : ""}${R.note ? `<p class="quiet">${esc(R.note)}</p>` : ""}`;
+  w.querySelector(".smb-btns").innerHTML = `${next != null ? `<button type="button" class="btn" data-smb-next>Let's do the next one</button>` : `<span class="quiet">That was the last one on the list.</span>`}<button type="button" class="btn quiet-btn" data-smb-exit>Exit</button>`;
+  const close = () => { w.remove(); document.removeEventListener("keydown", esc1); }, esc1 = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", esc1);
+  w.querySelector("[data-smb-exit]").addEventListener("click", close);
+  w.querySelector("[data-smb-next]")?.addEventListener("click", () => { document.removeEventListener("keydown", esc1); document.querySelector(`[data-sm="${next}"]`)?.scrollIntoView({ block: "center" }); smReadAgain(next); });
+  (w.querySelector("[data-smb-next]") || w.querySelector("[data-smb-exit]")).focus();
+  supMailShow(gone ? `Read ${row.file || "it"} again: ${pos.length ? "found PO " + pos.join(", ") + ", so it" : "it's done, so it"} went to ${sn}'s list by itself (📤 Sent to suppliers below).`
+    : `Read ${row.file || "it"} again${pos.length ? ": found PO " + pos.join(", ") : again ? ": no PO number on it matches a PO in the app" : ""}.`);
+}
 async function supMailRun(force) {
   if (MAIL.busy) return; const d = await supMailLoad(); if (!d) return;
   const todo = (d.rows || []).filter(r => r.status === "new");
@@ -25057,16 +25097,7 @@ function supMailShow(msg) {
       const bin = atob(f.data.b64), b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
       const url = URL.createObjectURL(new Blob([b], { type: f.data.mime || "application/octet-stream" }));
       if (/pdf/i.test(f.data.mime || "") || /\.pdf$/i.test(f.data.name)) { if (w) w.location = url; } else { w?.close(); const a = document.createElement("a"); a.href = url; a.download = f.data.name || "invoice"; a.click(); } });
-    tr.querySelector("[data-sm-read]")?.addEventListener("click", async e => { e.target.disabled = true; const sup = tr.querySelector(".sm-sup")?.value || null;
-      const again = row.status !== "new";   // Read it again: a scan is scanned again right here (about half a minute a page), so a PO or price missed the first time can be found
-      supMailShow(`Reading ${row.file || "the email"}…${again ? " If it's a scan, the page is scanned again: about half a minute a page." : ""}`);
-      const say = t => { const m = document.querySelector("#sm-box .staff-msg:not(.err)"); if (m) m.textContent = `${row.file || "The paper"}: ${t}`; };
-      let res; try { res = await supMailRead({ ...row, supplier: sup || row.supplier }, sup, { rescan: again, say }); } catch (er) { res = { status: "error", result: { note: er.message } }; }
-      await db.rpc("supplier_mail_set", { p_id: id, p_status: res.status, p_supplier: res.supplier || sup, p_result: res.result });
-      await supMailLoad(); await loadPbUpdates(); auRender();
-      const gone = !(MAIL.data?.rows || []).some(x => x.id === id), pos = (res.result || {}).pos || [];
-      supMailShow(gone ? `Read ${row.file || "it"} again: ${pos.length ? "found PO " + pos.join(", ") + ", so it" : "it's done, so it"} went to ${res.supplier || sup || "its supplier"}'s list by itself (📤 Sent to suppliers below).`
-        : `Read ${row.file || "it"} again${pos.length ? ": found PO " + pos.join(", ") : again ? ": no PO number on it matches a PO in the app" : ""}.`); });
+    tr.querySelector("[data-sm-read]")?.addEventListener("click", e => { e.target.disabled = true; smReadAgain(id); });
     tr.querySelector("[data-sm-del]")?.addEventListener("click", async e => { const b = e.currentTarget;
       if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Delete"; return; }
       b.disabled = true; const { error } = await db.rpc("supplier_mail_delete", { p_id: id });
