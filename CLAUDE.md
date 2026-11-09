@@ -66,4 +66,4 @@
 
 ## Our statement (suppliers): invoices that miss their statement
 
-- Our statement runs from their last statement's lines plus our invoices after it. Our invoices dated in that statement's month (after the statement before it) that aren't on it are carried forward (⏳ "not on their … statement: carried here, waiting for their next one"), and checked against their next statement (✓ "now on their … one", or flagged "ask them about it"). $0 invoices on our side are flagged to fix. `openOurStatement` (`late`).
+- Our statement runs from their last statement's lines plus our invoices after it. Our invoices dated in that statement's month (after the statement before it) that aren't on it are carried forward (⏳ "not on their … statement: carried here, waiting for their next one"), and checked against their next statement (✓ "now on their … one", or flagged "ask them about it"). $0 lines on our side are packing slips loaded before the invoice (📦, "the amount comes with their invoice"). `openOurStatement` (`late`).
