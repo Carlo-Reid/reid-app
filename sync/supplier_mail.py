@@ -82,7 +82,7 @@ def ocr_pdf(data):
         return "\n\f\n".join(pages) + "\n" + OCR_MARK
 
 
-OCR_MARK = "[read v3]"   # pages read the way below (turned the right way up first; numbers on shaded bands read again)
+OCR_MARK = "[read v4]"   # pages read the way below (turned the right way up first; numbers on shaded bands read again)
 WORDS = re.compile(r"\b(invoice|order|total|qty|quantity|ship|sold|date|price|amount|customer|terms|description|phone|tax|hst|gst|unit|each|subtotal|picking|packing|account|branch)\b", re.I)
 
 
@@ -139,7 +139,11 @@ def shaded_numbers(img, have, read):
             t = read(out)
             full.append({a + "-" + b for a, b in PO_FULL.findall(t)})
             bare.append(set(PO_BARE.findall(t)))
-        new = sorted(x for x in (full[0] | full[1]) if x not in flat) + sorted(x for x in (bare[0] & bare[1]) if x not in flat)
+        # numbers typed into the boxes of a form (Daikin/Goodman's pick ticket: the Customer P.O. Number box) are skipped when the
+        # page is read as lines of text; reading it as loose words finds them
+        loose = subprocess.run(["tesseract", img, "stdout", "--psm", "11"], capture_output=True, timeout=180).stdout.decode("utf-8", "replace")
+        full.append({a + "-" + b for a, b in PO_FULL.findall(loose)})
+        new = sorted(x for x in (full[0] | full[1] | full[2]) if x not in flat) + sorted(x for x in ((bare[0] & bare[1]) | set(PO_BARE.findall(loose))) if x not in flat)
         return ("\n[shaded parts read again] " + " ".join(new) + "\n") if new else ""
     except Exception:
         return ""
