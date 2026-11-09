@@ -4658,6 +4658,8 @@ body[data-page="customer"] .file .tn-kind { display: block; font-size: calc(12.5
 .file .tech-card .miss-chip { font-size: calc(13px * var(--fs, 1)); padding: 3px 6px 3px 10px; }
 .file .tech-card .tech-status, .file .tech-card .tech-btns, .file .tech-card > .msg, .file .tech-card > .link { margin-left: 14px; margin-right: 14px; } .file .tech-card .tech-btns { margin-bottom: 12px; } .file .tech-card > .tech-status:last-of-type { margin-bottom: 12px; }
 /* equipment as app squares; a square opens its details */
+.srp-late { font-size: 12px; font-weight: 700; color: #8a5300; } .srp-late.ok { color: #1f6b47; } .srp-late.bad { color: #b02a37; }
+@media print { .srp-late { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
 .sm-guess { margin-top: 6px; padding: 6px 8px; border: 1px dashed #9fbfe0; border-radius: 6px; background: rgba(47,111,179,.06); }
 .sm-guess .sm-g1 { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 2px 0; } .sm-guess .sm-g3 { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
 .sm-send { margin-top: 6px; white-space: nowrap; } .sm-sent-h { margin-top: 18px; }
@@ -17069,7 +17071,12 @@ async function openOurStatement(sup, asOf) {
     const pick = SRP.from && before.find(x => x.date === SRP.from) || before[before.length - 1];   // to start: their statement before this one (last month's)
     if (pick) { const b0 = await db.rpc("supplier_our_statement", { p_supplier: sup, p_as_of: pick.date }); const F = b0.data?.their;
       if (F && F.date === pick.date) { base = { date: F.date, total: Number(F.total), list: before };
-        D.invoices = [...(F.lines || []).filter(l => l.code !== "P").map(l => ({ id: null, number: l.reference, date: l.date, total: Number(l.amount), type: Number(l.amount) < 0 ? "credit" : "invoice", po: "", fromSt: true })),
+        // our invoices from that statement's month that didn't make it onto it: carried to this one, to be checked against their next statement
+        const nz = t => String(t || "").replace(/\W/g, "").toUpperCase(), onF = new Set((F.lines || []).map(l => nz(l.reference))), pi = before.indexOf(pick);
+        const lo = pi > 0 ? before[pi - 1].date : ymd(new Date(Date.parse(F.date) - 45 * 864e5));
+        const late = (D.invoices || []).filter(x => String(x.date || "") <= F.date && String(x.date || "") > lo && !onF.has(nz(x.number))).map(x => ({ ...x, late: F.date }));
+        base.late = late.length;
+        D.invoices = [...late, ...(F.lines || []).filter(l => l.code !== "P").map(l => ({ id: null, number: l.reference, date: l.date, total: Number(l.amount), type: Number(l.amount) < 0 ? "credit" : "invoice", po: "", fromSt: true })),
           ...(F.lines || []).filter(l => l.code === "P").map(l => ({ id: null, number: l.reference, date: l.date, total: Number(l.amount), type: "credit", po: "", fromSt: true })),
           ...(D.invoices || []).filter(x => String(x.date || "") > F.date)];
         D.payments = (D.payments || []).filter(x => String(x.date || "") > F.date); } } }
@@ -17078,9 +17085,10 @@ async function openOurStatement(sup, asOf) {
   const norm = t => String(t || "").replace(/\W/g, "").toUpperCase(), ours = new Map(O.pos.map(x => [norm(x.number), x])), theirs = new Map((T?.lines || []).filter(l => l.code !== "P").map(l => [norm(l.reference), l]));
   const cmp = [];
   if (T) { theirs.forEach((l, k) => { const o = ours.get(k), a = Number(l.amount);
-      cmp.push(!o ? { ref: l.reference, date: l.date, their: a, our: null, why: (D.invoices || []).some(x => norm(x.number) === k) ? "Not owing in our records (credit, or not in our records by that date)" : "We don't have this invoice", bad: true }
+      const z = (D.invoices || []).find(x => norm(x.number) === k && Number(x.total) === 0 && !x.fromSt);
+      cmp.push(!o && z ? { ref: l.reference, date: l.date, their: a, our: 0, why: "Our copy shows $0: fix the amount on Supplier invoices", bad: true } : !o ? { ref: l.reference, date: l.date, their: a, our: null, why: (D.invoices || []).some(x => norm(x.number) === k) ? "Not owing in our records (credit, or not in our records by that date)" : "We don't have this invoice", bad: true }
         : Math.abs(o.due - a) > 0.004 ? { ref: l.reference, date: l.date, their: a, our: o.due, why: o.due < 0.005 ? "We show it paid" : "Different amount", bad: true } : { ref: l.reference, date: l.date, their: a, our: o.due, why: "Same", bad: false }); });
-    O.open.forEach(x => { if (!theirs.has(norm(x.number))) cmp.push({ ref: x.number, date: x.date, their: null, our: x.due, why: "Not on their statement", bad: true }); }); }
+    O.open.forEach(x => { if (!theirs.has(norm(x.number))) cmp.push({ ref: x.number, date: x.date, their: null, our: x.due, why: x.late ? (T.date > x.late ? `Missed their ${fmtDate(x.late)} statement and isn't on this one either: ask ${D.supplier ? sinvShort(D.supplier) : "them"} about it` : `Not on their statement yet (made after it was printed): it goes on our next statement and is checked against their next one`) : "Not on their statement", bad: true }); }); }
   const bad = cmp.filter(c => c.bad), theirTot = T ? Number(T.total) : null, badRef = new Set(bad.map(c => norm(c.ref)));
   const rowsShow = all ? [...O.pos, ...O.credits].sort((a, b) => String(a.date).localeCompare(String(b.date))) : O.open;
   // the invoices' before tax, HST, PO and job (as on View Supplier Invoices)
@@ -17092,13 +17100,13 @@ async function openOurStatement(sup, asOf) {
       <div class="srp-hr"><div>As of <b>${esc(fmtDate(date))}</b></div><div class="srp-big">${money(O.due)}</div><div class="quiet">we owe them, by our records</div></div></div>
     <table class="srp-t"><thead><tr><th>Date</th><th>Invoice #</th><th>PO / job</th><th class="r">Before tax</th><th class="r">HST</th><th class="r">Total</th><th class="r">Paid / credited</th><th class="r">Balance due</th></tr></thead><tbody>
       ${rowsShow.length ? rowsShow.map(x => { const r = RW(x.id), cr = x.total < 0; return `<tr class="${badRef.has(norm(x.number)) ? "srp-bad" : cr ? "srp-cr" : x.due > 0.004 ? "" : "srp-paid"}"><td>${esc(x.date ? fmtDate(x.date) : "")}</td>
-        <td>${esc(x.number)}${cr ? ` <span class="quiet">credit</span>` : ""}${x.fromSt ? ` <span class="quiet">· from their statement</span>` : ""}</td><td>${esc(r.po_number || x.po || r.po_text || "")}${r.po_customer ? `<div class="quiet">${esc(r.po_customer)}</div>` : ""}</td>
+        <td>${esc(x.number)}${cr ? ` <span class="quiet">credit</span>` : ""}${x.fromSt ? ` <span class="quiet">· from their statement</span>` : ""}${x.late ? (T && T.date > x.late && theirs.has(norm(x.number)) ? `<div class="srp-late ok">✓ missed their ${esc(fmtDate(x.late))} statement, now on their ${esc(fmtDate(T.date))} one</div>` : `<div class="srp-late">⏳ not on their ${esc(fmtDate(x.late))} statement: carried here, waiting for their next one</div>`) : ""}${Number(x.total) === 0 && !x.fromSt ? `<div class="srp-late bad">⚠ $0 on our copy: open it on Supplier invoices and fix the amount</div>` : ""}</td><td>${esc(r.po_number || x.po || r.po_text || "")}${r.po_customer ? `<div class="quiet">${esc(r.po_customer)}</div>` : ""}</td>
         <td class="r num">${r.subtotal != null ? money(r.subtotal) : ""}</td><td class="r num">${r.hst != null ? money(r.hst) : ""}</td><td class="r num">${money(x.total)}</td>
         <td class="r num">${cr ? "" : money(x.applied)}</td><td class="r num">${cr ? "" : money(x.due)}</td></tr>`; }).join("") : `<tr><td colspan="8" class="quiet">Nothing owing by our records.</td></tr>`}
       ${O.unapplied > 0.004 ? `<tr class="srp-cr"><td></td><td colspan="6">Payments and credits not used up yet</td><td class="r num">−${money(O.unapplied)}</td></tr>` : ""}
       <tr class="srp-totrow"><td colspan="3">${all ? "Total" : "Total owing"}</td><td class="r num">${money(sumOf(rowsShow, x => RW(x.id).subtotal))}</td><td class="r num">${money(sumOf(rowsShow, x => RW(x.id).hst))}</td><td class="r num">${money(sumOf(rowsShow, x => x.total))}</td><td></td><td class="r num">${money(O.due)}</td></tr></tbody></table>
     <div class="srp-age">${[["current", "Current"], ["d31_60", "31–60 days"], ["d61_90", "61–90 days"], ["d91_120", "91–120 days"], ["over120", "Over 120 days"]].map(([k, t]) => `<div><span>${t}</span><b>${money(O.ag[k])}</b></div>`).join("")}<div class="srp-agt"><span>Balance due</span><b>${money(O.due)}</b></div></div>
-    ${base ? `<p class="quiet srp-note">Starts from what was owing on their ${esc(fmtDate(base.date))} statement (${money(base.total)}, its lines marked “from their statement”), then our invoices and credits after it, less our payments after it.</p>` : ""}
+    ${base ? `<p class="quiet srp-note">Starts from what was owing on their ${esc(fmtDate(base.date))} statement (${money(base.total)}, its lines marked “from their statement”), then our invoices and credits after it, less our payments after it.${base.late ? ` Also ${base.late} invoice${base.late === 1 ? "" : "s"} of ours from before it that ${base.late === 1 ? "wasn't" : "weren't"} on it (⏳): carried here to be checked against their next statement.` : ""}</p>` : ""}
     <p class="quiet srp-note">Our invoices and credits to ${esc(fmtDate(date))}: ${money(O.pos.reduce((t, x) => t + x.total, 0))} invoiced, ${money(O.creditSum)} credited, ${money(O.paid)} paid (${O.pays.length} payment${O.pays.length === 1 ? "" : "s"}). Payments and credits are taken off the oldest invoices first.</p>
     ${T ? `<div class="srp-cmp"><h3>Matched against their statement of ${esc(fmtDate(T.date))}</h3>
       <div class="srp-cmptot"><span>Theirs <b>${money(theirTot)}</b></span><span>Ours <b>${money(O.due)}</b></span><span class="${Math.abs(theirTot - O.due) < 0.005 ? "st-ok" : "st-bad"}">${Math.abs(theirTot - O.due) < 0.005 ? "✓ The same" : `Off by ${money(Math.abs(theirTot - O.due))}`}</span>

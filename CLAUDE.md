@@ -63,3 +63,7 @@
 
 - Each document has "📤 Send to <supplier> list": it leaves the main supplier mail list and goes to "📤 Sent to suppliers" (under it, with Put back) and to the supplier's page tile "📨 Sent from Auto update" (`supplier_mail_send`, `supplier_mail_sent`, `supplier_doc_file`, `sync/extra/229_supplier_mail_sent.sql`).
 - A document with no PO attached shows its likely PO (`supplier_mail_po_guess`): a printed PO number, or one digit off because scans misread (a highlighter made 106607062 read as 406607062), this supplier first, with Attach. Also "Attach a PO by number" and "+ Make a PO for it" (job number → `get_po_number`, blank → shop stock `new_stock_po`), then attached with `supplier_mail_set_po`.
+
+## Our statement (suppliers): invoices that miss their statement
+
+- Our statement runs from their last statement's lines plus our invoices after it. Our invoices dated in that statement's month (after the statement before it) that aren't on it are carried forward (⏳ "not on their … statement: carried here, waiting for their next one"), and checked against their next statement (✓ "now on their … one", or flagged "ask them about it"). $0 invoices on our side are flagged to fix. `openOurStatement` (`late`).
