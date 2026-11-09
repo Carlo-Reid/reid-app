@@ -410,6 +410,9 @@ def save(cur, out_dir, manifest):
             cur.execute(f"INSERT INTO {table} ({collist}) OVERRIDING SYSTEM VALUE SELECT {sel} FROM {tmp} "
                         f"ON CONFLICT (id) DO UPDATE SET {upd}")
         elif how == "st_id":
+            if table == "visit_assignments":   # the same tech on the same call under a new ServiceTitan id (taken off and put back on): the old row goes
+                cur.execute(f"DELETE FROM {tmp} a USING {tmp} b WHERE a.visit_id = b.visit_id AND a.employee_id = b.employee_id AND a.st_id < b.st_id")
+                cur.execute(f"DELETE FROM visit_assignments va USING {tmp} t WHERE va.visit_id = t.visit_id AND va.employee_id = t.employee_id AND va.st_id IS DISTINCT FROM t.st_id")
             cur.execute(f"INSERT INTO {table} ({collist}) SELECT {sel} FROM {tmp} ON CONFLICT (st_id) DO UPDATE SET {upd}")
         elif how == "new":
             cur.execute(f"INSERT INTO {table} ({collist}) OVERRIDING SYSTEM VALUE SELECT {sel} FROM {tmp} ON CONFLICT DO NOTHING")
