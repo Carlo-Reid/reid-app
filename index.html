@@ -24800,15 +24800,57 @@ async function openSupDocs(sup) {
   SMS_ROWS = data || []; box.innerHTML = smSentTable(data || [], !sup); smSentWire(box);
 }
 document.addEventListener("click", e => { const b = e.target.closest?.("[data-sinv-maildocs]"); if (!b) return; e.preventDefault(); openSupDocs(b.dataset.sinvMaildocs ? Number(b.dataset.sinvMaildocs) : null); });
-async function supMailRead(row, supplierPick) {
+// ---------- "Read it again" on a scan: the page is scanned again here in the browser (Carlo, Nov 9) ----------
+// Same steps as the mailbox reader (sync/supplier_mail.py): turn the page the right way up, read it, then read it again with
+// grey shading washed out and once more as loose words, and add the PO-like numbers the first reading missed.
+const SM_WORDS = /\b(invoice|order|total|qty|quantity|ship|sold|date|price|amount|customer|terms|description|phone|tax|hst|gst|unit|each|subtotal|picking|packing|account|branch)\b/gi;
+const smOcrScore = t => (t.match(SM_WORDS) || []).length * 5 + (t.match(/[A-Za-z]{4,}/g) || []).length - (t.match(/[^\w\s.,:;/$#()&%'"-]/g) || []).length;
+function smTurn(c, deg) { const o = document.createElement("canvas"), q = deg % 180 !== 0; o.width = q ? c.height : c.width; o.height = q ? c.width : c.height;
+  const g = o.getContext("2d"); g.translate(o.width / 2, o.height / 2); g.rotate(deg * Math.PI / 180); g.drawImage(c, -c.width / 2, -c.height / 2); return o; }
+function smWash(c, cut) {   // blur a little (so the dots of a grey band melt together), then pure black and white
+  const w = c.width, h = c.height, o = document.createElement("canvas"); o.width = w; o.height = h; const g = o.getContext("2d"); g.drawImage(c, 0, 0);
+  const im = g.getImageData(0, 0, w, h), d = im.data; let a = new Float32Array(w * h), b = new Float32Array(w * h);
+  for (let i = 0, p = 0; i < a.length; i++, p += 4) a[i] = d[p] * .299 + d[p + 1] * .587 + d[p + 2] * .114;
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y = 0; y < h; y++) for (let x = 0, i = y * w; x < w; x++, i++) b[i] = (a[x > 0 ? i - 1 : i] + a[i] + a[x < w - 1 ? i + 1 : i]) / 3;
+    for (let y = 0; y < h; y++) for (let x = 0, i = y * w; x < w; x++, i++) a[i] = (b[y > 0 ? i - w : i] + b[i] + b[y < h - 1 ? i + w : i]) / 3; }
+  for (let i = 0, p = 0; i < a.length; i++, p += 4) { const v = a[i] > cut ? 255 : 0; d[p] = d[p + 1] = d[p + 2] = v; d[p + 3] = 255; }
+  g.putImageData(im, 0, 0); return o; }
+async function smScanAgain(blob, name, say) {
+  await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"); await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const cv = [];
+  if (/\.(png|jpe?g)$/i.test(name || "") || /^image\//.test(blob.type || "")) { const img = await createImageBitmap(blob), c = document.createElement("canvas"); c.width = img.width; c.height = img.height; c.getContext("2d").drawImage(img, 0, 0); cv.push(c); }
+  else { const pdf = await window.pdfjsLib.getDocument({ data: await blob.arrayBuffer() }).promise;
+    for (let n = 1; n <= Math.min(pdf.numPages, 8); n++) { say?.(`Opening page ${n} of ${Math.min(pdf.numPages, 8)}…`); const pg = await pdf.getPage(n), vp = pg.getViewport({ scale: 3 }), c = document.createElement("canvas"); c.width = vp.width; c.height = vp.height;
+      const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: g, viewport: vp }).promise; cv.push(c); } }
+  const worker = await window.Tesseract.createWorker("eng"), psm = m => worker.setParameters({ tessedit_pageseg_mode: m }).catch(() => {}), read = async c => (await worker.recognize(c)).data.text || "";
+  const full = t => [...t.matchAll(/(?<![\d-])(\d{6,12})\s?-\s?(\d{3})(?!\d)/g)].map(m => m[1] + "-" + m[2]), bare = t => t.match(/(?<![\d-])\d{7,12}(?![\d-])/g) || [];
+  const pages = [];
+  try {
+    for (let k = 0; k < cv.length; k++) {
+      say?.(`Scanning page ${k + 1} of ${cv.length} again…`); await psm("6");
+      let c = cv[k], text = await read(c), best = smOcrScore(text);
+      if (best < 60) for (const deg of [90, 270, 180]) { const c2 = smTurn(cv[k], deg), t2 = await read(c2), s2 = smOcrScore(t2); if (s2 > best) { c = c2; text = t2; best = s2; } if (best >= 60) break; }   // sideways or upside down
+      say?.(`Page ${k + 1} of ${cv.length}: looking for numbers on shaded bands and in boxes…`);
+      const flat = text.replace(/\s/g, ""), wash = await read(smWash(c, 150)); await psm("11"); const loose = await read(c);
+      const extra = [...new Set([...full(wash), ...full(loose), ...bare(loose), ...bare(wash).filter(x => loose.replace(/\s/g, "").includes(x))])].filter(x => !flat.includes(x));
+      pages.push(text + (extra.length ? "\n[numbers read again] " + extra.join(" ") + "\n" : ""));
+    }
+  } finally { await worker.terminate().catch(() => {}); }
+  return pages.join("\n\f\n");
+}
+async function supMailRead(row, supplierPick, opts) {
   const f = await db.rpc("supplier_mail_file", { p_id: row.id });
   if (f.error || !f.data) throw new Error(f.error ? rpcErr(f.error) : "the file is missing");
   const bin = atob(f.data.b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const blob = new Blob([bytes], { type: f.data.mime || "application/octet-stream" }); blob.name = f.data.name;
   let doc = await invoiceRows(blob, f.data.name);
   if (doc.kind === "pdf" && doc.lines.filter(l => l !== "\f" && l.trim()).length < 3) {
-    if (!f.data.ocr) return { status: "unread", result: { note: "This is a scanned copy. Its words are read at the next mailbox check (about 10 minutes), then it's read again by itself." } };
-    const ls = f.data.ocr.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+    let ocr = f.data.ocr;
+    if (opts?.rescan) { try { const t = await smScanAgain(blob, f.data.name, opts.say); if (t && t.replace(/\s/g, "").length > 40) ocr = t; } catch (e) { if (!ocr) throw new Error("the page couldn't be scanned here (" + e.message + ")"); } }   // "Read it again": a fresh scan, not the saved words
+    if (!ocr) return { status: "unread", result: { note: "This is a scanned copy. Its words are read at the next mailbox check (about 10 minutes), then it's read again by itself." } };
+    const ls = ocr.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
     doc = { kind: "ocr", lines: ls, rows: ls.map(l => l.split(" ")) };
   }
   let sup = supplierPick || row.supplier;
@@ -24948,10 +24990,15 @@ function supMailShow(msg) {
       const url = URL.createObjectURL(new Blob([b], { type: f.data.mime || "application/octet-stream" }));
       if (/pdf/i.test(f.data.mime || "") || /\.pdf$/i.test(f.data.name)) { if (w) w.location = url; } else { w?.close(); const a = document.createElement("a"); a.href = url; a.download = f.data.name || "invoice"; a.click(); } });
     tr.querySelector("[data-sm-read]")?.addEventListener("click", async e => { e.target.disabled = true; const sup = tr.querySelector(".sm-sup")?.value || null;
-      supMailShow(`Reading ${row.file || "the email"}…`);
-      let res; try { res = await supMailRead({ ...row, supplier: sup || row.supplier }, sup); } catch (er) { res = { status: "error", result: { note: er.message } }; }
+      const again = row.status !== "new";   // Read it again: a scan is scanned again right here (about 15 seconds a page), so a PO or price missed the first time can be found
+      supMailShow(`Reading ${row.file || "the email"}…${again ? " If it's a scan, the page is scanned again: about 15 seconds a page." : ""}`);
+      const say = t => { const m = document.querySelector("#sm-box .staff-msg:not(.err)"); if (m) m.textContent = `${row.file || "The paper"}: ${t}`; };
+      let res; try { res = await supMailRead({ ...row, supplier: sup || row.supplier }, sup, { rescan: again, say }); } catch (er) { res = { status: "error", result: { note: er.message } }; }
       await db.rpc("supplier_mail_set", { p_id: id, p_status: res.status, p_supplier: res.supplier || sup, p_result: res.result });
-      await supMailLoad(); await loadPbUpdates(); auRender(); });
+      await supMailLoad(); await loadPbUpdates(); auRender();
+      const gone = !(MAIL.data?.rows || []).some(x => x.id === id), pos = (res.result || {}).pos || [];
+      supMailShow(gone ? `Read ${row.file || "it"} again: ${pos.length ? "found PO " + pos.join(", ") + ", so it" : "it's done, so it"} went to ${res.supplier || sup || "its supplier"}'s list by itself (📤 Sent to suppliers below).`
+        : `Read ${row.file || "it"} again${pos.length ? ": found PO " + pos.join(", ") : again ? ": no PO number on it matches a PO in the app" : ""}.`); });
     tr.querySelector("[data-sm-del]")?.addEventListener("click", async e => { const b = e.currentTarget;
       if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? Delete"; return; }
       b.disabled = true; const { error } = await db.rpc("supplier_mail_delete", { p_id: id });
