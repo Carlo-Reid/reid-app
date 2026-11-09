@@ -82,7 +82,7 @@ def ocr_pdf(data):
         return "\n\f\n".join(pages) + "\n" + OCR_MARK
 
 
-OCR_MARK = "[read v2]"   # pages read the way below (turned the right way up first)
+OCR_MARK = "[read v3]"   # pages read the way below (turned the right way up first; numbers on shaded bands read again)
 WORDS = re.compile(r"\b(invoice|order|total|qty|quantity|ship|sold|date|price|amount|customer|terms|description|phone|tax|hst|gst|unit|each|subtotal|picking|packing|account|branch)\b", re.I)
 
 
@@ -97,12 +97,12 @@ def ocr_page(img):
     read = lambda f: subprocess.run(["tesseract", f, "stdout", "--psm", "6"], capture_output=True, timeout=180).stdout.decode("utf-8", "replace")
     first = read(img)
     if ocr_score(first) >= 60:
-        return first
+        return first + shaded_numbers(img, first, read)
     try:
         from PIL import Image
     except ImportError:
         return first
-    best, best_score = first, ocr_score(first)
+    best, best_score, best_img = first, ocr_score(first), img
     # tesseract can say which way is up; otherwise try each turn
     turns = [90, 180, 270]
     osd = subprocess.run(["tesseract", img, "stdout", "--psm", "0"], capture_output=True, timeout=120).stdout.decode("utf-8", "replace")
@@ -114,10 +114,35 @@ def ocr_page(img):
         Image.open(img).rotate(-deg, expand=True).save(out)
         t = read(out)
         if ocr_score(t) > best_score:
-            best, best_score = t, ocr_score(t)
+            best, best_score, best_img = t, ocr_score(t), out
         if best_score >= 60:
             break
-    return best
+    return best + shaded_numbers(best_img, best, read)
+
+
+PO_FULL = re.compile(r"(?<![\d-])(\d{6,12})\s?-\s?(\d{3})(?!\d)")
+PO_BARE = re.compile(r"(?<![\d-])\d{7,12}(?![\d-])")
+
+
+def shaded_numbers(img, have, read):
+    """PO numbers printed on a grey shaded band (Boone's pick ticket prints the Customer PO# on one) come out as junk or
+    not at all. Read the page again with the shading washed out (blurred, then pure black and white) and add the PO-like
+    numbers the first reading missed as one extra line. The app only ties a number to a PO that really exists."""
+    try:
+        from PIL import Image, ImageFilter
+        soft = Image.open(img).convert("L").filter(ImageFilter.GaussianBlur(1.5))
+        seen = set(re.sub(r"\s", "", have)); flat = re.sub(r"\s", "", have)
+        full, bare = [], []
+        for n, cut in enumerate((120, 150)):
+            out = img[:-4] + f"_bw{cut}.png"
+            soft.point(lambda px, cut=cut: 255 if px > cut else 0).save(out)
+            t = read(out)
+            full.append({a + "-" + b for a, b in PO_FULL.findall(t)})
+            bare.append(set(PO_BARE.findall(t)))
+        new = sorted(x for x in (full[0] | full[1]) if x not in flat) + sorted(x for x in (bare[0] & bare[1]) if x not in flat)
+        return ("\n[shaded parts read again] " + " ".join(new) + "\n") if new else ""
+    except Exception:
+        return ""
 
 
 def read_scans(cur):
@@ -142,6 +167,33 @@ def read_scans(cur):
             n += 1
         else:
             cur.execute("UPDATE supplier_mail SET ocr_text = '' WHERE id = %s", (mid,))
+    return n
+
+
+def reread_shaded(cur):
+    """Scans read before shaded bands were read again, that still have no PO tied to them: read them again (a few each
+    run). Only the words change; the app's own reading of the paper (prices, status) is left as it is. The database ties
+    the PO as soon as the words are saved."""
+    cur.execute("SELECT to_regclass('public.supplier_mail_pos') IS NOT NULL AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'supplier_mail' AND column_name = 'sent_at')")
+    if not cur.fetchone()[0]:
+        return 0
+    cur.execute("""SELECT id, data FROM supplier_mail m
+                   WHERE coalesce(ocr_text, '') <> '' AND position(%s IN ocr_text) = 0 AND data IS NOT NULL
+                     AND sent_at IS NULL AND status IN ('imported', 'nothing', 'unread', 'needs_supplier')
+                     AND NOT EXISTS (SELECT 1 FROM supplier_mail_pos x WHERE x.mail_id = m.id)
+                     AND coalesce(received_at, created_at) > now() - interval '60 days'
+                   ORDER BY id DESC LIMIT 6""", (OCR_MARK,))
+    n = 0
+    for mid, data in cur.fetchall():
+        text = ocr_pdf(bytes(data))
+        if not text:
+            continue
+        cur.execute("UPDATE supplier_mail SET ocr_text = %s WHERE id = %s", (text[:200000], mid))
+        cur.execute("""UPDATE supplier_mail m SET result = jsonb_set(coalesce(m.result, '{}'::jsonb), '{pos}', q.pos)
+                       FROM (SELECT to_jsonb(array_agg(p.po_number ORDER BY p.po_number)) AS pos
+                               FROM supplier_mail_pos x JOIN purchase_orders p ON p.id = x.purchase_order_id WHERE x.mail_id = %s) q
+                       WHERE m.id = %s AND q.pos IS NOT NULL""", (mid, mid))
+        n += cur.rowcount
     return n
 
 
@@ -245,6 +297,12 @@ def main():
         scans = read_scans(cur) if cur.fetchone()[0] else 0   # needs setup file 93
         if scans:
             say(f"Read the words on {scans} scanned invoice{'s' if scans != 1 else ''}.")
+        try:
+            tied = reread_shaded(cur)
+            if tied:
+                say(f"Read shaded PO numbers again: {tied} more scan{'s' if tied != 1 else ''} tied to a PO.")
+        except Exception as e:
+            say(f"Couldn't read the shaded PO numbers again: {str(e)[:150]}")
         try:   # supplier invoices loaded since last time: attach them to the customer invoices on their PO's job
             cur.execute("SELECT to_regprocedure('public._sinv_autolink(bigint)') IS NOT NULL")
             if cur.fetchone()[0]:
