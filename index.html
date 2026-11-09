@@ -4667,6 +4667,7 @@ body[data-page="customer"] .file .tn-kind { display: block; font-size: calc(12.5
 .srp-late { font-size: 12px; font-weight: 700; color: #8a5300; } .srp-late.ok { color: #1f6b47; } .srp-late.bad { color: #b02a37; }
 @media print { .srp-late { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
 .sm-guess { margin-top: 6px; padding: 6px 8px; border: 1px dashed #9fbfe0; border-radius: 6px; background: rgba(47,111,179,.06); }
+.sm-ask { display: flex; flex-direction: column; gap: 6px; } .sm-ask-b { display: flex; flex-wrap: wrap; gap: 6px; }
 .sm-guess .sm-g1 { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 2px 0; } .sm-guess .sm-g3 { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
 .sm-send { margin-top: 6px; white-space: nowrap; } .sm-sent-h { margin-top: 18px; }
 .file .eq-apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; align-items: stretch; margin: 6px 0 12px; }
@@ -24830,17 +24831,21 @@ async function supMailRead(row, supplierPick) {
     result: { counts: totals, refs, unread: unread.slice(0, 30), unknown, ref: refUsed, date: dateUsed, pos,
       note: any ? "" : unknown.length ? `${unknown.length} line${unknown.length > 1 ? "s" : ""} with a part number this app doesn't know yet: match ${unknown.length > 1 ? "each" : "it"} to a price book item once (or add it as a new item), and next time it's automatic.` : "No lines with a part number we know were found" } };
 }
+// a paper that's done (read, and its PO attached) goes to its supplier's list by itself (Carlo, Nov 9); one put back by hand stays put
+async function supMailAutoFile() { try { const { data, error } = await db.rpc("supplier_mail_autofile"); return error ? [] : (data || []); } catch { return []; } }
+const supMailFiledMsg = went => `${went.length} paper${went.length > 1 ? "s" : ""} with a PO went to ${went.length > 1 ? "their supplier's list by themselves" : "its supplier's list by itself"}: ${went.slice(0, 4).map(x => `${x.file || "a document"} → ${sinvShort(x.supplier || "")}`).join(", ")}${went.length > 4 ? ` and ${went.length - 4} more` : ""}. They're under 📤 Sent to suppliers below.`;
 async function supMailRun(force) {
   if (MAIL.busy) return; const d = await supMailLoad(); if (!d) return;
   const todo = (d.rows || []).filter(r => r.status === "new");
-  if (!todo.length) { if (force) supMailShow(); return; }
+  if (!todo.length) { const went = await supMailAutoFile(); if (went.length) { await supMailLoad(); supMailShow(supMailFiledMsg(went)); } else if (force) supMailShow(); return; }
   MAIL.busy = true; supMailShow(`Reading ${todo.length} supplier email${todo.length > 1 ? "s" : ""}…`);
   for (const r of todo) {
     let res; try { res = await supMailRead(r); } catch (e) { res = { status: "error", result: { note: e.message } }; }
     await db.rpc("supplier_mail_set", { p_id: r.id, p_status: res.status, p_supplier: res.supplier || null, p_result: res.result });
   }
+  const went = await supMailAutoFile();
   MAIL.busy = false; await supMailLoad(); await loadPbUpdates();
-  auRender();
+  auRender(); if (went.length) supMailShow(supMailFiledMsg(went));
 }
 const MAIL_ST = { new: ["waiting", ""], imported: ["sent to approvals", "ok"], nothing: ["no changes", ""], unread: ["couldn't read", "warn"], needs_supplier: ["pick the supplier", "warn"], ignored: ["ignored", ""], error: ["problem", "warn"], no_file: ["no file attached", ""] };
 function supMailHtml(msg) {
@@ -24881,26 +24886,36 @@ function supMailShow(msg) {
     if (gb) (async () => { const { data, error } = await db.rpc("supplier_mail_po_guess", { p_id: id, p_text: null }); if (!gb.isConnected) return;
       const G = error ? [] : (data || []), sup = () => tr.querySelector(".sm-sup")?.value || row.supplier;
       gb.innerHTML = `${G.length ? G.map(g => `<div class="sm-g1">${g.exact ? "Its PO" : "Looks like"} <b>PO ${esc(g.po_number)}</b>${g.exact ? "" : ` <span class="quiet">(the scan read ${esc(g.read_as)})</span>`} · ${esc(sinvShort(g.supplier || ""))}${g.job ? ` · job ${esc(g.job)}` : ""}${g.customer ? ` · ${esc(g.customer)}` : ""}${g.made ? ` <span class="quiet">made ${esc(fmtDate(g.made))}</span>` : ""}
-          <button class="btn sm-gbtn" type="button" data-sm-att="${esc(g.po_number)}">Attach</button></div>`).join("") : `<div class="quiet">No PO found for it in the app.</div>`}
-        <div class="sm-g2"><button class="link" type="button" data-sm-byhand>Attach a PO by number</button> · <button class="link" type="button" data-sm-mkpo>+ Make a PO for it</button></div>
+          <button class="btn sm-gbtn" type="button" data-sm-att="${esc(g.po_number)}">Attach</button></div>`).join("") + `<div class="sm-g2"><button class="link" type="button" data-sm-byhand>Attach a PO by number</button> · <button class="link" type="button" data-sm-mkpo>+ Make a PO for it</button></div>`
+        : `<div class="sm-ask"><div><b>❓ No PO found for this one.</b> <span data-sm-askq>Do you want me to make one?</span></div>
+          <div class="sm-ask-b"><button class="btn sm-gbtn" type="button" data-sm-mkpo>Yes, make the PO</button> <button class="btn quiet-btn sm-gbtn" type="button" data-sm-byhand>No, I'll attach it myself</button></div></div>`}
         <div class="sm-g3 hidden" data-sm-hand><input placeholder="PO number" aria-label="PO number" style="width:150px"> <button class="btn" type="button">Attach</button></div>
         <div class="sm-g3 hidden" data-sm-mk><input data-mk-job placeholder="Job number (blank = shop stock)" aria-label="Job number" style="width:210px"> <input data-mk-what placeholder="What for" aria-label="What for" style="width:200px" value="${esc((row.file || "").replace(/\.[a-z]+$/i, ""))}"> <button class="btn" type="button">Make the PO and attach it</button></div>`;
       const attach = async (no, b) => { if (b) b.disabled = true; const { data: pos, error: e2 } = await db.rpc("supplier_mail_set_po", { p_id: id, p_po_number: no, p_remove: false });
         if (e2) { if (b) b.disabled = false; return alertMsg("Not attached: " + rpcErr(e2)); }
-        await db.rpc("supplier_mail_set", { p_id: id, p_status: row.status, p_supplier: sup() || null, p_result: { ...(row.result || {}), pos } }); await supMailLoad(); supMailShow(`Attached to PO ${no}.`); };
+        const sName = sup() || null; await db.rpc("supplier_mail_set", { p_id: id, p_status: row.status, p_supplier: sName, p_result: { ...(row.result || {}), pos } });
+        const went = (await supMailAutoFile()).some(x => x.id === id);   // read + PO attached = done: it files itself under its supplier
+        await supMailLoad(); supMailShow(`Attached to PO ${no}.${went ? ` It's done, so it went to ${sName || "its supplier"}'s list by itself (📤 Sent to suppliers below, and on the supplier's page).` : ""}`); };
       gb.querySelectorAll("[data-sm-att]").forEach(b => b.addEventListener("click", () => attach(b.dataset.smAtt, b)));
       const hand = gb.querySelector("[data-sm-hand]"), mk = gb.querySelector("[data-sm-mk]");
       gb.querySelector("[data-sm-byhand]").addEventListener("click", () => { hand.classList.toggle("hidden"); mk.classList.add("hidden"); hand.querySelector("input").focus(); });
       hand.querySelector("button").addEventListener("click", e => { const v = hand.querySelector("input").value.trim(); if (v) attach(v, e.target); });
-      gb.querySelector("[data-sm-mkpo]").addEventListener("click", () => { mk.classList.toggle("hidden"); hand.classList.add("hidden"); mk.querySelector("[data-mk-job]").focus(); });
-      mk.querySelector("button").addEventListener("click", async e => { const b = e.target, s = sup(), sid = supIdOf(s); if (!sid) return alertMsg("Pick the supplier first (the Supplier box on this line).");
-        const jn = mk.querySelector("[data-mk-job]").value.trim(), what = mk.querySelector("[data-mk-what]").value.trim() || null; b.disabled = true; let r;
+      // no PO found: when a job number is printed on the paper, "Yes" makes the PO for that job right away; otherwise it asks which job (blank = shop stock)
+      let jobG = null;
+      if (!G.length) db.rpc("supplier_mail_job_guess", { p_id: id }).then(({ data: J }) => { if (!gb.isConnected || (J || []).length !== 1) return; jobG = J[0];
+        const q = gb.querySelector("[data-sm-askq]"); if (q) q.innerHTML = `Job <b>${esc(jobG.job)}</b>${jobG.customer ? ` (${esc(jobG.customer)})` : ""} is printed on it. Do you want me to make a PO for that job?`;
+        mk.querySelector("[data-mk-job]").value = jobG.job; }, () => {});
+      gb.querySelector("[data-sm-mkpo]").addEventListener("click", e => { if (jobG && !G.length) return makePO(e.currentTarget, jobG.job, mk.querySelector("[data-mk-what]").value.trim() || null);
+        mk.classList.toggle("hidden"); hand.classList.add("hidden"); mk.querySelector("[data-mk-job]").focus(); });
+      mk.querySelector("button").addEventListener("click", e => makePO(e.currentTarget, mk.querySelector("[data-mk-job]").value.trim(), mk.querySelector("[data-mk-what]").value.trim() || null));
+      const makePO = async (b, jn, what) => { const s = sup(), sid = supIdOf(s); if (!sid) return alertMsg("Pick the supplier first (the Supplier box on this line).");
+        b.disabled = true; let r;
         if (jn) { const { data: J } = await db.from("jobs").select("id").eq("job_number", jn).limit(1); if (!J?.length) { b.disabled = false; return alertMsg(`There's no job ${jn} in the app.`); }
           r = await db.rpc("get_po_number", { p_job_id: J[0].id, p_supplier_id: sid, p_supplier_name: null, p_what: what }); }
         else r = await db.rpc("new_stock_po", { p_supplier_id: sid, p_supplier_name: null, p_what: what, p_purpose: "warehouse_restock" });
         if (r.error) { b.disabled = false; return alertMsg("PO not made: " + rpcErr(r.error)); }
         const no = typeof r.data === "string" ? r.data : r.data?.po_number; if (!no) { b.disabled = false; return alertMsg("The PO was made but its number didn't come back. Find it on the Purchase orders page."); }
-        await attach(no); });
+        await attach(no); };
     })();
     tr.querySelectorAll("[data-sm-po]").forEach(b => b.addEventListener("click", () => { POP.q = b.dataset.smPo; openPOs(); }));
     tr.querySelector("[data-sm-open]")?.addEventListener("click", async () => { const w = window.open("", "_blank"); const f = await db.rpc("supplier_mail_file", { p_id: id });
