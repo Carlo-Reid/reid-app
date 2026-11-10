@@ -1400,6 +1400,11 @@
   #podium-box .pod-f input { font-size: 17px; padding: 10px 12px; border-radius: 6px; } #podium-box .pod-f button { justify-self: start; font-size: 18px; padding: 12px 22px; }
   #podium-box .pod-hide { -webkit-text-security: disc; }
   #podium-box .pod-go { font-size: 20px; padding: 16px 28px; background: #1f9d4a; border-color: #1f9d4a; color: #fff; border-radius: 6px; margin-right: 10px; }
+  .note-rec { display: block; margin: 6px 0 2px; } .note-rec:empty { display: none; }
+  .note-rec .nrec-one, .note-rec .nrec-add { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 6px; }
+  .note-rec .nrec-play { font-size: 16px; padding: 9px 16px; background: #23415f; border-color: #23415f; color: #fff; border-radius: 6px; }
+  .note-rec .nrec-info, .note-rec .nrec-tip { font-size: 14px; color: var(--ink); } .note-rec .nrec-msg { font-size: 15px; font-weight: 600; color: #14703a; } .note-rec .nrec-msg.err { color: #b3261e; }
+  .note-rec .nrec-player { display: inline-flex; align-items: center; gap: 10px; } .note-rec audio { height: 40px; max-width: 100%; }
   .podium-link { font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--blue); white-space: nowrap; }
   .note-actions { display: inline-flex; gap: 14px; margin-left: 12px; }
   .note-actions .link.copied { color: var(--green); }
@@ -9540,6 +9545,49 @@ function addBoxJumps() {
   });
 }
 
+// Call recordings on Podium call notes (Carlo, Nov 10): Podium has no way for the app to fetch a recording, but its page lets a person
+// download one. Each Podium call note has "Add the recording": pick the downloaded file and the app keeps it (private storage bucket
+// call-recordings, table note_recordings) and plays it right on the note. Office people and owners only. sync/extra/247_note_recordings.sql.
+const NOTE_REC = new Map(); let NOTE_REC_T = 0;   // note id -> its recordings (once asked)
+const noteRecCan = () => ["owner", "admin", "office", "dispatcher", "accounting"].includes(ME.role);
+function noteRecSlot(id) { clearTimeout(NOTE_REC_T); NOTE_REC_T = setTimeout(noteRecLoad, 60);
+  return `<span class="note-rec" data-note-rec="${id}">${NOTE_REC.has(id) ? noteRecHtml(id) : ""}</span>`; }
+function noteRecHtml(id) { const L = NOTE_REC.get(id) || [];
+  return L.map(r => `<span class="nrec-one" data-rec="${r.id}"><button class="btn nrec-play" type="button" data-rec-play="${esc(r.path)}" data-rec-name="${esc(r.name || "recording")}">▶ Play the recording</button>
+      <span class="nrec-info">${esc(r.name || "")}${r.bytes ? " · " + (r.bytes / 1048576).toFixed(1) + " MB" : ""}${r.by ? " · added by " + esc(r.by) : ""}</span>
+      <button class="link" type="button" data-rec-off="${r.id}" data-rec-note="${id}">Take it off</button></span>`).join("")
+    + `<span class="nrec-add"><button class="btn quiet-btn" type="button" data-rec-add="${id}">🎧 ${L.length ? "Add another recording" : "Add the recording"}</button>${L.length ? "" : `<span class="nrec-tip">Press Open in Podium, download the recording there, then add the file here.</span>`}<span class="nrec-msg" role="status"></span></span>`; }
+function noteRecDraw(id) { document.querySelectorAll(`[data-note-rec="${id}"]`).forEach(el => { el.innerHTML = noteRecHtml(id); }); }
+async function noteRecLoad() {
+  const ids = [...new Set([...document.querySelectorAll("[data-note-rec]")].map(el => Number(el.dataset.noteRec)).filter(id => id && !NOTE_REC.has(id)))];
+  for (let i = 0; i < ids.length; i += 400) { const part = ids.slice(i, i + 400);
+    const { data, error } = await db.rpc("note_recordings_for", { p_notes: part }); if (error) return;   // not there yet (before the update): show nothing
+    part.forEach(id => NOTE_REC.set(id, [])); (data || []).forEach(r => NOTE_REC.get(Number(r.note_id))?.push(r)); part.forEach(noteRecDraw); }
+}
+document.addEventListener("click", async e => {
+  const add = e.target.closest("[data-rec-add]"), play = e.target.closest("[data-rec-play]"), off = e.target.closest("[data-rec-off]");
+  if (add) { e.preventDefault(); const id = Number(add.dataset.recAdd), inp = document.createElement("input"); inp.type = "file"; inp.accept = "audio/*,.mp3,.wav,.m4a,.ogg,.webm,.mp4";
+    inp.addEventListener("change", async () => { const f = inp.files && inp.files[0]; if (!f) return;
+      const say = (t, err) => document.querySelectorAll(`[data-note-rec="${id}"] .nrec-msg`).forEach(m => { m.textContent = t; m.classList.toggle("err", !!err); });
+      if (!/^(audio|video)\//.test(f.type) && !/\.(mp3|wav|m4a|ogg|webm|mp4|aac)$/i.test(f.name)) return say("That is not a sound file. Pick the recording you downloaded from Podium.", true);
+      if (f.size > 100 * 1048576) return say("That file is too big (over 100 MB).", true);
+      add.disabled = true; say("Saving the recording…");
+      const safe = f.name.normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80) || "recording", path = `notes/${id}/${Date.now()}-${safe}`;
+      const up = await db.storage.from("call-recordings").upload(path, f, { contentType: f.type || "audio/mpeg" });
+      if (up.error) { add.disabled = false; return say("Not saved: " + up.error.message, true); }
+      const { error } = await db.rpc("note_recording_add", { p_note: id, p_path: path, p_name: f.name, p_bytes: f.size, p_mime: f.type || null });
+      if (error) { add.disabled = false; return say("Not saved: " + rpcErr(error), true); }
+      NOTE_REC.delete(id); await noteRecLoad(); say("✓ Saved. Press Play to hear it."); });
+    inp.click(); return; }
+  if (play) { e.preventDefault(); play.disabled = true; const { data, error } = await db.storage.from("call-recordings").createSignedUrl(play.dataset.recPlay, 3600);
+    if (error || !data?.signedUrl) { play.disabled = false; play.textContent = "Could not open it. Try again"; return; }
+    const box = document.createElement("span"); box.className = "nrec-player";
+    box.innerHTML = `<audio controls autoplay src="${esc(data.signedUrl)}"></audio> <a class="link" href="${esc(data.signedUrl)}" download="${esc(play.dataset.recName)}" target="_blank" rel="noopener">Download</a>`;
+    play.replaceWith(box); return; }
+  if (off) { e.preventDefault(); const k = await askChoice("Take this recording off the note?", "It will not show on the note any more. The file is kept, so it can be put back if this was a mistake.", [["yes", "Yes, take it off", true], ["", "No, keep it"]]);
+    if (k !== "yes") return; const { error } = await db.rpc("note_recording_remove", { p_id: Number(off.dataset.recOff) }); if (error) return alertMsg("Not done: " + rpcErr(error));
+    const id = Number(off.dataset.recNote); NOTE_REC.delete(id); noteRecLoad(); }
+});
 function podiumBody(text) {
   const m = text.match(/\s*(https:\/\/app\.podium\.com\/[^\s]+)\s*$/);
   const body = m ? text.slice(0, m.index) : text;
@@ -9590,7 +9638,7 @@ function noteHtml(n, hide, job, rank, pinCount) {
     : `<button class="link" data-pin-set="1" data-note-id="${n.id}">Pin</button>`;
   const actions = `<span class="note-actions"><button class="link" type="button" data-copy-note="${n.id ?? ""}" title="Copy this note">Copy</button>${pinTools}${can("notes.edit") && rank !== undefined ? `<button class="link" data-edit-note="${n.id}">Edit</button>` : ""}${can("notes.delete") && rank !== undefined ? `<button class="link danger" data-delete-note="${n.id}">Delete</button>` : ""}</span>`;
   const pinStyle = n.pinned && rank != null ? ` style="--pin:${pinColor(rank)}"` : "";
-  return `<div class="note${n.pinned ? " pin" : ""}${n.fresh ? " fresh" : ""}${hide === true ? " hidden" : ""}"${pinStyle} data-note="${n.id}">${n.pinned ? `<span class="pin-label">Pinned${rank != null ? " " + (rank + 1) : ""}</span>` : ""}${jobLabel}<span class="body">${n.source === "podium" ? podiumBody(n.body) : esc(n.body)}</span><span class="when"><b class="ndate">${fmtDate(n.created_at)}</b>${who ? ", by " + esc(who) : ""}${actions}</span></div>`;
+  return `<div class="note${n.pinned ? " pin" : ""}${n.fresh ? " fresh" : ""}${hide === true ? " hidden" : ""}"${pinStyle} data-note="${n.id}">${n.pinned ? `<span class="pin-label">Pinned${rank != null ? " " + (rank + 1) : ""}</span>` : ""}${jobLabel}<span class="body">${n.source === "podium" ? podiumBody(n.body) : esc(n.body)}</span>${n.source === "podium" && n.id && noteRecCan() && /call duration|a call was|voicemail/i.test(n.body || "") ? noteRecSlot(n.id) : ""}<span class="when"><b class="ndate">${fmtDate(n.created_at)}</b>${who ? ", by " + esc(who) : ""}${actions}</span></div>`;
 }
 
 function alertNote(btn, text) {
