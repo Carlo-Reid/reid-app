@@ -2474,7 +2474,7 @@ button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 
   .pbr-doc { display: block; margin-top: 5px; border: 1px solid #23415f; background: #fff; color: #23415f; border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .prc-hi-say { font-size: 17px; color: var(--ink); background: #eef6ee; border: 2px solid #1f9d4a; border-radius: 6px; padding: 10px 14px; margin: 8px 0 12px; } .prc-head:has(.prc-hi-open) { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; } .prc-hi-open { font-size: 16px; padding: 9px 14px; max-width: 100%; }
   table.prc-t tr.prc-hit > td { background: #d9f2df; border-top: 3px solid #1f9d4a; border-bottom: 3px solid #1f9d4a; } table.prc-t tr.prc-hit > td:first-child { border-left: 6px solid #1f9d4a; }
-  .pb-sellp { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; } .pb-sellp-btn { border: 1px solid #23415f; background: #23415f; color: #fff; border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .pb-sellp { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; } .pb-sellp-btn.pb-sellp-upd { background: #fff; color: #23415f; } .pb-sellp-btn { border: 1px solid #23415f; background: #23415f; color: #fff; border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .pb-st-footnote { font-size: 15px; color: var(--ink); background: #eef6ee; border: 1px solid #b9d8bd; border-radius: 6px; padding: 7px 10px; margin: 8px 0; } .pb-st-box .pb-st-rolls { display: block; }
   .pbr-foot { font-size: 14px; font-weight: 400; color: var(--ink); background: #eef6ee; border: 1px solid #b9d8bd; border-radius: 6px; padding: 5px 8px; margin-top: 4px; text-align: left; white-space: normal; }
   .pb-newbtns .pbr-open { color: #fff; background: #23415f; border-color: #23415f; padding: 5px 12px; font-size: 15px; white-space: nowrap; }
@@ -27733,7 +27733,7 @@ function showPbItem(id) {
       <label class="pb-desc-lab"><span>Description <i class="pb-desc-note">shows on the invoice</i></span></label>
       <div class="rte" id="pb-rte">${edit ? rteBar() : ""}<div class="rte-area pb-desc-ta" id="pb-desc-rte" contenteditable="${edit ? "true" : "false"}" role="textbox" aria-multiline="true" aria-label="Description">${esc(pbText(r.description)).replace(/\n/g, "<br>")}</div>
         <textarea name="description" hidden>${esc(pbText(r.description))}</textarea></div>
-      <div class="ins-two"><label><span class="pb-sellp">Sell price${ME.role === "owner" || (can("pricebook.edit") && seeCost()) ? ` <button type="button" class="pb-sellp-btn" id="pb-to-pricing" title="Open the pricing rules that set the sell price for this kind of item">💲 Pricing for this</button>` : ""}</span><input name="unit_price" inputmode="decimal" value="${f2(r.unit_price)}" ${dis}></label>
+      <div class="ins-two"><label><span class="pb-sellp">Sell price${ME.role === "owner" || (can("pricebook.edit") && seeCost()) ? ` <button type="button" class="pb-sellp-btn" id="pb-to-pricing" title="Open the pricing rules that set the sell price for this kind of item">💲 Pricing for this</button>${edit ? ` <button type="button" class="pb-sellp-btn pb-sellp-upd" id="pb-upd-price" title="Work out the sell price again from the pricing rule, and save it">🔄 Update price</button>` : ""}` : ""}</span><input name="unit_price" inputmode="decimal" value="${f2(r.unit_price)}" ${dis}></label>
         ${seeCost() ? `<label>Our cost<input name="unit_cost" inputmode="decimal" value="${f2(r.unit_cost)}" ${dis}></label>` : `<input type="hidden" name="unit_cost" value="">`}</div>
       ${seeCost() && r.id ? pbNewCost(r, true) : ""}
       ${nw ? `<div class="pb-margin quiet" id="pb-margin"></div>` : ""}
@@ -27934,6 +27934,15 @@ function showPbItem(id) {
       document.addEventListener("pointerdown", e => { if (!e.target.closest(".pb-namewrap")) nt.classList.add("hidden"); }, { capture: true });
     }
     // Sell price → 💲 Pricing for this (Carlo, Nov 10): the pricing page, at this item's own formula if it has one, else at the markup rules for its kind
+    // 🔄 Update price (Carlo, Nov 10): the pricing rule for this kind of item, at the cost in the box, sets the sell price; asks first, then saves the item
+    $("#pb-upd-price")?.addEventListener("click", async e => { e.preventDefault(); const fm = $("#pb-form"), n = v => Number(String(v).replace(/[$,\s]/g, ""));
+      if (r.price_formula_id) return alertMsg("This one gets its price from its series, not from a markup rule. Press 💲 Pricing for this, then Save and reprice there.");
+      const c = n(fm.unit_cost.value), now = n(fm.unit_price.value), rp = pbRulePrice(fm.item_type.value, c);
+      if (!(c > 0)) return alertMsg("I need the cost first. Type what it costs us, then press Update price.");
+      if (rp == null) return alertMsg(`I have no pricing rule for a cost of ${money(c)}. Press 💲 Pricing for this and add a line for it.`);
+      if (Math.abs(rp - now) < 0.005) return alertMsg(`Nothing to change. The sell price is already ${money(rp)}, the same as the pricing rule.`);
+      if (await askChoice("Update the sell price?", `Cost: <b>${money(c)}</b>. The pricing rule says <b>${money(rp)}</b>.<br>Sell price now: ${money(now)}. I will change it to <b>${money(rp)}</b> and save the item.`, [["yes", "Yes, update it", true], ["", "Cancel"]]) !== "yes") return;
+      fm.unit_price.value = rp.toFixed(2); fm.unit_price.dispatchEvent(new Event("input", { bubbles: true })); fm.requestSubmit(); });
     $("#pb-to-pricing")?.addEventListener("click", e => { e.preventDefault(); const kind = ["service", "material", "equipment", "security"].includes(r.item_type) ? r.item_type : "material";
       PRC.hi = r.price_formula_id ? null : { id: r.id, name: pbName(r.name), type: kind, cost: r.unit_cost, price: r.unit_price, unit: /^(foot|feet|ft)$/i.test(r.unit_of_measure || "") ? "foot" : /^(roll|box|bag|hour)$/i.test(r.unit_of_measure || "") ? String(r.unit_of_measure).toLowerCase() : "" }; PRC.rulesEdit = null;
       if (PRC.hi && Number(r.unit_cost) > 0) PRC.tryCost = Number(r.unit_cost);
