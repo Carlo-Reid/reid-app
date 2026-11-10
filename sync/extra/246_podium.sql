@@ -42,8 +42,9 @@ BEGIN
     DELETE FROM podium_conn; DELETE FROM podium_oauth_state;
     RETURN jsonb_build_object('saved', false);
   END IF;
-  IF v_i !~ '^[^\s]{8,200}$' THEN RAISE EXCEPTION 'The Client ID does not look right. It is one long row of letters and numbers with no spaces.'; END IF;
-  IF v_s !~ '^[^\s]{16,300}$' THEN RAISE EXCEPTION 'The Client Secret does not look right. It is one long row of letters and numbers with no spaces.'; END IF;
+  IF v_i ~ '\s' OR length(v_i) NOT BETWEEN 8 AND 300 THEN RAISE EXCEPTION 'The Client ID does not look right. It is one long row of letters and numbers with no spaces.'; END IF;
+  IF v_s ~ '\s' OR length(v_s) NOT BETWEEN 16 AND 600 THEN   -- (a count over 255 inside {} is not allowed in a pattern: that was the 'invalid repetition count' error)
+  RAISE EXCEPTION 'The Client Secret does not look right. It is one long row of letters and numbers with no spaces.'; END IF;
   PERFORM public._podium_secret_set('podium_client_id', v_i); PERFORM public._podium_secret_set('podium_client_secret', v_s);
   RETURN jsonb_build_object('saved', true);
 END $f$;
