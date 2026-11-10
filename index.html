@@ -4871,6 +4871,9 @@ button.smc-k, .smc-k { background: #e8edf2 !important; color: #1f2a37 !important
 .ef-row { display: flex; gap: 22px; align-items: center; font-size: calc(20px * var(--fs, 1)); } .ef-val { font-weight: 800; } .ef-radio { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; cursor: pointer; } .ef-radio input { width: 24px; height: 24px; }
 .ef-q.ef-auto { background: linear-gradient(rgba(20, 140, 130, .08), rgba(20, 140, 130, .08)), var(--panel); font-size: calc(18px * var(--fs, 1)); } .ef-q.ef-miss { border: 4px solid #c92a2a; background: linear-gradient(rgba(201, 42, 42, .08), rgba(201, 42, 42, .08)), var(--panel); }
 .ef-msg { font-size: calc(19px * var(--fs, 1)); font-weight: 800; } .ef-msg[hidden] { display: none; } .ef-btns { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; justify-content: space-between; } .ef-btns .btn { font-size: calc(22px * var(--fs, 1)); padding: 18px 30px; font-weight: 800; border-radius: 8px; }
+.ef-pic-ask { font-size: calc(19px * var(--fs, 1)); font-weight: 800; margin-top: 6px; } .ef-pic-have { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-top: 8px; } .ef-pic-have img { width: 170px; height: 170px; object-fit: contain; background: #fff; border: 2px solid #4a5d70; border-radius: 6px; }
+.ef-pic-ok { font-size: calc(19px * var(--fs, 1)); font-weight: 800; color: #1f9d4a; } .ef-pic-msg { margin-top: 10px; font-size: calc(17px * var(--fs, 1)); font-weight: 750; color: #c92a2a; }
+.ef-drop { margin-top: 12px; padding: 16px; border: 3px dashed #4a5d70; border-radius: 6px; font-size: calc(17px * var(--fs, 1)); display: flex; flex-direction: column; gap: 10px; } .ef-drop.on { border-color: #1f9d4a; background: rgba(31, 157, 74, .10); } .ef-pic .eco-say.eco-sm .eco-man { width: 84px; height: 84px; }
 .eco-name { display: block; color: #1b3a6b; font-size: calc(15px * var(--fs, 1)); font-weight: 800; margin-bottom: 2px; }
 @media (max-width: 560px) { .eco-say { gap: 16px; } .eco-say .eco-man { width: 84px; height: 84px; } .eco-bubble { font-size: 15px; padding: 10px 12px; } }
 /* Auto update supplier mail: the message about what just happened is big, bold and green, and stays in view while the list scrolls (Carlo, Nov 9) */
@@ -25380,7 +25383,7 @@ function smNewItemForm(row, u, sup, onDone) {
       <label class="ef-q" data-ef-q="unit"><b><span>9</span> How is it sold?</b><select name="unit">${["each", "per foot", "per box", "per roll", "per bag", "per hour"].map(x => `<option ${f.unit === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>
       <div class="ef-q" data-ef-q="tax"><b><span>10</span> Do we charge HST on it?</b><div class="ef-row"><label class="ef-radio"><input type="radio" name="tax" value="yes" ${f.tax === "yes" ? "checked" : ""}> Yes</label><label class="ef-radio"><input type="radio" name="tax" value="no" ${f.tax === "no" ? "checked" : ""}> No</label></div></div>
       <div class="ef-q ef-auto"><b>🧾 From the paperwork</b><div>Supplier: <b>${esc(supRow ? supRow.name : sup)}</b></div><div>Their part number: <b>${esc(u.code || "")}</b></div></div>
-      <div class="ef-q ef-auto"><b>📷 Picture</b><div>You can add a picture later, on the price list page.</div></div>
+      <div class="ef-q ef-pic" data-ef-q="pic"><b>📷 Picture</b><small>This one can wait. You can also add it later, on the price list page.</small><div data-ef-pic></div><input type="file" accept="image/*" data-ef-file hidden></div>
       <div class="staff-msg err ef-msg" data-ef-msg role="alert" hidden></div>
       <div class="ef-btns"><button class="btn" type="submit">Save the new item</button><button class="apb apb-grey apb-sm" type="button" data-ef-cancel><span class="apb-ic" aria-hidden="true">🚪</span><span class="apb-tn">Stop. Do not add it</span></button></div></form>`;
     const F = w.querySelector("form"), msg = F.querySelector("[data-ef-msg]"), num = v => Number(String(v).replace(/[$,\s]/g, ""));
@@ -25388,6 +25391,29 @@ function smNewItemForm(row, u, sup, onDone) {
     const rule = async () => { const c = num(F.cost.value); if (!(c > 0)) return; const { data } = await db.rpc("pb_rule_price_for", { p_type: f.type, p_cost: c }); f.rule = data == null ? null : Number(data);
       const t = F.querySelector("[data-ef-rule]"); if (t) t.textContent = f.rule != null ? `Our pricing rules say ${money(f.rule)}.` : "There is no pricing rule for this. Please type the price.";
       if (f.rule != null && (!F.price.value.trim() || F.price.dataset.auto === "1")) { F.price.value = f.rule.toFixed(2); F.price.dataset.auto = "1"; } };
+    // The picture (the only thing that can wait): from this computer, or picked from the web. The web way opens Google's pictures in a small window with the part number
+    // already typed; the person right-clicks a picture → Copy image, comes back and presses Paste the picture (or drags it in). It is kept and saved with the item.
+    const picBox = F.querySelector("[data-ef-pic]"), fileIn = F.querySelector("[data-ef-file]"); let picMode = f.pic ? "have" : "", picMsg = "";
+    const sq = (cls, attr, ic, t) => `<button class="apb ${cls} apb-sm" type="button" ${attr}><span class="apb-ic" aria-hidden="true">${ic}</span><span class="apb-tn">${t}</span></button>`;
+    const picTake = async blob => { try { const im = await pbLoadImg(blob); f.pic = { th: pbShrink(im, 320), ph: pbShrink(im, 800) }; picMode = "have"; picMsg = ""; } catch (e) { picMsg = "I could not use that one. It is not a picture."; } picDraw(); };
+    const picFromClip = async () => { try { const items = await navigator.clipboard.read(); for (const it of items) { const ty = it.types.find(x => x.startsWith("image/")); if (ty) return picTake(await it.getType(ty)); }
+        picMsg = "I do not see a picture yet. In the pictures window, right-click the picture and pick “Copy image”. Then press Paste the picture again."; } catch (e) { picMsg = "I could not read it. Click in this box and press Ctrl+V, or drag the picture onto this box."; } picDraw(); };
+    const picDraw = () => { picBox.innerHTML = picMode === "have" && f.pic ? `<div class="ef-pic-have"><img alt="The picture you picked" src="data:image/jpeg;base64,${f.pic.th}"><div><div class="ef-pic-ok">✅ Got it. I will save this picture with the item.</div><div class="apb-row">${sq("apb-blue", "data-ef-pic-change", "🔁", "Pick a different one")}${sq("apb-grey", "data-ef-pic-off", "🚫", "No picture for now")}</div></div></div>`
+        : picMode === "ask" ? `<div class="ef-pic-ask">Where is the picture?</div><div class="apb-row">${sq("apb-blue", "data-ef-pic-file", "📁", "A file on this computer")}${sq("apb-green", "data-ef-pic-web", "🌐", "Pick one from the web")}</div>`
+        : picMode === "web" ? `<div class="eco-say eco-sm eco-top">${ecoFace("happy")}<div class="eco-bubble"><span class="eco-l">I opened a window of pictures and typed the part number for you.</span><span class="eco-l"><b>1.</b> Find the picture you like.</span><span class="eco-l"><b>2.</b> Right-click it and pick <b>Copy image</b>.</span><span class="eco-l"><b>3.</b> Come back here and press <b>Paste the picture</b>.</span></div></div>
+            <div class="ef-drop" data-ef-drop tabindex="0"><div class="apb-row">${sq("apb-green", "data-ef-pic-paste", "📋", "Paste the picture")}${sq("apb-blue", "data-ef-pic-web", "🌐", "Open the pictures again")}${sq("apb-grey", "data-ef-pic-back", "↩", "Go back")}</div><div>You can also drag the picture onto this box.</div></div>`
+        : `<div class="apb-row">${sq("apb-blue", "data-ef-pic-start", "📷", "Add a picture now")}</div>`;
+      if (picMsg) picBox.insertAdjacentHTML("beforeend", `<div class="ef-pic-msg" role="status">${esc(picMsg)}</div>`);
+      const on = (q, fn) => picBox.querySelector(q)?.addEventListener("click", fn);
+      on("[data-ef-pic-start]", () => { picMode = "ask"; picMsg = ""; picDraw(); }); on("[data-ef-pic-change]", () => { picMode = "ask"; picMsg = ""; picDraw(); }); on("[data-ef-pic-off]", () => { f.pic = null; picMode = ""; picMsg = ""; picDraw(); });
+      on("[data-ef-pic-back]", () => { picMode = "ask"; picMsg = ""; picDraw(); }); on("[data-ef-pic-file]", () => fileIn.click()); on("[data-ef-pic-paste]", picFromClip);
+      on("[data-ef-pic-web]", () => { const q = [F.model.value.trim() || F.sku.value.trim(), F.mfr.value.trim() && !/^not known$/i.test(F.mfr.value.trim()) ? F.mfr.value.trim() : "", F.name.value.trim()].filter(Boolean).join(" ");
+        window.open("https://www.google.com/search?tbm=isch&q=" + encodeURIComponent(q), "ecoPictures", "width=1100,height=820"); picMode = "web"; picMsg = ""; picDraw(); });
+      const drop = picBox.querySelector("[data-ef-drop]"); if (drop) { ["dragover", "dragenter"].forEach(k => drop.addEventListener(k, e => { e.preventDefault(); drop.classList.add("on"); })); drop.addEventListener("dragleave", () => drop.classList.remove("on"));
+        drop.addEventListener("drop", async e => { e.preventDefault(); drop.classList.remove("on"); const file = [...(e.dataTransfer.files || [])].find(x => x.type.startsWith("image/")); if (file) return picTake(file);
+          const url = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain"); try { const r = await fetch(url); const bl = await r.blob(); if (!bl.type.startsWith("image/")) throw 0; picTake(bl); } catch { picMsg = "That website would not let me take the picture by dragging. Right-click it, pick “Copy image”, then press Paste the picture."; picDraw(); } }); } };
+    picDraw(); fileIn.addEventListener("change", () => { if (fileIn.files[0]) picTake(fileIn.files[0]); fileIn.value = ""; });
+    F.addEventListener("paste", e => { const it = [...(e.clipboardData?.items || [])].find(x => x.type.startsWith("image/")); if (it && picMode !== "") { e.preventDefault(); picTake(it.getAsFile()); } });
     rule(); F.cost.addEventListener("change", rule); F.price.addEventListener("input", () => { F.price.dataset.auto = ""; });
     F.querySelector("[data-ef-back]").addEventListener("click", () => { keep(); ask(); }); F.querySelector("[data-ef-cancel]").addEventListener("click", close);
     F.addEventListener("submit", async e => { e.preventDefault(); keep(); F.querySelectorAll(".ef-miss").forEach(x => x.classList.remove("ef-miss"));
@@ -25408,7 +25434,8 @@ function smNewItemForm(row, u, sup, onDone) {
       if (error) return fail("I could not save it: " + rpcErr(error));
       const e1 = (await db.rpc("set_pb_item_categories", { p_item: newId, p_ids: [Number(f.cat)] })).error;
       const e2 = supRow && supRow.id != null ? (await db.rpc("save_pb_item_suppliers", { p_item: newId, p: [{ supplier_id: Number(supRow.id), sku: String(u.code || f.sku).trim(), cost: String(num(f.cost)), lead: "", note: "From " + ((row.result || {}).ref || row.file || "a supplier paper"), preferred: true }] })).error : null;
-      if (e1 || e2) alertMsg("The item was added, but one part did not save: " + rpcErr(e1 || e2));
+      const e3 = f.pic ? (await db.rpc("set_pb_picture", { p_id: newId, p_thumb: f.pic.th, p_photo: f.pic.ph })).error : null;
+      if (e1 || e2 || e3) alertMsg("The item was added, but one part did not save" + (e3 && !e1 && !e2 ? " (the picture)" : "") + ": " + rpcErr(e1 || e2 || e3));
       close(); await onDone(newId); }); };
   ask();
 }
