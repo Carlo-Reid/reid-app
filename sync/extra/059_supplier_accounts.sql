@@ -1,3 +1,15 @@
+-- (Nov 10, 2026) the list also gives lines_amount: the invoice's own lines added up (see 244_sinv_lines_amount.sql). The helper is made here first,
+-- so the list has the column from the moment this file runs and never loses it while the later files run.
+CREATE OR REPLACE FUNCTION public._sinv_lines_amount(p_lines jsonb) RETURNS numeric LANGUAGE sql IMMUTABLE AS $$
+  SELECT round(sum(CASE
+      WHEN (x ->> 'net_amount') ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (x ->> 'net_amount')::numeric
+      WHEN (x ->> 'unit_price') ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (x ->> 'unit_price')::numeric
+           * CASE WHEN coalesce(x ->> 'shipped', x ->> 'ordered') ~ '^-?[0-9]+(\.[0-9]+)?$' THEN coalesce(x ->> 'shipped', x ->> 'ordered')::numeric ELSE 1 END
+           * (1 - CASE WHEN (x ->> 'discount') ~ '^[0-9]+(\.[0-9]+)?$' THEN (x ->> 'discount')::numeric ELSE 0 END / 100) END), 2)
+  FROM (SELECT DISTINCT ON (x ->> 'code', x ->> 'description', coalesce(x ->> 'shipped', x ->> 'ordered'), x ->> 'unit_price', x ->> 'net_amount') x   -- a line read twice off the scan counts once
+        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_lines) = 'array' THEN p_lines ELSE '[]'::jsonb END) x) u
+$$;
+
 -- Supplier invoices: one supplier can send statements for more than one of our accounts (Trent: 4112 main and 4161 water heaters),
 -- sometimes with the same date. Statements are now one per supplier + date + account.
 ALTER TABLE public.supplier_statements ADD COLUMN IF NOT EXISTS account text NOT NULL DEFAULT '';
@@ -63,7 +75,7 @@ BEGIN
       WITH m AS MATERIALIZED (SELECT i.id AS inv_id, public._sinv_po(i) AS po_id FROM supplier_invoices i
                               WHERE (p_supplier IS NULL OR i.supplier_id = p_supplier) AND (v_st = 0 OR i.statement_id = v_st))
       SELECT i.id, i.supplier_id, btrim(sp.name) AS supplier, i.supplier_invoice_number AS number, i.invoice_date, i.doc_type, i.po_text, i.job_name,
-             i.subtotal, i.hst, i.total, jsonb_array_length(i.lines) AS line_count, i.match_state, i.match_note, i.statement_id, i.handwriting, i.read_notes,
+             i.subtotal, i.hst, i.total, jsonb_array_length(i.lines) AS line_count, public._sinv_lines_amount(i.lines) AS lines_amount, i.match_state, i.match_note, i.statement_id, i.handwriting, i.read_notes,
              (SELECT count(*) FROM supplier_doc_pages d WHERE d.supplier_invoice_id = i.id) AS pages,
              po.id AS po_id, po.po_number, po.status AS po_status, po.job_id AS po_job_id, j.job_number AS po_job_number, c.id AS po_customer_id, c.display_name AS po_customer,
              (po.supplier_id IS DISTINCT FROM i.supplier_id) AS po_other_supplier, i.purchase_order_id IS NOT NULL AS po_by_hand,
