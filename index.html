@@ -1392,6 +1392,13 @@
   .note-add textarea { min-height: 50px; padding: 6px 10px; }
   .note-add .row { margin-top: 6px; gap: 6px 14px; }
   .note-add .btn { padding: 6px 16px; font-size: calc(14px * var(--fs, 1)); }
+  #podium-box .pod-on { color: #14703a; } #podium-box .pod-off { color: var(--ink); font-weight: 600; }
+  #podium-box .pod-p { font-size: 17px; max-width: 820px; margin: 0 0 12px; } #podium-box .pod-bad { color: #b3261e; }
+  #podium-box .pod-ol { font-size: 17px; line-height: 1.6; max-width: 820px; margin: 0 0 14px; padding-left: 26px; } #podium-box .pod-ol li { margin-bottom: 6px; }
+  #podium-box .pod-code { background: #eef2f6; border: 1px solid #c9d3de; border-radius: 4px; padding: 2px 7px; font-size: 15px; color: #1c2b3a; user-select: all; white-space: nowrap; }
+  #podium-box .pod-f { display: grid; gap: 10px; max-width: 620px; margin-bottom: 10px; } #podium-box .pod-f label { display: grid; gap: 4px; font-size: 17px; font-weight: 600; }
+  #podium-box .pod-f input { font-size: 17px; padding: 10px 12px; border-radius: 6px; } #podium-box .pod-f button { justify-self: start; font-size: 18px; padding: 12px 22px; }
+  #podium-box .pod-go { font-size: 20px; padding: 16px 28px; background: #1f9d4a; border-color: #1f9d4a; color: #fff; border-radius: 6px; margin-right: 10px; }
   .podium-link { font-size: calc(13px * var(--fs, 1)); font-weight: 600; color: var(--blue); white-space: nowrap; }
   .note-actions { display: inline-flex; gap: 14px; margin-left: 12px; }
   .note-actions .link.copied { color: var(--green); }
@@ -6781,9 +6788,12 @@ async function start() {
   if (unsub) return showUnsubscribe(unsub);
   const bookTok = new URLSearchParams(location.search).get("book");
   if (bookTok) return showOnlineBook(bookTok, new URLSearchParams(location.search).get("t"));
+  { const q = new URLSearchParams(location.search), st = q.get("state") || "";   // back from Podium's "may the Reid app connect?" page
+    if (/^pod_[a-z0-9]{20,}$/.test(st)) { PODIUM_BACK = { code: q.get("code") || "", state: st, error: (q.get("error_description") || q.get("error") || "").slice(0, 120) };
+      try { history.replaceState(null, "", location.pathname); } catch (e) {} } }
   if (CONFIG.testToken) return showApp();
   const { data } = await db.auth.getSession();
-  data.session ? showApp() : showSignin();
+  data.session ? showApp().then(podiumBack) : showSignin();
 }
 function showSignin() { $("#app").classList.add("hidden"); $("#signin").classList.remove("hidden"); $("#email").focus(); }
 async function showApp() {
@@ -6932,7 +6942,7 @@ $("#signin-form").addEventListener("submit", async e => {
   const { error } = await db.auth.signInWithPassword({ email: $("#email").value.trim(), password: $("#password").value });
   if (!error) try { sessionStorage.setItem("reid.dayStartOnLogin", "1"); sessionStorage.setItem("reid.justSignedIn", "1"); sessionStorage.removeItem("reid.loginId"); } catch (e) {}
   if (error) { $("#signin-error").textContent = "That email and password didn't match. Check them and try again."; return; }
-  showApp();
+  showApp().then(podiumBack);
 });
 
 $("#forgot-link").addEventListener("click", () => { $("#forgot").classList.toggle("hidden"); $("#email").focus(); });
@@ -26060,7 +26070,7 @@ function ecoPop(anchor, lines, face, at) { document.querySelectorAll(".eco-pop")
 // RULE (Carlo, Nov 9): a click on any Eco Man picture, anywhere in the app, makes him dance in place for 3 seconds. Nothing else happens on that click.
 document.addEventListener("click", e => { const m = e.target.closest?.(".eco-man"); if (!m || m.closest(".eco-dance, button, a")) return; e.stopPropagation(); e.preventDefault();
   m.classList.remove("eco-jig"); void m.getBoundingClientRect(); m.classList.add("eco-jig"); clearTimeout(m._jig); m._jig = setTimeout(() => m.classList.remove("eco-jig"), 3000); }, true);
-const ECO_IDLE = ".smc-headline, .sm-unk-facts, .sm-unk-ask, .sm-unk-head, .ua-head, .ua-line, .ua-tot, .ua-ok, .ua-cand > span, .sm-look-tip, .train-cap, .smc-bar, .smc-sub, .smc-part > h4, .sm-unk-pick, .smc-acts-t, .smc-line, .smc-small, .sm-sup-tip, .ef-auto, .ef-q > b, .ef-q small";
+const ECO_IDLE = "#podium-box > h2, #podium-box .pod-p, .smc-headline, .sm-unk-facts, .sm-unk-ask, .sm-unk-head, .ua-head, .ua-line, .ua-tot, .ua-ok, .ua-cand > span, .sm-look-tip, .train-cap, .smc-bar, .smc-sub, .smc-part > h4, .sm-unk-pick, .smc-acts-t, .smc-line, .smc-small, .sm-sup-tip, .ef-auto, .ef-q > b, .ef-q small";
 function ecoIdleRule(key, e, place) { const n = ECO_ANGRY_N[key] = (ECO_ANGRY_N[key] || 0) + 1, me = esc(smMyFirst());
   if (n > 20) { ECO_ANGRY_N[key] = 0; return ecoDance(place); }
   ecoPop(document.body, n > 10 ? [`${me}, nothing to do here.`, "Keep scrolling down."] : ["Nothing to do here.", "Keep scrolling down. 👇"], n > 10 ? "red" : "violet", { x: e.clientX, y: e.clientY }); return n; }
@@ -29154,6 +29164,82 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
   if (k === "quotes") return openQuotes(); if (k === "logos") return openLogos(); if (k === "print") return openPrintBook(); if (k === "kits") return openAddonKits(); if (k === "control") return openPriceControl(); if (k === "pricing") return openPricing(); if (k === "commission") return openCommissions();
   if (k === "pricing-rules") return openPricing(null, null, "material");   // the price book page with the markup & member prices panel open
 });
+// Settings (owners): the connection to Podium (Carlo, Nov 10). The two keys from the Podium developer page are pasted here once and kept in the
+// locked vault; Connect to Podium sends the owner to Podium's own page to say yes, and Podium sends him back here with a one-time code
+// (podiumBack). The podium Edge Function does the talking. sync/extra/246_podium.sql.
+const PODIUM_REDIRECT = "https://reid-app.pages.dev/";
+const PODIUM_SCOPES = ["read_locations", "read_organizations", "read_contacts", "write_contacts", "read_messages", "write_messages"];
+let PODIUM_BACK = null;
+async function podiumBox(note, bad) {
+  const box = $("#podium-box"); if (!box) return;
+  const { data, error } = await db.rpc("podium_state");
+  if (error) { box.innerHTML = `<h2>Podium</h2><p class="quiet">${/PGRST202|could not find/i.test(error.message || "") ? "This turns on in a few minutes, after the update." : esc(rpcErr(error))}</p>`; return; }
+  const P = data || {}, locs = (P.locations || []).map(l => l.name).filter(Boolean);
+  const msg = `<div class="staff-msg ${bad ? "err" : "ok"}" id="pod-msg" role="status">${esc(note || "")}</div>`;
+  if (!P.has_keys) {
+    box.innerHTML = `<h2>Podium: <span class="pod-off">not connected yet</span></h2>
+      <p class="pod-p"><b>Step 1 of 2. I need two keys from Podium.</b> You only do this one time.</p>
+      <ol class="pod-ol"><li>Open <a href="https://developer.podium.com" target="_blank" rel="noopener">developer.podium.com</a> and sign in.</li>
+        <li>Press <b>Dashboard</b>, then <b>Create App</b>. For the name, type <i>Reid app</i>.</li>
+        <li>In the menu on the side, press <b>OAuth</b>.</li>
+        <li><b>Redirect URL:</b> copy this and paste it there, exactly as it is: <code class="pod-code">${PODIUM_REDIRECT}</code> <button class="btn quiet-btn" type="button" data-pod-copy>Copy</button></li>
+        <li><b>Scopes:</b> tick these six: ${PODIUM_SCOPES.map(x => `<code class="pod-code">${x}</code>`).join(" ")}</li>
+        <li>Press <b>Save</b>. Podium now shows a <b>Client ID</b> and a <b>Client Secret</b>. The secret shows only one time, so do the next step before you leave that page.</li>
+        <li>Copy each one into its box here and press Save the keys.</li></ol>
+      <form class="pod-f" autocomplete="off">
+        <label>Client ID <input type="text" name="cid" autocomplete="off" placeholder="Paste the Client ID here"></label>
+        <label>Client Secret <input type="password" name="sec" autocomplete="off" placeholder="Paste the Client Secret here"></label>
+        <button class="btn" type="submit">Save the keys</button>
+      </form>${msg}`;
+    box.querySelector("[data-pod-copy]").addEventListener("click", async e => { try { await navigator.clipboard.writeText(PODIUM_REDIRECT); e.currentTarget.textContent = "Copied ✓"; } catch { } });
+    const f = box.querySelector("form");
+    f.addEventListener("submit", async e => { e.preventDefault(); const m = $("#pod-msg");
+      if (!f.cid.value.trim() || !f.sec.value.trim()) { m.className = "staff-msg err"; m.textContent = "Paste both keys first."; return; }
+      const { error: er } = await db.rpc("podium_set_keys", { p_id: f.cid.value.trim(), p_secret: f.sec.value.trim() }); f.sec.value = "";
+      if (er) { m.className = "staff-msg err"; m.textContent = "Not saved: " + rpcErr(er); return; }
+      podiumBox("Thank you. I saved the keys. Now press Connect to Podium."); });
+    return;
+  }
+  if (!P.connected) {
+    box.innerHTML = `<h2>Podium: <span class="pod-off">not connected yet</span></h2>
+      <p class="pod-p"><b>Step 2 of 2. I have the keys.</b> Press the button. Podium will open and ask if the Reid app may connect. Say yes, and it brings you back here.</p>
+      <button class="btn pod-go" type="button" data-pod-connect>🔗 Connect to Podium</button>
+      <button class="btn quiet-btn" type="button" data-pod-keys>Change the keys</button>${msg}`;
+  } else {
+    box.innerHTML = `<h2>Podium: <span class="pod-on">✓ connected</span></h2>
+      <p class="pod-p">${locs.length ? `I can see ${locs.length === 1 ? "this location" : "these locations"} in Podium: <b>${esc(locs.join(", "))}</b>.` : "I am connected to Podium."}${P.connected_at ? ` Connected on ${esc(fmtWhen(P.connected_at))}.` : ""}</p>
+      ${P.last_error ? `<p class="pod-p pod-bad">The last time I asked Podium, it said: ${esc(P.last_error)}</p>` : ""}
+      <button class="btn" type="button" data-pod-test>Test it</button>
+      <button class="btn quiet-btn" type="button" data-pod-off>Disconnect</button>${msg}`;
+  }
+  const say = (t, err) => { const m = $("#pod-msg"); if (m) { m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; } };
+  box.querySelector("[data-pod-connect]")?.addEventListener("click", async e => { e.currentTarget.disabled = true; say("Opening Podium…");
+    let d = null; try { const r = await db.functions.invoke("podium", { body: { action: "start" } }); d = r.error ? null : r.data; } catch { }
+    if (d && d.url && /^https:\/\/api\.podium\.com\//.test(d.url)) { location.href = d.url; return; }
+    e.currentTarget.disabled = false; say(d && d.need_keys ? "I do not have the keys yet." : d && d.error === "not_allowed" ? "Only an owner can do this." : "I could not start. Try again in a few minutes.", true); });
+  box.querySelector("[data-pod-keys]")?.addEventListener("click", async () => {
+    const k = await askChoice("Change the keys?", "I will forget the two Podium keys I have, and you paste them in again.", [["yes", "Yes, change them", true], ["", "No, keep them"]]);
+    if (k !== "yes") return; const { error: er } = await db.rpc("podium_set_keys", { p_id: "", p_secret: "" }); if (er) return say("Not changed: " + rpcErr(er), true); podiumBox(); });
+  box.querySelector("[data-pod-test]")?.addEventListener("click", async e => { e.currentTarget.disabled = true; say("Asking Podium…");
+    let d = null; try { const r = await db.functions.invoke("podium", { body: { action: "test" } }); d = r.error ? null : r.data; } catch { }
+    if (d && d.ok) return podiumBox("✓ It works. Podium answered.");
+    podiumBox(d && d.need_connect ? "I am not connected. Press Connect to Podium." : "It did not work. " + (d && d.message ? "Podium said: " + d.message : "Try again in a few minutes."), true); });
+  box.querySelector("[data-pod-off]")?.addEventListener("click", async () => {
+    const k = await askChoice("Disconnect Podium?", "The app will stop talking to Podium until you connect it again. The two keys stay saved.", [["yes", "Yes, disconnect", true], ["", "No, stay connected"]]);
+    if (k !== "yes") return; const { error: er } = await db.rpc("podium_disconnect"); if (er) return say("Not done: " + rpcErr(er), true); podiumBox("Disconnected."); });
+}
+// Podium sent the owner back with ?code=…&state=pod_… (or ?error=…): finish the connection and show Settings
+async function podiumBack() {
+  const b = PODIUM_BACK; PODIUM_BACK = null; if (!b || ME.role !== "owner") return;
+  await openSettings(); const box = $("#podium-box"); box?.scrollIntoView({ block: "center" });
+  if (!b.code) return podiumBox("Podium did not connect" + (b.error ? ": " + b.error.replace(/_/g, " ") : "") + ". Press Connect to Podium to try again.", true);
+  const think = ecoThink("I am connecting to Podium…");
+  let d = null; try { const r = await db.functions.invoke("podium", { body: { action: "finish", code: b.code, state: b.state } }); d = r.error ? null : r.data; } catch { }
+  think.close();
+  if (d && d.connected) await podiumBox("✓ Connected to Podium." + (d.note ? " (I could not list the locations yet: " + d.note + ")" : ""));
+  else await podiumBox("Podium did not connect. " + (d && d.message ? d.message : "Press Connect to Podium to try again."), true);
+  $("#podium-box")?.scrollIntoView({ block: "center" });
+}
 // Settings (owners): while testing, proposals and invoices go to these instead of the customer. Empty the email to go live.
 async function sendTestBox() {
   const box = $("#send-test-box"); if (!box) return;
@@ -29179,7 +29265,7 @@ async function sendTestBox() {
     if (k === "yes") save("", f.phone.value.trim()); });
 }
 function renderSettings(slots, note) {
-  setTimeout(wireMyPassword, 0); setTimeout(sendTestBox, 0); setTimeout(competeBox, 0);
+  setTimeout(wireMyPassword, 0); setTimeout(sendTestBox, 0); setTimeout(competeBox, 0); setTimeout(podiumBox, 0);
   setTimeout(async () => {
     const on = $("#cp-on"), msg = $("#cp-msg"); if (!on) return;
     const r = await db.rpc("my_call_popup");
@@ -29218,6 +29304,7 @@ function renderSettings(slots, note) {
       <p class="quiet" style="max-width:720px;margin:0 0 10px">These are now in <b>Page settings</b> (the Page settings button at the top right of every page). You can set them for all pages, or give one page its own look.</p>
       <button class="btn quiet-btn" type="button" data-open-pl>Open Page settings</button>
     </section>
+    ${ME.role === "owner" ? `<section class="block" id="podium-box"><h2>Podium</h2><div class="quiet">Loading…</div></section>` : ""}
     <section class="block" id="set-callpop">
       <h2>Call pop-up</h2>
       <p class="quiet" style="max-width:720px;margin:0 0 10px">When a call comes in on Podium, a card pops up at the bottom right with who's calling, their address, plan and balance, and a button to open their file. Just for you: everyone picks their own.</p>
