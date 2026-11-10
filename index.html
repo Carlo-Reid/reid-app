@@ -2472,6 +2472,8 @@ button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 
   .pb-newbtns button { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 1px 7px; font: inherit; font-weight: 700; cursor: pointer; }
   .pb-soldper .pb-sold-q { display: block; font-size: 16px; color: var(--ink); } .pb-soldper #pb-soldkind { font-size: 16px; padding: 8px; border: 2px solid #23415f; border-radius: 6px; }
   .pbr-doc { display: block; margin-top: 5px; border: 1px solid #23415f; background: #fff; color: #23415f; border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .prc-hi-say { font-size: 17px; color: var(--ink); background: #eef6ee; border: 2px solid #1f9d4a; border-radius: 6px; padding: 10px 14px; margin: 8px 0 12px; } .prc-hi-say .prc-hi-btns { display: block; margin-top: 8px; }
+  table.prc-t tr.prc-hit > td { background: #d9f2df; border-top: 3px solid #1f9d4a; border-bottom: 3px solid #1f9d4a; } table.prc-t tr.prc-hit > td:first-child { border-left: 6px solid #1f9d4a; }
   .pb-sellp { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; } .pb-sellp-btn { border: 1px solid #23415f; background: #23415f; color: #fff; border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .pb-st-footnote { font-size: 15px; color: var(--ink); background: #eef6ee; border: 1px solid #b9d8bd; border-radius: 6px; padding: 7px 10px; margin: 8px 0; } .pb-st-box .pb-st-rolls { display: block; }
   .pbr-foot { font-size: 14px; font-weight: 400; color: var(--ink); background: #eef6ee; border: 1px solid #b9d8bd; border-radius: 6px; padding: 5px 8px; margin-top: 4px; text-align: left; white-space: normal; }
@@ -25171,7 +25173,10 @@ function prcCalc() {
 }
 function wirePricing() {
   const reload = (m, keep) => openPricing(null, m);
-  document.querySelectorAll("[data-prc-part]").forEach(b => b.addEventListener("click", () => { PRC.part = b.dataset.prcPart; PRC.rulesEdit = null; renderPricing(); }));
+  document.querySelectorAll("[data-prc-part]").forEach(b => b.addEventListener("click", () => { PRC.part = b.dataset.prcPart; PRC.rulesEdit = null; PRC.hi = null; renderPricing(); }));
+  document.querySelector("[data-prc-hi-x]")?.addEventListener("click", () => { PRC.hi = null; renderPricing(); });
+  document.querySelector("[data-prc-hi-item]")?.addEventListener("click", e => openPbItemPage(Number(e.currentTarget.dataset.prcHiItem)));
+  { const hit = document.querySelector(".prc-hit, .prc-hi-say"); if (hit && PRC.hi && !PRC.hi.seen) { PRC.hi.seen = true; setTimeout(() => (document.querySelector(".prc-hit") || hit).scrollIntoView({ block: "center", behavior: "smooth" }), 80); } }
   if (PRC.part) wirePrcPart();
   document.querySelectorAll("[data-prc-s]").forEach(b => b.addEventListener("click", async () => { PRC.part = null; PRC.sel = Number(b.dataset.prcS); setPage("pricing=" + PRC.sel, "pricing", "Pricing"); await prcLoadSeries(); renderPricing(); }));
   $("#prc-model")?.addEventListener("change", e => { PRC.model = Number(e.target.value); prcCalc(); });
@@ -25243,11 +25248,17 @@ function prcPartHtml(edit) {
       ${edit ? `<div class="set-tools"><button class="btn" type="button" id="prc-psave">Save member prices</button></div>` : ""}</section>`;
   }
   const t = PRC.part; if (!PRC.rulesEdit) PRC.rulesEdit = P.rules.filter(r => r.item_type === t).map(r => ({ cost_from: (+r.cost_from).toFixed(2), cost_to: r.cost_to == null || r.cost_to === "" ? "" : (Number(r.cost_to) - 0.01).toFixed(2), markup_pct: +r.markup_pct })).sort((a, b) => Number(a.cost_from) - Number(b.cost_from));
+  // came here from an item's "💲 Pricing for this" button (Carlo, Nov 10): light up the line that sets that item's sell price, and say so
+  const H = PRC.hi && PRC.hi.type === t ? PRC.hi : null, hc = H ? Number(H.cost) : NaN;
+  const hitI = H && isFinite(hc) ? PRC.rulesEdit.findIndex(r => hc >= Number(r.cost_from) - 1e-9 && (r.cost_to === "" || hc <= Number(r.cost_to) + 1e-9)) : -1, hr = hitI >= 0 ? PRC.rulesEdit[hitI] : null;
+  const hRt = Number(P.round_to) || 0.01, hPrice = hr && hr.markup_pct !== "" && hr.markup_pct != null ? Math.round(Math.round(hc * (1 + Number(hr.markup_pct) / 100) / hRt) * hRt * 100) / 100 : null;
+  const hiSay = !H ? "" : `<div class="prc-hi-say">👉 <b>${esc(H.name)}</b> costs us <b>${isFinite(hc) && hc > 0 ? money(hc) : "nothing yet"}</b>${H.unit ? " a " + esc(H.unit) : ""}. ${hr ? `The <b>green line</b> below sets its sell price: ${money(hc)} + ${Number(hr.markup_pct)}% = <b>${money(hPrice)}</b>.${H.price != null && Math.abs(Number(H.price) - hPrice) > 0.004 ? ` Its sell price now is ${money(H.price)}.` : " That is its sell price now."}` : isFinite(hc) && hc > 0 ? "No line below covers that cost, so it keeps the sell price typed on the item. Add a line to give it a rule." : "Type its cost on the item first; then a line here can set its sell price."}
+      <span class="prc-hi-btns"><button class="btn quiet-btn" type="button" data-prc-hi-item="${H.id}">← Back to the item</button> <button class="link" type="button" data-prc-hi-x>Hide this</button></span></div>`;
   const R = PRC.rulesEdit, inp = (i, k, v, ph) => prcStep(`<input class="ie-num prc-in" data-ri="${i}" data-rk="${k}" inputmode="decimal" value="${v ?? ""}" placeholder="${ph || ""}" ${d} style="width:${k === "markup_pct" ? 64 : 90}px">`, 1, k === "markup_pct" ? 0 : 2, !edit);
   return `<section class="cl-tools prc-sheet" id="prc-part"><div class="prc-head"><h2>${PRC_TYPE[t]} <span class="quiet">sell price = what we paid + mark up %</span></h2></div>
-    <p class="quiet">One line per cost range, cheapest first. A part that costs exactly the Max is in that line. ${t === "equipment" ? "Equipment in a series is priced by its series instead; this is only for equipment that isn't in one." : ""}</p>
+    ${hiSay}<p class="quiet">One line per cost range, cheapest first. A part that costs exactly the Max is in that line. ${t === "equipment" ? "Equipment in a series is priced by its series instead; this is only for equipment that isn't in one." : ""}</p>
     <div class="staff-wrap"><table class="prc-t prc-mk"><thead><tr><th>Min</th><th>Max</th><th class="r">Mark up</th><th class="r" title="What we make: what we sold it for minus what we paid">Gross profit</th><th class="r" title="What we paid × this = the sell price">Markup</th><th class="r" title="Of every dollar the customer pays, how much is profit">Real</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
-      ${R.map((r, i) => `<tr><td>$ ${inp(i, "cost_from", r.cost_from, "0.00")}</td><td>$ ${inp(i, "cost_to", r.cost_to, "and up")}</td><td class="r">${inp(i, "markup_pct", r.markup_pct, "")} %</td>
+      ${R.map((r, i) => `<tr${i === hitI ? ` class="prc-hit"` : ""}><td>$ ${inp(i, "cost_from", r.cost_from, "0.00")}</td><td>$ ${inp(i, "cost_to", r.cost_to, "and up")}</td><td class="r">${inp(i, "markup_pct", r.markup_pct, "")} %</td>
         <td class="r num" data-rgp="${i}"></td><td class="r num" data-rmx="${i}"></td><td class="r num" data-rreal="${i}"></td>
         ${edit ? `<td><button class="link danger" type="button" data-rdel="${i}" title="Take this line off">×</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="7" class="quiet">No mark up set: these keep the price typed in the price book. Add a line to start.</td></tr>`}
     </tbody></table></div>
@@ -27922,7 +27933,10 @@ function showPbItem(id) {
       document.addEventListener("pointerdown", e => { if (!e.target.closest(".pb-namewrap")) nt.classList.add("hidden"); }, { capture: true });
     }
     // Sell price → 💲 Pricing for this (Carlo, Nov 10): the pricing page, at this item's own formula if it has one, else at the markup rules for its kind
-    $("#pb-to-pricing")?.addEventListener("click", e => { e.preventDefault(); if (r.price_formula_id) openPricing(r.price_formula_id); else openPricing(null, null, ["service", "material", "equipment", "security"].includes(r.item_type) ? r.item_type : "material"); });
+    $("#pb-to-pricing")?.addEventListener("click", e => { e.preventDefault(); const kind = ["service", "material", "equipment", "security"].includes(r.item_type) ? r.item_type : "material";
+      PRC.hi = r.price_formula_id ? null : { id: r.id, name: pbName(r.name), type: kind, cost: r.unit_cost, price: r.unit_price, unit: /^(foot|feet|ft)$/i.test(r.unit_of_measure || "") ? "foot" : /^(roll|box|bag|hour)$/i.test(r.unit_of_measure || "") ? String(r.unit_of_measure).toLowerCase() : "" }; PRC.rulesEdit = null;
+      if (PRC.hi && Number(r.unit_cost) > 0) PRC.tryCost = Number(r.unit_cost);
+      if (r.price_formula_id) openPricing(r.price_formula_id); else openPricing(null, null, kind); });
     // sold per: each, by the foot (how many feet bought) or by the roll (how long the roll is)
     const sk = $("#pb-soldkind");
     if (sk) sk.addEventListener("change", () => { const k = sk.value, lab = f.querySelector(".pb-len"), on = k === "roll" || k === "foot";

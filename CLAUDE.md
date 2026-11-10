@@ -181,6 +181,7 @@
 ## Price book item: Sell price
 
 - (Carlo, Nov 10.) On the item's own box the label **Price** is now **Sell price**, and beside it a dark blue **💲 Pricing for this** button (owners, and people who edit the price book and see costs) opens the Pricing page: at the item's own formula when it has one (`price_formula_id`), else at the markup rules for its kind (`openPricing(null, null, item_type)`: Parts = `service`, Material, Equipment, Security). `#pb-to-pricing` in `showPbItem`. Unsaved changes on the item are not saved by the button.
+- **The line that affects the item is lit up** (Carlo, Nov 10: "when you click the button and it takes you to the page have it highlight the lines that affect it"). The button sets `PRC.hi` (the item's id, name, kind, cost, price, unit); on the markup rules for that kind the line whose cost range holds the item's cost is green (`tr.prc-hit`), the page scrolls to it, and a green box above the table says "👉 18-2 Thermostat Wire costs us $0.20 a foot. The green line below sets its sell price: $0.20 + 200% = $0.60." (and its sell price now, if different), with **← Back to the item** and Hide this. No line covers the cost → it says so. "Try a cost" is filled with the item's cost. Picking another kind on the Pricing page clears it. Items priced by a formula (series) open their formula with no highlight yet.
 
 ## Price book item: stock of an item sold by the foot
 
