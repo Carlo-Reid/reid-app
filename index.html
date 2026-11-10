@@ -29217,7 +29217,7 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
 // locked vault; Connect to Podium sends the owner to Podium's own page to say yes, and Podium sends him back here with a one-time code
 // (podiumBack). The podium Edge Function does the talking. sync/extra/246_podium.sql.
 const PODIUM_REDIRECT = "https://reid-app.pages.dev/";
-const PODIUM_SCOPES = ["read_locations", "read_organizations", "read_contacts", "write_contacts", "read_messages", "write_messages"];
+const PODIUM_SCOPES = ["read_locations", "read_organizations", "read_contacts", "write_contacts", "read_messages", "write_messages", "read_phones"];
 let PODIUM_BACK = null;
 async function podiumBox(note, bad) {
   const box = $("#podium-box"); if (!box) return;
@@ -29232,7 +29232,7 @@ async function podiumBox(note, bad) {
         <li>Press <b>Dashboard</b>, then <b>Create App</b>. For the name, type <i>Reid app</i>.</li>
         <li>In the menu on the side, press <b>OAuth</b>.</li>
         <li><b>Redirect URL:</b> copy this and paste it there, exactly as it is: <code class="pod-code">${PODIUM_REDIRECT}</code> <button class="btn quiet-btn" type="button" data-pod-copy>Copy</button></li>
-        <li><b>Scopes:</b> tick these six: ${PODIUM_SCOPES.map(x => `<code class="pod-code">${x}</code>`).join(" ")}</li>
+        <li><b>Scopes:</b> tick these seven: ${PODIUM_SCOPES.map(x => `<code class="pod-code">${x}</code>`).join(" ")}</li>
         <li>Press <b>Save</b>. Podium now shows a <b>Client ID</b> and a <b>Client Secret</b>. The secret shows only one time, so do the next step before you leave that page.</li>
         <li>Copy each one into its box here and press Save the keys.</li></ol>
       <form class="pod-f" autocomplete="off">
@@ -29259,10 +29259,20 @@ async function podiumBox(note, bad) {
       <p class="pod-p">${locs.length ? `I can see ${locs.length === 1 ? "this location" : "these locations"} in Podium: <b>${esc(locs.join(", "))}</b>.` : "I am connected to Podium."}${P.connected_at ? ` Connected on ${esc(fmtWhen(P.connected_at))}.` : ""}</p>
       ${P.last_error ? `<p class="pod-p pod-bad">The last time I asked Podium, it said: ${esc(P.last_error)}</p>` : ""}
       <button class="btn" type="button" data-pod-test>Test it</button>
-      <button class="btn quiet-btn" type="button" data-pod-off>Disconnect</button>${msg}`;
+      <button class="btn" type="button" data-pod-again title="Use this after a new permission (scope) was ticked on the Podium developer page">🔗 Connect to Podium again</button>
+      <button class="btn" type="button" data-pod-probe>🔎 Check what Podium lets me see</button>
+      <button class="btn quiet-btn" type="button" data-pod-off>Disconnect</button>
+      <div class="pod-probe" id="pod-probe"></div>${msg}`;
   }
   const say = (t, err) => { const m = $("#pod-msg"); if (m) { m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; } };
-  box.querySelector("[data-pod-connect]")?.addEventListener("click", async e => { e.currentTarget.disabled = true; say("Opening Podium…");
+  box.querySelector("[data-pod-probe]")?.addEventListener("click", async e => { e.currentTarget.disabled = true; say("Asking Podium… this takes about half a minute.");
+    let d = null; try { const r = await db.functions.invoke("podium", { body: { action: "probe" } }); d = r.error ? null : r.data; } catch { }
+    e.currentTarget.disabled = false;
+    if (!d || !d.ok) return say("It did not work. " + (d && d.message ? "Podium said: " + d.message : "Try again in a few minutes."), true);
+    const nice = { 200: "✓ yes", 401: "✗ no (not allowed)", 403: "✗ no (not allowed)", 404: "✗ not there", 0: "no answer" };
+    $("#pod-probe").innerHTML = `<p class="pod-p"><b>Here is what Podium answered.</b> I saved it, so you do not need to copy it.</p><ul class="pod-ol">${(d.results || []).map(r => `<li>${esc(r.path)}: <b>${esc(nice[r.status] || "answer " + r.status)}</b></li>`).join("")}</ul>`;
+    say("Done. Tell Claude you pressed it."); });
+  box.querySelector("[data-pod-connect], [data-pod-again]")?.addEventListener("click", async e => { e.currentTarget.disabled = true; say("Opening Podium…");
     let d = null; try { const r = await db.functions.invoke("podium", { body: { action: "start" } }); d = r.error ? null : r.data; } catch { }
     if (d && d.url && /^https:\/\/api\.podium\.com\//.test(d.url)) { location.href = d.url; return; }
     e.currentTarget.disabled = false; say(d && d.need_keys ? "I do not have the keys yet." : d && d.error === "not_allowed" ? "Only an owner can do this." : "I could not start. Try again in a few minutes.", true); });

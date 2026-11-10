@@ -91,6 +91,13 @@ BEGIN
     last_ok = CASE WHEN p_error IS NULL THEN now() ELSE last_ok END, last_error = p_error WHERE id = 1;
 END $f$;
 
+-- what Podium lets the app see (the Edge Function's "probe": only yes/no and field names, no customer data), kept so it can be looked at later
+ALTER TABLE public.podium_conn ADD COLUMN IF NOT EXISTS probe jsonb;
+CREATE OR REPLACE FUNCTION public._podium_probe_save(p jsonb) RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path TO 'public' AS $f$
+  UPDATE podium_conn SET probe = jsonb_build_object('at', now(), 'results', p) WHERE id = 1 $f$;
+REVOKE EXECUTE ON FUNCTION public._podium_probe_save(jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._podium_probe_save(jsonb) TO service_role;
+
 REVOKE EXECUTE ON FUNCTION public._podium_secret_set(text, text), public.podium_allowed(), public.podium_state(), public.podium_set_keys(text, text), public.podium_disconnect(),
   public._podium_secrets(), public._podium_state_new(bigint), public._podium_state_use(text, bigint), public._podium_save(text, text, timestamptz, bigint, jsonb, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.podium_allowed(), public.podium_state(), public.podium_set_keys(text, text), public.podium_disconnect() TO authenticated;

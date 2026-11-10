@@ -3,11 +3,12 @@
 //   { action: "start" }               → the Podium address to send the owner to, to approve the connection
 //   { action: "finish", code, state } → trades Podium's one-time code for the keys, saves them in the vault, lists the locations
 //   { action: "test" }                → asks Podium for the locations, to prove the connection still works
+//   { action: "probe" }               → tries the addresses where calls / recordings might be and says which ones answer (no customer data is returned: only yes/no and field names)
 // The Client ID / Secret and the tokens live in the database vault; they are never sent to the browser. See sync/extra/246_podium.sql.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const REDIRECT = "https://reid-app.pages.dev/";   // must be exactly the Redirect URL typed in the Podium developer page
-const SCOPES = "read_locations read_organizations read_contacts write_contacts read_messages write_messages";
+const SCOPES = "read_locations read_organizations read_contacts write_contacts read_messages write_messages read_phones";   // read_phones added Nov 10 to look for calls and recordings
 const API = "https://api.podium.com";
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" } });
@@ -66,6 +67,29 @@ Deno.serve(async (req) => {
     const loc = await locations(t.access);
     await admin.rpc("_podium_save", { p_access: t.access, p_refresh: t.refresh, p_expires: t.expires, p_user: who.data, p_locations: loc.list ?? null, p_error: loc.error ?? null });
     return json({ connected: true, locations: loc.list ?? [], note: loc.error ?? null });
+  }
+
+  if (body.action === "probe") {
+    if (!sec.refresh_token) return json({ need_connect: true });
+    const t = await tokens({ grant_type: "refresh_token", refresh_token: sec.refresh_token });
+    if ("error" in t) return json({ error: "podium", message: t.error });
+    await admin.rpc("_podium_save", { p_access: t.access, p_refresh: t.refresh, p_expires: t.expires, p_user: null, p_locations: null, p_error: null });
+    const loc = ((await admin.from("podium_conn").select("locations").eq("id", 1).maybeSingle()).data?.locations ?? []) as { uid?: string }[];
+    const L = loc[0]?.uid ? "?locationUid=" + encodeURIComponent(loc[0].uid) + "&limit=2" : "?limit=2";
+    const paths = ["phones", "phone_numbers", "phone-numbers", "calls", "phone_calls", "phones/calls", "call_recordings", "recordings", "voicemails", "conversations", "messages", "users"];
+    const keysOf = (o: unknown): string[] => o && typeof o === "object" && !Array.isArray(o) ? Object.keys(o as Record<string, unknown>).slice(0, 40) : [];
+    const out: Record<string, unknown>[] = [];
+    for (const p of paths) for (const q of [L, "?limit=2"]) {
+      try { const r = await timed(API + "/v4/" + p + q, 12000, { headers: { Authorization: "Bearer " + t.access, Accept: "application/json" } });
+        const j = await r.json().catch(() => null) as Record<string, unknown> | null;
+        const list = j && Array.isArray(j.data) ? j.data as unknown[] : Array.isArray(j) ? j as unknown[] : null;
+        out.push({ path: p, with_location: q === L && q !== "?limit=2", status: r.status, keys: keysOf(j), n: list ? list.length : null, item_keys: list && list.length ? keysOf(list[0]) : [],
+          message: !r.ok && j ? String(j.message ?? j.error ?? "").slice(0, 160) : "" });
+        if (r.ok || q === "?limit=2" || L === "?limit=2") break;
+      } catch { out.push({ path: p, status: 0, message: "no answer" }); break; }
+    }
+    await admin.rpc("_podium_probe_save", { p: out });
+    return json({ ok: true, results: out.map(o => ({ path: o.path, status: o.status })) });
   }
 
   if (body.action === "test") {
