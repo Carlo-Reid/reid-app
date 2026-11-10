@@ -1,0 +1,85 @@
+// Supabase Edge Function: podium   (keep "Verify JWT" ON: only signed-in owners use it)
+// The app's connection to Podium (Settings → Podium). Podium uses OAuth: an owner approves the app once on Podium's own page.
+//   { action: "start" }               → the Podium address to send the owner to, to approve the connection
+//   { action: "finish", code, state } → trades Podium's one-time code for the keys, saves them in the vault, lists the locations
+//   { action: "test" }                → asks Podium for the locations, to prove the connection still works
+// The Client ID / Secret and the tokens live in the database vault; they are never sent to the browser. See sync/extra/246_podium.sql.
+import { createClient } from "npm:@supabase/supabase-js@2.45.4";
+
+const REDIRECT = "https://reid-app.pages.dev/";   // must be exactly the Redirect URL typed in the Podium developer page
+const SCOPES = "read_locations read_organizations read_contacts write_contacts read_messages write_messages";
+const API = "https://api.podium.com";
+const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
+const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" } });
+const timed = async (url: string, ms: number, init: RequestInit = {}) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); try { return await fetch(url, { ...init, signal: c.signal }); } finally { clearTimeout(t); } };
+type Sec = { client_id?: string; client_secret?: string; refresh_token?: string; access_token?: string; expires?: string | null };
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  if (req.method !== "POST") return json({ error: "post_only" }, 405);
+  const url = Deno.env.get("SUPABASE_URL")!, auth = req.headers.get("Authorization") ?? "";
+  const asUser = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } }, auth: { persistSession: false } });
+  const who = await asUser.rpc("podium_allowed");
+  if (who.error || !who.data) return json({ error: "not_allowed" });
+  const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
+  let body: { action?: string; code?: string; state?: string } = {};
+  try { body = await req.json(); } catch { return json({ error: "bad_request" }, 400); }
+  const sec = ((await admin.rpc("_podium_secrets")).data ?? {}) as Sec;
+  if (!sec.client_id || !sec.client_secret) return json({ need_keys: true });
+
+  // ask Podium for tokens (first time with the one-time code, later with the refresh token)
+  const tokens = async (extra: Record<string, string>) => {
+    try {
+      const r = await timed(API + "/oauth/token", 20000, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: sec.client_id, client_secret: sec.client_secret, ...extra }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.access_token) return { error: String(j.error_description ?? j.error ?? j.message ?? ("Podium said no (" + r.status + ")")).slice(0, 200) };
+      const secs = Number(j.expires_in) > 0 ? Number(j.expires_in) : 36000;   // 10 hours
+      return { access: String(j.access_token), refresh: j.refresh_token ? String(j.refresh_token) : null, expires: new Date(Date.now() + (secs - 300) * 1000).toISOString() };
+    } catch { return { error: "Podium did not answer." }; }
+  };
+  const locations = async (access: string) => {
+    try {
+      const r = await timed(API + "/v4/locations?limit=100", 20000, { headers: { Authorization: "Bearer " + access, Accept: "application/json" } });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return { status: r.status, error: String(j.message ?? j.error ?? ("Podium said no (" + r.status + ")")).slice(0, 200) };
+      const list = (Array.isArray(j.data) ? j.data : Array.isArray(j.locations) ? j.locations : Array.isArray(j) ? j : []) as Record<string, unknown>[];
+      return { list: list.slice(0, 100).map(l => ({ uid: String(l.uid ?? l.id ?? ""), name: String(l.name ?? l.displayName ?? "").slice(0, 120) })) };
+    } catch { return { error: "Podium did not answer." }; }
+  };
+
+  if (body.action === "start") {
+    const st = await admin.rpc("_podium_state_new", { p_user: who.data });
+    if (st.error || !st.data) return json({ error: "failed", message: "I could not start." });
+    return json({ url: API + "/oauth/authorize?client_id=" + encodeURIComponent(sec.client_id) + "&redirect_uri=" + encodeURIComponent(REDIRECT)
+      + "&scope=" + encodeURIComponent(SCOPES) + "&state=" + encodeURIComponent(String(st.data)), redirect: REDIRECT, scopes: SCOPES });
+  }
+
+  if (body.action === "finish") {
+    const code = String(body.code ?? "").slice(0, 2000), state = String(body.state ?? "").slice(0, 200);
+    if (!code || !state) return json({ error: "bad_request" }, 400);
+    const ok = await admin.rpc("_podium_state_use", { p_state: state, p_user: who.data });
+    if (ok.error || !ok.data) return json({ error: "old", message: "That took too long, or it was started by someone else. Press Connect to Podium again." });
+    const t = await tokens({ grant_type: "authorization_code", code, redirect_uri: REDIRECT });
+    if ("error" in t) return json({ error: "podium", message: t.error });
+    if (!t.refresh) return json({ error: "podium", message: "Podium did not give me a key to stay connected." });
+    const loc = await locations(t.access);
+    await admin.rpc("_podium_save", { p_access: t.access, p_refresh: t.refresh, p_expires: t.expires, p_user: who.data, p_locations: loc.list ?? null, p_error: loc.error ?? null });
+    return json({ connected: true, locations: loc.list ?? [], note: loc.error ?? null });
+  }
+
+  if (body.action === "test") {
+    if (!sec.refresh_token) return json({ need_connect: true });
+    let access = sec.access_token && sec.expires && new Date(sec.expires).getTime() > Date.now() ? sec.access_token : null;
+    const renew = async () => { const t = await tokens({ grant_type: "refresh_token", refresh_token: sec.refresh_token! });
+      if ("error" in t) return t.error;
+      await admin.rpc("_podium_save", { p_access: t.access, p_refresh: t.refresh, p_expires: t.expires, p_user: null, p_locations: null, p_error: null }); access = t.access; return null; };
+    if (!access) { const e = await renew(); if (e) { await admin.rpc("_podium_save", { p_access: null, p_refresh: null, p_expires: null, p_user: null, p_locations: null, p_error: e }); return json({ error: "podium", message: e }); } }
+    let loc = await locations(access!);
+    if (loc.status === 401) { const e = await renew(); if (!e) loc = await locations(access!); }
+    await admin.rpc("_podium_save", { p_access: null, p_refresh: null, p_expires: null, p_user: null, p_locations: loc.list ?? null, p_error: loc.error ?? null });
+    if (loc.error) return json({ error: "podium", message: loc.error });
+    return json({ ok: true, locations: loc.list });
+  }
+  return json({ error: "bad_request" }, 400);
+});
