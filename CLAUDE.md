@@ -10,6 +10,8 @@
 
 - **Tell Carlo as soon as what he asked for is done.** If something extra comes up (a failed sync, another bug), say his request is done first, then work on the extra and tell him about it. Never keep him waiting on extra work without saying so (Carlo, Nov 9).
 
+- **The "nothing to do here" rule: do it on everything from now on, without being asked** (Carlo, Nov 9: "always do this even if I do not ask; if I do not want it I will ask you to remove it"). When someone clicks a section that has no purpose (a heading, a title bar, a line of plain words: anything that is not a button, box or link), the **happy Eco Man pops up in violet** and says "Nothing to do here. Keep scrolling down." If the same spot is hit **more than 10 times** it follows **the angry rule** (red angry Eco Man, red bubble). Code: `ECO_IDLE` (the list of such places: add every new heading/plain section to it), `ecoIdleRule`, `.eco-pop.eco-violet` in `index.html`. Eco Man's own bubbles with nothing to press use the angry rule from the first click (see Eco Man below). On Auto update it covers the dark blue paper headings, the yellow "What to do" strip, the step titles and the plain lines. **Every new screen or section I build gets this.**
+
 ## Waiting on Carlo (pick up next session)
 
 - **Boone is paid by credit card.** Carlo is bringing the card payment info on Monday morning, Nov 9, 2026 so Boone's payments can be recorded like the bank payments to Lennox and Master (`sync/extra/195_bank_supplier_payments.sql`), and Boone's Our statement can match theirs. The app has three so far: Oct 2 $10,000, Oct 6 $10,000 and Oct 26 $12,662.01 ("Carlo P.C. Master Card"). Remind him at the start.
