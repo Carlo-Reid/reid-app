@@ -24311,7 +24311,7 @@ function renderPbReview(msg) {
     <p class="lead">Costs from supplier invoices that are different from the price book, and items that aren't in it yet. Approve to change the cost (or add the new item), or approve and set the price by your markup rule. ✕ keeps things as they are; a new item you don't approve never shows in the price book.</p>
     <section class="cl-tools">
       ${rows.length ? `<label class="pbr-find">🔎 Search <input type="search" id="pbr-q" value="${esc(PB.updQ || "")}" placeholder="Item name, code, supplier or invoice number" autocomplete="off"></label>` : ""}
-      <div class="ow-sortbar"><strong>${rows.length} waiting</strong><span id="pbr-shown"></span>${rows.length && ok ? `<label class="pb-allpick"><input type="checkbox" id="pbr-all" ${pick.size === rows.length ? "checked" : ""}> Pick all</label>` : ""}
+      <div class="ow-sortbar"><strong>${rows.length} waiting</strong><span id="pbr-shown"></span>${rows.length && ok ? `<label class="pb-allpick"><input type="checkbox" id="pbr-all" ${pick.size === rows.length ? "checked" : ""}> Pick all</label>` : ""}${rows.length ? `<button type="button" class="pbr-open pbr-copy" id="pbr-copy" title="Copy the item number of every line that is showing, one under the other, so you can paste them somewhere else">📋 Copy all item numbers</button>` : ""}
         <span class="staff-msg ok" role="status">${msg ? esc(msg) : ""}</span></div>
       ${ok && pick.size ? `<div class="pb-bulk"><strong>${pick.size} picked</strong>
         <button class="btn" type="button" data-pbr="approve">Approve the new costs</button>
@@ -24319,7 +24319,7 @@ function renderPbReview(msg) {
         <button class="btn quiet-btn" type="button" data-pbr="dismiss">Keep the old costs</button>
         <button class="link" type="button" id="pbr-clear">Clear</button></div>` : ""}
       ${rows.length ? `<div class="staff-wrap"><table class="calls-table pb-table"><thead><tr>${ok ? "<th></th>" : ""}<th>Item</th><th>From</th><th class="r">Cost now</th><th class="r">New cost</th><th class="r">Price now</th><th class="r">Rule price</th>${ok ? "<th></th>" : ""}</tr></thead><tbody>
-        ${rows.map(u => `<tr data-pbr-row="${u.id}" data-q="${esc([pbName(u.name), u.sku, u.supplier, u.supplier_code, u.doc_ref].filter(Boolean).join(" ").toLowerCase())}">${ok ? `<td class="pb-pick"><input type="checkbox" data-pbr-pick="${u.id}" ${pick.has(u.id) ? "checked" : ""} aria-label="Pick ${esc(pbName(u.name))}"></td>` : ""}
+        ${rows.map(u => `<tr data-pbr-row="${u.id}" data-sku="${esc(u.sku || "")}" data-q="${esc([pbName(u.name), u.sku, u.supplier, u.supplier_code, u.doc_ref].filter(Boolean).join(" ").toLowerCase())}">${ok ? `<td class="pb-pick"><input type="checkbox" data-pbr-pick="${u.id}" ${pick.has(u.id) ? "checked" : ""} aria-label="Pick ${esc(pbName(u.name))}"></td>` : ""}
           <td>${u.kind === "new" ? `<span class="ow-tag pb-newtag">New item</span> ` : ""}<strong>${esc(pbName(u.name))}</strong><div class="quiet">${esc(u.sku)}${u.supplier_code && u.supplier_code !== u.sku ? " · " + esc(u.supplier) + " code " + esc(u.supplier_code) : ""}</div></td>
           <td>${esc(u.supplier)} ${esc(u.doc_ref)}<div class="quiet">${u.doc_date ? esc(fmtDate(u.doc_date)) : ""}</div>${/price list/i.test(u.doc_ref || "") ? "" : `<button type="button" class="pbr-doc" data-pbr-doc="${u.id}" title="Open the supplier's paper this cost came from">📄 See the paper</button>`}</td>
           <td class="r num">${u.kind === "new" ? `<span class="quiet">not in the<br>price book</span>` : money(u.cost)}</td><td class="r num"><strong>${money(u.new_cost)}</strong> ${u.kind === "new" ? "" : pbChg(u.cost, u.new_cost)}${(() => { const m = /\[roll \$([\d.]+) ÷ ([\d.]+) ft\]/.exec(u.description || ""); return m ? `<div class="pbr-foot">a foot<br>The paper says $${esc(m[1])} for the roll.<br>$${esc(m[1])} ÷ ${esc(m[2])} feet = $${(Number(m[1]) / Number(m[2])).toFixed(3)} a foot</div>` : ""; })()}</td>
@@ -24333,6 +24333,14 @@ function renderPbReview(msg) {
     document.querySelectorAll("[data-pbr-row]").forEach(tr => { const hit = w.every(x => tr.dataset.q.includes(x)); tr.hidden = !hit; if (hit) { n++; ids.push(Number(tr.dataset.pbrRow)); } });
     const sh = $("#pbr-shown"); if (sh) sh.textContent = w.length ? ` · showing ${n}` : ""; return ids; };
   $("#pbr-q")?.addEventListener("input", e => { PB.updQ = e.target.value; pbrShown(); }); pbrShown();
+  // 📋 Copy all item numbers (Carlo, Nov 10): our code of every line showing (after a search, only those), one per line, no repeats
+  $("#pbr-copy")?.addEventListener("click", async e => { const b = e.currentTarget, was = "📋 Copy all item numbers", say = t => { b.textContent = t; setTimeout(() => { b.textContent = was; }, 5000); };
+    const L = [...new Set([...document.querySelectorAll("[data-pbr-row]")].filter(tr => !tr.hidden).map(tr => tr.dataset.sku).filter(Boolean))];
+    if (!L.length) return say("No item numbers to copy");
+    const txt = L.join("\n");
+    try { await navigator.clipboard.writeText(txt); }
+    catch { const ta = document.createElement("textarea"); ta.value = txt; ta.style.cssText = "position:fixed;left:-9999px"; document.body.appendChild(ta); ta.select(); let ok2 = false; try { ok2 = document.execCommand("copy"); } catch {} ta.remove(); if (!ok2) return say("I could not copy them"); }
+    say(`✓ Copied ${L.length} item number${L.length === 1 ? "" : "s"}. Now paste them.`); });
   $("#pbr-all")?.addEventListener("change", e => { PB.updPick = e.target.checked ? new Set(pbrShown()) : new Set(); renderPbReview(); });
   $("#pbr-clear")?.addEventListener("click", () => { PB.updPick = new Set(); renderPbReview(); });
   document.querySelectorAll("[data-pbr-pick]").forEach(cb => cb.addEventListener("change", () => { const id = Number(cb.dataset.pbrPick); cb.checked ? pick.add(id) : pick.delete(id); renderPbReview(); }));
