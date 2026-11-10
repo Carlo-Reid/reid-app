@@ -153,6 +153,8 @@
 
 - (Carlo, Nov 10.) **Match to PO** is in the top section of an open supplier invoice, right under **Find our invoice** (it used to be lower, with Note / Date / Mark checked, which stay where they were). **Once the invoice has a PO, that spot says "✔ PO found: PO …" and there is no box to search again.** Only when the PO was matched by hand it also shows "Wrong PO? Take it off" (the old "Use the printed PO": it clears the hand match), so a mistake can be fixed. `sinvPoLineHtml`, `.sci-po` in `index.html`; same `data-sinv-setpo` / `data-sinv-unpo` handlers as before.
 
+- The **Note / Save note** box on an open supplier invoice was taken off (Carlo, Nov 10: "not sure what good it is"). Notes saved before are still in the database (`match_note`) and still show where the lists showed them; there is just no box to type one.
+
 ## Supplier invoices: put a PO line back
 
 - (Carlo, Nov 10.) In an open supplier invoice, "Changes to this PO" shows **↩ Put it back** beside each "Took off" line. It asks first, then adds the line again with the same words, quantity and price (the usual PO save, reason "Put back: it was taken off by mistake"), and the entry then says "(put back)". `sinvHistory`, `data-sinv-putback` in `index.html`; no database change. It comes back as a new line, so anything tied to the old line (received counts) is not carried over.
