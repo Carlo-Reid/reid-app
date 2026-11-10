@@ -206,6 +206,10 @@
 
 - (Carlo, Nov 10: the stock of 18-2 Thermostat Wire "shows 10781 in stock, is that the number of feet or number of rolls, because it should be number of rolls".) It is **feet**: stock is kept in the unit the item is sold in. For an item sold by the foot with feet bought filled in, the item's Stock section now shows **In stock** in rolls, big ("43 rolls + 31 ft") with "10,781 feet in all" under it, and a green line under the boxes says every number in the section is in feet and how many feet a roll is. The other boxes (sold, free to sell, where, Main warehouse count) are still in feet; the count is still typed in feet. `stockShow` in the item panel, `.pb-st-rolls`, `#pb-st-footnote`. Not changed: the Stock page and scanning still count this item in feet.
 
+## Price book item: Accounting is in the right side bar
+
+- (Carlo, Nov 10: "move this… to the right side bar".) On a part's own page, the **Accounting** block (its heading, the "Margin 78% · markup 358% · profit $80.16" line, "where this item's sales, cost and stock are booked", and the account boxes when opened) is the first box of the right side bar (`.pbi-side`, `#pb-acct-side`), above Where it's listed. `showPbItem` builds it in the form as before, then moves it; its boxes get `form="pb-form"` so the item's Save still saves them. In the price book list's small side panel (no right side bar there) it stays where it was.
+
 ## Price book item: Stock "Where:" squares
 
 - (Carlo, Nov 10: "change all of these into small square apps".) In the item's Stock section, each place under **Where:** (Adam 1, Counted Inventory 35, Dave 1…) is a small blue square (84px, `.pb-st-sq`): the count big on top, the place's name under it; red when the count is below zero. They wrap under the word "Where:". They only show; a click does nothing (they are in `ECO_IDLE`, so the nothing-to-do rule answers). `stockShow` in the item panel.
