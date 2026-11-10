@@ -206,6 +206,10 @@
 
 - (Carlo, Nov 10: the stock of 18-2 Thermostat Wire "shows 10781 in stock, is that the number of feet or number of rolls, because it should be number of rolls".) It is **feet**: stock is kept in the unit the item is sold in. For an item sold by the foot with feet bought filled in, the item's Stock section now shows **In stock** in rolls, big ("43 rolls + 31 ft") with "10,781 feet in all" under it, and a green line under the boxes says every number in the section is in feet and how many feet a roll is. The other boxes (sold, free to sell, where, Main warehouse count) are still in feet; the count is still typed in feet. `stockShow` in the item panel, `.pb-st-rolls`, `#pb-st-footnote`. Not changed: the Stock page and scanning still count this item in feet.
 
+## Price book item: Stock "Where:" squares
+
+- (Carlo, Nov 10: "change all of these into small square apps".) In the item's Stock section, each place under **Where:** (Adam 1, Counted Inventory 35, Dave 1…) is a small blue square (84px, `.pb-st-sq`): the count big on top, the place's name under it; red when the count is below zero. They wrap under the word "Where:". They only show; a click does nothing (they are in `ECO_IDLE`, so the nothing-to-do rule answers). `stockShow` in the item panel.
+
 ## Price book item: How is it sold?
 
 - (Carlo, Nov 10: "where is the how is it sold, each, per foot and so on section in PB1 area".) It was there but hard to spot: a small "Sold per" drop-down under Member price in the item's own box, with only Each / By the foot / By the roll. Now it is labelled **How is it sold?** in bold with a dark blue frame, and it has the same choices as the new-item form on Auto update: Each, By the foot, By the roll, **By the box, By the bag, By the hour**. Same spot (under Member price, above Labour hours); `#pb-soldkind` in the item panel; the unit is saved in `unit_of_measure` as before (each / foot / roll / box / bag / hour). Items added from Auto update saved "per box" style words: the drop-down reads those too.
