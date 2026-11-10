@@ -26,6 +26,10 @@
 
 - **Boone is paid by credit card.** Carlo is bringing the card payment info on Monday morning, Nov 9, 2026 so Boone's payments can be recorded like the bank payments to Lennox and Master (`sync/extra/195_bank_supplier_payments.sql`), and Boone's Our statement can match theirs. The app has three so far: Oct 2 $10,000, Oct 6 $10,000 and Oct 26 $12,662.01 ("Carlo P.C. Master Card"). Remind him at the start.
 
+## Receivables: payments in the bank with no invoice
+
+- (Carlo, Nov 9.) Money that came into the bank (kinds Deposits, Card & online payments in, Partners & financing, Other) with nothing attached on the Bank page. Receivables shows Eco Man at the top: "Carlo, please help me find these. There are 2,743 payments in the bank with no invoice." → **Show me the list** opens its own screen (`openUnapplied`, `UA`, `uaCardHtml` in `index.html`): pick a year, one big card per payment (amount, day, what the bank says), up to 3 invoices for exactly the same amount as "Yes, link this one" squares, a box to type an invoice number and **Save the link**, Undo after. One payment can take several invoices. The link is a `bank_invoice_links` row (how `by hand`), the same as the Bank page makes, so it shows on the Bank page right away; it does NOT record a payment on the invoice. RPCs `bank_unapplied`, `bank_unapplied_link`, `bank_unapplied_unlink` (`_recv_ok`: invoices.adjust, owner/admin/accounting or bank.view), `sync/extra/241_bank_unapplied.sql`. Most of the list is Elavon card deposits (many invoices in one deposit): those are really matched by loading the Credit Card Statement on the Bank page.
+
 ## Payroll side bar
 
 - **No green or red in the Payroll side bar ("His calls").** Carlo is saving those colours for special side bar functions later. Maintenance shows teal-blue and Warranty grey there (`.pr-side .pr-k-*`); the call boxes keep their usual colours.
