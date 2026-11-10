@@ -159,6 +159,8 @@
 
 - The **Note / Save note** box on an open supplier invoice was taken off (Carlo, Nov 10: "not sure what good it is"). Notes saved before are still in the database (`match_note`) and still show where the lists showed them; there is just no box to type one.
 
+- **Clicking an invoice with no PO opens only the invoice** (Carlo, Nov 10: clicking C443072 "pops up with a print page… remove the print pop up, the normal one is good enough"). The big "New PO for …" page (`openMkPoPop`, shown in the invoice viewer with its Print bar) used to open by itself the first time such an invoice was clicked; that automatic open is gone. The make-a-PO box inside the open invoice (`data-mkpo`, its `data-mkpo-big` button) still opens it by hand.
+
 ## Supplier invoices: put a PO line back
 
 - (Carlo, Nov 10.) In an open supplier invoice, "Changes to this PO" shows **↩ Put it back** beside each "Took off" line. It asks first, then adds the line again with the same words, quantity and price (the usual PO save, reason "Put back: it was taken off by mistake"), and the entry then says "(put back)". `sinvHistory`, `data-sinv-putback` in `index.html`; no database change. It comes back as a new line, so anything tied to the old line (received counts) is not carried over.
