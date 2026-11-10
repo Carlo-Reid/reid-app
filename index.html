@@ -18108,7 +18108,23 @@ function sinvParseLines(text, credit) {
     const neg = credit || !!m[8];
     out.push({ code: m[2], description: desc, shipped: n(m[3]), backorder: m[4] ? n(m[4]) || null : null, unit_price: n(m[5]), discount: m[6] ? n(m[6]) : null, net_amount: (neg ? -1 : 1) * n(m[7]) });
   }
+  if (out.length) return out;
+  // Boone's pick ticket / sales order (Carlo, Nov 10, invoice C443072 came in with no lines): the line number and part number are on one line
+  // ("001 |LF4525050") and the words, ordered / shipped / back-ordered, the 5-decimal price, the discount and the net amount are on the next one or two.
+  const A = /^\s*[|\[\]_ ]*(\d{3})\s*[|\[\]]*\s*([A-Z0-9][A-Z0-9\-\/.]{3,})\s*[|\[\] ]*$/i, B = /^(.*?)[\s|]+(\d{1,4})\s+(\d{1,4})\s+(\d{1,4}|o)[\s|\[\]]+([\d,]+\.\d{4,5})[\s|\[\]]+(?:(\d{1,2}(?:\.\d+)?)[\s|\[\]]+)?([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i, seen = new Set();
+  for (let i = 0; i < L.length; i++) { const a = L[i].match(A); if (!a || !/\d/.test(a[2])) continue;
+    for (let j = i + 1; j < Math.min(L.length, i + 4); j++) { if (A.test(L[j])) break; const b = L[j].match(B); if (!b) continue;
+      const neg = credit || !!b[8], desc = b[1].replace(/[|\[\]]/g, " ").replace(/\s+(UN|EA|FT|BX|PK|RL|PR|LB|CS|BG|ST|PC)\s*$/i, "").replace(/\s+/g, " ").trim(), bo = /^o$/i.test(b[4]) ? 0 : n(b[4]);
+      const row = { code: a[2].toUpperCase(), description: desc, shipped: n(b[3]), backorder: bo || null, unit_price: n(b[5]), discount: b[6] ? n(b[6]) : null, net_amount: (neg ? -1 : 1) * n(b[7]) }, k = [row.code, row.shipped, row.unit_price, row.net_amount].join("|");
+      if (!seen.has(k)) { seen.add(k); out.push(row); } break; } }
   return out;
+}
+// the PO number printed on a supplier's paper, from the words read off it (used by Read it again): Boone prints it under "Customer PO#", in the first box of the next line
+function sinvPoFromText(text) {
+  const L = String(text || "").split(/\n/);
+  for (let i = 0; i < L.length; i++) if (/Customer\s+P\.?\s?O/i.test(L[i])) for (let j = i + 1; j < Math.min(L.length, i + 3); j++) { const m = L[j].replace(/^[\s|\[\]_]+/, "").match(/^(\d{6,12}(?:-\d{1,3})?)\b/); if (m) return m[1]; }
+  const g = String(text || "").match(/(?:\bP\.?\s?O\.?|PURCHASE\s+ORDER|CUSTOMER\s+ORDER)\s*(?:#|NO\.?|NUMBER|NUM\.?)?\s*[:#.]?\s*(\d{6,12}(?:-\d{1,3})?)\b/i);
+  return g ? g[1] : "";
 }
 // a PO made from an invoice's lines, for approving: [{ description, quantity, unit_cost }]
 // the same line read twice (an invoice scanned with its copy, or its packing slip) is only counted once,
@@ -19203,10 +19219,11 @@ function wireSupInv() {
       const amt = x => x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : Number(x.unit_price || 0) * Number(x.shipped ?? x.ordered ?? 1) * (1 - (Number(x.discount) || 0) / 100), sum = A => Math.round(A.reduce((a, x) => a + amt(x), 0) * 100) / 100;
       const li = A => A.length ? `<ul style="margin:4px 0 10px;padding-left:20px;text-align:left">${A.slice(0, 12).map(x => `<li>${esc(String(x.shipped ?? x.ordered ?? ""))} × ${esc([x.code, x.description].filter(Boolean).join(" · ").slice(0, 70))} · ${money(amt(x))}</li>`).join("")}${A.length > 12 ? `<li>…and ${A.length - 12} more</li>` : ""}</ul>` : `<p>(no lines)</p>`;
       say("");
-      const k2 = await askChoice("Use the new reading?", `<b>New reading: ${L.length} ${L.length === 1 ? "line" : "lines"}, ${money(sum(L))}</b>${li(L)}<b>What it has now: ${old.length} ${old.length === 1 ? "line" : "lines"}, ${money(sum(old))}</b>${li(old)}The invoice says ${money(before)} before tax. Lines typed in by hand are kept.`, [["yes", "Yes, use the new reading", true], ["", "No, keep what it has"]]);
+      const po = !r.po_id ? sinvPoFromText(text) : "";
+      const k2 = await askChoice("Use the new reading?", `<b>New reading: ${L.length} ${L.length === 1 ? "line" : "lines"}, ${money(sum(L))}</b>${li(L)}<b>What it has now: ${old.length} ${old.length === 1 ? "line" : "lines"}, ${money(sum(old))}</b>${li(old)}${po ? `I also read <b>PO ${esc(po)}</b> on it. If that PO is in the app, I will match it. ` : ""}The invoice says ${money(before)} before tax. Lines typed in by hand are kept.`, [["yes", "Yes, use the new reading", true], ["", "No, keep what it has"]]);
       if (k2 !== "yes") { say("Nothing was changed."); b.disabled = false; return; }
-      const { error } = await db.rpc("supplier_invoice_reread", { p_id: id, p_lines: L }); if (error) { say("Not saved: " + rpcErr(error)); b.disabled = false; return; }
-      SINV.det.delete(id); await sinvLoadDet(id); const top = $("#main").scrollTop; renderSupInv("Read again. The lines are from the new reading."); $("#main").scrollTop = top;
+      const { error } = await db.rpc("supplier_invoice_reread", { p_id: id, p_lines: L, p_extra: po ? { po_text: po } : {} }); if (error) { say("Not saved: " + rpcErr(error)); b.disabled = false; return; }
+      SINV.det.delete(id); SINV.data = null; await openSupInv("Read again. The lines are from the new reading.");
     } catch (er) { say("I could not read it: " + (er.message || er)); b.disabled = false; } }));
   document.querySelectorAll("[data-sinv-edpo]").forEach(b => b.addEventListener("click", () => { SINV.edPo = SINV.edPo === Number(b.dataset.sinvEdpo) ? null : Number(b.dataset.sinvEdpo); redo(); }));
   document.querySelectorAll("[data-sinv-ped]").forEach(f => {
