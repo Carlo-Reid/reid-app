@@ -18488,6 +18488,15 @@ async function dropInFill(x, text, C) {
   x.lines = sinvDedupLines(sinvParseLines(text, x.credit), x.subtotal ?? (x.total != null ? Math.round(x.total / 1.13 * 100) / 100 : null));
   if (x.slip) { x.total = null; x.credit = false; x.subtotal = null; x.hst = null; }
 }
+// A form whose table sits in ruled, shaded boxes (Heating Parts Central's statement: the word "Statement", the invoice line and the aging boxes) can come back with
+// almost none of its numbers: the reader skips the whole table. Such a page (fewer than 4 amounts read) is read once more with the form's lines wiped out, as one block,
+// and those words are added under the first reading (Carlo, Nov 10: "it is still not reading it as a statement").
+async function stReadBoxes(worker, canvas, text) {
+  if ((String(text).match(/\d\.\d{2}\b/g) || []).length >= 4) return text;
+  try { await worker.setParameters({ tessedit_pageseg_mode: "6" }); const t2 = (await worker.recognize(smNoLines(canvas))).data.text; await worker.setParameters({ tessedit_pageseg_mode: "3" });
+    return (String(t2).match(/\d\.\d{2}\b/g) || []).length > (String(text).match(/\d\.\d{2}\b/g) || []).length ? text + "\n[boxes read again without the form's lines]\n" + t2 : text;
+  } catch { try { await worker.setParameters({ tessedit_pageseg_mode: "3" }); } catch {} return text; }
+}
 async function dropInFiles(files) {
   if (!files.length) return;
   const items = files.map(f => ({ file: f.name, f, busy: "Waiting…" })); DROPIN.items.push(...items); drawDropIn();
@@ -18508,7 +18517,7 @@ async function dropInFiles(files) {
           const good = r => (r.words || []).filter(w => w.confidence > 80 && /[A-Za-z0-9]{3,}/.test(w.text)).length;
           if (good(d) < 8) for (const deg of [-90, 90]) { x.busy = `Page ${i + 1} looks sideways: turning it…`; drawDropIn(); const r = dropInTurn(cv[i], deg), e = (await worker.recognize(r)).data;
             if (good(e) > good(d) + 10) { d = e; cv[i] = r; break; } }
-          PT.push(d.text); }
+          x.busy = `Reading page ${i + 1} of ${cv.length}…`; PT.push(await stReadBoxes(worker, cv[i], d.text)); }
         // a page printed faintly on yellow paper (City Electric's copies): its right-hand box (invoice #, dates, PO) read again, cleaned up and bigger
         if (cv.length > 1) { const yel = cv.map(dropInYellow); if (yel.some(Boolean)) { await worker.setParameters({ tessedit_pageseg_mode: "6" });
           for (let i = 0; i < cv.length; i++) if (yel[i]) { x.busy = `Page ${i + 1} is printed faintly: reading its number…`; drawDropIn(); PT[i] += "\n[faint copy]\n" + (await worker.recognize(dropInFaint(cv[i]))).data.text; }
@@ -18762,7 +18771,7 @@ async function stReadFiles(files, S) {
     }
     const worker = await window.Tesseract.createWorker("eng"); const texts = [];
     let stop = canvases.length;
-    for (let i = 0; i < stop; i++) { say(`Reading page ${i + 1} of ${stop}… (about 10 seconds a page)`); const { data } = await worker.recognize(canvases[i]); texts.push(data.text);
+    for (let i = 0; i < stop; i++) { say(`Reading page ${i + 1} of ${stop}… (about 10 seconds a page)`); const { data } = await worker.recognize(canvases[i]); data.text = await stReadBoxes(worker, canvases[i], data.text); texts.push(data.text);
       // the statement says "Page 1 of 5" and the file has more pages after it (its invoices): read only the statement's pages
       const pg = String(data.text).match(/\bPage\s+(\d{1,2})\s+(?:of|de)\s+(\d{1,2})\b/i);
       if (i === 0 && pg && Number(pg[1]) === 1 && Number(pg[2]) < canvases.length && /STATEMENT|ETAT DE COMPTE|REMITTANCE/i.test(data.text)) stop = Number(pg[2]);
