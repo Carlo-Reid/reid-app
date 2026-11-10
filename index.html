@@ -18699,7 +18699,7 @@ function sinvHistory(C) {
 // Match to PO sits at the top, near Find our invoice (Carlo, Nov 10). Once a PO is matched it says "PO found" and the search box is gone, so nobody looks for it again.
 function sinvPoLineHtml(r, edit, d) {
   // Read it again sits here too, beside the Match to PO box (Carlo, Nov 10)
-  const rr = edit && ((d && d.pages) || []).length ? `<button class="btn quiet-btn sci-reread" type="button" data-sinv-reread="${r.id}" title="Read the scanned pages again, in case the lines were read wrong the first time">🔄 Read it again</button><span class="quiet" data-sinv-rereadmsg role="status"></span>` : "";
+  const rr = edit && ((d && d.pages) || []).length ? `<button class="btn quiet-btn sci-reread" type="button" data-sinv-reread="${r.id}" title="Read the scanned pages again, in case the lines were read wrong the first time">🔄 Read it again</button><button class="btn quiet-btn" type="button" data-sinv-print="${r.id}" title="Print the scanned pages of this invoice">🖨 Print the invoice</button><span class="quiet" data-sinv-rereadmsg role="status"></span>` : "";
   if (r.po_id) return `<div class="sci-po sci-po-ok"><b>✔ PO found:</b> <span>PO ${esc(r.po_number || "")}</span>${edit && r.po_by_hand ? ` <button class="link" type="button" data-sinv-unpo="${r.id}">Wrong PO? Take it off</button>` : ""}${rr}</div>`;
   return edit ? `<div class="sci-po"><label>Match to PO <input id="sinv-po-${r.id}" placeholder="PO number, job number or customer" value="${esc(r.po_by_hand ? r.po_number || "" : "")}" autocomplete="off"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button>${rr}<div class="sci-po-found" data-sci-pofound="${r.id}"></div></div>` : "";
 }
@@ -19174,6 +19174,18 @@ function wireSupInv() {
   document.querySelectorAll("[data-sret-open]").forEach(b => b.addEventListener("click", () => { SINV.open = Number(b.dataset.sretOpen); SINV.f = "all"; SINV.q = ""; redo(); setTimeout(() => document.querySelector(".sinv-row.open")?.scrollIntoView({ block: "start" }), 300); }));
   document.querySelectorAll("[data-sinv-addcopy]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); SINV.open = Number(b.dataset.sinvAddcopy); redo();
     setTimeout(() => { const z = document.querySelector(`[data-sinv-drop="${SINV.open}"]`); z?.scrollIntoView({ block: "center" }); z?.focus({ preventScroll: true }); }, 400); }));
+  // Print the invoice (Carlo, Nov 10): the invoice's scanned pages, one to a sheet, in a new window with the print box open
+  document.querySelectorAll("[data-sinv-print]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sinvPrint), r = (SINV.data?.rows || []).find(x => x.id === id), d = SINV.det.get(id), msg = b.parentElement.querySelector("[data-sinv-rereadmsg]"), say = t => { if (msg) msg.textContent = t; };
+    if (!r || !d) return; const w = window.open("", "_blank"); if (!w) return say("The print window was blocked. Allow pop-ups for this site, then press it again.");
+    const title = `${sinvShort(r.supplier || "") || "Supplier"} ${r.doc_type === "credit" ? "credit" : "invoice"} ${r.number || ""}`;
+    w.document.write(`<!doctype html><title>${esc(title)}</title><style>body{margin:0;font-family:sans-serif}p{padding:24px;font-size:18px}img{display:block;width:100%;page-break-after:always;break-after:page}img:last-child{page-break-after:auto;break-after:auto}@page{margin:8mm}</style><p id="w">Getting the pages…</p>`);
+    b.disabled = true;
+    try { const P = d.pages || [], srcs = [];
+      for (const pg of P) { if (!SINV.img.has(pg.id)) { const q = await db.rpc("supplier_doc_page", { p_id: pg.id }); if (q.data) SINV.img.set(pg.id, "data:image/jpeg;base64," + q.data); } if (SINV.img.has(pg.id)) srcs.push(SINV.img.get(pg.id)); }
+      if (w.closed) return; if (!srcs.length) { w.document.getElementById("w").textContent = "There is no copy of this invoice to print."; return; }
+      w.document.getElementById("w").remove(); let left = srcs.length; const go = () => { if (--left <= 0) setTimeout(() => { try { w.focus(); w.print(); } catch { } }, 200); };
+      srcs.forEach(src => { const im = w.document.createElement("img"); im.alt = title; im.onload = go; im.onerror = go; im.src = src; w.document.body.appendChild(im); });
+    } catch (er) { say("I could not print it: " + (er.message || er)); } finally { b.disabled = false; } }));
   // Read it again (Carlo, Nov 10): the saved pages are read again here in the browser; the new lines are shown first and only saved after a yes
   document.querySelectorAll("[data-sinv-reread]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sinvReread), r = (SINV.data?.rows || []).find(x => x.id === id), d = SINV.det.get(id), msg = b.parentElement.querySelector("[data-sinv-rereadmsg]"), say = t => { if (msg) msg.textContent = t; };
     if (!r || !d) return; b.disabled = true;
