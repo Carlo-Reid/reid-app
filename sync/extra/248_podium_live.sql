@@ -145,4 +145,6 @@ REVOKE EXECUTE ON FUNCTION public._podium_customers(text), public._podium_hook_s
 GRANT EXECUTE ON FUNCTION public.podium_text_who(), public.podium_thread(bigint, int), public.podium_missed_list(), public.podium_missed_done(text, boolean), public.podium_live_state() TO authenticated;
 GRANT EXECUTE ON FUNCTION public._podium_customers(text), public._podium_hook_secret(), public._podium_hook_set(text), public._podium_hook_note(jsonb), public._podium_call_in(text, jsonb),
   public._podium_msg_in(text, text, jsonb, bigint, text), public._podium_text_check(bigint, text) TO service_role;
+-- the Edge Functions read podium_conn themselves (which location to send from, the webhook's id): without this the first text failed with "Podium did not tell me which location to send from" (Nov 10)
+GRANT SELECT ON public.podium_conn TO service_role;
 NOTIFY pgrst, 'reload schema';
