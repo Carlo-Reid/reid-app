@@ -18688,7 +18688,9 @@ function sinvReturnsHtml(R, edit, page) {
 function sinvHistory(C) {
   const m = v => v == null ? "" : `${esc(v.description || "")} · qty ${esc(String(v.quantity ?? ""))} · ${money(v.unit_cost || 0)} each`;
   const act = { edit: "Changed", add: "Added", delete: "Took off", ignore: "Let go", return: "Put on a return" };
-  return `<details class="sinv-hist" open><summary>Changes to this PO <span class="quiet">(${C.length})</span></summary><ul>${C.map(c => `<li><b>${act[c.action] || c.action}</b>
+  // a line taken off by mistake can be put back (Carlo, Nov 10): the button shows on "Took off" until that line has been put back
+  const back = c => C.some(a => a.action === "add" && /^Put back/.test(a.reason || "") && (a.new?.description || "") === (c.old?.description || "") && new Date(a.at) > new Date(c.at));
+  return `<details class="sinv-hist" open><summary>Changes to this PO <span class="quiet">(${C.length})</span></summary><ul>${C.map(c => `<li><b>${act[c.action] || c.action}</b>${c.action === "delete" && c.old && c.old.description ? (back(c) ? ` <span class="quiet">(put back)</span>` : ` <button class="btn vtp-small" type="button" data-sinv-putback="${esc(JSON.stringify({ description: c.old.description, quantity: Number(c.old.quantity) || 1, unit_cost: Number(c.old.unit_cost) || 0 }))}">↩ Put it back</button>`) : ""}
     ${c.action === "edit" ? `${m(c.old)} <span aria-hidden="true">→</span> ${m(c.new)}` : c.action === "add" || c.action === "return" ? m(c.new) : c.action === "delete" ? m(c.old) : esc(String(c.key || "").replace(/^i:|\|p:\d+$|\|-$/g, "").replace(/^-\|p:/, "PO line "))}
     <div class="quiet">${esc(fmtDate(String(c.at).slice(0, 10)))} ${esc(new Date(c.at).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }))}${c.by ? " · " + esc(c.by) : ""}${c.invoice ? " · from invoice " + esc(c.invoice) : ""}${c.reason ? " · " + esc(c.reason) : ""}</div></li>`).join("")}</ul></details>`;
 }
@@ -19164,6 +19166,9 @@ function wireSupInv() {
       const chk = f.chk.checked; if (!ch.length && !chk) { f.querySelector(".msg").textContent = "Nothing changed."; return; }
       if (await apply(id, ch, chk, `PO saved${ch.length ? ` (${ch.length} ${ch.length === 1 ? "change" : "changes"}, recorded)` : ""}${chk ? " and marked checked" : ""}.`, f.why.value.trim())) SINV.edPo = null; });
   });
+  document.querySelectorAll("[data-sinv-putback]").forEach(b => b.addEventListener("click", async () => { let ln; try { ln = JSON.parse(b.dataset.sinvPutback); } catch { return; }
+    if ((await askChoice("Put this line back on the PO?", `${ln.description} · qty ${ln.quantity} · ${money(ln.unit_cost)} each`, [["yes", "Yes, put it back", true], ["", "No"]])) !== "yes") return;
+    b.disabled = true; if (!(await apply(SINV.open, [ln], false, "Put back on the PO (recorded).", "Put back: it was taken off by mistake"))) b.disabled = false; }));
   if (SINV.open && !SINV.det.has(SINV.open)) sinvLoadDet(SINV.open);
 }
 async function openPOs() {

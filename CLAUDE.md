@@ -149,6 +149,10 @@
 
 - (Carlo, Nov 10.) In an open supplier invoice, in the "🧾 Customer invoice" section, under **Find our invoice**, there is a line **Add to our stock**: pick the place (warehouses and other non-truck places, Main warehouse first) and press **📦 Put these parts in stock**; it asks "Put these 3 parts in Main warehouse?" first. Each invoice line (code + shipped qty) is matched to our price list by that supplier's own part number (`supplier_items.supplier_sku`), else by our code (`sku`); matched parts go in with `stock_move` (kind in, note "From supplier invoice … (supplier)"), so they show in Stock history and can be undone there. Parts not in the price list are NOT added and are listed ("Not in our price list, so not added: …"). An invoice can only be added once (table `supplier_invoice_stock`; if every move was undone it can be added again); after, the line shows "📦 Added to our stock · place · day · who" and the parts. Credits, returns and charges do not show the line. RPC `supplier_invoice_to_stock(p_id, p_place, p_dry)` (dry = just look), `sync/extra/242_supplier_invoice_to_stock.sql`; `sinvStockHtml`, `d.stock`, `SINV.places` in `index.html`.
 
+## Supplier invoices: put a PO line back
+
+- (Carlo, Nov 10.) In an open supplier invoice, "Changes to this PO" shows **↩ Put it back** beside each "Took off" line. It asks first, then adds the line again with the same words, quantity and price (the usual PO save, reason "Put back: it was taken off by mistake"), and the entry then says "(put back)". `sinvHistory`, `data-sinv-putback` in `index.html`; no database change. It comes back as a new line, so anything tied to the old line (received counts) is not carried over.
+
 ## Our statement (suppliers): invoices that miss their statement
 
 - **"👁 View the document" on Check what was read** (Carlo, Nov 10): beside Save the statement in the statement loader (`stReviewHtml`); it opens the statement's own pages big over the screen (`stViewDoc`, `#stv-doc`, from `STV.read.imgs`), Close or Esc shuts it, so the lines can be checked against the paper before saving.
