@@ -1820,7 +1820,7 @@
   .mc-ev { border: 1px solid #7dd3fc; background: #e0f2fe; border-radius: 12px; padding: 8px 12px; margin: 8px 0 12px; } .mc-ev h3 { margin: 0 0 4px; font-size: 14px; color: #075985; }
   .mc-ev-i { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; padding: 4px 0; border-top: 1px solid #bae6fd; } .mc-ev-i:first-of-type { border-top: 0; } .mc-ev-t { font-weight: 700; color: #0c4a6e; min-width: 140px; }
   .pr-pu-st.wait { color: #b45309; font-weight: 700; } .fu-pay .fu-item { border-left: 4px solid #f59e0b; } .fu-item.fu-pay-i > .fu-main { grid-column: 1 / -1; min-width: 0; }   /* a payroll line has no tick box, so its words take the full width (they were squeezed into the 34px tick column: Carlo, Nov 10) */ .pbr-find { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: calc(17px * var(--fs, 1)); margin-bottom: 12px; } .pbr-find input { flex: 1 1 auto; max-width: 620px; font-size: calc(17px * var(--fs, 1)); padding: 9px 12px; }
-  .sci-po { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; } .sci-po label { font-weight: 700; display: flex; gap: 8px; align-items: center; } .sci-po-ok b { color: #14703a; } .sci-po-ok span { font-weight: 700; }
+  .sci-po { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; } .sci-po label { font-weight: 700; display: flex; gap: 8px; align-items: center; } .sci-po-ok b { color: #14703a; } .sci-po-found { flex: 1 1 100%; display: grid; gap: 6px; } .sci-po-found:empty { display: none; } .sci-po-ok span { font-weight: 700; }
   .sci-stock { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; } .sci-stock label { font-weight: 700; display: flex; gap: 8px; align-items: center; } .sci-stock ul { flex: 1 1 100%; margin: 0; padding-left: 20px; } .sci-stock p { flex: 1 1 100%; margin: 0; } .sci-stock-done b { color: #14703a; }
   .fu-pay-btns { display: flex; gap: 12px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
   .pr-pu-st { font-size: 10.5px; font-weight: 700; color: #6b21a8; }
@@ -18699,7 +18699,7 @@ function sinvHistory(C) {
 // Match to PO sits at the top, near Find our invoice (Carlo, Nov 10). Once a PO is matched it says "PO found" and the search box is gone, so nobody looks for it again.
 function sinvPoLineHtml(r, edit) {
   if (r.po_id) return `<div class="sci-po sci-po-ok"><b>✔ PO found:</b> <span>PO ${esc(r.po_number || "")}</span>${edit && r.po_by_hand ? ` <button class="link" type="button" data-sinv-unpo="${r.id}">Wrong PO? Take it off</button>` : ""}</div>`;
-  return edit ? `<div class="sci-po"><label>Match to PO <input id="sinv-po-${r.id}" placeholder="PO number" value="${esc(r.po_by_hand ? r.po_number || "" : "")}" autocomplete="off"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button></div>` : "";
+  return edit ? `<div class="sci-po"><label>Match to PO <input id="sinv-po-${r.id}" placeholder="PO number, job number or customer" value="${esc(r.po_by_hand ? r.po_number || "" : "")}" autocomplete="off"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button><div class="sci-po-found" data-sci-pofound="${r.id}"></div></div>` : "";
 }
 function sinvCustHtml(r, d, edit) {
   const C = d.cinv; if (!C) { const pl = sinvPoLineHtml(r, edit); return pl ? `<section class="sinv-cust">${pl}</section>` : ""; }
@@ -19108,6 +19108,19 @@ function wireSupInv() {
   document.querySelectorAll(".sinv-scan").forEach(f => f.addEventListener("click", () => { const im = f.querySelector("img"); if (im) pageZoom(im.src, im.alt, f); }));
   const save = async (id, p, okMsg) => { const { error } = await db.rpc("supplier_invoice_set", { p_id: id, p }); if (error) { alertMsg("Not saved: " + rpcErr(error)); return; } SINV.det.delete(id); await openSupInv(okMsg); };
   document.querySelectorAll("[data-sinv-setpo]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.sinvSetpo), v = $("#sinv-po-" + id).value.trim(); if (v) save(id, { po_number: v }, `Matched to PO ${v}.`); }));
+  // Match to PO: as soon as a number (or job, or customer) is typed, every PO that matches shows under the box; click one to match it (Carlo, Nov 10)
+  document.querySelectorAll("[data-sci-pofound]").forEach(hf => { const id = Number(hf.dataset.sciPofound), hi = $("#sinv-po-" + id); if (!hi) return; let ht;
+    const row = (SINV.data?.rows || []).find(x => x.id === id), sn = String(sinvShort(row?.supplier || "") || "").toLowerCase();
+    hi.addEventListener("input", () => { clearTimeout(ht); ht = setTimeout(async () => { const q = hi.value.trim(); if (q.length < 2) { hf.innerHTML = ""; return; }
+      hf.innerHTML = `<span class="quiet">Looking…</span>`;
+      const { data, error } = await db.rpc("po_list", { p_search: q, p_status: "all", p_supplier: null, p_from: null, p_to: null, p_limit: 40 }); if (hi.value.trim() !== q || !hf.isConnected) return;
+      const mine = r => sn && String(r.supplier || "").toLowerCase().startsWith(sn) ? 0 : 1, ql = q.toLowerCase(), num = r => String(r.po_number || "").toLowerCase().startsWith(ql) ? 0 : String(r.po_number || "").toLowerCase().includes(ql) ? 1 : 2;
+      const L = (error ? [] : data || []).filter(r => r.status !== "cancelled").sort((a, b) => num(a) - num(b) || mine(a) - mine(b) || String(b.created_at).localeCompare(String(a.created_at))).slice(0, 8);
+      hf.innerHTML = error ? `<span class="quiet">I could not look: ${esc(rpcErr(error))}</span>` : L.length ? L.map(r => `<button type="button" class="stk-pick" data-sci-popick="${esc(r.po_number)}"><b>PO ${esc(r.po_number)}</b> · ${esc(sinvShort(r.supplier || ""))}${r.job_number ? ` · job ${esc(r.job_number)}` : ""}${r.customer_name ? ` · ${esc(r.customer_name)}` : ""}
+          <span class="quiet">${esc(fmtDate(String(r.created_at).slice(0, 10)))}${r.amount != null ? " · " + money(r.amount) : ""}${r.description ? " · " + esc(String(r.description).slice(0, 60)) : ""}</span></button>`).join("")
+        : `<span class="quiet">No PO in the app matches "${esc(q)}".</span>`;
+      hf.querySelectorAll("[data-sci-popick]").forEach(b => b.addEventListener("click", () => { b.disabled = true; save(id, { po_number: b.dataset.sciPopick }, `Matched to PO ${b.dataset.sciPopick}.`); })); }, 250); });
+    hi.addEventListener("keydown", e => { if (e.key !== "Enter") return; e.preventDefault(); const one = hf.querySelectorAll("[data-sci-popick]"); if (one.length === 1) one[0].click(); else if (hi.value.trim()) save(id, { po_number: hi.value.trim() }, `Matched to PO ${hi.value.trim()}.`); }); });
   document.querySelectorAll("[data-sinv-unpo]").forEach(b => b.addEventListener("click", () => save(Number(b.dataset.sinvUnpo), { po_number: "" }, "Back to the PO printed on it.")));
   document.querySelectorAll("[data-sinv-date]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.sinvDate), v = $("#sinv-date-" + id).value; if (v) save(id, { invoice_date: v }, `Date changed to ${fmtDate(v)}.`); }));
   document.querySelectorAll("[data-sinv-note]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.sinvNote); save(id, { match_note: $("#sinv-note-" + id).value }, "Note saved."); }));
