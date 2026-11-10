@@ -163,6 +163,10 @@
 
 - **Clicking an invoice with no PO opens only the invoice** (Carlo, Nov 10: clicking C443072 "pops up with a print page… remove the print pop up, the normal one is good enough"). The big "New PO for …" page (`openMkPoPop`, shown in the invoice viewer with its Print bar) used to open by itself the first time such an invoice was clicked; that automatic open is gone. The make-a-PO box inside the open invoice (`data-mkpo`, its `data-mkpo-big` button) still opens it by hand.
 
+## Supplier invoices: Read it again
+
+- (Carlo, Nov 10: "add a button to re read the invoice in case it was read wrong the first time".) An open supplier invoice that has scanned pages shows **🔄 Read it again** beside Date / Mark checked. It reads the saved pages again in the browser (tesseract, plus `stReadBoxes` for ruled forms; about 15 seconds a page), picks out the lines (`sinvParseLines`, `sinvDedupLines`), then shows the new reading beside what the invoice has now (lines and totals, and the invoice's before-tax amount) and asks "Use the new reading?". Only a yes saves it: RPC `supplier_invoice_reread(p_id, p_lines)` replaces the read lines, keeps lines typed in by hand (`by_hand`), adds "Read again in the app on …" to `read_notes` and puts the old lines in `audit_log`. No lines found = nothing changes. It does not change the PO, the date or the totals. `sync/extra/243_supplier_invoice_reread.sql`; `data-sinv-reread` in `renderSupInv`. An invoice with no copy has no button (use ⬆ Add the invoice).
+
 ## Supplier invoices: put a PO line back
 
 - (Carlo, Nov 10.) In an open supplier invoice, "Changes to this PO" shows **↩ Put it back** beside each "Took off" line. It asks first, then adds the line again with the same words, quantity and price (the usual PO save, reason "Put back: it was taken off by mistake"), and the entry then says "(put back)". `sinvHistory`, `data-sinv-putback` in `index.html`; no database change. It comes back as a new line, so anything tied to the old line (received counts) is not carried over.

@@ -17994,6 +17994,7 @@ function sinvDetail(r, edit) {
       ${edit ? `<div class="sinv-acts">
         <label>📅 Date <input type="date" id="sinv-date-${r.id}" value="${esc(r.invoice_date || "")}"></label><button class="btn quiet-btn" type="button" data-sinv-date="${r.id}">Save date</button>
         ${r.match_state === "ok" ? `<button class="btn quiet-btn" type="button" data-sinv-ok="${r.id}" data-v="">Undo checked</button>` : `<button class="btn" type="button" data-sinv-ok="${r.id}" data-v="ok">✓ Mark checked</button>`}
+        ${(d.pages || []).length ? `<button class="btn quiet-btn" type="button" data-sinv-reread="${r.id}" title="Read the scanned pages again, in case the lines were read wrong the first time">🔄 Read it again</button><span class="quiet" data-sinv-rereadmsg role="status"></span>` : ""}
         ${r.po_id ? `<button class="btn quiet-btn" type="button" data-sinv-edpo="${r.id}">${SINV.edPo === r.id ? "Close the editor" : "✎ Edit the PO lines"}</button>` : ""}</div>` : ""}
       ${edit && r.po_id && SINV.edPo === r.id ? sinvPoEditor(r, P, d) : ""}
       ${(d.changes || []).length ? sinvHistory(d.changes) : ""}</section></div>
@@ -19172,6 +19173,28 @@ function wireSupInv() {
   document.querySelectorAll("[data-sret-open]").forEach(b => b.addEventListener("click", () => { SINV.open = Number(b.dataset.sretOpen); SINV.f = "all"; SINV.q = ""; redo(); setTimeout(() => document.querySelector(".sinv-row.open")?.scrollIntoView({ block: "start" }), 300); }));
   document.querySelectorAll("[data-sinv-addcopy]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); SINV.open = Number(b.dataset.sinvAddcopy); redo();
     setTimeout(() => { const z = document.querySelector(`[data-sinv-drop="${SINV.open}"]`); z?.scrollIntoView({ block: "center" }); z?.focus({ preventScroll: true }); }, 400); }));
+  // Read it again (Carlo, Nov 10): the saved pages are read again here in the browser; the new lines are shown first and only saved after a yes
+  document.querySelectorAll("[data-sinv-reread]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sinvReread), r = (SINV.data?.rows || []).find(x => x.id === id), d = SINV.det.get(id), msg = b.parentElement.querySelector("[data-sinv-rereadmsg]"), say = t => { if (msg) msg.textContent = t; };
+    if (!r || !d) return; b.disabled = true;
+    try { say("Getting the reader ready…"); await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); const w = await window.Tesseract.createWorker("eng"); let text = "";
+      const P = d.pages || []; for (let i = 0; i < P.length; i++) { const pg = P[i]; say(`Reading page ${i + 1} of ${P.length}… (about 15 seconds a page)`);
+        if (!SINV.img.has(pg.id)) { const q = await db.rpc("supplier_doc_page", { p_id: pg.id }); if (q.data) SINV.img.set(pg.id, "data:image/jpeg;base64," + q.data); }
+        if (!SINV.img.has(pg.id)) continue;
+        const im = await new Promise((ok, no) => { const e = new Image(); e.onload = () => ok(e); e.onerror = () => no(new Error("the page picture did not open")); e.src = SINV.img.get(pg.id); });
+        const k = Math.max(1, Math.min(2, 2400 / im.naturalWidth)), c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+        const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
+        text += "\n" + await stReadBoxes(w, c, (await w.recognize(c)).data.text); }
+      await w.terminate();
+      const before = sinvBefore(r), L = sinvDedupLines(sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0), before), old = (d.lines || []).filter(x => !x.by_hand);
+      if (!L.length) { say("I read it again but could not pick out any lines. Nothing was changed."); b.disabled = false; return; }
+      const amt = x => x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : Number(x.unit_price || 0) * Number(x.shipped ?? x.ordered ?? 1) * (1 - (Number(x.discount) || 0) / 100), sum = A => Math.round(A.reduce((a, x) => a + amt(x), 0) * 100) / 100;
+      const li = A => A.length ? `<ul style="margin:4px 0 10px;padding-left:20px;text-align:left">${A.slice(0, 12).map(x => `<li>${esc(String(x.shipped ?? x.ordered ?? ""))} × ${esc([x.code, x.description].filter(Boolean).join(" · ").slice(0, 70))} · ${money(amt(x))}</li>`).join("")}${A.length > 12 ? `<li>…and ${A.length - 12} more</li>` : ""}</ul>` : `<p>(no lines)</p>`;
+      say("");
+      const k2 = await askChoice("Use the new reading?", `<b>New reading: ${L.length} ${L.length === 1 ? "line" : "lines"}, ${money(sum(L))}</b>${li(L)}<b>What it has now: ${old.length} ${old.length === 1 ? "line" : "lines"}, ${money(sum(old))}</b>${li(old)}The invoice says ${money(before)} before tax. Lines typed in by hand are kept.`, [["yes", "Yes, use the new reading", true], ["", "No, keep what it has"]]);
+      if (k2 !== "yes") { say("Nothing was changed."); b.disabled = false; return; }
+      const { error } = await db.rpc("supplier_invoice_reread", { p_id: id, p_lines: L }); if (error) { say("Not saved: " + rpcErr(error)); b.disabled = false; return; }
+      SINV.det.delete(id); await sinvLoadDet(id); const top = $("#main").scrollTop; renderSupInv("Read again. The lines are from the new reading."); $("#main").scrollTop = top;
+    } catch (er) { say("I could not read it: " + (er.message || er)); b.disabled = false; } }));
   document.querySelectorAll("[data-sinv-edpo]").forEach(b => b.addEventListener("click", () => { SINV.edPo = SINV.edPo === Number(b.dataset.sinvEdpo) ? null : Number(b.dataset.sinvEdpo); redo(); }));
   document.querySelectorAll("[data-sinv-ped]").forEach(f => {
     f.querySelector("[data-sinv-addln]").addEventListener("click", () => f.querySelector(".sinv-ped-new").insertAdjacentHTML("beforeend",
