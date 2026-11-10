@@ -17297,7 +17297,10 @@ async function openSupInv(msg) {
   renderSupInv(msg);
 }
 // how an invoice stands against its PO
-const sinvBefore = r => r.subtotal != null ? Number(r.subtotal) : Math.round(Number(r.total) / 1.13 * 100) / 100;   // before tax (13% HST when it isn't printed)
+// before tax: as printed, else from the total (13% HST), else the invoice's own lines added up. The last one is for pick tickets, which are saved with $0:
+// the list used to say "Under the PO by $1,803.00" while every line matched the PO (Carlo, Nov 10, C440593).
+const sinvBeforeOwn = r => r.subtotal != null ? Number(r.subtotal) : Math.round(Number(r.total) / 1.13 * 100) / 100;   // only what the invoice itself says ($0 for a pick ticket): used to drop lines read twice
+const sinvBefore = r => r.subtotal != null ? Number(r.subtotal) : Number(r.total) ? Math.round(Number(r.total) / 1.13 * 100) / 100 : r.lines_amount != null ? Number(r.lines_amount) : 0;
 // a PO billed on more than one invoice: they're added up and compared together
 function sinvState(r) {
   const before = sinvBefore(r), grp = r.po_id && Number(r.po_other_invoices) ? (SINV.data?.rows || []).filter(x => x.po_id === r.po_id && x.doc_type === "invoice") : null;
@@ -17980,7 +17983,7 @@ function sinvCompare(r, L, P, what) {
 }
 function sinvDetail(r, edit) {
   const d = SINV.det.get(r.id); if (!d) { sinvLoadDet(r.id); return `<p class="quiet">Loading…</p>`; }
-  const L = sinvDedupLines(d.lines || [], sinvBefore(r)), P = d.po_lines || [];   // a line read twice off the scan counts once
+  const L = sinvDedupLines(d.lines || [], sinvBeforeOwn(r)), P = d.po_lines || [];   // a line read twice off the scan counts once
   const lt = (rows, inv) => rows.length ? `<table class="sinv-lt"><thead><tr><th>${inv ? "Code" : "Code"}</th><th>What</th><th class="r">Qty</th><th class="r">Each</th>${inv ? `<th class="r">Disc.</th>` : ""}<th class="r">Amount</th></tr></thead><tbody>
     ${rows.map(x => inv ? `<tr><td>${esc(x.code || "")}</td><td>${esc(x.description || "")}</td><td class="r">${x.shipped ?? x.ordered ?? ""}${x.backorder ? ` <span class="quiet">(${x.backorder} back-ordered)</span>` : ""}</td><td class="r">${x.unit_price != null ? money(x.unit_price) : ""}</td><td class="r">${esc(x.discount ?? "")}${x.discount ? "%" : ""}</td><td class="r">${x.net_amount != null && !isNaN(Number(x.net_amount)) ? money(x.net_amount) : `<span class="quiet">${x.unit_price != null && x.shipped != null ? money(Math.round(Number(x.unit_price) * (1 - (Number(x.discount) || 0) / 100) * Number(x.shipped) * 100) / 100) : ""}</span>`}</td></tr>`
       : `<tr><td>${esc(x.sku || "")}</td><td>${esc(x.description || "")}</td><td class="r">${x.quantity}</td><td class="r">${money(x.unit_cost)}</td><td class="r">${money(x.line_total)}</td></tr>`).join("")}</tbody></table>` : `<p class="quiet">${inv ? "No lines read from the copy." : "No PO lines."}</p>`;
@@ -18139,7 +18142,7 @@ function sinvDedupLines(L, before) {
 }
 function sinvPoDraft(r, L) {
   const credit = r.doc_type === "credit" || Number(r.total) < 0;
-  L = sinvDedupLines(L, sinvBefore(r));
+  L = sinvDedupLines(L, sinvBeforeOwn(r));
   if (L.length) return L.map(x => { const q = Number(x.shipped ?? x.ordered ?? 1) || 1;
     const amt = x.net_amount != null ? Number(x.net_amount) : Number(x.unit_price || 0) * q * (1 - Number(x.discount || 0) / 100);
     return { description: [x.code, x.description].filter(Boolean).join(" · "), quantity: q, unit_cost: Math.round(amt / q * 100) / 100 * (credit && amt > 0 ? -1 : 1) }; });
@@ -19216,7 +19219,7 @@ function wireSupInv() {
         const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
         text += "\n" + await stReadBoxes(w, c, (await w.recognize(c)).data.text); }
       await w.terminate();
-      const before = sinvBefore(r), L = sinvDedupLines(sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0), before), old = (d.lines || []).filter(x => !x.by_hand);
+      const before = sinvBeforeOwn(r), L = sinvDedupLines(sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0), before), old = (d.lines || []).filter(x => !x.by_hand);
       if (!L.length) { say("I read it again but could not pick out any lines. Nothing was changed."); b.disabled = false; return; }
       const amt = x => x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : Number(x.unit_price || 0) * Number(x.shipped ?? x.ordered ?? 1) * (1 - (Number(x.discount) || 0) / 100), sum = A => Math.round(A.reduce((a, x) => a + amt(x), 0) * 100) / 100;
       const li = A => A.length ? `<ul style="margin:4px 0 10px;padding-left:20px;text-align:left">${A.slice(0, 12).map(x => `<li>${esc(String(x.shipped ?? x.ordered ?? ""))} × ${esc([x.code, x.description].filter(Boolean).join(" · ").slice(0, 70))} · ${money(amt(x))}</li>`).join("")}${A.length > 12 ? `<li>…and ${A.length - 12} more</li>` : ""}</ul>` : `<p>(no lines)</p>`;
