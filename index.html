@@ -4860,6 +4860,17 @@ button.smc-k, .smc-k { background: #e8edf2 !important; color: #1f2a37 !important
 /* the "silly" rule: a green arrow pointing at the box to type in, and the box lights up */
 .eco-arrow { position: fixed; z-index: 9100; width: 58px; height: 48px; display: grid; place-items: center; border-radius: 6px; background: #1f9d4a; color: #fff; font-size: 30px; box-shadow: 0 4px 12px rgba(0, 0, 0, .3); animation: smSupNudge .8s ease-in-out infinite; pointer-events: none; }
 .eco-here { outline: 4px solid #1f9d4a !important; outline-offset: 2px; box-shadow: 0 0 0 8px rgba(31, 157, 74, .25) !important; }
+/* the new-item form that "Yes, add it" opens: big, one question under the other, in the middle of the screen */
+.eco-form-wrap { position: fixed; inset: 0; z-index: 8000; background: rgba(20, 40, 60, .5); display: grid; place-items: start center; overflow-y: auto; padding: 30px 14px; }
+.eco-form { width: min(100%, 760px); background: var(--panel); color: var(--ink); border: 4px solid #1b3a6b; border-radius: 8px; padding: 24px 28px 28px; box-shadow: 0 20px 60px rgba(0, 0, 0, .4); display: flex; flex-direction: column; gap: 26px; }
+.eco-form .eco-say { margin: 0; } .eco-form .eco-say .eco-man { width: 110px; height: 110px; } .eco-form .eco-bubble { flex: 1; max-width: none; } .eco-form .eco-l { white-space: normal; } .ef-big { font-size: calc(22px * var(--fs, 1)); font-weight: 800; }
+.ef-types { display: flex; flex-wrap: wrap; gap: 18px; justify-content: center; } .ef-types .apb { width: 150px; min-height: 150px; } .ef-types .apb .apb-ic { width: 72px; height: 72px; font-size: 40px; } .ef-types .apb .apb-tn { font-size: calc(18px * var(--fs, 1)); }
+.ef-q { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border: 2px solid #4a5d70; border-radius: 6px; background: linear-gradient(rgba(47, 111, 181, .07), rgba(47, 111, 181, .07)), var(--panel); }
+.ef-q > b { font-size: calc(20px * var(--fs, 1)); display: flex; align-items: center; gap: 10px; } .ef-q > b > span { display: inline-grid; place-items: center; min-width: 34px; height: 34px; padding: 0 6px; border-radius: 4px; background: #23415f; color: #fff; font-size: 17px; }
+.ef-q small { font-size: calc(15.5px * var(--fs, 1)); color: var(--ink); } .ef-q input:not([type=radio]), .ef-q select { font-size: calc(20px * var(--fs, 1)); padding: 12px 14px; border-radius: 4px; border: 2px solid #4a5d70; width: 100%; box-sizing: border-box; background: var(--panel); color: var(--ink); }
+.ef-row { display: flex; gap: 22px; align-items: center; font-size: calc(20px * var(--fs, 1)); } .ef-val { font-weight: 800; } .ef-radio { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; cursor: pointer; } .ef-radio input { width: 24px; height: 24px; }
+.ef-q.ef-auto { background: linear-gradient(rgba(20, 140, 130, .08), rgba(20, 140, 130, .08)), var(--panel); font-size: calc(18px * var(--fs, 1)); } .ef-q.ef-miss { border: 4px solid #c92a2a; background: linear-gradient(rgba(201, 42, 42, .08), rgba(201, 42, 42, .08)), var(--panel); }
+.ef-msg { font-size: calc(19px * var(--fs, 1)); font-weight: 800; } .ef-msg[hidden] { display: none; } .ef-btns { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; justify-content: space-between; } .ef-btns .btn { font-size: calc(22px * var(--fs, 1)); padding: 18px 30px; font-weight: 800; border-radius: 8px; }
 .eco-name { display: block; color: #1b3a6b; font-size: calc(15px * var(--fs, 1)); font-weight: 800; margin-bottom: 2px; }
 @media (max-width: 560px) { .eco-say { gap: 16px; } .eco-say .eco-man { width: 84px; height: 84px; } .eco-bubble { font-size: 15px; padding: 10px 12px; } }
 /* Auto update supplier mail: the message about what just happened is big, bold and green, and stays in view while the list scrolls (Carlo, Nov 9) */
@@ -25340,6 +25351,67 @@ document.addEventListener("click", e => { if (e.target.closest && e.target.close
 // Eco Man pops up over a place that should not be clicked and says so (Carlo, Nov 9). One pop-up at a time; it goes away after 5 seconds or on the next click.
 //  - the "Hi Carlo, you need to fix up 5 documents" box: "Don't click here, Carlo. Click below."
 //  - box 2 of a paper when the PO was found: "Carlo, stop clicking here. I told you I found it. Move on to step 3." (the PO number link itself still opens the PO)
+// "Yes, add it" on a part the app does not know (Carlo, Nov 9): Eco Man first asks "Is this a part, a material, equipment or security?", then opens a form that is
+// already filled in with what the paperwork says. Every question must be answered before it saves; only the picture can wait. Saving adds the item to the price list
+// (save_pb_item, its category, and the supplier's part number so the next paper matches by itself), like the quote reader's "+ Add to price book".
+const SM_NEW_TYPES = [["service", "Part", "🔩"], ["material", "Material", "🧱"], ["equipment", "Equipment", "❄️"], ["security", "Security", "🔒"]];
+function smNewItemForm(row, u, sup, onDone) {
+  document.querySelectorAll(".eco-form-wrap").forEach(x => x.remove()); const me = esc(smMyFirst());
+  const code0 = String(u.code || "").replace(/^\d+\s*[\/|]\s*/, "").trim(), name0 = String(u.description || "").replace(/^[\[\]|]+\s*/, "").trim();
+  const supRow = (SUPPLIERS || []).find(x => String(x.name).trim().toLowerCase().startsWith(String(sup).toLowerCase())), makers = ["Lennox", "Carrier", "Trane", "Goodman", "Bosch", "Daikin", "York", "Rheem", "Napoleon"];
+  const f = { type: "", cat: "", name: name0, sku: code0, mfr: makers.find(m => m.toLowerCase() === String(sup).toLowerCase()) || "", model: code0, cost: u.cost != null ? Number(u.cost).toFixed(2) : "", price: "", unit: "each", tax: "yes", rule: null };
+  const w = document.createElement("div"); w.className = "eco-form-wrap"; document.body.appendChild(w);
+  const close = () => w.remove();
+  const ask = () => { w.innerHTML = `<div class="eco-form" role="dialog" aria-label="What kind of thing is it?"><div class="eco-say">${ecoFace("confused")}<div class="eco-bubble"><span class="eco-l ef-big">${me}, is this a part, a material, equipment or security?</span><span class="eco-l">${esc(name0 || code0)}</span></div></div>
+      <div class="ef-types">${SM_NEW_TYPES.map(([k, t, ic]) => `<button class="apb apb-blue" type="button" data-ef-type="${k}"><span class="apb-ic" aria-hidden="true">${ic}</span><span class="apb-tn">${t}</span></button>`).join("")}</div>
+      <div class="ef-btns"><button class="apb apb-grey apb-sm" type="button" data-ef-cancel><span class="apb-ic" aria-hidden="true">🚪</span><span class="apb-tn">Stop. Do not add it</span></button></div></div>`;
+    w.querySelectorAll("[data-ef-type]").forEach(b => b.addEventListener("click", () => { f.type = b.dataset.efType; form(); }));
+    w.querySelector("[data-ef-cancel]").addEventListener("click", close); };
+  const form = () => { const tn = (SM_NEW_TYPES.find(t => t[0] === f.type) || [])[1] || "";
+    w.innerHTML = `<form class="eco-form" novalidate aria-label="Add a new item"><div class="eco-say">${ecoFace("happy")}<div class="eco-bubble"><span class="eco-l ef-big">${me}, I filled in what I could from the paperwork.</span><span class="eco-l">Please check it, and answer every question.</span><span class="eco-l">Only the picture can wait.</span></div></div>
+      <div class="ef-q" data-ef-q="type"><b><span>1</span> What is it?</b><div class="ef-row"><span class="ef-val">${esc(tn)}</span> <button class="link" type="button" data-ef-back>Change</button></div></div>
+      <label class="ef-q" data-ef-q="name"><b><span>2</span> What do we call it?</b><input name="name" value="${esc(f.name)}" maxlength="200" autocomplete="off"></label>
+      <label class="ef-q" data-ef-q="sku"><b><span>3</span> Our code for it</b><small>The supplier's part number is fine.</small><input name="sku" value="${esc(f.sku)}" maxlength="80" autocomplete="off"></label>
+      <label class="ef-q" data-ef-q="cat"><b><span>4</span> Which group does it go in?</b><select name="cat"><option value="">Pick a group…</option>${pbCatOptions()}</select></label>
+      <label class="ef-q" data-ef-q="mfr"><b><span>5</span> Who makes it?</b><small>The brand name. If you do not know, type “Not known”.</small><input name="mfr" value="${esc(f.mfr)}" maxlength="80" autocomplete="off"></label>
+      <label class="ef-q" data-ef-q="model"><b><span>6</span> Model or part number</b><input name="model" value="${esc(f.model)}" maxlength="80" autocomplete="off"></label>
+      <label class="ef-q" data-ef-q="cost"><b><span>7</span> What does it cost us?</b><small>From the paperwork.</small><input name="cost" inputmode="decimal" value="${esc(f.cost)}" autocomplete="off"></label>
+      <label class="ef-q" data-ef-q="price"><b><span>8</span> What do we sell it for?</b><small data-ef-rule>${f.rule != null ? `Our pricing rules say ${money(f.rule)}.` : "Working out our price…"}</small><input name="price" inputmode="decimal" value="${esc(f.price)}" autocomplete="off"></label>
+      <label class="ef-q" data-ef-q="unit"><b><span>9</span> How is it sold?</b><select name="unit">${["each", "per foot", "per box", "per roll", "per bag", "per hour"].map(x => `<option ${f.unit === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+      <div class="ef-q" data-ef-q="tax"><b><span>10</span> Do we charge HST on it?</b><div class="ef-row"><label class="ef-radio"><input type="radio" name="tax" value="yes" ${f.tax === "yes" ? "checked" : ""}> Yes</label><label class="ef-radio"><input type="radio" name="tax" value="no" ${f.tax === "no" ? "checked" : ""}> No</label></div></div>
+      <div class="ef-q ef-auto"><b>🧾 From the paperwork</b><div>Supplier: <b>${esc(supRow ? supRow.name : sup)}</b></div><div>Their part number: <b>${esc(u.code || "")}</b></div></div>
+      <div class="ef-q ef-auto"><b>📷 Picture</b><div>You can add a picture later, on the price list page.</div></div>
+      <div class="staff-msg err ef-msg" data-ef-msg role="alert" hidden></div>
+      <div class="ef-btns"><button class="btn" type="submit">Save the new item</button><button class="apb apb-grey apb-sm" type="button" data-ef-cancel><span class="apb-ic" aria-hidden="true">🚪</span><span class="apb-tn">Stop. Do not add it</span></button></div></form>`;
+    const F = w.querySelector("form"), msg = F.querySelector("[data-ef-msg]"), num = v => Number(String(v).replace(/[$,\s]/g, ""));
+    F.cat.value = f.cat; const keep = () => { ["name", "sku", "cat", "mfr", "model", "cost", "price", "unit"].forEach(k => { f[k] = F[k].value; }); f.tax = F.tax.value; };
+    const rule = async () => { const c = num(F.cost.value); if (!(c > 0)) return; const { data } = await db.rpc("pb_rule_price_for", { p_type: f.type, p_cost: c }); f.rule = data == null ? null : Number(data);
+      const t = F.querySelector("[data-ef-rule]"); if (t) t.textContent = f.rule != null ? `Our pricing rules say ${money(f.rule)}.` : "There is no pricing rule for this. Please type the price.";
+      if (f.rule != null && (!F.price.value.trim() || F.price.dataset.auto === "1")) { F.price.value = f.rule.toFixed(2); F.price.dataset.auto = "1"; } };
+    rule(); F.cost.addEventListener("change", rule); F.price.addEventListener("input", () => { F.price.dataset.auto = ""; });
+    F.querySelector("[data-ef-back]").addEventListener("click", () => { keep(); ask(); }); F.querySelector("[data-ef-cancel]").addEventListener("click", close);
+    F.addEventListener("submit", async e => { e.preventDefault(); keep(); F.querySelectorAll(".ef-miss").forEach(x => x.classList.remove("ef-miss"));
+      const miss = (q, t) => { const el = F.querySelector(`[data-ef-q="${q}"]`); el.classList.add("ef-miss"); msg.hidden = false; msg.textContent = t; el.scrollIntoView({ block: "center", behavior: "smooth" }); (el.querySelector("input, select") || el).focus?.({ preventScroll: true }); };
+      if (!f.name.trim()) return miss("name", "Question 2: please give it a name.");
+      if (!f.sku.trim()) return miss("sku", "Question 3: please give it a code.");
+      if (!f.cat) return miss("cat", "Question 4: please pick the group it goes in.");
+      if (!f.mfr.trim()) return miss("mfr", "Question 5: please type who makes it. If you do not know, type “Not known”.");
+      if (!f.model.trim()) return miss("model", "Question 6: please type the model or part number.");
+      if (f.cost.trim() === "" || !(num(f.cost) >= 0)) return miss("cost", "Question 7: please type what it costs us, as a number.");
+      if (f.price.trim() === "" || !(num(f.price) >= 0)) return miss("price", "Question 8: please type what we sell it for, as a number.");
+      if (!f.tax) return miss("tax", "Question 10: please pick Yes or No.");
+      const sb = F.querySelector("[type=submit]"); sb.disabled = true; msg.hidden = false; msg.classList.remove("err"); msg.textContent = "Saving…";
+      const fail = t => { sb.disabled = false; msg.classList.add("err"); msg.textContent = t; };
+      const pl = { name: f.name.trim(), sku: f.sku.trim(), item_type: f.type, description: f.name.trim(), unit_price: String(num(f.price)), unit_cost: String(num(f.cost)), member_price: "", unit_of_measure: f.unit, est_labour_hours: "",
+        manufacturer: /^not known$/i.test(f.mfr.trim()) ? "" : f.mfr.trim(), model: f.model.trim(), preferred_supplier_id: supRow && supRow.id != null ? String(supRow.id) : "", taxable: f.tax === "yes" };
+      const { data: newId, error } = await db.rpc("save_pb_item", { p_id: null, p: pl });
+      if (error) return fail("I could not save it: " + rpcErr(error));
+      const e1 = (await db.rpc("set_pb_item_categories", { p_item: newId, p_ids: [Number(f.cat)] })).error;
+      const e2 = supRow && supRow.id != null ? (await db.rpc("save_pb_item_suppliers", { p_item: newId, p: [{ supplier_id: Number(supRow.id), sku: String(u.code || f.sku).trim(), cost: String(num(f.cost)), lead: "", note: "From " + ((row.result || {}).ref || row.file || "a supplier paper"), preferred: true }] })).error : null;
+      if (e1 || e2) alertMsg("The item was added, but one part did not save: " + rpcErr(e1 || e2));
+      close(); await onDone(newId); }); };
+  ask();
+}
 let ECO_POP_T = 0;
 function ecoPop(anchor, lines, face, at) { document.querySelectorAll(".eco-pop").forEach(x => x.remove()); clearTimeout(ECO_POP_T); if (!anchor) return;
   const pop = document.createElement("div"); pop.className = "eco-pop go"; pop.setAttribute("role", "status");
@@ -25352,7 +25424,7 @@ function ecoPop(anchor, lines, face, at) { document.querySelectorAll(".eco-pop")
 // Counted for each place (key) since the page was opened. Use ecoAngryRule("some-key", anchorElement, ["line one", "line two"]) wherever he asks for "the angry rule".
 // THE "NOTHING TO DO HERE" RULE (Carlo, Nov 9; do this everywhere from now on without being asked): a section that has no purpose when clicked (a heading, a title, a line of plain words)
 // shows the happy Eco Man in violet saying "Nothing to do here. Keep scrolling down." After more than 10 clicks on it he follows the angry rule (red). ECO_IDLE is the list of such places: add new ones to it.
-const ECO_IDLE = ".smc-bar, .smc-sub, .smc-part > h4, .sm-unk-pick, .smc-acts-t, .smc-line, .smc-small, .sm-sup-tip";
+const ECO_IDLE = ".smc-bar, .smc-sub, .smc-part > h4, .sm-unk-pick, .smc-acts-t, .smc-line, .smc-small, .sm-sup-tip, .ef-auto, .ef-q > b, .ef-q small";
 function ecoIdleRule(key, e, place) { const n = ECO_ANGRY_N[key] = (ECO_ANGRY_N[key] || 0) + 1, me = esc(smMyFirst());
   if (n > 20) { ECO_ANGRY_N[key] = 0; return ecoDance(place); }
   ecoPop(document.body, n > 10 ? [`${me}, nothing to do here.`, "Keep scrolling down."] : ["Nothing to do here.", "Keep scrolling down. 👇"], n > 10 ? "red" : "violet", { x: e.clientX, y: e.clientY }); return n; }
@@ -25416,7 +25488,7 @@ function supMailHtml(msg) {
     ${!rows.length ? `<p class="smc-none">🎉 No papers are waiting. New papers sent to supplierpo@hsginc.ca show here in about 10 minutes.</p>` :
     `<div class="smc-list">${rows.map((r, idx) => { const R = r.result || {}, c = R.counts || {}, pos = R.pos || [], [ico, tone, head, sub] = smPlain(r), unk = (R.unknown || []).filter(u => !u.done);
       const scan = /^scan@/i.test(r.from || "") || /^scan@/i.test(r.from_addr || ""), when = r.received ? `${fmtDate(r.received)}, ${new Date(r.received).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" })}` : "";
-      const prices = [c.added ? `🟢 <b>${n(c.added).replace("price", "new price")}</b>. Please check ${c.added > 1 ? "them" : "it"} on the Approvals page.` : "", c["new item waiting"] ? `🟢 <b>${c["new item waiting"]} new item${c["new item waiting"] > 1 ? "s" : ""}</b> to check on the Approvals page.` : "",
+      const prices = [c["new item added"] ? `🟢 <b>${c["new item added"]} new item${c["new item added"] > 1 ? "s" : ""}</b> added to our price list.` : "", c.added ? `🟢 <b>${n(c.added).replace("price", "new price")}</b>. Please check ${c.added > 1 ? "them" : "it"} on the Approvals page.` : "", c["new item waiting"] ? `🟢 <b>${c["new item waiting"]} new item${c["new item waiting"] > 1 ? "s" : ""}</b> to check on the Approvals page.` : "",
         c.same ? `✔ ${n(c.same)} checked: the same as our price list.` : "", c["already there"] ? `✔ ${n(c["already there"])} ${c["already there"] > 1 ? "were" : "was"} already checked before.` : "",
         c.older ? `✔ ${n(c.older)} checked: a newer paper already gave us the price.` : "", c["not matched"] ? `${c["not matched"]} part${c["not matched"] > 1 ? "s" : ""} on this paper ${c["not matched"] > 1 ? "are" : "is"} not in our price list.` : ""].filter(Boolean);
       const need1 = !!r.file && !r.supplier, need2 = !pos.length && !["new", "ignored"].includes(r.status), need3 = unk.length > 0;
@@ -25441,8 +25513,8 @@ function supMailHtml(msg) {
                 <span class="eco-l sm-unk-next">If you can't find it, move to the next section and add it. 👇</span></div></div>
               <div class="eco-say eco-sm eco-top sm-unk-opt">${ECO_MAN_SVG}<div class="eco-bubble"><span class="eco-l sm-unk-q">Is it a new part?</span><span class="eco-l">Do you want me to add it to our system?</span>
                 <div class="apb-row"><button class="apb apb-green apb-sm" type="button" data-sm-new><span class="apb-ic" aria-hidden="true">➕</span><span class="apb-tn">Yes, add it</span></button></div></div></div>
-              <div class="eco-say eco-sm eco-top sm-unk-opt">${ECO_MAN_SVG}<div class="eco-bubble"><span class="eco-l sm-unk-q">Is it not a part at all?</span><span class="eco-l">Like a courier or shipping charge. Do you want me to leave it out?</span>
-                <div class="apb-row"><button class="apb apb-grey apb-sm" type="button" data-sm-notpart><span class="apb-ic" aria-hidden="true">🚫</span><span class="apb-tn">Yes, leave it out</span></button></div></div></div></div>`).join("")}
+              <div class="eco-say eco-sm eco-top sm-unk-opt">${ECO_MAN_SVG}<div class="eco-bubble"><span class="eco-l sm-unk-q">Is it not a part at all?</span><span class="eco-l">Like a courier or shipping charge. Then I can send this paper to ${esc(r.supplier || "the supplier")}'s page, like a packing slip.</span>
+                <div class="apb-row"><button class="apb apb-green apb-sm" type="button" data-sm-notpart><span class="apb-ic" aria-hidden="true">📤</span><span class="apb-tn">Send it to the supplier page</span></button></div></div></div></div>`).join("")}
             ${(R.unread || []).length ? `<div class="smc-small">Could not read: ${esc(R.unread.join(", "))}</div>` : ""}${R.note && !(unk.length && r.status === "unread") ? `<div class="smc-small">${r.status === "error" ? "What the computer said: " : ""}${esc(R.note)}</div>` : ""}</section></div>` : ""}
         <footer class="smc-acts"><div class="smc-acts-main">${r.file ? `<span class="smc-acts-t">What you can do with this paper:</span><button class="apb apb-purple" type="button" data-sm-open><span class="apb-ic" aria-hidden="true">👁</span><span class="apb-tn">Look at the paper</span></button><button class="apb apb-blue${nextB === "read" ? " apb-next" : ""}" type="button" data-sm-read><span class="apb-ic" aria-hidden="true">🔄</span><span class="apb-tn">Read it${r.status === "new" ? "" : " again"}</span></button>
           <button class="apb apb-green" type="button" data-sm-send><span class="apb-ic" aria-hidden="true">📤</span><span class="apb-tn">Send to ${esc(r.supplier || "supplier")} list</span></button>` : ""}</div><div class="smc-acts-more">${r.file ? `<span class="smc-acts-t">Do not need it?</span>${["new", "unread", "needs_supplier", "error"].includes(r.status) ? `<button class="apb apb-grey apb-sm" type="button" data-sm-ignore title="Leave this paper alone. Nothing is done with it."><span class="apb-ic" aria-hidden="true">⏭</span><span class="apb-tn">Skip this paper</span></button>` : ""}` : ""}
@@ -25549,21 +25621,24 @@ function supMailShow(msg) {
           const { error } = await db.rpc("link_supplier_code", { p_supplier: sup, p_code: u.code, p_item: Number(b.dataset.pick) });
           if (error) { alertMsg("Not saved: " + rpcErr(error)); return; }
           await reread(`Remembered ${u.code} for ${b.querySelector("b").textContent}. Reading it again…`); })); }, 250); });
+      // "Is it not a part at all?" → Send it to the supplier page: this line is left out, and the whole paper goes to the supplier's list like a packing slip (Carlo, Nov 9). Asks Sure? first.
       box.querySelector("[data-sm-notpart]")?.addEventListener("click", async e => { const b = e.currentTarget, sup = tr.querySelector(".sm-sup")?.value || row.supplier, r0 = row.result || {};
-        if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.querySelector(".apb-tn").textContent = "Sure? Leave it out"; return; }
+        if (!sup) return alertMsg("Pick the supplier first, in step 1.");
+        if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.querySelector(".apb-tn").textContent = "Sure? Send it"; setTimeout(() => { if (document.body.contains(b)) { delete b.dataset.sure; b.querySelector(".apb-tn").textContent = "Send it to the supplier page"; } }, 6000); return; }
         b.disabled = true; u.done = true; u.skipped = true; const c = r0.counts || {}, left = (r0.unknown || []).filter(x => !x.done).length;
-        const { error } = await db.rpc("supplier_mail_set", { p_id: id, p_status: left ? "unread" : (c.added || c["new item waiting"]) ? "imported" : "nothing", p_supplier: sup || null, p_result: { ...r0, note: left ? r0.note : "" } });
-        if (error) { u.done = false; delete u.skipped; b.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
-        await supMailAutoFile?.(); await supMailLoad(); supMailShow(`Left out “${u.description || u.code}”. It is not a part.`); });
+        const e1 = (await db.rpc("supplier_mail_set", { p_id: id, p_status: left ? "unread" : (c.added || c["new item waiting"] || c["new item added"]) ? "imported" : "nothing", p_supplier: sup, p_result: { ...r0, note: left ? r0.note : "" } })).error;
+        if (e1) { u.done = false; delete u.skipped; b.disabled = false; return alertMsg("Not saved: " + rpcErr(e1)); }
+        const e2 = (await db.rpc("supplier_mail_send", { p_id: id, p_supplier: sup, p_undo: false })).error;
+        await supMailLoad(); supMailShow(e2 ? `I left out “${u.description || u.code}”, but I could not send the paper: ${rpcErr(e2)}` : `Sent “${row.file || row.subject || "the paper"}” to ${sup}'s page, like a packing slip. It is under 📤 Finished papers below.`); });
       box.querySelector("[data-sm-new]").addEventListener("click", async e => { const sup = tr.querySelector(".sm-sup")?.value || row.supplier, nb = e.currentTarget;
         if (nb.dataset.sure !== "1") { nb.dataset.sure = "1"; nb.querySelector(".apb-tn").textContent = "Sure? Add it"; setTimeout(() => { if (document.body.contains(nb)) { delete nb.dataset.sure; nb.querySelector(".apb-tn").textContent = "Yes, add it"; } }, 6000); return; }   // one press is not enough: it asks Sure? first (Carlo pressed it by mistake, Nov 9)
         if (!sup) { alertMsg("Pick the supplier first."); return; }
-        const r0 = row.result || {}, { data, error } = await db.rpc("import_supplier_lines", { p_supplier: sup, p_ref: r0.ref || ("email " + fmtDate(row.received || new Date().toISOString())), p_date: r0.date || ymd(new Date()), p_lines: [{ code: u.code, description: u.description, cost: u.cost }] });
-        if (error) { alertMsg("Not added: " + rpcErr(error)); return; }
-        u.done = true; const c = { ...(r0.counts || {}) }; for (const [k, v] of Object.entries(data.counts || {})) c[k] = (c[k] || 0) + v;
-        const left = (r0.unknown || []).filter(x => !x.done).length;
-        await db.rpc("supplier_mail_set", { p_id: id, p_status: left ? "unread" : (c.added || c["new item waiting"]) ? "imported" : "nothing", p_supplier: sup, p_result: { ...r0, counts: c, note: left ? r0.note : "" } });
-        await supMailLoad(); await loadPbUpdates(); auRender(); }); });
+        delete nb.dataset.sure; nb.querySelector(".apb-tn").textContent = "Yes, add it";
+        // Eco Man asks what kind of thing it is, then opens the new-item form filled in from the paperwork (smNewItemForm). Saving it adds the item to the price list right away.
+        smNewItemForm(row, u, sup, async newId => { const r0 = row.result || {}; u.done = true; u.added_item = newId; const c = { ...(r0.counts || {}) }; c["new item added"] = (c["new item added"] || 0) + 1;
+          const left = (r0.unknown || []).filter(x => !x.done).length;
+          await db.rpc("supplier_mail_set", { p_id: id, p_status: left ? "unread" : "imported", p_supplier: sup, p_result: { ...r0, counts: c, note: left ? r0.note : "" } });
+          PB.rows = null; await supMailAutoFile(); await supMailLoad(); await loadPbUpdates().catch(() => { }); supMailShow(`Added “${u.description || u.code}” to our price list.`); }); }); });
   });
 }
 
