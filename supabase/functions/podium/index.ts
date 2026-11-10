@@ -88,6 +88,28 @@ Deno.serve(async (req) => {
         if (r.ok || q === "?limit=2" || L === "?limit=2") break;
       } catch { out.push({ path: p, status: 0, message: "no answer" }); break; }
     }
+    // calls answered on Nov 10: look closer at one call for where its recording is (field names and masked addresses only, no customer data)
+    try {
+      const H = { Authorization: "Bearer " + t.access, Accept: "application/json" };
+      const mask = (v: string) => v.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "{uid}").replace(/\+?\d{7,}/g, "{n}").replace(/\?.*$/, "?…").slice(0, 160);
+      const deep = (o: unknown, pre = "", d = 0, acc: Record<string, string> = {}): Record<string, string> => {
+        if (o && typeof o === "object" && d < 4) for (const [k, v] of Object.entries(Array.isArray(o) ? (o.length ? { "[0]": o[0] } : {}) : o as Record<string, unknown>)) {
+          const key = pre ? pre + "." + k : k;
+          if (v && typeof v === "object") deep(v, key, d + 1, acc);
+          else acc[key] = v === null ? "null" : typeof v === "string" && /^https?:\/\//.test(v) ? "url " + mask(v) : typeof v; }
+        return acc; };
+      const lr = await timed(API + "/v4/calls?limit=25", 15000, { headers: H }); const lj = await lr.json().catch(() => null) as { data?: Record<string, unknown>[]; metadata?: unknown } | null;
+      const calls = lj?.data ?? [];
+      out.push({ path: "calls (list, closer look)", status: lr.status, n: calls.length, metadata_keys: keysOf(lj?.metadata), shape: calls[0] ? deep(calls[0]) : {},
+        statuses: [...new Set(calls.map(c => String(c.status)))], directions: [...new Set(calls.map(c => String(c.direction)))], event_types: [...new Set(calls.map(c => String(c.eventType)))],
+        with_voicemail: calls.filter(c => c.hasVoicemail).length, voicemail_shape: deep(calls.find(c => c.hasVoicemail)?.voicemail ?? null) });
+      const one = calls.find(c => Number(c.durationSeconds) > 20) ?? calls[0];
+      if (one?.uid) for (const tail of ["", "/recording", "/recordings", "/audio", "/media", "/transcript", "/transcription"]) {
+        const r = await timed(API + "/v4/calls/" + encodeURIComponent(String(one.uid)) + tail, 12000, { headers: H, redirect: "manual" });
+        const ct = r.headers.get("content-type") ?? ""; const j = /json/.test(ct) ? await r.json().catch(() => null) : null;
+        out.push({ path: "calls/{uid}" + tail, status: r.status, content_type: ct.slice(0, 60), location: r.headers.get("location") ? mask(r.headers.get("location")!) : "", shape: j ? deep((j as Record<string, unknown>).data ?? j) : {},
+          message: !r.ok && j ? String((j as Record<string, unknown>).message ?? "").slice(0, 160) : "" }); }
+    } catch (e) { out.push({ path: "calls (closer look)", status: 0, message: String(e).slice(0, 160) }); }
     await admin.rpc("_podium_probe_save", { p: out });
     return json({ ok: true, results: out.map(o => ({ path: o.path, status: o.status })) });
   }
