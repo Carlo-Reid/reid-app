@@ -41,10 +41,19 @@ GRANT EXECUTE ON FUNCTION public.refresh_comm_item_groups(int) TO authenticated;
 -- forget when something it depends on changes
 CREATE OR REPLACE FUNCTION public._comm_group_forget_all() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $f$
 BEGIN DELETE FROM comm_item_group_cache; RETURN NULL; END $f$;
+-- (Nov 9, 2026: the old one-line CASE read OLD.item_id on pricebook_items, which has no such column, so deleting or renaming a price book item failed. IF/ELSE reads only the column that exists.)
 CREATE OR REPLACE FUNCTION public._comm_group_forget_item() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $f$
+DECLARE v_old bigint; v_new bigint;
 BEGIN
-  IF TG_OP IN ('UPDATE', 'DELETE') THEN DELETE FROM comm_item_group_cache WHERE item_id = (CASE WHEN TG_TABLE_NAME = 'pricebook_items' THEN OLD.id ELSE OLD.item_id END); END IF;
-  IF TG_OP IN ('UPDATE', 'INSERT') THEN DELETE FROM comm_item_group_cache WHERE item_id = (CASE WHEN TG_TABLE_NAME = 'pricebook_items' THEN NEW.id ELSE NEW.item_id END); END IF;
+  IF TG_TABLE_NAME = 'pricebook_items' THEN
+    IF TG_OP IN ('UPDATE', 'DELETE') THEN v_old := OLD.id; END IF;
+    IF TG_OP IN ('UPDATE', 'INSERT') THEN v_new := NEW.id; END IF;
+  ELSE
+    IF TG_OP IN ('UPDATE', 'DELETE') THEN v_old := OLD.item_id; END IF;
+    IF TG_OP IN ('UPDATE', 'INSERT') THEN v_new := NEW.item_id; END IF;
+  END IF;
+  IF v_old IS NOT NULL THEN DELETE FROM comm_item_group_cache WHERE item_id = v_old; END IF;
+  IF v_new IS NOT NULL THEN DELETE FROM comm_item_group_cache WHERE item_id = v_new; END IF;
   RETURN NULL;
 END $f$;
 DROP TRIGGER IF EXISTS comm_group_forget ON public.commission_groups;
