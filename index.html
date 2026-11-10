@@ -1821,7 +1821,7 @@
   .mc-ev-i { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; padding: 4px 0; border-top: 1px solid #bae6fd; } .mc-ev-i:first-of-type { border-top: 0; } .mc-ev-t { font-weight: 700; color: #0c4a6e; min-width: 140px; }
   .pr-pu-st.wait { color: #b45309; font-weight: 700; } .fu-pay .fu-item { border-left: 4px solid #f59e0b; } .fu-item.fu-pay-i > .fu-main { grid-column: 1 / -1; min-width: 0; }   /* a payroll line has no tick box, so its words take the full width (they were squeezed into the 34px tick column: Carlo, Nov 10) */ .pbr-find { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: calc(17px * var(--fs, 1)); margin-bottom: 12px; } .pbr-find input { flex: 1 1 auto; max-width: 620px; font-size: calc(17px * var(--fs, 1)); padding: 9px 12px; }
   .sci-apps { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 4px; } .sci-app { display: grid; gap: 4px; justify-items: center; } .sci-app-n { font-size: calc(13px * var(--fs, 1)); font-weight: 700; }
-  .sci-po { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; } .sci-po label { font-weight: 700; display: flex; gap: 8px; align-items: center; } .sci-po-ok b { color: #14703a; } .sci-reread { margin-left: 14px; } .sci-po-found { flex: 1 1 100%; display: grid; gap: 6px; } .sci-po-found:empty { display: none; } .sci-po-ok span { font-weight: 700; }
+  .sci-po { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; } .sci-po label { font-weight: 700; display: flex; gap: 8px; align-items: center; } .sci-top { gap: 18px; align-items: flex-start; } .apb.sci-big { width: 190px; min-height: 150px; gap: 6px; } .sci-app-k { font-size: calc(13px * var(--fs, 1)); font-weight: 800; letter-spacing: .04em; text-transform: uppercase; opacity: .9; } .sci-big .apb-tn { font-size: calc(16px * var(--fs, 1)); line-height: 1.2; } .sci-tools { border-top: 0; padding-top: 0; } .sci-po-found { flex: 1 1 100%; display: grid; gap: 6px; } .sci-po-found:empty { display: none; } .sci-po-ok span { font-weight: 700; }
   .sci-stock { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; } .sci-stock label { font-weight: 700; display: flex; gap: 8px; align-items: center; } .sci-stock ul { flex: 1 1 100%; margin: 0; padding-left: 20px; } .sci-stock p { flex: 1 1 100%; margin: 0; } .sci-stock-done b { color: #14703a; }
   .fu-pay-btns { display: flex; gap: 12px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
   .pr-pu-st { font-size: 10.5px; font-weight: 700; color: #6b21a8; }
@@ -18121,6 +18121,15 @@ function sinvParseLines(text, credit) {
       const neg = credit || !!b[8], desc = b[1].replace(/[|\[\]]/g, " ").replace(/\s+(UN|EA|FT|BX|PK|RL|PR|LB|CS|BG|ST|PC)\s*$/i, "").replace(/\s+/g, " ").trim(), bo = /^o$/i.test(b[4]) ? 0 : n(b[4]);
       const row = { code: a[2].toUpperCase(), description: desc, shipped: n(b[3]), backorder: bo || null, unit_price: n(b[5]), discount: b[6] ? n(b[6]) : null, net_amount: (neg ? -1 : 1) * n(b[7]) }, k = [row.code, row.shipped, row.unit_price, row.net_amount].join("|");
       if (!seen.has(k)) { seen.add(k); out.push(row); } break; } }
+  if (out.length) return out;
+  // Boone's "Sales order / Packing slip" (Carlo, Nov 10, C440377): everything is on one line and there is no net amount, only the 5-decimal price:
+  // "002| KITNIP05B K## 1/2" BLK STEEL NIPPLE KITS 12 0 13.56000 0 UN". Lines with no price (a kit's COMPONENT lines) are left out: the kit line carries the price.
+  const C = /^\s*[|\[\]_ ]*(\d{3})\s*[|\[\]]*\s*([A-Z0-9][A-Z0-9\-\/.]{3,})\s+(.+?)\s+(\d{1,4})\s+(?:(\d{1,4})\s+)?(\d{1,4}|o)[\s|\[\]]+([\d,]+\.\d{5})(?!\d)[\s|\[\]]*(?:(\d{1,2})\s+)?(\d{1,4})?\s*(?:UN|EA|FT|BX|PK|RL|PR|LB|CS|BG|ST|PC)?[\s|\[\]]*$/i;
+  for (let i = 0; i < L.length; i++) { const c = L[i].match(C); if (!c) continue;
+    const ordered = n(c[4]), shipped = c[5] != null ? n(c[5]) : c[9] != null && n(c[9]) > 0 ? n(c[9]) : ordered, desc = c[3].replace(/[|\[\]]/g, " ").replace(/\s+(UN|EA|FT|BX|PK|RL|PR|LB|CS|BG|ST|PC|J)\s*$/i, "").replace(/\s+/g, " ").trim();
+    const row = { code: c[2].toUpperCase(), description: desc, shipped: shipped || ordered, backorder: /^o$/i.test(c[6]) ? null : n(c[6]) || null, unit_price: n(c[7]), discount: c[8] && c[9] != null ? n(c[8]) : null, net_amount: null }, k = [row.code, row.shipped, row.unit_price].join("|");
+    if (credit) row.unit_price = -Math.abs(row.unit_price);
+    if (!seen.has(k)) { seen.add(k); out.push(row); } }
   return out;
 }
 // the PO number printed on a supplier's paper, from the words read off it (used by Read it again): Boone prints it under "Customer PO#", in the first box of the next line
@@ -18717,24 +18726,37 @@ function sinvHistory(C) {
 }
 // the customer invoice(s) this supplier invoice was for: attached by hand; the PO's job's invoices are suggested
 // Match to PO sits at the top, near Find our invoice (Carlo, Nov 10). Once a PO is matched it says "PO found" and the search box is gone, so nobody looks for it again.
-function sinvPoLineHtml(r, edit, d) {
-  // Read it again sits here too, beside the Match to PO box (Carlo, Nov 10)
-  const rr = edit && ((d && d.pages) || []).length ? `<button class="btn quiet-btn sci-reread" type="button" data-sinv-reread="${r.id}" title="Read the scanned pages again, in case the lines were read wrong the first time">🔄 Read it again</button><button class="btn quiet-btn" type="button" data-sinv-print="${r.id}" title="Print the scanned pages of this invoice">🖨 Print the invoice</button><span class="quiet" data-sinv-rereadmsg role="status"></span>` : "";
-  if (r.po_id) return `<div class="sci-po sci-po-ok"><div class="sci-app"><button class="apb apb-green" type="button" data-sci-poopen="${r.po_id}" title="Open PO ${esc(r.po_number || "")}"><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">PO found</span><span class="sci-app-n">${esc(r.po_number || "")}</span></button>${edit && r.po_by_hand ? `<button class="link" type="button" data-sinv-unpo="${r.id}">Wrong PO? Take it off</button>` : ""}</div>${rr}</div>`;
-  return edit ? `<div class="sci-po"><label>Match to PO <input id="sinv-po-${r.id}" placeholder="PO number, job number or customer" value="${esc(r.po_by_hand ? r.po_number || "" : "")}" autocomplete="off"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button>${rr}<div class="sci-po-found" data-sci-pofound="${r.id}"></div></div>` : "";
+// The top of an open supplier invoice (Carlo, Nov 10): two app boxes side by side. "Supplier P.O." says "Click to find the PO" (a click shows the search box)
+// or "P.O. Found and Matched" (a click opens the PO); "Customer Invoice" does the same for our invoice. Read it again and Print sit on the line under them.
+function sinvPoTile(r, edit) {
+  if (r.po_id) return `<div class="sci-app"><button class="apb apb-green sci-big" type="button" data-sci-poopen="${r.po_id}" title="Open PO ${esc(r.po_number || "")}"><span class="sci-app-k">Supplier P.O.</span><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">P.O. Found and Matched</span><span class="sci-app-n">${esc(r.po_number || "")}</span></button>${edit && r.po_by_hand ? `<button class="link" type="button" data-sinv-unpo="${r.id}">Wrong PO? Take it off</button>` : ""}</div>`;
+  return `<div class="sci-app"><button class="apb apb-blue sci-big" type="button" ${edit ? `data-sci-pofind="${r.id}"` : "disabled"} title="Find the PO for this invoice"><span class="sci-app-k">Supplier P.O.</span><span class="apb-ic" aria-hidden="true">🔎</span><span class="apb-tn">${edit ? "Click to find the PO" : "No PO yet"}</span></button></div>`;
+}
+function sinvPoFindHtml(r, edit) {
+  return edit && !r.po_id && SINV.poFind === r.id ? `<div class="sci-po"><label>Match to PO <input id="sinv-po-${r.id}" placeholder="PO number, job number or customer" value="${esc(r.po_by_hand ? r.po_number || "" : "")}" autocomplete="off"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button><div class="sci-po-found" data-sci-pofound="${r.id}"></div></div>` : "";
+}
+function sinvToolsHtml(r, edit, d) {
+  return edit && ((d && d.pages) || []).length ? `<div class="sci-po sci-tools"><button class="btn quiet-btn" type="button" data-sinv-reread="${r.id}" title="Read the scanned pages again, in case the lines were read wrong the first time">🔄 Read it again</button><button class="btn quiet-btn" type="button" data-sinv-print="${r.id}" title="Print the scanned pages of this invoice">🖨 Print the invoice</button><span class="quiet" data-sinv-rereadmsg role="status"></span></div>` : "";
 }
 function sinvCustHtml(r, d, edit) {
-  const C = d.cinv; if (!C) { const pl = sinvPoLineHtml(r, edit, d); return pl ? `<section class="sinv-cust">${pl}</section>` : ""; }
+  const C = d.cinv; if (!C) return `<section class="sinv-cust"><div class="sci-apps sci-top">${sinvPoTile(r, edit)}</div>${sinvPoFindHtml(r, edit)}${sinvToolsHtml(r, edit, d)}</section>`;
   const row = (i, act) => `<div class="sci-row"><button class="link" type="button" data-sci-open="${i.id}"><b>#${esc(i.number || i.id)}</b></button> <span>${esc(fmtDate(i.date))}</span> <span><b>${esc(i.who || "")}</b>${i.street ? ` · ${esc(i.street)}` : ""}${i.job ? ` · job ${esc(i.job)}` : ""}</span> <span class="r">${money(i.total)}${Number(i.balance) > 0.004 ? ` <span class="quiet">(${money(i.balance)} owing)</span>` : ""}</span>${act}</div>`;
-  const F = SINV.sciFind?.id === r.id ? SINV.sciFind : null;
-  return `<section class="sinv-cust" data-sci="${r.id}"><h3>Customer Invoice</h3>
-    ${C.linked.length ? `<div class="sci-apps">${C.linked.map(i => `<div class="sci-app"><button class="apb apb-green" type="button" data-sci-open="${i.id}" title="Open invoice ${esc(String(i.number || i.id))}${i.who ? " · " + esc(i.who) : ""}"><span class="apb-ic" aria-hidden="true">🧾</span><span class="apb-tn">Invoice attached</span><span class="sci-app-n">#${esc(String(i.number || i.id))}</span></button>${edit ? `<button class="link danger" type="button" data-sci-off="${i.id}" title="Take this invoice off">✕ Take it off</button>` : ""}</div>`).join("")}</div>` : `<p class="quiet">No customer invoice attached yet.</p>`}
-    ${edit && C.suggest.length ? `<div class="sci-sug"><span class="cl-label">On this PO's job</span>${C.suggest.map(i => row(i, `<button class="btn quiet-btn vtp-small" type="button" data-sci-on="${i.id}">＋ Attach</button>`)).join("")}</div>` : ""}
-    ${edit ? `<div class="sci-find"><label>Find our invoice <input type="search" data-sci-q="${r.id}" value="${esc(F?.q || "")}" placeholder="Invoice #, job #, customer or street" autocomplete="off"></label>
+  const F = SINV.sciFind?.id === r.id ? SINV.sciFind : null, showFind = edit && (SINV.invFind === r.id || !!F);
+  const invTiles = C.linked.length ? C.linked.map(i => `<div class="sci-app"><button class="apb apb-green sci-big" type="button" data-sci-open="${i.id}" title="Open invoice ${esc(String(i.number || i.id))}${i.who ? " · " + esc(i.who) : ""}"><span class="sci-app-k">Customer Invoice</span><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">Invoice Found and Matched</span><span class="sci-app-n">#${esc(String(i.number || i.id))}</span></button>${edit ? `<button class="link danger" type="button" data-sci-off="${i.id}" title="Take this invoice off">✕ Take it off</button>` : ""}</div>`).join("") + (edit ? `<div class="sci-app"><button class="link" type="button" data-sci-invfind="${r.id}">＋ Attach another invoice</button></div>` : "")
+    : `<div class="sci-app"><button class="apb apb-blue sci-big" type="button" ${edit ? `data-sci-invfind="${r.id}"` : "disabled"} title="Find our invoice for these parts"><span class="sci-app-k">Customer Invoice</span><span class="apb-ic" aria-hidden="true">🔎</span><span class="apb-tn">${edit ? "Click to find the invoice" : "No invoice yet"}</span></button></div>`;
+  return `<section class="sinv-cust" data-sci="${r.id}">
+    <div class="sci-apps sci-top">${sinvPoTile(r, edit)}${invTiles}</div>
+    ${sinvPoFindHtml(r, edit)}
+    ${showFind && C.suggest.length ? `<div class="sci-sug"><span class="cl-label">On this PO's job</span>${C.suggest.map(i => row(i, `<button class="btn quiet-btn vtp-small" type="button" data-sci-on="${i.id}">＋ Attach</button>`)).join("")}</div>` : ""}
+    ${showFind ? `<div class="sci-find"><label>Find our invoice <input type="search" data-sci-q="${r.id}" value="${esc(F?.q || "")}" placeholder="Invoice #, job #, customer or street" autocomplete="off"></label>
       ${F?.rows ? (F.rows.length ? F.rows.filter(i => !C.linked.some(x => x.id === i.id)).map(i => row(i, `<button class="btn vtp-small" type="button" data-sci-on="${i.id}">＋ Attach</button>`)).join("") : `<p class="quiet">Nothing found for “${esc(F.q)}”.</p>`) : ""}</div>` : ""}
-    ${sinvPoLineHtml(r, edit, d)}
+    ${sinvToolsHtml(r, edit, d)}
     ${sinvStockHtml(r, d, edit)}</section>`;
 }
+// the two "click to find" app boxes: show (or hide) the search box and put the pointer in it
+document.addEventListener("click", e => { const p = e.target.closest?.("[data-sci-pofind]"), v = e.target.closest?.("[data-sci-invfind]"); if (!p && !v) return; e.preventDefault();
+  const id = Number((p || v).dataset[p ? "sciPofind" : "sciInvfind"]); if (p) SINV.poFind = SINV.poFind === id ? null : id; else { SINV.invFind = SINV.invFind === id ? null : id; if (SINV.invFind == null && SINV.sciFind?.id === id) SINV.sciFind = null; }
+  const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; (p ? document.getElementById("sinv-po-" + id) : document.querySelector(`[data-sci-q="${id}"]`))?.focus(); });
 // "Add to our stock" (Carlo, Nov 10): one press puts the parts on this supplier invoice into a stock place. d.stock = what supplier_invoice_to_stock says (a dry look).
 function sinvStockHtml(r, d, edit) {
   const K = d.stock; if (!K || K.not_invoice) return "";
@@ -19219,12 +19241,26 @@ function wireSupInv() {
         const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
         text += "\n" + await stReadBoxes(w, c, (await w.recognize(c)).data.text); }
       await w.terminate();
-      const before = sinvBeforeOwn(r), L = sinvDedupLines(sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0), before), old = (d.lines || []).filter(x => !x.by_hand);
+      const before = sinvBeforeOwn(r), old = (d.lines || []).filter(x => !x.by_hand); let L = sinvDedupLines(sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0), before);
+      // no PO on it yet, and the plain reading does not show one: look again the way Auto update does (shading washed out, loose words), then keep a number only if it is a PO in the app
+      let po = !r.po_id ? sinvPoFromText(text) : "";
+      if (!r.po_id && !po) { try { const cands = new Set();
+          for (let i = 0; i < P.length; i++) { if (!SINV.img.has(P[i].id)) continue; say(`Looking for the PO number on page ${i + 1} of ${P.length}… (about half a minute)`);
+            const du = SINV.img.get(P[i].id), bin = atob(du.split(",")[1]), u8 = new Uint8Array(bin.length); for (let z = 0; z < bin.length; z++) u8[z] = bin.charCodeAt(z); const bl = new Blob([u8], { type: "image/jpeg" }), t3 = await smScanAgain(bl, "page.jpg", null, null, null); text += "\n" + t3;
+            const p2 = sinvPoFromText(t3); if (p2) cands.add(p2); (t3.match(/\[numbers read again\][^\n]*/g) || []).forEach(l => (l.match(/\d{6,12}(?:-\d{1,3})?/g) || []).forEach(x => cands.add(x))); }
+          const sn = String(sinvShort(r.supplier || "") || "").toLowerCase();
+          for (const c of [...cands].slice(0, 6)) { const q = await db.rpc("po_list", { p_search: c, p_status: "all", p_supplier: null, p_from: null, p_to: null, p_limit: 20 });
+            const hit = (q.data || []).filter(x => x.status !== "cancelled" && (x.po_number === c || String(x.po_number).split("-")[0] === c)).sort((a, b) => (String(b.supplier || "").toLowerCase().startsWith(sn) ? 1 : 0) - (String(a.supplier || "").toLowerCase().startsWith(sn) ? 1 : 0))[0];
+            if (hit) { po = c; break; } }
+        } catch { } }
+      if (!L.length) L = sinvDedupLines(sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0), before);   // the second look may show the lines too
+      if (!L.length && po && (await askChoice("I found the PO, but no lines", `I could not pick out the lines on this one, but I read <b>PO ${esc(po)}</b> on it and that PO is in the app. Do you want me to match it?`, [["yes", "Yes, match the PO", true], ["", "No"]])) === "yes") {
+        const { error } = await db.rpc("supplier_invoice_set", { p_id: id, p: { po_number: po } }); if (error) { say("Not saved: " + rpcErr(error)); b.disabled = false; return; }
+        SINV.det.delete(id); SINV.data = null; await openSupInv(`Matched to PO ${po}.`); return; }
       if (!L.length) { say("I read it again but could not pick out any lines. Nothing was changed."); b.disabled = false; return; }
       const amt = x => x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : Number(x.unit_price || 0) * Number(x.shipped ?? x.ordered ?? 1) * (1 - (Number(x.discount) || 0) / 100), sum = A => Math.round(A.reduce((a, x) => a + amt(x), 0) * 100) / 100;
       const li = A => A.length ? `<ul style="margin:4px 0 10px;padding-left:20px;text-align:left">${A.slice(0, 12).map(x => `<li>${esc(String(x.shipped ?? x.ordered ?? ""))} × ${esc([x.code, x.description].filter(Boolean).join(" · ").slice(0, 70))} · ${money(amt(x))}</li>`).join("")}${A.length > 12 ? `<li>…and ${A.length - 12} more</li>` : ""}</ul>` : `<p>(no lines)</p>`;
       say("");
-      const po = !r.po_id ? sinvPoFromText(text) : "";
       const k2 = await askChoice("Use the new reading?", `<b>New reading: ${L.length} ${L.length === 1 ? "line" : "lines"}, ${money(sum(L))}</b>${li(L)}<b>What it has now: ${old.length} ${old.length === 1 ? "line" : "lines"}, ${money(sum(old))}</b>${li(old)}${po ? `I also read <b>PO ${esc(po)}</b> on it. If that PO is in the app, I will match it. ` : ""}The invoice says ${money(before)} before tax. Lines typed in by hand are kept.`, [["yes", "Yes, use the new reading", true], ["", "No, keep what it has"]]);
       if (k2 !== "yes") { say("Nothing was changed."); b.disabled = false; return; }
       const { error } = await db.rpc("supplier_invoice_reread", { p_id: id, p_lines: L, p_extra: po ? { po_text: po } : {} }); if (error) { say("Not saved: " + rpcErr(error)); b.disabled = false; return; }
