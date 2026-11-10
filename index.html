@@ -19787,6 +19787,13 @@ async function openAutoUpdate(tab) {
   if (tab) AU.tab = tab;
   setPage("auto-update", "autoupdate", "Auto Update");
   if (!(seeCost() && can("pricebook.edit"))) { $("#main").innerHTML = `<div class="empty"><div><h2>Auto Update</h2>Ask Carlo for "Edit the price book" and "See what parts and equipment cost".</div></div>`; return; }
+  // Opened before since the app was loaded: show what we have right away, then get the newest in the background and show it
+  // (not while someone is typing in a box, so their words stay). Carlo, Nov 10: "the auto update page takes too long to load".
+  if (MAIL.data && PB.updRows && SUPPLIERS) {
+    renderAutoUpdate();
+    auLoad().then(() => { if (!auOn()) return; if (!document.activeElement?.matches?.("input, textarea, select") && !document.querySelector(".eco-form-wrap, .train-cur")) renderAutoUpdate(); supMailRun().catch(() => { MAIL.busy = false; }); }).catch(() => {});
+    return;
+  }
   $("#main").innerHTML = `<div class="loading">Loading…</div>`;
   await auLoad();
   if (!auOn()) return;
@@ -25122,8 +25129,10 @@ const supplierBySign = t => (SUPPLIER_SIGNS.find(([, re]) => re.test(t || "")) |
 const noPricesOn = lines => /\b(packing (slip|list)|pick(ing)? (ticket|list)|shipping list|delivery (slip|receipt)|bill of lading|feuille d.emballage|bon de cueillette|bordereau d.exp[ée]dition)\b/i.test(lines.join(" "))
   || !lines.some(l => /\b\d{1,3}(,\d{3})*\.\d{2}(?!\d|\s?%)/.test(l));
 const MAIL = { busy: false, data: null };
-async function supMailLoad() { await smMyFirstLoad(); if (!(seeCost() && can("pricebook.edit"))) return null; const [l, sn] = await Promise.all([db.rpc("supplier_mail_list", { p_limit: 80 }), db.rpc("supplier_mail_sent", { p_supplier: null, p_limit: 200 })]);
-  SMW.at = 0; MAIL.data = l.error ? null : l.data; MAIL.sent = sn.error ? null : (sn.data || []); MAIL.sentIds = new Set((MAIL.sent || []).map(x => x.id)); return MAIL.data; }
+async function supMailLoad() { if (!(seeCost() && can("pricebook.edit"))) { await smMyFirstLoad(); return null; }
+  // all three at once (the name used to be asked for first, then the papers): Carlo, Nov 10, "the page takes too long to load"
+  const [l, sn] = await Promise.all([db.rpc("supplier_mail_list", { p_limit: 80 }), db.rpc("supplier_mail_sent", { p_supplier: null, p_limit: 200 }), smMyFirstLoad()]);
+  MAIL.at = Date.now(); SMW.at = 0; MAIL.data = l.error ? null : l.data; MAIL.sent = sn.error ? null : (sn.data || []); MAIL.sentIds = new Set((MAIL.sent || []).map(x => x.id)); return MAIL.data; }
 // the supplier in the app for a short name ("Trane" → "Trane 613-744-5396")
 const supIdOf = n => { n = String(n || "").trim().toLowerCase(); if (!n) return null; const L = (SUPPLIERS || []).filter(s => { const m = String(s.name).toLowerCase(); return m === n || m.startsWith(n + " ") || m.startsWith(n + "("); }); return L[0]?.id || null; };
 async function smOpenFile(rpc, id) { const w = window.open("", "_blank"); const f = await db.rpc(rpc, { p_id: id });
@@ -25409,7 +25418,7 @@ async function smReadAgain(id) {
     : `Read ${row.file || "it"} again${pos.length ? ": found PO " + pos.join(", ") : again ? ": no PO number on it matches a PO in the app" : ""}.`);
 }
 async function supMailRun(force) {
-  if (MAIL.busy) return; const d = await supMailLoad(); if (!d) return;
+  if (MAIL.busy) return; const d = !force && MAIL.data && Date.now() - (MAIL.at || 0) < 15000 ? MAIL.data : await supMailLoad(); if (!d) return;   // just loaded by the page: do not ask for it all a second time
   const todo = (d.rows || []).filter(r => r.status === "new");
   if (!todo.length) { const went = await supMailAutoFile(); if (went.length) { await supMailLoad(); supMailShow(supMailFiledMsg(went)); } else if (force) supMailShow(); return; }
   MAIL.busy = true; supMailShow(`Reading ${todo.length} supplier email${todo.length > 1 ? "s" : ""}…`);
