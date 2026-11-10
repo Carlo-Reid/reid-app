@@ -8,7 +8,7 @@ BEGIN
   SELECT coalesce(read_notes, '') INTO v_notes FROM supplier_invoices WHERE id = p_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'That invoice is gone'; END IF;
   IF p_on THEN
-    IF v_notes ILIKE '%packing slip%' THEN RETURN; END IF;
+    IF v_notes ILIKE '%Marked as a packing slip in the app%' THEN RETURN; END IF;   -- a paper the reader only guessed was a packing slip still gets the person's mark
     UPDATE supplier_invoices SET read_notes = btrim(v_notes || ' Marked as a packing slip in the app on ' || to_char(now() AT TIME ZONE 'America/Toronto', 'Mon FMDD, YYYY') || '.'), updated_at = now() WHERE id = p_id;
   ELSE
     UPDATE supplier_invoices SET read_notes = nullif(btrim(regexp_replace(v_notes, '\s*Marked as a packing slip in the app on [A-Za-z]{3} [0-9]{1,2}, [0-9]{4}\.', '', 'g')), ''), updated_at = now() WHERE id = p_id;
