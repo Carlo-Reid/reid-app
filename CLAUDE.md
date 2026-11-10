@@ -65,7 +65,7 @@
 
 ## Eco Man (the mascot)
 
-- **Eco Man** is the company mascot: the smiling house with the red roof flexing its arms (Carlo named him Nov 9, 2026: "we will start to use him"). Redrawn clean as inline SVG, `ECO_MAN_SVG` in `index.html` (ids start `eco-`, so put only one on a page, or give a second copy new ids). He talks in a word bubble: `.eco-say` (him on the left, `.eco-bubble` with a pointer, "Eco Man says:"). First use: top of Auto update → supplier mail, saying "Send paperwork to supplierpo@hsginc.ca. I check for new ones every 10 minutes and keep you posted." Use him for friendly messages from the app; the app talks as "I".
+- **Eco Man** is the company mascot: the smiling house with the red roof flexing its arms (Carlo named him Nov 9, 2026: "we will start to use him"). Redrawn clean as inline SVG, `ECO_MAN_SVG` in `index.html` (ids start `eco-`, so put only one on a page, or give a second copy new ids). He talks in a word bubble: `.eco-say` (him on the left, `.eco-bubble` with a pointer, "Eco Man says:"). First use: top of Auto update → supplier mail, saying "Send paperwork to supplierpo@hsginc.ca. I check for new ones every 10 minutes and keep you posted. The last time I looked was Nov 9, 2026 at 8:05 p.m." (`data-eco-last`, filled by `supMailShow` from `last_check`; the old "Papers from suppliers … last looked" heading is gone). Use him for friendly messages from the app; the app talks as "I".
 
 ## Auto update: supplier mail → supplier lists and POs
 
