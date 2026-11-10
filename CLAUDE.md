@@ -63,6 +63,10 @@
 
 - Who is on call each day: `on_call` table (`sync/extra/224_on_call.sql`), loaded with Nov–Dec 2026 from Carlo's Shifter calendar screenshots (top name = on call, bottom name, Adam or Dave = 2nd on call). Seed rows only fill empty days, so changes made in the app stay. Day view shows an orange "📟 On call … · 2nd: …" strip above Waiting for a day (Change = pick from drop-downs, owners/dispatch) and a 📟 tag on those people's lines. January isn't in yet.
 
+## Eco Man (the mascot)
+
+- **Eco Man** is the company mascot: the smiling house with the red roof flexing its arms (Carlo named him Nov 9, 2026: "we will start to use him"). Redrawn clean as inline SVG, `ECO_MAN_SVG` in `index.html` (ids start `eco-`, so put only one on a page, or give a second copy new ids). He talks in a word bubble: `.eco-say` (him on the left, `.eco-bubble` with a pointer, "Eco Man says:"). First use: top of Auto update → supplier mail, saying "Send paperwork to supplierpo@hsginc.ca. I check for new ones every 10 minutes and keep you posted." Use him for friendly messages from the app; the app talks as "I".
+
 ## Auto update: supplier mail → supplier lists and POs
 
 - Each document has "📤 Send to <supplier> list". **Send only sends and stays on the Auto update page** (Carlo, Nov 9 afternoon: "I want to stay on the page so I can keep checking them all"; it no longer jumps into the invoice reader). Sent ones have "📥 Load into Supplier invoices", which opens that supplier's invoice reader (Supplier invoices drop-in, `smLoadToInvoices`) to check and Save, so it lands in View Supplier Invoices by month. It leaves the main supplier mail list and goes to "📤 Sent to suppliers" (under it, with Put back) and to the supplier's page tile "📨 Sent from Auto update" (`supplier_mail_send`, `supplier_mail_sent`, `supplier_doc_file`, `sync/extra/229_supplier_mail_sent.sql`).
