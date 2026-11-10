@@ -24869,7 +24869,7 @@ const supplierBySign = t => (SUPPLIER_SIGNS.find(([, re]) => re.test(t || "")) |
 const noPricesOn = lines => /\b(packing (slip|list)|pick(ing)? (ticket|list)|shipping list|delivery (slip|receipt)|bill of lading|feuille d.emballage|bon de cueillette|bordereau d.exp[ée]dition)\b/i.test(lines.join(" "))
   || !lines.some(l => /\b\d{1,3}(,\d{3})*\.\d{2}(?!\d|\s?%)/.test(l));
 const MAIL = { busy: false, data: null };
-async function supMailLoad() { if (!(seeCost() && can("pricebook.edit"))) return null; const [l, sn] = await Promise.all([db.rpc("supplier_mail_list", { p_limit: 80 }), db.rpc("supplier_mail_sent", { p_supplier: null, p_limit: 200 })]);
+async function supMailLoad() { await smMyFirstLoad(); if (!(seeCost() && can("pricebook.edit"))) return null; const [l, sn] = await Promise.all([db.rpc("supplier_mail_list", { p_limit: 80 }), db.rpc("supplier_mail_sent", { p_supplier: null, p_limit: 200 })]);
   SMW.at = 0; MAIL.data = l.error ? null : l.data; MAIL.sent = sn.error ? null : (sn.data || []); MAIL.sentIds = new Set((MAIL.sent || []).map(x => x.id)); return MAIL.data; }
 // the supplier in the app for a short name ("Trane" → "Trane 613-744-5396")
 const supIdOf = n => { n = String(n || "").trim().toLowerCase(); if (!n) return null; const L = (SUPPLIERS || []).filter(s => { const m = String(s.name).toLowerCase(); return m === n || m.startsWith(n + " ") || m.startsWith(n + "("); }); return L[0]?.id || null; };
@@ -25187,6 +25187,9 @@ function smPlain(r) {
     default: return ["⚪", "off", r.status, ""];
   }
 }
+// the signed-in person's first name: the Staff page name (my_started), else the start of their email (carlo@… → Carlo)
+function smMyFirst() { const f = (typeof HSG !== "undefined" && HSG.me && HSG.me.first) || (ME.name || "").split(" ")[0] || (ME.email || "").split("@")[0].split(/[._-]/)[0]; return f ? f[0].toUpperCase() + f.slice(1) : "there"; }
+async function smMyFirstLoad() { try { if (typeof HSG !== "undefined" && !HSG.me) { const { data } = await db.rpc("my_started"); HSG.me = data || {}; } } catch { } }
 let SM_FILTER = "";   // Auto update: show only one kind of paper (needs you / a problem / waiting…)
 function supMailHtml(msg) {
   const d = MAIL.data; if (!d) return "";
@@ -25196,7 +25199,7 @@ function supMailHtml(msg) {
   return `<section class="sm-box" id="sm-box"><h3>Papers from suppliers <span class="quiet">sent to supplierpo@hsginc.ca · ${d.last_check ? `last looked ${ago < 1 ? "just now" : ago < 60 ? ago + " min ago" : fmtDate(d.last_check)}` : "not looked at yet"}</span></h3>
     ${(() => { const t = { ok: 0, warn: 0, bad: 0, wait: 0, off: 0 }; rows.forEach(r => t[smPlain(r)[1]]++); const todo = t.warn + t.bad; if (SM_FILTER && !t[SM_FILTER]) SM_FILTER = "";
       const chip = (k, txt) => t[k] ? `<button type="button" class="smc-k smc-k-${k}${SM_FILTER === k ? " on" : ""}" data-sm-f="${k}">${txt} (${t[k]})</button>` : "";
-      return `<div class="smc-sum ${todo ? "smc-sum-todo" : "smc-sum-ok"}">${todo ? `Hi <b>${esc((typeof ME !== "undefined" && ME && ME.name || "").split(" ")[0] || "there")}</b>, you need to fix up <b>${todo} document${todo > 1 ? "s" : ""}</b>.` : rows.length ? "👍 <b>Nothing needs you right now.</b>" : "🎉 <b>No papers are waiting.</b>"}</div>
+      return `<div class="smc-sum ${todo ? "smc-sum-todo" : "smc-sum-ok"}">${todo ? `Hi <b>${esc(smMyFirst())}</b>, you need to fix up <b>${todo} document${todo > 1 ? "s" : ""}</b>.` : rows.length ? "👍 <b>Nothing needs you right now.</b>" : "🎉 <b>No papers are waiting.</b>"}</div>
       <p class="smc-help">The app reads each paper, finds its <b>order number (PO)</b> and checks the <b>prices</b>. A finished paper moves to the supplier's list by itself. Only the papers that need a person stay here.</p>
       ${rows.length ? `<div class="smc-key" aria-label="Show only some papers"><b>Show:</b> <button type="button" class="smc-k smc-k-all${SM_FILTER ? "" : " on"}" data-sm-f="">All (${rows.length})</button>${chip("warn", "🟡 Needs you")}${chip("bad", "🔴 A problem")}${chip("wait", "⏳ Waiting")}${chip("ok", "✅ Finished")}${chip("off", "⚪ Other")}</div>` : ""}`; })()}
     ${d.last_error ? `<div class="staff-msg err">${esc(d.last_error)}</div>` : ""}${msg ? `<div class="staff-msg">${esc(msg)}</div>` : ""}
