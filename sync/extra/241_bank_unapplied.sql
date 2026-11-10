@@ -4,7 +4,8 @@
 CREATE OR REPLACE FUNCTION public._recv_ok() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT coalesce(public.has_permission('invoices.adjust') OR public.current_staff_role() IN ('owner', 'admin', 'accounting') OR public._bank_owner(), false) $f$;
 
-CREATE OR REPLACE FUNCTION public.bank_unapplied(p_year integer DEFAULT NULL, p_limit integer DEFAULT 25, p_offset integer DEFAULT 0)
+DROP FUNCTION IF EXISTS public.bank_unapplied(integer, integer, integer);
+CREATE OR REPLACE FUNCTION public.bank_unapplied(p_year integer DEFAULT NULL, p_limit integer DEFAULT 25, p_offset integer DEFAULT 0, p_month text DEFAULT NULL)
  RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public'
 AS $function$
 DECLARE r jsonb;
@@ -17,7 +18,7 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM bank_invoice_links k WHERE k.bank_id = b.id) AND NOT EXISTS (SELECT 1 FROM bank_files k WHERE k.bank_id = b.id)
       AND NOT EXISTS (SELECT 1 FROM bank_sinv_links k WHERE k.bank_id = b.id) AND NOT EXISTS (SELECT 1 FROM bank_transfer_links k WHERE k.a_id = b.id OR k.b_id = b.id)
       AND NOT EXISTS (SELECT 1 FROM bank_vehicle_links k WHERE k.bank_id = b.id)),
-  g AS (SELECT * FROM f WHERE p_year IS NULL OR extract(year FROM txn_date) = p_year),
+  g AS (SELECT * FROM f WHERE (p_year IS NULL OR extract(year FROM txn_date) = p_year) AND (p_month IS NULL OR to_char(txn_date, 'YYYY-MM') = p_month)),
   pg AS (SELECT * FROM g ORDER BY txn_date DESC, id DESC LIMIT least(greatest(coalesce(p_limit, 25), 1), 200) OFFSET greatest(coalesce(p_offset, 0), 0)),
   cand AS (   -- invoices for exactly the same amount, dated up to 4 months before the money came in, whose money is not found in the bank yet
     SELECT pg.id AS bank_id, i.id, i.invoice_number, i.invoice_date, i.total, i.balance_due, c.display_name,
@@ -28,6 +29,7 @@ BEGIN
   SELECT jsonb_build_object(
     'count', (SELECT count(*) FROM g), 'sum', (SELECT coalesce(sum(amount_in), 0) FROM g), 'all', (SELECT count(*) FROM f),
     'years', (SELECT coalesce(jsonb_agg(jsonb_build_object('y', y, 'n', n, 'sum', s) ORDER BY y DESC), '[]'::jsonb) FROM (SELECT extract(year FROM txn_date)::int y, count(*) n, sum(amount_in) s FROM f GROUP BY 1) t),
+    'months', (SELECT coalesce(jsonb_agg(jsonb_build_object('m', m, 'n', n, 'sum', s) ORDER BY m DESC), '[]'::jsonb) FROM (SELECT to_char(txn_date, 'YYYY-MM') m, count(*) n, sum(amount_in) s FROM f GROUP BY 1) t),
     'rows', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', pg.id, 'date', pg.txn_date, 'account', pg.account, 'description', pg.description, 'amount', pg.amount_in, 'note', pg.note,
         'cands', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', cd.id, 'number', cd.invoice_number, 'date', cd.invoice_date, 'total', cd.total, 'balance', cd.balance_due, 'customer', cd.display_name) ORDER BY cd.rn), '[]'::jsonb)
                   FROM cand cd WHERE cd.bank_id = pg.id AND cd.rn <= 3)) ORDER BY pg.txn_date DESC, pg.id DESC), '[]'::jsonb) FROM pg)) INTO r;
@@ -64,6 +66,6 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'Only the person who made this link, or an owner, can take it off'; END IF;
 END $function$;
 
-REVOKE EXECUTE ON FUNCTION public.bank_unapplied(integer, integer, integer), public.bank_unapplied_link(bigint, text), public.bank_unapplied_unlink(bigint, bigint) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.bank_unapplied(integer, integer, integer), public.bank_unapplied_link(bigint, text), public.bank_unapplied_unlink(bigint, bigint) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.bank_unapplied(integer, integer, integer, text), public.bank_unapplied_link(bigint, text), public.bank_unapplied_unlink(bigint, bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.bank_unapplied(integer, integer, integer, text), public.bank_unapplied_link(bigint, text), public.bank_unapplied_unlink(bigint, bigint) TO authenticated;
 NOTIFY pgrst, 'reload schema';
