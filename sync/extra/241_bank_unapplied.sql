@@ -12,7 +12,8 @@ BEGIN
   IF NOT public._recv_ok() THEN RAISE EXCEPTION 'You don''t have permission to see this list'; END IF;
   WITH f AS (
     SELECT b.id, b.txn_date, b.account, b.description, b.amount_in, b.note FROM bank_transactions b
-    WHERE b.amount_in > 0 AND public._bank_cat(b.description, b.code, b.amount_in) IN ('Deposits', 'Card & online payments in', 'Partners & financing', 'Other')
+    WHERE b.amount_in > 0 AND b.txn_date >= DATE '2026-01-01'   -- only 2026 and forward (Carlo, Nov 9)
+      AND public._bank_cat(b.description, b.code, b.amount_in) IN ('Deposits', 'Card & online payments in', 'Partners & financing', 'Other')
       AND NOT EXISTS (SELECT 1 FROM bank_invoice_links k WHERE k.bank_id = b.id) AND NOT EXISTS (SELECT 1 FROM bank_files k WHERE k.bank_id = b.id)
       AND NOT EXISTS (SELECT 1 FROM bank_sinv_links k WHERE k.bank_id = b.id) AND NOT EXISTS (SELECT 1 FROM bank_transfer_links k WHERE k.a_id = b.id OR k.b_id = b.id)
       AND NOT EXISTS (SELECT 1 FROM bank_vehicle_links k WHERE k.bank_id = b.id)),
