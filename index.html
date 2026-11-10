@@ -9718,15 +9718,22 @@ const MY_VERSION = document.querySelector('meta[name="app-version"]')?.content |
 // published now, and a different page later means there's an update
 let UPD_BASE = null;
 const updHash = t => { let h = 0; for (let k = 0; k < t.length; k++) h = (h * 31 + t.charCodeAt(k)) | 0; return t.length + ":" + h; };
+// The look is a light one: only the page's tag (its ETag) is asked for, not the whole 3.8 MB app. The full page is read only if the host sends no tag, and then at most once a minute.
+let UPD_TAG = null, UPD_FULL_AT = 0;
 async function checkForUpdate() {
   if (location.protocol === "file:") return;
   try {
+    const hd = await fetch(location.pathname + "?v=" + Date.now(), { method: "HEAD", cache: "no-store" }), tag = hd.ok ? (hd.headers.get("etag") || hd.headers.get("last-modified")) : null;
+    let changed = false;
+    if (tag) { if (UPD_TAG == null) { UPD_TAG = tag; return; } if (tag === UPD_TAG) return; changed = true; }   // a different tag: make sure with the page itself
+    else { if (Date.now() - UPD_FULL_AT < 60000) return; }
+    UPD_FULL_AT = Date.now();
     const r = await fetch(location.pathname + "?v=" + Date.now(), { cache: "no-store" });
     if (!r.ok) return;
     const t = await r.text(), m = t.match(/<meta name="app-version" content="([^"]+)"/), h = updHash(t);
     if (!t.includes("checkForUpdate")) return;   // not the app (an error page)
-    if (UPD_BASE == null) { UPD_BASE = h; if (!(m && MY_VERSION !== "dev" && m[1] !== MY_VERSION)) return; }
-    if ((h !== UPD_BASE || (m && MY_VERSION !== "dev" && m[1] !== MY_VERSION)) && !$("#update-box").classList.contains("ready")) {
+    if (UPD_BASE == null && !changed) { UPD_BASE = h; if (!(m && MY_VERSION !== "dev" && m[1] !== MY_VERSION)) return; }
+    if ((changed || h !== UPD_BASE || (m && MY_VERSION !== "dev" && m[1] !== MY_VERSION)) && !$("#update-box").classList.contains("ready")) {
       $("#update-box").classList.add("ready");
       $("#update-title").textContent = "There is a new update";
       $("#update-text").textContent = "Press the button to load it.";
@@ -12918,12 +12925,13 @@ const MAPZ = { zones: null, areas: null, can: false };
 const MAP_GREY = "#8a96a3";
 const MAP_PALETTE = ["#1f6fd1", "#e8590c", "#2b8a3e", "#c2255c", "#7048e8", "#0c8599", "#e67700", "#5c940d", "#d6336c", "#364fc7", "#a61e4d", "#087f5b", "#862e9c", "#f08c00", "#495057"];
 // slow lists that hardly change (map zones, towns, communities, neighbourhoods): kept in this browser and used straight away;
-// a fresh copy is fetched in the background a few seconds later (at most every 10 min), so they never slow a page down
+// a fresh copy is fetched in the background a few seconds later (at most every 6 hours; it was every 10 minutes, and each of these four lists costs the database about
+// 2 seconds, which slowed every other page for everyone on our small database: Carlo, Nov 10, "the pages are taking too long to load"). Saving a change to one of them still reloads it at once (force).
 async function rpcCache(fn, args, force) {
   const k = "reid.rc." + (ME?.id || 0) + "." + fn + (args ? JSON.stringify(args) : "");
   const fetchNow = async () => { const r = await db.rpc(fn, args || {}); if (!r.error && r.data) try { localStorage.setItem(k, JSON.stringify({ t: Date.now(), data: r.data })); } catch { } return r; };
   if (!force) { let c = null; try { c = JSON.parse(localStorage.getItem(k) || "null"); } catch { }
-    if (c?.data) { if (Date.now() - c.t > 10 * 60e3) setTimeout(() => fetchNow().catch(() => { }), 8000); return { data: c.data, error: null }; } }
+    if (c?.data) { if (Date.now() - c.t > 6 * 3600e3) setTimeout(() => fetchNow().catch(() => { }), 8000); return { data: c.data, error: null }; } }
   return fetchNow();
 }
 async function loadMapZones(force) {
