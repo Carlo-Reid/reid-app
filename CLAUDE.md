@@ -24,7 +24,7 @@
 
 ## Waiting on Carlo (pick up next session)
 
-- **Boone is paid by credit card.** Carlo is bringing the card payment info on Monday morning, Nov 9, 2026 so Boone's payments can be recorded like the bank payments to Lennox and Master (`sync/extra/195_bank_supplier_payments.sql`), and Boone's Our statement can match theirs. The app has three so far: Oct 2 $10,000, Oct 6 $10,000 and Oct 26 $12,662.01 ("Carlo P.C. Master Card"). Remind him at the start.
+- **Boone's credit card payments are in** (Carlo gave the list Nov 10, 2026): 30 payments, Dec 10, 2025 to Oct 26, 2026, $292,662.01 in all, method "Carlo P.C. Master Card", each with its reference (MC1225B … MC1026B) in `supplier_payments` (supplier 1). 27 were added straight in the database (note "From Carlo's list of Boone payments, Nov 10, 2026"); the three October ones were already there and got their reference. Not in a `sync/extra` file (it is data). Boone is paid by card, so these do not come from the Bank page. Next: check Boone's Our statement against theirs with him.
 
 ## Receivables: payments in the bank with no invoice
 
