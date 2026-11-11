@@ -6340,6 +6340,7 @@ body.htd-docked .file .sec1a { width: auto !important; max-width: none !importan
 .htin-go:hover, .nfp-go:hover { text-decoration-style: solid; color: #075a63 !important; }
 .htin-go::after, .nfp-go::after { content: " ↗"; font-size: .85em; font-weight: 400; text-decoration: none; display: inline-block; margin-left: 1px; }
 .nfp-go { text-align: left; font: inherit; }
+.sinv-memo-tag { background: #e3f4e8; color: #14703a; border: 1px solid #b9d8c2; font-weight: 700; white-space: nowrap; }
 .sci-memo-co { display: block; font-size: 14px; font-weight: 600; color: #14703a; margin-top: 4px; max-width: 180px; }
 .sinv-memo-note { padding: 12px 14px; border: 1px solid #b9d8c2; border-left: 6px solid #23415f; border-radius: 6px; background: var(--panel, #fff); font-size: 16px; margin: 8px 0; }
 .ie-tankpo { margin: 18px 0 10px; padding: 14px 16px; border: 2px solid #23415f; border-radius: 6px; background: var(--panel, #fff); }
@@ -17972,7 +17973,8 @@ async function openSupInv(msg) {
   await loadSuppliers().catch(() => {});
   if (SINV.sup != null && SUPPLIERS?.length && !SUPPLIERS.some(x => Number(x.id) === Number(SINV.sup))) { SINV.sup = null; SINV.st = 0; SINV.open = null; sinvSaveTab(); }   // the remembered supplier is gone (merged): all suppliers
   if (!SINV.data) $("#main").innerHTML = `<div class="loading">Loading supplier invoices…</div>`;
-  const { data, error } = await db.rpc("supplier_invoices_list", { p_supplier: SINV.sup, p_statement: SINV.st });
+  const [{ data, error }, cmL] = await Promise.all([db.rpc("supplier_invoices_list", { p_supplier: SINV.sup, p_statement: SINV.st }), db.rpc("credit_memos_list", { p_supplier: SINV.sup })]);
+  SINV.memos = cmL.error ? (SINV.memos || {}) : cmL.data || {};   // the Credit Memo of each credit paper, for the tag on its line
   if (document.body.dataset.page !== "supplier-invoices") return;
   if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load supplier invoices</h2>${esc(/function|schema|PGRST202/i.test(error.message || "") ? "This turns on after tonight's update." : rpcErr(error))}</div></div>`; return; }
   if (!SINV.rets) { const rt = await db.rpc("supplier_returns_list", { p_invoice: null }); SINV.rets = rt.error ? [] : rt.data || []; }
@@ -18054,7 +18056,7 @@ function renderSupInv(msg) {
       <span class="quiet">${list.length} · ${money(sum(list))}</span></div>
     ${list.length ? `<div class="staff-wrap"><table class="calls-table sinv-t"><thead><tr><th>Date</th><th>Invoice</th><th>PO</th><th>Job / customer</th><th class="r">Invoice before tax</th><th class="r">PO amount</th><th>Status</th></tr></thead><tbody>
       ${list.map(r => `<tr class="sinv-row ${SINV.open === r.id ? "open" : ""}" data-sinv="${r.id}"><td class="num">${esc(fmtDate(r.invoice_date))}</td>
-        <td><b>${esc(r.number)}</b>${r.doc_type !== "invoice" ? ` <span class="ow-tag">${esc({ credit: "Credit", charge: "Charge", return: "Return" }[r.doc_type] || r.doc_type)}</span>` : ""}<div class="quiet">${money(r.total)} with tax${r.pages ? ` · ${r.pages} ${r.pages === 1 ? "page" : "pages"}` : " · no copy"}</div></td>
+        <td><b>${esc(r.number)}</b>${r.doc_type !== "invoice" ? ` <span class="ow-tag">${esc({ credit: "Credit", charge: "Charge", return: "Return" }[r.doc_type] || r.doc_type)}</span>` : ""}${SINV.memos?.[r.id] ? ` <span class="ow-tag sinv-memo-tag" title="This credit has a Credit Memo">🧾 Credit Memo ${esc(SINV.memos[r.id])}</span>` : ""}<div class="quiet">${money(r.total)} with tax${r.pages ? ` · ${r.pages} ${r.pages === 1 ? "page" : "pages"}` : " · no copy"}</div></td>
         <td>${r.po_number ? `<button class="link" type="button" data-sinv-po="${esc(r.po_number)}">${esc(r.po_number)}</button>${r.po_by_hand ? ` <span class="quiet">(matched by hand)</span>` : ""}${r.po_text && r.po_text !== r.po_number ? `<div class="quiet">printed: ${esc(r.po_text)}</div>` : ""}` : r.po_text ? `<span class="quiet">${esc(r.po_text)}</span>` : `<span class="quiet">—</span>`}
           ${Number(r.po_other_invoices) ? `<div class="quiet">PO is also on ${r.po_other_invoices} other ${r.po_other_invoices == 1 ? "invoice" : "invoices"}</div>` : ""}</td>
         <td>${r.po_customer ? `<button class="link" type="button" data-sinv-cust="${r.po_customer_id}">${esc(r.po_customer)}</button><div class="quiet">Job ${esc(r.po_job_number || "")}</div>` : r.po_id ? `<span class="quiet">Stock / shop</span>` : ""}${r.handwriting ? `<div class="sinv-hw" title="Handwritten on the slip">✎ ${esc(r.handwriting.slice(0, 60))}</div>` : ""}</td>

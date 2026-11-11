@@ -145,6 +145,12 @@ DO $$ DECLARE r record; BEGIN
   END LOOP;
 END $$;
 
+-- the Supplier invoices list: the memo number of each credit paper (for the tag on its line)
+CREATE OR REPLACE FUNCTION public.credit_memos_list(p_supplier bigint DEFAULT NULL) RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $function$
+  SELECT CASE WHEN NOT (public._sinv_can_edit() OR public._can_see_costs() OR public._tank_office()) THEN '{}'::jsonb ELSE
+    coalesce((SELECT jsonb_object_agg(m.supplier_invoice_id::text, m.memo_number) FROM supplier_credit_memos m WHERE p_supplier IS NULL OR m.supplier_id = p_supplier), '{}'::jsonb) END $function$;
+REVOKE EXECUTE ON FUNCTION public.credit_memos_list(bigint) FROM PUBLIC, anon; GRANT EXECUTE ON FUNCTION public.credit_memos_list(bigint) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public._credit_memo_make(bigint, text, bigint), public._credit_order_auto(bigint), public.credit_memo_for(bigint), public.credit_memo_make(bigint), public.credit_memo_remove(bigint) FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public._credit_memo_make(bigint, text, bigint), public._credit_order_auto(bigint) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.credit_memo_for(bigint), public.credit_memo_make(bigint), public.credit_memo_remove(bigint) TO authenticated;
