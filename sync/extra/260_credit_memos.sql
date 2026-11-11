@@ -151,6 +151,27 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $function$
   SELECT CASE WHEN NOT (public._sinv_can_edit() OR public._can_see_costs() OR public._tank_office()) THEN '{}'::jsonb ELSE
     coalesce((SELECT jsonb_object_agg(m.supplier_invoice_id::text, m.memo_number) FROM supplier_credit_memos m WHERE p_supplier IS NULL OR m.supplier_id = p_supplier), '{}'::jsonb) END $function$;
 REVOKE EXECUTE ON FUNCTION public.credit_memos_list(bigint) FROM PUBLIC, anon; GRANT EXECUTE ON FUNCTION public.credit_memos_list(bigint) TO authenticated;
+-- the Credit Memos page: find and list the memos
+CREATE OR REPLACE FUNCTION public.credit_memo_list(p_search text DEFAULT NULL, p_supplier bigint DEFAULT NULL, p_kind text DEFAULT 'all', p_limit int DEFAULT 300) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE q text := nullif(lower(btrim(coalesce(p_search, ''))), ''); v jsonb; n int; tot numeric;
+BEGIN
+  IF NOT (public._sinv_can_edit() OR public._can_see_costs() OR public._tank_office()) THEN RETURN jsonb_build_object('rows', '[]'::jsonb, 'count', 0, 'total', 0); END IF;
+  WITH base AS (
+    SELECT m.id, m.memo_number, m.amount, m.how, m.created_at, m.supplier_id, btrim(s.name) AS supplier, i.id AS inv, i.supplier_invoice_number AS credit, i.invoice_date,
+           po.id AS po_id, po.po_number, rp.po_number AS replaced_po, t.credit_number AS credit_order, t.invoice_id AS tank_invoice
+    FROM supplier_credit_memos m JOIN supplier_invoices i ON i.id = m.supplier_invoice_id LEFT JOIN suppliers s ON s.id = m.supplier_id
+      LEFT JOIN purchase_orders po ON po.id = m.purchase_order_id LEFT JOIN purchase_orders rp ON rp.id = m.replaced_po_id LEFT JOIN tank_orders t ON t.id = m.tank_order_id
+    WHERE (p_supplier IS NULL OR m.supplier_id = p_supplier)
+      AND (coalesce(p_kind, 'all') = 'all' OR (p_kind = 'order' AND m.tank_order_id IS NOT NULL) OR (p_kind = 'fixed' AND m.replaced_po_id IS NOT NULL) OR (p_kind = 'new' AND m.how IN ('hand', 'auto')))
+      AND (q IS NULL OR lower(m.memo_number) LIKE '%' || q || '%' OR lower(coalesce(i.supplier_invoice_number, '')) LIKE '%' || q || '%' OR lower(coalesce(s.name, '')) LIKE '%' || q || '%'
+           OR lower(coalesce(po.po_number, '')) LIKE '%' || q || '%' OR lower(coalesce(t.credit_number, '')) LIKE '%' || q || '%' OR lower(coalesce(i.po_text, '')) LIKE '%' || q || '%'))
+  SELECT (SELECT count(*) FROM base), (SELECT coalesce(sum(amount), 0) FROM base),
+         coalesce((SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT * FROM base ORDER BY invoice_date DESC NULLS LAST, id DESC LIMIT greatest(1, least(coalesce(p_limit, 300), 2000))) x), '[]'::jsonb)
+  INTO n, tot, v;
+  RETURN jsonb_build_object('rows', v, 'count', n, 'total', tot);
+END $function$;
+REVOKE EXECUTE ON FUNCTION public.credit_memo_list(text, bigint, text, int) FROM PUBLIC, anon; GRANT EXECUTE ON FUNCTION public.credit_memo_list(text, bigint, text, int) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public._credit_memo_make(bigint, text, bigint), public._credit_order_auto(bigint), public.credit_memo_for(bigint), public.credit_memo_make(bigint), public.credit_memo_remove(bigint) FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public._credit_memo_make(bigint, text, bigint), public._credit_order_auto(bigint) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.credit_memo_for(bigint), public.credit_memo_make(bigint), public.credit_memo_remove(bigint) TO authenticated;
