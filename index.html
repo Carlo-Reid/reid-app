@@ -384,6 +384,7 @@
   .eco-spot img.eco-man { background: none !important; box-shadow: none !important; border: 0 !important; mix-blend-mode: normal !important; height: 120px; width: auto; max-width: none; display: block; pointer-events: auto; cursor: pointer; user-select: none; } .eco-spot.sz-s img.eco-man { height: 70px; } .eco-spot.sz-l img.eco-man { height: 200px; }
   @media print { .eco-spot, #eco-find-bar, #eco-pick, #eco-pick-dot { display: none !important; } }
   body.eco-placing #main, body.eco-placing #main *, body.eco-placing #search-page, body.eco-placing #search-page * { cursor: crosshair !important; }
+  .eco-spot img.eco-man, img.eco-dance-man, img.eco-think-man { cursor: grab; touch-action: none; -webkit-user-drag: none; user-select: none; } img.eco-dragging { cursor: grabbing !important; }
   #eco-pick-dot { position: fixed; z-index: 9001; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; background: #7a3fd1; border: 4px solid #fff; box-shadow: 0 0 0 4px #7a3fd1; pointer-events: none; animation: ecoFound 1.1s ease-in-out infinite; }
   #eco-pick { position: fixed; inset: 0; z-index: 9002; background: rgba(20, 28, 40, .55); display: grid; place-items: center; padding: 16px; }
   #eco-pick .ep-box { background: var(--panel, #fff); color: var(--ink, #1c2733); border: 4px solid #4b2a8a; border-radius: 8px; width: min(980px, 96vw); max-height: 92vh; overflow: auto; padding: 18px 20px; display: grid; gap: 14px; }
@@ -26828,7 +26829,7 @@ function ecoSpotsApply() { const pg = ecoPageKey(), want = new Map();
   document.querySelectorAll(".eco-spot").forEach(sp => { const w = want.get(sp.dataset.spot), sig = w && [w[0].file, w[0].size, w[0].fx, w[0].fy].join("|"); if (w && sp.parentElement === w[1] && sp.dataset.sig === sig) want.delete(sp.dataset.spot); else sp.remove(); });
   want.forEach(([s, h]) => { if (getComputedStyle(h).position === "static") h.classList.add("eco-spot-host");
     const sp = document.createElement("span"); sp.className = "eco-spot sz-" + (s.size || "m"); sp.dataset.spot = String(s.id); sp.dataset.sig = [s.file, s.size, s.fx, s.fy].join("|"); sp.style.left = s.fx + "%"; sp.style.top = s.fy + "%";
-    sp.innerHTML = `<img class="eco-man" data-eco-spot="${+s.id}" src="eco/${s.file}.webp" alt="Eco Man" draggable="false">`; h.appendChild(sp); if (ECO_FIND.on) sp.firstChild.classList.add("eco-found"); }); }
+    sp.innerHTML = `<img class="eco-man" data-eco-spot="${+s.id}" src="eco/${s.file}.webp" alt="Eco Man" draggable="false">`; h.appendChild(sp); const mv = ECO_DRAG[s.id]; if (mv) sp.firstChild.style.translate = `${+mv[0] || 0}px ${+mv[1] || 0}px`; if (ECO_FIND.on) sp.firstChild.classList.add("eco-found"); }); }
 (function ecoSpotsWatch() { let t = 0; const later = () => { clearTimeout(t); t = setTimeout(ecoSpotsApply, 300); };
   try { const mo = new MutationObserver(L => { if (L.every(m => [...m.addedNodes, ...m.removedNodes].every(n => n.nodeType === 1 && n.classList.contains("eco-spot")))) return; later(); });
     ["main", "search-page"].forEach(id => { const el = document.getElementById(id); if (el) mo.observe(el, { childList: true, subtree: true }); });
@@ -26889,6 +26890,22 @@ function ecoPlacePick(k) { const pl = ECO_PLACES.find(x => x[0] === k); if (!pl)
       ECO_PICKS = data || {}; try { localStorage.setItem("reid.eco.picks", JSON.stringify(ECO_PICKS)); } catch { }
       ECO_FIND.msg = k === "logo" ? "✓ Changed. Click the logo 8 times to see him." : "✓ Changed. You will see him on the next refresh box."; close(); } });
   draw(); }
+// Drag him (Carlo, Nov 10, 10:14 p.m.: "when I click on an eco man that is dancing or moving but not giving instructions I want to be able to move him around as a user, drag him up down right or left").
+// Anyone can drag: an Eco Man put on a page by hand, the dancer, and the thinking one. Not the ones that talk in a bubble or the one on the green refresh box (they give instructions).
+// It moves him on this person's screen only (CSS translate, so his dance keeps going). One put on a page by hand stays where this person dragged him, on this computer (localStorage reid.eco.drag, by spot id).
+// A short click with no move is still a click (he dances). The click that ends a drag is swallowed.
+let ECO_DRAG = {}; try { ECO_DRAG = JSON.parse(localStorage.getItem("reid.eco.drag") || "{}") || {}; } catch { }
+(function ecoDragWire() { let d = null; const OK = ".eco-spot img.eco-man, img.eco-dance-man, img.eco-think-man";
+  const at = el => { const t = (el.style.translate || "").match(/(-?[\d.]+)px(?:\s+(-?[\d.]+)px)?/); return t ? [+t[1] || 0, +t[2] || 0] : [0, 0]; };
+  document.addEventListener("pointerdown", e => { if (e.button > 0 || ECO_FIND.on) return; const el = e.target.closest?.(OK); if (!el) return; d = { el, x: e.clientX, y: e.clientY, o: at(el), go: false, id: e.pointerId }; }, true);
+  document.addEventListener("pointermove", e => { if (!d || e.pointerId !== d.id) return; const dx = e.clientX - d.x, dy = e.clientY - d.y;
+    if (!d.go) { if (Math.abs(dx) + Math.abs(dy) < 6) return; d.go = true; d.el.classList.add("eco-dragging"); try { d.el.setPointerCapture(d.id); } catch { } }
+    e.preventDefault(); d.el.style.translate = `${Math.round(d.o[0] + dx)}px ${Math.round(d.o[1] + dy)}px`; }, true);
+  const end = e => { if (!d || e.pointerId !== d.id) return; const w = d; d = null; if (!w.go) return; w.el.classList.remove("eco-dragging"); try { w.el.releasePointerCapture(w.id); } catch { }
+    ECO_FIND.dragAt = Date.now();
+    const sid = w.el.dataset.ecoSpot; if (sid) { ECO_DRAG[sid] = at(w.el); try { localStorage.setItem("reid.eco.drag", JSON.stringify(ECO_DRAG)); } catch { } } };
+  document.addEventListener("dragstart", e => { if (e.target.closest?.(OK)) e.preventDefault(); }, true);
+  document.addEventListener("pointerup", end, true); document.addEventListener("pointercancel", end, true); })();
 const ECO_FIND = { on: false };
 function ecoPlaceOf(img) { const d = img.dataset.ecoPlace; if (d && ECO_PLACES.some(p => p[0] === d)) return d;
   const f = (img.getAttribute("src") || "").replace(/^.*\//, "").replace(/\.webp.*$/, ""); return (ECO_PLACES.find(p => ecoPicOf(p[0]) === f) || ECO_PLACES[0])[0]; }
@@ -26910,6 +26927,7 @@ function ecoFindSet(on) { ECO_FIND.on = !!on; if (!on) ECO_FIND.placing = false;
   if (L.length) L[0].scrollIntoView({ block: "center", behavior: "smooth" }); }
 document.getElementById("eco-find-btn")?.addEventListener("click", () => ecoFindSet(!ECO_FIND.on));
 document.addEventListener("click", e => {
+  if (ECO_FIND.dragAt && Date.now() - ECO_FIND.dragAt < 150) { ECO_FIND.dragAt = 0; e.stopPropagation(); e.preventDefault(); return; }   // the click that ends a drag
   if (ECO_FIND.on && ECO_FIND.placing && !e.target.closest?.("#eco-find-bar, #eco-pick, #eco-find-btn")) { e.stopPropagation(); e.preventDefault(); ecoSpotClick(e); return; }
   if (ECO_FIND.on) { const f = e.target.closest?.(".eco-found, img[data-eco-spot]"); if (f) { e.stopPropagation(); e.preventDefault(); if (f.dataset.ecoSpot) ecoSpotPick({ id: +f.dataset.ecoSpot }); else ecoFindGo(ecoPlaceOf(f)); return; } }
   const m = e.target.closest?.(".eco-man"); if (!m || m.closest(".eco-dance, button, a")) return; e.stopPropagation(); e.preventDefault();
