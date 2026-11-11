@@ -379,6 +379,9 @@
   .tl-block span { font-weight: 500; margin-left: 4px; }
   .pl-btn.eco-find-btn { margin-left: 0; } .pl-btn.eco-find-btn[aria-pressed="true"] { background: #7a3fd1; color: #fff; border-color: #7a3fd1; }
   img.eco-found { outline: 5px solid #7a3fd1 !important; outline-offset: 4px; border-radius: 8px; cursor: pointer !important; animation: ecoFound 1.1s ease-in-out infinite; position: relative; z-index: 3; } @keyframes ecoFound { 50% { outline-color: #c9a7f5; outline-offset: 9px; } } @media (prefers-reduced-motion: reduce) { img.eco-found { animation: none; } }
+  img.eco-hid { display: none !important; }
+  .eco-del-x { position: fixed; z-index: 9001; background: #c62828; color: #fff; border: 2px solid #fff; border-radius: 6px; font-size: 15px; font-weight: 800; padding: 5px 10px; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,.4); white-space: nowrap; } .eco-del-x:hover { background: #a31515; } .eco-del-x[data-sure] { background: #7a0d0d; outline: 3px solid #ffd966; }
+  @media print { .eco-del-x { display: none !important; } }
   #eco-find-bar { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 9000; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; max-width: min(900px, 94vw); background: #4b2a8a; color: #fff; font-size: 18px; padding: 12px 16px; border-radius: 8px; border: 3px solid #c9a7f5; box-shadow: 0 8px 28px rgba(0,0,0,.35); }
   .eco-spot-host { position: relative; } .eco-spot { position: absolute; z-index: 2; transform: translate(-50%, -50%); line-height: 0; pointer-events: none; }
   .eco-spot img.eco-man { background: none !important; box-shadow: none !important; border: 0 !important; mix-blend-mode: normal !important; height: 120px; width: auto; max-width: none; display: block; pointer-events: auto; cursor: pointer; user-select: none; } .eco-spot.sz-s img.eco-man { height: 70px; } .eco-spot.sz-l img.eco-man { height: 200px; }
@@ -26934,7 +26937,7 @@ let ECO_PICKS = {}; try { ECO_PICKS = JSON.parse(localStorage.getItem("reid.eco.
 const ecoPicOf = k => { const pl = ECO_PLACES.find(x => x[0] === k) || ECO_PLACES[0], pk = ECO_PICKS[pl[0]]; return ECO_LIB.some(l => l[0] === pk) ? pk : pl[2]; };
 const ECO_3D = n => `eco/${ecoPicOf(n)}.webp`;
 async function ecoPicksLoad() { try { const { data, error } = await db.rpc("eco_pics"); if (error || !data || typeof data !== "object") return false; ECO_PICKS = data; try { localStorage.setItem("reid.eco.picks", JSON.stringify(data)); } catch { } return true; } catch { return false; } }
-(function ecoPicksWatch() { let got = false; const go = async () => { if (!ME.role) return; if (await ecoPicksLoad()) got = true; ecoSpotsLoad(); }; setTimeout(function t() { go().finally(() => setTimeout(t, got ? 600000 : 8000)); }, 3000); })();
+(function ecoPicksWatch() { let got = false; const go = async () => { if (!ME.role) return; if (await ecoPicksLoad()) got = true; ecoSpotsLoad(); ecoHidLoad(); }; setTimeout(function t() { go().finally(() => setTimeout(t, got ? 600000 : 8000)); }, 3000); })();
 const ECO_FACES = {}; ["happy", "sad", "confused", "angry", "impatient"].forEach(n => Object.defineProperty(ECO_FACES, n, { enumerable: true, get: () => `<img class="eco-man" data-eco-place="${n}" src="${ECO_3D(n)}" alt="Eco Man, ${n}" draggable="false">` }));
 const ecoFace = n => ECO_FACES[n] || ECO_FACES.happy;
 const ECO_MAN_SVG = ECO_FACES.happy;   // made once when the app opens: a new pick shows here after a refresh
@@ -27223,10 +27226,31 @@ const ecoPageKey = () => document.body.dataset.page || "search";
 function ecoSpotsKeep(d) { if (!Array.isArray(d)) return false; ECO_SPOTS = d; try { localStorage.setItem("reid.eco.spots", JSON.stringify(d)); } catch { } ecoSpotsApply(); return true; }
 async function ecoSpotsLoad() { try { const { data, error } = await db.rpc("eco_spots"); if (error) return false; return ecoSpotsKeep(data); } catch { return false; } }
 const ecoSpotRoot = k => document.getElementById(k === "S" ? "search-page" : "main");
+// Eco Men that are part of a page and were taken off it by an owner (Carlo, Nov 11: "click on one and delete it from the page without leaving the page").
+// company_settings.eco_hidden = [{id, page, sel}]: sel is the path to the piece he sits in; his pictures in that piece are not shown (class eco-hid).
+let ECO_HID = []; try { ECO_HID = JSON.parse(localStorage.getItem("reid.eco.hid") || "[]") || []; } catch { } if (!Array.isArray(ECO_HID)) ECO_HID = [];
+function ecoHidApply() { const pg = ecoPageKey(); document.querySelectorAll("img.eco-hid").forEach(i => i.classList.remove("eco-hid"));
+  ECO_HID.forEach(h => { if (h.page !== pg) return; const host = ecoSpotHost(h); if (host) [...host.children].forEach(c => { if (c.matches("img.eco-man:not([data-eco-spot])")) c.classList.add("eco-hid"); }); }); }
+function ecoHidKeep(d) { if (!Array.isArray(d)) return false; ECO_HID = d; try { localStorage.setItem("reid.eco.hid", JSON.stringify(d)); } catch { } ecoHidApply(); return true; }
+async function ecoHidLoad() { try { const { data, error } = await db.rpc("eco_hidden"); if (error) return false; return ecoHidKeep(data); } catch { return false; } }
+// the path to the piece an Eco Man picture sits in ("M …" / "S …"), or null when he is not in the page itself (a pop-up, the dancer)
+function ecoHidSel(img) { const rk = img.closest("#main") ? "M" : img.closest("#search-page") ? "S" : null, par = img.parentElement; if (!rk || !par) return null; const q = ecoSelOf(par, ecoSpotRoot(rk)); return q ? rk + " " + q : null; }
+// the red Delete tags on each Eco Man while the Eco Man bar is open: one click asks "Sure?", the second takes him off, and the page stays where it is
+function ecoDelTags(L) { document.querySelectorAll(".eco-del-x").forEach(x => x.remove()); if (!ECO_FIND.on || ECO_FIND.placing) return;
+  const tags = []; L.forEach(img => { const spot = img.dataset.ecoSpot, sel = spot ? null : ecoHidSel(img); if (!spot && !sel) return;
+    const b = document.createElement("button"); b.type = "button"; b.className = "eco-del-x"; b.textContent = "🗑 Delete"; document.body.appendChild(b); tags.push([b, img]);
+    b.addEventListener("click", async e => { e.stopPropagation(); e.preventDefault();
+      if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "Sure? Click again"; setTimeout(() => { if (b.isConnected) { delete b.dataset.sure; b.textContent = "🗑 Delete"; } }, 5000); return; }
+      b.disabled = true; b.textContent = "Taking him off…";
+      const r = spot ? await db.rpc("eco_spot_del", { p_id: +spot }) : await db.rpc("eco_hide_add", { p: { page: ecoPageKey(), sel } });
+      const ok = !r.error && (spot ? ecoSpotsKeep(r.data) : ecoHidKeep(r.data));
+      ECO_FIND.msg = ok ? "✓ He is off this page." : "I could not take him off. " + ((r.error && r.error.message) || "Try again."); ecoFindSet(true); }); });
+  const place = () => { if (!ECO_FIND.on || !tags.some(t => t[0].isConnected)) return; tags.forEach(([b, img]) => { const r = img.getBoundingClientRect(); if (!img.isConnected || !r.width) { b.style.display = "none"; return; }
+      b.style.display = ""; b.style.left = Math.max(4, Math.min(innerWidth - b.offsetWidth - 4, r.right - b.offsetWidth / 2)) + "px"; b.style.top = Math.max(4, r.top - 14) + "px"; }); requestAnimationFrame(place); }; place(); }
 function ecoSpotHost(s) { try { const r = ecoSpotRoot(String(s.sel)[0]), q = String(s.sel).slice(2); return !r ? null : q === ":scope" ? r : r.querySelector(q); } catch { return null; } }
 // his size: s, m, l (70, 120, 200 px high) or, from the slider (Carlo, Nov 10, 11:02 p.m.: "add a sliding scale I can also use to change his size"), any height from 40 to 400 px
 const ecoSpotPx = z => ({ s: 70, m: 120, l: 200 })[z] || Math.max(40, Math.min(400, Math.round(+z) || 120));
-function ecoSpotsApply() { const pg = ecoPageKey(), want = new Map();
+function ecoSpotsApply() { const pg = ecoPageKey(), want = new Map(); ecoHidApply();
   ECO_SPOTS.forEach(s => { if (s.page !== pg || !ECO_LIB.some(l => l[0] === s.file)) return; if (ECO_GONE[s.id] > Date.now()) return; const h = ecoSpotHost(s); if (h && h.getClientRects().length) want.set(String(s.id), [s, h]); });
   document.querySelectorAll(".eco-spot").forEach(sp => { const w = want.get(sp.dataset.spot), sig = w && [w[0].file, w[0].size, w[0].fx, w[0].fy].join("|"); if (w && sp.parentElement === w[1] && sp.dataset.sig === sig) want.delete(sp.dataset.spot); else sp.remove(); });
   want.forEach(([s, h]) => { if (getComputedStyle(h).position === "static") h.classList.add("eco-spot-host");
@@ -27399,18 +27423,20 @@ function ecoPlaceOf(img) { const d = img.dataset.ecoPlace; if (d && ECO_PLACES.s
   const f = (img.getAttribute("src") || "").replace(/^.*\//, "").replace(/\.webp.*$/, ""); return (ECO_PLACES.find(p => ecoPicOf(p[0]) === f) || ECO_PLACES[0])[0]; }
 async function ecoFindGo(place) { ecoFindSet(false); ECO_SET.place = place || null; ECO_SET.msg = ""; await openSettings(); setTimeout(() => { document.querySelector('[data-set-tab="eco"]')?.click(); document.getElementById("eco-set")?.scrollIntoView({ block: "start" }); }, 150); }
 function ecoFindSet(on) { ECO_FIND.on = !!on; if (!on) ECO_FIND.placing = false; document.body.classList.remove("eco-placing"); document.body.classList.toggle("eco-find", ECO_FIND.on); document.getElementById("eco-find-btn")?.setAttribute("aria-pressed", String(ECO_FIND.on));
-  document.getElementById("eco-find-bar")?.remove(); document.querySelectorAll(".eco-found").forEach(x => x.classList.remove("eco-found")); if (!on) return;
+  document.getElementById("eco-find-bar")?.remove(); document.querySelectorAll(".eco-del-x").forEach(x => x.remove()); document.querySelectorAll(".eco-found").forEach(x => x.classList.remove("eco-found")); if (!on) return;
   const L = [...document.querySelectorAll("img.eco-man, img.upd-eco, img.eco-dance-man")].filter(i => i.offsetParent !== null && !i.closest("#eco-set, #eco-find-bar"));
   L.forEach(i => i.classList.add("eco-found"));
   const bar = document.createElement("div"); bar.id = "eco-find-bar"; bar.setAttribute("role", "status");
   if (ECO_FIND.placing) { document.body.classList.add("eco-placing"); bar.innerHTML = `<span>👆 <b>Click the spot on this page where you want Eco Man.</b></span><button class="btn quiet-btn" type="button" data-ef-noplace>Cancel</button>`;
     document.body.appendChild(bar); bar.querySelector("[data-ef-noplace]").addEventListener("click", () => { ECO_FIND.placing = false; ecoFindSet(true); }); return; }
   const efMsg = ECO_FIND.msg ? `<b>${esc(ECO_FIND.msg)}</b> ` : ""; ECO_FIND.msg = "";
-  bar.innerHTML = `<span>${efMsg}${L.length ? `🏠 Eco Man is in <b>${L.length} ${L.length === 1 ? "place" : "places"}</b> on this page. He has a violet frame. <b>Click him to change him.</b>` : `🏠 Eco Man is not on this page right now. He pops up when something happens, like a click on the wrong spot.`}</span>
-    <button class="btn" type="button" data-ef-add>➕ Add him to this page</button><button class="btn" type="button" data-ef-place="logo">🖼 Change him on the logo</button><button class="btn" type="button" data-ef-place="update">🔄 Change him on the refresh box</button><button class="btn" type="button" data-ef-set>Open his settings</button><button class="btn quiet-btn" type="button" data-ef-x>Close</button>`;
+  bar.innerHTML = `<span>${efMsg}${L.length ? `🏠 Eco Man is in <b>${L.length} ${L.length === 1 ? "place" : "places"}</b> on this page. He has a violet frame. <b>Click him to change him.</b> Press his red <b>🗑 Delete</b> tag to take him off this page.` : `🏠 Eco Man is not on this page right now. He pops up when something happens, like a click on the wrong spot.`}</span>
+    <button class="btn" type="button" data-ef-add>➕ Add him to this page</button><button class="btn" type="button" data-ef-place="logo">🖼 Change him on the logo</button><button class="btn" type="button" data-ef-place="update">🔄 Change him on the refresh box</button>${ECO_HID.filter(h => h.page === ecoPageKey()).length ? `<button class="btn" type="button" data-ef-back>↩ Put back the ${ECO_HID.filter(h => h.page === ecoPageKey()).length} I took off</button>` : ""}<button class="btn" type="button" data-ef-set>Open his settings</button><button class="btn quiet-btn" type="button" data-ef-x>Close</button>`;
   document.body.appendChild(bar);
   bar.querySelector("[data-ef-add]").addEventListener("click", () => { ECO_FIND.placing = true; ecoFindSet(true); });
   bar.querySelectorAll("[data-ef-place]").forEach(b => b.addEventListener("click", () => ecoPlacePick(b.dataset.efPlace)));
+  bar.querySelector("[data-ef-back]")?.addEventListener("click", async () => { const { data, error } = await db.rpc("eco_hide_clear", { p_page: ecoPageKey() }); ECO_FIND.msg = !error && ecoHidKeep(data) ? "✓ They are back on this page." : "I could not put them back. " + ((error && error.message) || "Try again."); ecoFindSet(true); });
+  ecoDelTags(L);
   bar.querySelector("[data-ef-set]").addEventListener("click", () => ecoFindGo(null)); bar.querySelector("[data-ef-x]").addEventListener("click", () => ecoFindSet(false));
   if (L.length) L[0].scrollIntoView({ block: "center", behavior: "smooth" }); }
 document.getElementById("eco-find-btn")?.addEventListener("click", () => ecoFindSet(!ECO_FIND.on));
