@@ -114,6 +114,9 @@
 
 ## Tasks page
 
+- **Site-wide pass** (Carlo, Nov 10, 9:15 p.m.: "go through all the site and continue to make some changes to improve it, but not the security tab for now"). **Do not touch the Security page.** Done so far tonight, each with its own section in these notes: Receivables, Sales, Calls, Partners, Price book list, Price book item, Pricing, and Tasks (below). **Still to go, in the order I told him**: Dispatch board, Customers (search), Installs, POs, Supplier invoices, Stock, Payroll, Bank, Commissions, Tech Calls, Marketing, Staff, Accounting, Tax payments, History, Duplicates, Log-ins, Sent. The recipe that he keeps saying yes to: plain words, bigger, square corners; a dark blue "You are looking at" bar; rarely used things under a ⚙ square; one clear button for the next thing to do; ❓ Help (`pbHelp(0, { root, list })`); "What needs you" counts where there is something to chase. Light touch on pages people already use fast; a first question screen only where a page has several different jobs.
+- **A green Done button on every task** (Nov 10): "✓ My part is done" on a task someone gave you, "✓ Done" on your own, "✓ All done" on one you gave to others (`.fu-done-btn`, the existing `data-complete` handler). Before, a task someone gave you could only be finished by **unticking** a ticked box, which nobody guesses. The tick box still works. Group names in plain words: "Tasks other people gave you" · "Your own tasks" · "Tasks you gave to other people"; "Send to…" → "📨 Send to someone".
+
 - "Payroll: waiting for your approval" lines (`.fu-pay-i`) have no tick box, so `.fu-main` must span the whole row (`grid-column: 1 / -1`); without it the words were squeezed into the 34px tick column, one word per line (Carlo, Nov 10: "the task board is not working properly").
 
 ## Payroll side bar
