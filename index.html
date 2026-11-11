@@ -384,7 +384,7 @@
   .eco-spot img.eco-man { background: none !important; box-shadow: none !important; border: 0 !important; mix-blend-mode: normal !important; height: 120px; width: auto; max-width: none; display: block; pointer-events: auto; cursor: pointer; user-select: none; } .eco-spot.sz-s img.eco-man { height: 70px; } .eco-spot.sz-l img.eco-man { height: 200px; }
   @media print { .eco-spot, #eco-find-bar, #eco-pick, #eco-pick-dot { display: none !important; } }
   body.eco-placing #main, body.eco-placing #main *, body.eco-placing #search-page, body.eco-placing #search-page * { cursor: crosshair !important; }
-  .eco-spot img.eco-man, img.eco-dance-man, img.eco-think-man { cursor: grab; touch-action: none; -webkit-user-drag: none; user-select: none; } img.eco-dragging { cursor: grabbing !important; }
+  .eco-spot img.eco-man, img.eco-dance-man, img.eco-think-man { cursor: grab; touch-action: none; -webkit-user-drag: none; user-select: none; } img.eco-dragging { cursor: grabbing !important; } img.eco-bumped { transition: translate .3s cubic-bezier(.3, 1.6, .5, 1); }
   #eco-pick-dot { position: fixed; z-index: 9001; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; background: #7a3fd1; border: 4px solid #fff; box-shadow: 0 0 0 4px #7a3fd1; pointer-events: none; animation: ecoFound 1.1s ease-in-out infinite; }
   #eco-pick { position: fixed; inset: 0; z-index: 9002; background: rgba(20, 28, 40, .55); display: grid; place-items: center; padding: 16px; }
   #eco-pick .ep-box { background: var(--panel, #fff); color: var(--ink, #1c2733); border: 4px solid #4b2a8a; border-radius: 8px; width: min(980px, 96vw); max-height: 92vh; overflow: auto; padding: 18px 20px; display: grid; gap: 14px; }
@@ -26829,7 +26829,8 @@ function ecoSpotsApply() { const pg = ecoPageKey(), want = new Map();
   document.querySelectorAll(".eco-spot").forEach(sp => { const w = want.get(sp.dataset.spot), sig = w && [w[0].file, w[0].size, w[0].fx, w[0].fy].join("|"); if (w && sp.parentElement === w[1] && sp.dataset.sig === sig) want.delete(sp.dataset.spot); else sp.remove(); });
   want.forEach(([s, h]) => { if (getComputedStyle(h).position === "static") h.classList.add("eco-spot-host");
     const sp = document.createElement("span"); sp.className = "eco-spot sz-" + (s.size || "m"); sp.dataset.spot = String(s.id); sp.dataset.sig = [s.file, s.size, s.fx, s.fy].join("|"); sp.style.left = s.fx + "%"; sp.style.top = s.fy + "%";
-    sp.innerHTML = `<img class="eco-man" data-eco-spot="${+s.id}" src="eco/${s.file}.webp" alt="Eco Man" draggable="false">`; h.appendChild(sp); const mv = ECO_DRAG[s.id]; if (mv) sp.firstChild.style.translate = `${+mv[0] || 0}px ${+mv[1] || 0}px`; if (ECO_FIND.on) sp.firstChild.classList.add("eco-found"); }); }
+    sp.innerHTML = `<img class="eco-man" data-eco-spot="${+s.id}" src="eco/${s.file}.webp" alt="Eco Man" draggable="false">`; h.appendChild(sp); const mv = ECO_DRAG[s.id]; if (mv) sp.firstChild.style.translate = `${+mv[0] || 0}px ${+mv[1] || 0}px`; if (ECO_FIND.on) sp.firstChild.classList.add("eco-found"); });
+  if (want.size) setTimeout(() => window.ecoBumpAll?.(), 700); }
 (function ecoSpotsWatch() { let t = 0; const later = () => { clearTimeout(t); t = setTimeout(ecoSpotsApply, 300); };
   try { const mo = new MutationObserver(L => { if (L.every(m => [...m.addedNodes, ...m.removedNodes].every(n => n.nodeType === 1 && n.classList.contains("eco-spot")))) return; later(); });
     ["main", "search-page"].forEach(id => { const el = document.getElementById(id); if (el) mo.observe(el, { childList: true, subtree: true }); });
@@ -26897,13 +26898,28 @@ function ecoPlacePick(k) { const pl = ECO_PLACES.find(x => x[0] === k); if (!pl)
 let ECO_DRAG = {}; try { ECO_DRAG = JSON.parse(localStorage.getItem("reid.eco.drag") || "{}") || {}; } catch { }
 (function ecoDragWire() { let d = null; const OK = ".eco-spot img.eco-man, img.eco-dance-man, img.eco-think-man";
   const at = el => { const t = (el.style.translate || "").match(/(-?[\d.]+)px(?:\s+(-?[\d.]+)px)?/); return t ? [+t[1] || 0, +t[2] || 0] : [0, 0]; };
+  // The bump rule (Carlo, Nov 10, 10:23 p.m.: "if 2 images walk or bump or walk into each other have them move the other way, even if it's because the user moved them on purpose").
+  // Two Eco Men never sit on top of each other: the one that is bumped moves away, straight out from the middle of the other one. If it has no room left on the screen, the one being dragged bounces back when it is let go.
+  const box = el => { const r = el.getBoundingClientRect(), mx = r.width * .15, my = r.height * .15; return { l: r.left + mx, r: r.right - mx, t: r.top + my, b: r.bottom - my, cx: (r.left + r.right) / 2, cy: (r.top + r.bottom) / 2 }; };
+  const hit = (a, b) => a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b;
+  const keep = el => { const sid = el.dataset.ecoSpot; if (sid) { ECO_DRAG[sid] = at(el); try { localStorage.setItem("reid.eco.drag", JSON.stringify(ECO_DRAG)); } catch { } } };
+  const others = () => [...document.querySelectorAll(OK)].filter(x => x.getClientRects().length && x.getBoundingClientRect().width > 8);
+  const apart = (fix, mv, inView) => { const A = box(fix), B = box(mv); if (!hit(A, B)) return false; let dx = B.cx - A.cx, dy = B.cy - A.cy; if (Math.abs(dx) < .5 && Math.abs(dy) < .5) dx = 1;
+    const penX = dx >= 0 ? A.r - B.l : B.r - A.l, penY = dy >= 0 ? A.b - B.t : B.b - A.t, tx = Math.abs(dx) > .5 ? penX / Math.abs(dx) : Infinity, ty = Math.abs(dy) > .5 ? penY / Math.abs(dy) : Infinity, t = Math.min(tx, ty);
+    let mx = dx * t + (tx <= ty ? Math.sign(dx) * 10 : 0), my = dy * t + (ty < tx ? Math.sign(dy) * 10 : 0);
+    if (inView) { const R = mv.getBoundingClientRect(); if (R.left >= 0 && R.right <= innerWidth) mx = Math.max(-R.left, Math.min(innerWidth - R.right, mx)); if (R.top >= 0 && R.bottom <= innerHeight) my = Math.max(-R.top, Math.min(innerHeight - R.bottom, my)); }
+    const o = at(mv); mv.style.translate = `${Math.round(o[0] + mx)}px ${Math.round(o[1] + my)}px`; keep(mv); return true; };
+  const shove = (fix, L, done, n) => { if (n > 5) return; L.forEach(o => { if (!done.has(o) && apart(fix, o, true)) { const d2 = new Set(done); d2.add(o); shove(o, L, d2, n + 1); } }); };   // the bumped one bumps the next one, and so on
+  window.ecoBumpAll = () => { const L = others(); for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) apart(L[i], L[j], false); };
   document.addEventListener("pointerdown", e => { if (e.button > 0 || ECO_FIND.on) return; const el = e.target.closest?.(OK); if (!el) return; d = { el, x: e.clientX, y: e.clientY, o: at(el), go: false, id: e.pointerId }; }, true);
   document.addEventListener("pointermove", e => { if (!d || e.pointerId !== d.id) return; const dx = e.clientX - d.x, dy = e.clientY - d.y;
     if (!d.go) { if (Math.abs(dx) + Math.abs(dy) < 6) return; d.go = true; d.el.classList.add("eco-dragging"); try { d.el.setPointerCapture(d.id); } catch { } }
-    e.preventDefault(); d.el.style.translate = `${Math.round(d.o[0] + dx)}px ${Math.round(d.o[1] + dy)}px`; }, true);
+    e.preventDefault(); d.el.style.translate = `${Math.round(d.o[0] + dx)}px ${Math.round(d.o[1] + dy)}px`;
+    shove(d.el, others(), new Set([d.el]), 0); }, true);
   const end = e => { if (!d || e.pointerId !== d.id) return; const w = d; d = null; if (!w.go) return; w.el.classList.remove("eco-dragging"); try { w.el.releasePointerCapture(w.id); } catch { }
     ECO_FIND.dragAt = Date.now();
-    const sid = w.el.dataset.ecoSpot; if (sid) { ECO_DRAG[sid] = at(w.el); try { localStorage.setItem("reid.eco.drag", JSON.stringify(ECO_DRAG)); } catch { } } };
+    others().forEach(o => { if (o !== w.el && hit(box(o), box(w.el))) { w.el.classList.add("eco-bumped"); setTimeout(() => w.el.classList.remove("eco-bumped"), 450); apart(o, w.el, false); } });
+    keep(w.el); };
   document.addEventListener("dragstart", e => { if (e.target.closest?.(OK)) e.preventDefault(); }, true);
   document.addEventListener("pointerup", end, true); document.addEventListener("pointercancel", end, true); })();
 const ECO_FIND = { on: false };
