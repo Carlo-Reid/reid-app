@@ -26909,16 +26909,44 @@ let ECO_DRAG = {}; try { ECO_DRAG = JSON.parse(localStorage.getItem("reid.eco.dr
     let mx = dx * t + (tx <= ty ? Math.sign(dx) * 10 : 0), my = dy * t + (ty < tx ? Math.sign(dy) * 10 : 0);
     if (inView) { const R = mv.getBoundingClientRect(); if (R.left >= 0 && R.right <= innerWidth) mx = Math.max(-R.left, Math.min(innerWidth - R.right, mx)); if (R.top >= 0 && R.bottom <= innerHeight) my = Math.max(-R.top, Math.min(innerHeight - R.bottom, my)); }
     const o = at(mv); mv.style.translate = `${Math.round(o[0] + mx)}px ${Math.round(o[1] + my)}px`; keep(mv); return true; };
-  const shove = (fix, L, done, n) => { if (n > 5) return; L.forEach(o => { if (!done.has(o) && apart(fix, o, true)) { const d2 = new Set(done); d2.add(o); shove(o, L, d2, n + 1); } }); };   // the bumped one bumps the next one, and so on
+  // The wall rule (Carlo, Nov 10, 10:50 p.m.: "if an image hits a box or anything on the screen have it move the other way").
+  // While he is dragged (or pushed by another Eco Man) he can not go onto a thing on the screen: a button, a typing box, a drop-down, a link, a picture, a heading, or any box with a frame around it.
+  // He is put back out on the side he came in from, a little away from it, and he can not leave the screen. Not walls: the boxes he sits inside, anything he is already on top of when the drag starts
+  // (so one put on a button on purpose can still be pulled off it), and very big boxes (over a third of the screen), or the whole page would be one wall.
+  const setT = (el, x, y) => { el.style.translate = `${Math.round(x)}px ${Math.round(y)}px`; };
+  const WALL_TAG = /^(BUTTON|INPUT|SELECT|TEXTAREA|A|IMG|VIDEO|CANVAS|H1|H2|H3|H4)$/;
+  const wallsRaw = root => { const out = [], vw = innerWidth, vh = innerHeight, big = vw * vh * .34;
+    root.querySelectorAll("*").forEach(n => { if (!(n instanceof HTMLElement) || n.closest(".eco-spot, .eco-pop, #eco-find-bar, #eco-pick") || n.matches(".eco-man, .eco-dance-man")) return;
+      const r = n.getBoundingClientRect(); if (r.width < 16 || r.height < 12 || r.right <= 0 || r.bottom <= 0 || r.left >= vw || r.top >= vh || r.width * r.height > big) return;
+      const cs = getComputedStyle(n); if (cs.visibility === "hidden" || cs.display === "contents" || +cs.opacity === 0) return;
+      const framed = cs.borderTopStyle !== "none" && parseFloat(cs.borderTopWidth) >= 1 && cs.borderLeftStyle !== "none" && parseFloat(cs.borderLeftWidth) >= 1;
+      if (WALL_TAG.test(n.tagName) || framed) out.push({ n, l: r.left, r: r.right, t: r.top, b: r.bottom }); });
+    return out; };
+  const wallsFor = (D, el) => { let w = D.walls.get(el); if (w) return w; const root = el.closest(".eco-dance, .eco-think") || document.body; let raw = D.raw.get(root); if (!raw) D.raw.set(root, raw = wallsRaw(root));
+    const B = box(el); w = raw.filter(R => !R.n.contains(el) && !hit(B, R)); D.walls.set(el, w); return w; };
+  const onWall = (el, W) => { const B = box(el); return W.some(R => hit(B, R)); };
+  const solid = (el, W) => { for (let k = 0; k < 6; k++) { const B = box(el), R = W.find(x => hit(B, x)), o = at(el);
+      if (R) { const a = [B.r - R.l, R.r - B.l, B.b - R.t, R.b - B.t], m = Math.min(...a), i = a.indexOf(m), g = m + 12; setT(el, o[0] + (i === 0 ? -g : i === 1 ? g : 0), o[1] + (i === 2 ? -g : i === 3 ? g : 0)); continue; }
+      const E = el.getBoundingClientRect(), ex = E.width >= innerWidth ? 0 : E.left < 0 ? -E.left : E.right > innerWidth ? innerWidth - E.right : 0, ey = E.height >= innerHeight ? 0 : E.top < 0 ? -E.top : E.bottom > innerHeight ? innerHeight - E.bottom : 0;
+      if (!ex && !ey) return true; setT(el, o[0] + ex, o[1] + ey); }
+    return false; };
+  // the bumped one bumps the next one, and so on; a bumped one that would land on a wall stays where he is
+  const shove = (fix, L, done, n, D) => { if (n > 5) return; L.forEach(o => { if (done.has(o)) return; const was = at(o); if (!apart(fix, o, true)) return;
+    if (D && onWall(o, wallsFor(D, o))) { setT(o, was[0], was[1]); keep(o); return; } const d2 = new Set(done); d2.add(o); shove(o, L, d2, n + 1, D); }); };
   window.ecoBumpAll = () => { const L = others(); for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) apart(L[i], L[j], false); };
-  document.addEventListener("pointerdown", e => { if (e.button > 0 || ECO_FIND.on) return; const el = e.target.closest?.(OK); if (!el) return; d = { el, x: e.clientX, y: e.clientY, o: at(el), go: false, id: e.pointerId }; }, true);
+  document.addEventListener("pointerdown", e => { if (e.button > 0 || ECO_FIND.on) return; const el = e.target.closest?.(OK); if (!el) return; d = { el, x: e.clientX, y: e.clientY, o: at(el), good: at(el), go: false, id: e.pointerId, raw: new Map(), walls: new Map() }; }, true);
+  addEventListener("scroll", () => { if (d) { d.raw = new Map(); d.walls = new Map(); } }, true); addEventListener("resize", () => { if (d) { d.raw = new Map(); d.walls = new Map(); } });
   document.addEventListener("pointermove", e => { if (!d || e.pointerId !== d.id) return; const dx = e.clientX - d.x, dy = e.clientY - d.y;
     if (!d.go) { if (Math.abs(dx) + Math.abs(dy) < 6) return; d.go = true; d.el.classList.add("eco-dragging"); try { d.el.setPointerCapture(d.id); } catch { } }
-    e.preventDefault(); d.el.style.translate = `${Math.round(d.o[0] + dx)}px ${Math.round(d.o[1] + dy)}px`;
-    shove(d.el, others(), new Set([d.el]), 0); }, true);
+    e.preventDefault(); const W = wallsFor(d, d.el), L = others(); setT(d.el, d.o[0] + dx, d.o[1] + dy);
+    if (!solid(d.el, W)) setT(d.el, d.good[0], d.good[1]);
+    shove(d.el, L, new Set([d.el]), 0, d);
+    L.forEach(o => { if (o !== d.el) apart(o, d.el, false); });   // one that could not move out of the way (a wall behind him) sends the dragged one back
+    if (onWall(d.el, W) || L.some(o => o !== d.el && hit(box(o), box(d.el)))) setT(d.el, d.good[0], d.good[1]); else d.good = at(d.el); }, true);
   const end = e => { if (!d || e.pointerId !== d.id) return; const w = d; d = null; if (!w.go) return; w.el.classList.remove("eco-dragging"); try { w.el.releasePointerCapture(w.id); } catch { }
     ECO_FIND.dragAt = Date.now();
     others().forEach(o => { if (o !== w.el && hit(box(o), box(w.el))) { w.el.classList.add("eco-bumped"); setTimeout(() => w.el.classList.remove("eco-bumped"), 450); apart(o, w.el, false); } });
+    if (onWall(w.el, wallsFor(w, w.el))) setT(w.el, w.good[0], w.good[1]);
     keep(w.el); };
   document.addEventListener("dragstart", e => { if (e.target.closest?.(OK)) e.preventDefault(); }, true);
   document.addEventListener("pointerup", end, true); document.addEventListener("pointercancel", end, true); })();
