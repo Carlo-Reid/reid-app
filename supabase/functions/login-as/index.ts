@@ -1,11 +1,10 @@
 // Supabase Edge Function: login-as   (keep "Verify JWT" ON)
-// Lets Carlo (owner) sign in as another staff member from the Staff page, to see and test exactly what they see.
-// Only the emails in ALLOWED can use it, and only while they are an active owner in the app. Nothing is emailed:
+// Lets an owner sign in as another staff member from the Staff page, to see and test exactly what they see.
+// Any active owner can use it (Carlo, Nov 10, 2026: "anything George can do Carlo can and anything Carlo can do George can, that is a number one rule";
+// it used to be Carlo's email only). Nothing is emailed:
 // it hands back a one-time sign-in code the app uses straight away. Every use is written to the audit log.
 // It needs no new secrets: it uses the keys Supabase gives every Edge Function (the service role key, or the newer secret key).
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
-
-const ALLOWED = ["carlo@homeservicegroup.ca"];
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -30,9 +29,9 @@ Deno.serve(async (req) => {
   const caller = createClient(url, anon, { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } }, auth: { persistSession: false } });
   const { data: who } = await caller.auth.getUser();
   const myEmail = (who?.user?.email ?? "").toLowerCase();
-  if (!myEmail || !ALLOWED.includes(myEmail)) return reply(403, { error: "Only Carlo can do this" });
+  if (!myEmail) return reply(403, { error: "Please sign in again" });
 
-  // checked as Carlo himself, so the database's own rules decide (no admin key needed for this part)
+  // checked as the person asking, so the database's own rules decide (no admin key needed for this part): owners only
   const { data: myRole } = await caller.rpc("current_staff_role");
   if (myRole !== "owner") return reply(403, { error: "Only an active owner can do this" });
   const { data: me } = await caller.from("app_users").select("id").ilike("login_email", myEmail).limit(1).maybeSingle();
