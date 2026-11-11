@@ -210,6 +210,10 @@
 
 - (Carlo, Nov 10: "move this… to the right side bar".) On a part's own page, the **Accounting** block (its heading, the "Margin 78% · markup 358% · profit $80.16" line, "where this item's sales, cost and stock are booked", and the account boxes when opened) is the first box of the right side bar (`.pbi-side`, `#pb-acct-side`), above Where it's listed. `showPbItem` builds it in the form as before, then moves it; its boxes get `form="pb-form"` so the item's Save still saves them. In the price book list's small side panel (no right side bar there) it stays where it was.
 
+## Price book item: no Job costing box on Parts and Materials
+
+- (Carlo, Nov 10, 7:40 p.m.: "on the right side bar remove the job costing, it makes no sense here unless you disagree with good reasons".) The **Job costing** box (`#pbi-jc`, `pbiCosting`) is no longer shown on the page of a Part (`service`) or a Material: since their labour hours stopped being a cost, it only said sell price less cost, which the Accounting line right above already says. **I kept it on Equipment and Security pages** and told him why: there it is the only place that shows the whole cost of the item on a job (labour, warranty, office, the add-on kit) and so the real profit. If he says take it off those too, drop the box from `renderPbItemPage`. The **Labour cost** box (`#pbi-lab`) is still on every page; on Parts and Materials it no longer feeds job cost (offered to remove it).
+
 ## Price book item: Stock "Where:" squares
 
 - (Carlo, Nov 10: "change all of these into small square apps".) In the item's Stock section, each place under **Where:** (Adam 1, Counted Inventory 35, Dave 1…) is a small blue square (84px, `.pb-st-sq`): the count big on top, the place's name under it; red when the count is below zero. They wrap under the word "Where:". They only show; a click does nothing (they are in `ECO_IDLE`, so the nothing-to-do rule answers). `stockShow` in the item panel.
