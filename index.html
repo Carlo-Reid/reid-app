@@ -384,7 +384,7 @@
   .eco-spot img.eco-man { background: none !important; box-shadow: none !important; border: 0 !important; mix-blend-mode: normal !important; height: 120px; width: auto; max-width: none; display: block; pointer-events: auto; cursor: pointer; user-select: none; } .eco-spot.sz-s img.eco-man { height: 70px; } .eco-spot.sz-l img.eco-man { height: 200px; }
   @media print { .eco-spot, #eco-find-bar, #eco-pick, #eco-pick-dot { display: none !important; } }
   body.eco-placing #main, body.eco-placing #main *, body.eco-placing #search-page, body.eco-placing #search-page * { cursor: crosshair !important; }
-  .eco-spot img.eco-man, img.eco-dance-man, img.eco-think-man { cursor: grab; touch-action: none; -webkit-user-drag: none; user-select: none; } img.eco-dragging { cursor: grabbing !important; } img.eco-bumped { transition: translate .3s cubic-bezier(.3, 1.6, .5, 1); }
+  .eco-spot img.eco-man, img.eco-dance-man, img.eco-think-man { cursor: grab; touch-action: none; -webkit-user-drag: none; user-select: none; } img.eco-dragging { cursor: grabbing !important; } .eco-spot img.eco-man, img.eco-dance-man, img.eco-think-man { -webkit-touch-callout: none; } img.eco-held { cursor: nesw-resize !important; filter: drop-shadow(0 0 10px #ffd966) drop-shadow(0 0 3px #ffd966); } img.eco-bumped { transition: translate .3s cubic-bezier(.3, 1.6, .5, 1); }
   #eco-pick-dot { position: fixed; z-index: 9001; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; background: #7a3fd1; border: 4px solid #fff; box-shadow: 0 0 0 4px #7a3fd1; pointer-events: none; animation: ecoFound 1.1s ease-in-out infinite; }
   #eco-pick { position: fixed; inset: 0; z-index: 9002; background: rgba(20, 28, 40, .55); display: grid; place-items: center; padding: 16px; }
   #eco-pick .ep-box { background: var(--panel, #fff); color: var(--ink, #1c2733); border: 4px solid #4b2a8a; border-radius: 8px; width: min(980px, 96vw); max-height: 92vh; overflow: auto; padding: 18px 20px; display: grid; gap: 14px; }
@@ -26825,7 +26825,7 @@ async function ecoSpotsLoad() { try { const { data, error } = await db.rpc("eco_
 const ecoSpotRoot = k => document.getElementById(k === "S" ? "search-page" : "main");
 function ecoSpotHost(s) { try { const r = ecoSpotRoot(String(s.sel)[0]), q = String(s.sel).slice(2); return !r ? null : q === ":scope" ? r : r.querySelector(q); } catch { return null; } }
 function ecoSpotsApply() { const pg = ecoPageKey(), want = new Map();
-  ECO_SPOTS.forEach(s => { if (s.page !== pg || !ECO_LIB.some(l => l[0] === s.file)) return; const h = ecoSpotHost(s); if (h && h.getClientRects().length) want.set(String(s.id), [s, h]); });
+  ECO_SPOTS.forEach(s => { if (s.page !== pg || !ECO_LIB.some(l => l[0] === s.file)) return; if (ECO_GONE[s.id] > Date.now()) return; const h = ecoSpotHost(s); if (h && h.getClientRects().length) want.set(String(s.id), [s, h]); });
   document.querySelectorAll(".eco-spot").forEach(sp => { const w = want.get(sp.dataset.spot), sig = w && [w[0].file, w[0].size, w[0].fx, w[0].fy].join("|"); if (w && sp.parentElement === w[1] && sp.dataset.sig === sig) want.delete(sp.dataset.spot); else sp.remove(); });
   want.forEach(([s, h]) => { if (getComputedStyle(h).position === "static") h.classList.add("eco-spot-host");
     const sp = document.createElement("span"); sp.className = "eco-spot sz-" + (s.size || "m"); sp.dataset.spot = String(s.id); sp.dataset.sig = [s.file, s.size, s.fx, s.fy].join("|"); sp.style.left = s.fx + "%"; sp.style.top = s.fy + "%";
@@ -26896,6 +26896,13 @@ function ecoPlacePick(k) { const pl = ECO_PLACES.find(x => x[0] === k); if (!pl)
 // It moves him on this person's screen only (CSS translate, so his dance keeps going). One put on a page by hand stays where this person dragged him, on this computer (localStorage reid.eco.drag, by spot id).
 // A short click with no move is still a click (he dances). The click that ends a drag is swallowed.
 let ECO_DRAG = {}; try { ECO_DRAG = JSON.parse(localStorage.getItem("reid.eco.drag") || "{}") || {}; } catch { }
+// Stretch him and pop him off (Carlo, Nov 10, 10:53 p.m.: "if you click and hold an eco man and drag the mouse have it stretch him and when let go have it slam back into him and pop him off the screen for 10 minutes").
+// A quick pull still moves him (the drag rule). Hold the mouse down on him WITHOUT moving for about half a second: he glows yellow. Now pull: he stretches toward the mouse like rubber (CSS scale, up to 3 times).
+// Let go: he snaps back, then flies off the screen the other way, spinning, and stays away for 10 minutes on that person's screen (ECO_GONE, localStorage reid.eco.gone, by spot id; the dancer and the thinking one are just hidden).
+let ECO_GONE = {}; try { ECO_GONE = JSON.parse(localStorage.getItem("reid.eco.gone") || "{}") || {}; } catch { }
+function ecoGoneSet(id, until) { const now = Date.now(); Object.keys(ECO_GONE).forEach(k => { if (!(ECO_GONE[k] > now)) delete ECO_GONE[k]; }); if (id != null) ECO_GONE[id] = until;
+  try { localStorage.setItem("reid.eco.gone", JSON.stringify(ECO_GONE)); } catch { } }
+(function ecoGoneBack() { const soon = Math.min(...Object.values(ECO_GONE).filter(t => t > Date.now()), Date.now() + 60000); setTimeout(() => { try { ecoSpotsApply(); } catch { } ecoGoneBack(); }, Math.max(1000, soon - Date.now() + 300)); })();
 (function ecoDragWire() { let d = null; const OK = ".eco-spot img.eco-man, img.eco-dance-man, img.eco-think-man";
   const at = el => { const t = (el.style.translate || "").match(/(-?[\d.]+)px(?:\s+(-?[\d.]+)px)?/); return t ? [+t[1] || 0, +t[2] || 0] : [0, 0]; };
   // The bump rule (Carlo, Nov 10, 10:23 p.m.: "if 2 images walk or bump or walk into each other have them move the other way, even if it's because the user moved them on purpose").
@@ -26934,16 +26941,28 @@ let ECO_DRAG = {}; try { ECO_DRAG = JSON.parse(localStorage.getItem("reid.eco.dr
   const shove = (fix, L, done, n, D) => { if (n > 5) return; L.forEach(o => { if (done.has(o)) return; const was = at(o); if (!apart(fix, o, true)) return;
     if (D && onWall(o, wallsFor(D, o))) { setT(o, was[0], was[1]); keep(o); return; } const d2 = new Set(done); d2.add(o); shove(o, L, d2, n + 1, D); }); };
   window.ecoBumpAll = () => { const L = others(); for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) apart(L[i], L[j], false); };
-  document.addEventListener("pointerdown", e => { if (e.button > 0 || ECO_FIND.on) return; const el = e.target.closest?.(OK); if (!el) return; d = { el, x: e.clientX, y: e.clientY, o: at(el), good: at(el), go: false, id: e.pointerId, raw: new Map(), walls: new Map() }; }, true);
+  document.addEventListener("pointerdown", e => { if (e.button > 0 || ECO_FIND.on) return; const el = e.target.closest?.(OK); if (!el) return; d = { el, x: e.clientX, y: e.clientY, o: at(el), good: at(el), go: false, id: e.pointerId, raw: new Map(), walls: new Map(), w: el.offsetWidth || 100, h: el.offsetHeight || 100 };
+    const me = d; me.holdT = setTimeout(() => { if (d === me && !me.go) { me.hold = true; el.classList.add("eco-held"); } }, 450); }, true);
+  document.addEventListener("contextmenu", e => { if (d && e.target.closest?.(OK)) e.preventDefault(); }, true);
+  const popOff = w => { const el = w.el, dx = w.sx || 0, dy = w.sy || 0, len = Math.hypot(dx, dy) || 1, far = Math.max(innerWidth, innerHeight) * 1.3, o = at(el), from = el.style.scale || "1 1";
+    el.classList.remove("eco-held"); el.style.scale = ""; el.style.transformOrigin = "";
+    const gone = () => { const sid = el.dataset.ecoSpot; if (sid) { ecoGoneSet(sid, Date.now() + 600000); ecoSpotsApply(); } else el.style.visibility = "hidden"; };
+    try { el.animate({ scale: [from, "0.6 0.6", "1.3 1.3", "1 1"] }, { duration: 280, easing: "ease-out" }).finished
+      .then(() => el.animate({ translate: [`${o[0]}px ${o[1]}px`, `${Math.round(o[0] - dx / len * far)}px ${Math.round(o[1] - dy / len * far)}px`], rotate: ["0deg", "900deg"] }, { duration: 750, easing: "cubic-bezier(.4, 0, .9, .5)", fill: "forwards" }).finished)
+      .then(gone, gone); } catch { gone(); } };
   addEventListener("scroll", () => { if (d) { d.raw = new Map(); d.walls = new Map(); } }, true); addEventListener("resize", () => { if (d) { d.raw = new Map(); d.walls = new Map(); } });
   document.addEventListener("pointermove", e => { if (!d || e.pointerId !== d.id) return; const dx = e.clientX - d.x, dy = e.clientY - d.y;
-    if (!d.go) { if (Math.abs(dx) + Math.abs(dy) < 6) return; d.go = true; d.el.classList.add("eco-dragging"); try { d.el.setPointerCapture(d.id); } catch { } }
+    if (d.hold) { if (!d.go && Math.abs(dx) + Math.abs(dy) < 6) return; d.go = d.str = true; d.sx = dx; d.sy = dy; e.preventDefault(); try { d.el.setPointerCapture(d.id); } catch { }
+      d.el.style.transformOrigin = `${dx >= 0 ? 0 : 100}% ${dy >= 0 ? 0 : 100}%`; d.el.style.scale = `${Math.min(3, 1 + Math.abs(dx) / d.w).toFixed(3)} ${Math.min(3, 1 + Math.abs(dy) / d.h).toFixed(3)}`; return; }
+    if (!d.go) { if (Math.abs(dx) + Math.abs(dy) < 6) return; clearTimeout(d.holdT); d.go = true; d.el.classList.add("eco-dragging"); try { d.el.setPointerCapture(d.id); } catch { } }
     e.preventDefault(); const W = wallsFor(d, d.el), L = others(); setT(d.el, d.o[0] + dx, d.o[1] + dy);
     if (!solid(d.el, W)) setT(d.el, d.good[0], d.good[1]);
     shove(d.el, L, new Set([d.el]), 0, d);
     L.forEach(o => { if (o !== d.el) apart(o, d.el, false); });   // one that could not move out of the way (a wall behind him) sends the dragged one back
     if (onWall(d.el, W) || L.some(o => o !== d.el && hit(box(o), box(d.el)))) setT(d.el, d.good[0], d.good[1]); else d.good = at(d.el); }, true);
-  const end = e => { if (!d || e.pointerId !== d.id) return; const w = d; d = null; if (!w.go) return; w.el.classList.remove("eco-dragging"); try { w.el.releasePointerCapture(w.id); } catch { }
+  const end = e => { if (!d || e.pointerId !== d.id) return; const w = d; d = null; clearTimeout(w.holdT); w.el.classList.remove("eco-held");
+    if (w.str) { try { w.el.releasePointerCapture(w.id); } catch { } ECO_FIND.dragAt = Date.now(); popOff(w); return; }
+    if (!w.go) return; w.el.classList.remove("eco-dragging"); try { w.el.releasePointerCapture(w.id); } catch { }
     ECO_FIND.dragAt = Date.now();
     others().forEach(o => { if (o !== w.el && hit(box(o), box(w.el))) { w.el.classList.add("eco-bumped"); setTimeout(() => w.el.classList.remove("eco-bumped"), 450); apart(o, w.el, false); } });
     if (onWall(w.el, wallsFor(w, w.el))) setT(w.el, w.good[0], w.good[1]);
