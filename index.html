@@ -26944,16 +26944,22 @@ function ecoGoneSet(id, until) { const now = Date.now(); Object.keys(ECO_GONE).f
   document.addEventListener("pointerdown", e => { if (e.button > 0 || ECO_FIND.on) return; const el = e.target.closest?.(OK); if (!el) return; d = { el, x: e.clientX, y: e.clientY, o: at(el), good: at(el), go: false, id: e.pointerId, raw: new Map(), walls: new Map(), w: el.offsetWidth || 100, h: el.offsetHeight || 100 };
     const me = d; me.holdT = setTimeout(() => { if (d === me && !me.go) { me.hold = true; el.classList.add("eco-held"); } }, 450); }, true);
   document.addEventListener("contextmenu", e => { if (d && e.target.closest?.(OK)) e.preventDefault(); }, true);
-  const popOff = w => { const el = w.el, dx = w.sx || 0, dy = w.sy || 0, len = Math.hypot(dx, dy) || 1, far = Math.max(innerWidth, innerHeight) * 1.3, o = at(el), from = el.style.scale || "1 1";
-    el.classList.remove("eco-held"); el.style.scale = ""; el.style.transformOrigin = "";
+  const stretchT = (ang, k) => `rotate(${ang.toFixed(1)}deg) scale(${k.toFixed(3)}, ${(1 / Math.sqrt(k)).toFixed(3)}) rotate(${(-ang).toFixed(1)}deg)`;
+  const popOff = w => { const el = w.el, dx = w.sx || 0, dy = w.sy || 0, len = Math.hypot(dx, dy) || 1, far = Math.max(innerWidth, innerHeight) * 1.3, o = at(el), k0 = w.k || 1, ang = w.ang || 0;
+    // the snap: he shoots back past his own shape and wobbles, each swing smaller, like an elastic let go (more stretch = a bigger first swing)
+    const sw = Math.min(.5, (k0 - 1) * .3), snap = [k0, 1 - sw, 1 + sw * .7, 1 - sw * .4, 1 + sw * .2, 1].map(k => ({ transform: stretchT(ang, k) }));
+    el.classList.remove("eco-held"); el.style.transform = "";
     const gone = () => { const sid = el.dataset.ecoSpot; if (sid) { ecoGoneSet(sid, Date.now() + 600000); ecoSpotsApply(); } else el.style.visibility = "hidden"; };
-    try { el.animate({ scale: [from, "0.6 0.6", "1.3 1.3", "1 1"] }, { duration: 280, easing: "ease-out" }).finished
-      .then(() => el.animate({ translate: [`${o[0]}px ${o[1]}px`, `${Math.round(o[0] - dx / len * far)}px ${Math.round(o[1] - dy / len * far)}px`], rotate: ["0deg", "900deg"] }, { duration: 750, easing: "cubic-bezier(.4, 0, .9, .5)", fill: "forwards" }).finished)
+    try { el.animate(snap, { duration: 460, easing: "ease-out" }).finished
+      .then(() => { el.style.transformOrigin = ""; return el.animate({ translate: [`${o[0]}px ${o[1]}px`, `${Math.round(o[0] - dx / len * far)}px ${Math.round(o[1] - dy / len * far)}px`], rotate: ["0deg", "900deg"] }, { duration: 750, easing: "cubic-bezier(.4, 0, .9, .5)", fill: "forwards" }).finished; })
       .then(gone, gone); } catch { gone(); } };
   addEventListener("scroll", () => { if (d) { d.raw = new Map(); d.walls = new Map(); } }, true); addEventListener("resize", () => { if (d) { d.raw = new Map(); d.walls = new Map(); } });
   document.addEventListener("pointermove", e => { if (!d || e.pointerId !== d.id) return; const dx = e.clientX - d.x, dy = e.clientY - d.y;
     if (d.hold) { if (!d.go && Math.abs(dx) + Math.abs(dy) < 6) return; d.go = d.str = true; d.sx = dx; d.sy = dy; e.preventDefault(); try { d.el.setPointerCapture(d.id); } catch { }
-      d.el.style.transformOrigin = `${dx >= 0 ? 0 : 100}% ${dy >= 0 ? 0 : 100}%`; d.el.style.scale = `${Math.min(3, 1 + Math.abs(dx) / d.w).toFixed(3)} ${Math.min(3, 1 + Math.abs(dy) / d.h).toFixed(3)}`; return; }
+      // like an elastic (Carlo, 10:59 p.m.: "make him stretch more like an elastic would"): he is pulled along the line of the pull, whatever its angle, gets thinner across it as he gets longer,
+      // and pulls back harder the farther he goes (the stretch slows down toward 3.4 times). The side away from the mouse stays pinned.
+      const len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len, k = 1 + 2.4 * (1 - Math.exp(-len / (1.5 * Math.max(d.w, d.h))));
+      d.k = k; d.ang = Math.atan2(dy, dx) * 180 / Math.PI; d.el.style.animation = "none"; d.el.style.transformOrigin = `${(50 - ux * 42).toFixed(1)}% ${(50 - uy * 42).toFixed(1)}%`; d.el.style.transform = stretchT(d.ang, k); return; }
     if (!d.go) { if (Math.abs(dx) + Math.abs(dy) < 6) return; clearTimeout(d.holdT); d.go = true; d.el.classList.add("eco-dragging"); try { d.el.setPointerCapture(d.id); } catch { } }
     e.preventDefault(); const W = wallsFor(d, d.el), L = others(); setT(d.el, d.o[0] + dx, d.o[1] + dy);
     if (!solid(d.el, W)) setT(d.el, d.good[0], d.good[1]);
