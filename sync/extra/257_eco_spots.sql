@@ -20,7 +20,8 @@ BEGIN
   IF coalesce(p->>'page', '') !~ '^[a-z0-9=_-]{1,40}$' THEN RAISE EXCEPTION 'I do not know that page'; END IF;
   IF coalesce(p->>'file', '') !~ '^eco-3d-[a-z0-9-]{1,40}$' THEN RAISE EXCEPTION 'I do not know that picture'; END IF;
   IF length(coalesce(p->>'sel', '')) NOT BETWEEN 1 AND 700 THEN RAISE EXCEPTION 'I could not tell which spot that is'; END IF;
-  IF coalesce(p->>'size', 'm') NOT IN ('s', 'm', 'l') THEN RAISE EXCEPTION 'The size has to be small, medium or large'; END IF;
+  -- the size: s, m, l, or (from the slider, Nov 10) a height in pixels from 40 to 400
+  IF coalesce(p->>'size', 'm') NOT IN ('s', 'm', 'l') AND NOT (p->>'size' ~ '^[0-9]{2,3}$' AND (p->>'size')::int BETWEEN 40 AND 400) THEN RAISE EXCEPTION 'The size has to be small, medium or large, or a number from 40 to 400'; END IF;
   SELECT s.id, coalesce(s.eco_spots, '[]'::jsonb) INTO v_id, v_old FROM company_settings s ORDER BY s.id LIMIT 1;
   IF v_id IS NULL THEN RAISE EXCEPTION 'The company settings are missing'; END IF;
   IF v_sid IS NULL THEN
