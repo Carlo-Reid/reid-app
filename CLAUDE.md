@@ -179,6 +179,10 @@
 
 - **No green or red in the Payroll side bar ("His calls").** Carlo is saving those colours for special side bar functions later. Maintenance shows teal-blue and Warranty grey there (`.pr-side .pr-k-*`); the call boxes keep their usual colours.
 
+## Payroll: Mina's page says "You are the Best"
+
+- (Carlo, Nov 11, 2:58 p.m.: "on Mina's payroll page, section PA 1, next to his name add the words You are the Best and put a dancing Eco Man next to it as well, but only for Mina".) On the payroll page of the person whose first name is Mina, the heading reads "Mina … **You are the Best**" in green with a small Eco Man dancing beside it (`prBest(name)`, `.pr-best`, the `dance` place picture, `ecoDance3d`). Whoever opens that page sees it (Mina himself, and owners). No other person's page has it. It does not print. It goes by the first name, so a second person named Mina would get it too. Checked: the script parses. **Not looked at in a picture and not seen on the live app.**
+
 ## Office staff time (Payroll)
 
 - Office staff = app role office, admin, accounting, dispatcher or warehouse (not techs, even if ServiceTitan says technician). Their payroll page is time in / time out, not calls (`openOfficePayroll`, `sync/extra/212_office_time.sql`).
