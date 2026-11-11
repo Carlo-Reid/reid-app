@@ -31,7 +31,7 @@ BEGIN
     'orders', coalesce((SELECT jsonb_agg(jsonb_build_object('id', t.id, 'line', t.invoice_line_id, 'description', t.description, 'quantity', t.quantity,
         'unit_cost', CASE WHEN v_cost THEN t.unit_cost END, 'payer', t.payer, 'supplier', btrim(s.name), 'po_id', t.purchase_order_id, 'po_number', po.po_number,
         'po_status', po.status, 'credit_number', t.credit_number, 'credit_status', t.credit_status, 'credit_amount', CASE WHEN v_cost THEN t.credit_amount END,
-        'credit_ref', t.credit_ref, 'credit_received_at', t.credit_received_at, 'created_at', t.created_at) ORDER BY t.id)
+        'credit_ref', t.credit_ref, 'credit_received_at', t.credit_received_at, 'credit_auto', (t.credit_status = 'received' AND t.credit_received_by IS NULL), 'created_at', t.created_at) ORDER BY t.id)
       FROM tank_orders t LEFT JOIN suppliers s ON s.id = t.supplier_id LEFT JOIN purchase_orders po ON po.id = t.purchase_order_id WHERE t.invoice_id = i.id), '[]'::jsonb),
     'lines', coalesce((SELECT jsonb_agg(jsonb_build_object('id', l.id, 'item_id', l.item_id, 'description', l.description, 'sku', pi.sku, 'kind', pi.item_type,
         'quantity', l.quantity, 'unit_cost', CASE WHEN v_cost THEN coalesce(l.unit_cost, pi.unit_cost) END,
