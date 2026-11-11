@@ -230,7 +230,7 @@
 
 ## Price book item: Stock "Where:" squares
 
-- (Carlo, Nov 10: "change all of these into small square apps".) In the item's Stock section, each place under **Where:** (Adam 1, Counted Inventory 35, Dave 1…) is a small blue square (84px, `.pb-st-sq`): the count big on top, the place's name under it; red when the count is below zero. They wrap under the word "Where:". They only show; a click does nothing (they are in `ECO_IDLE`, so the nothing-to-do rule answers). `stockShow` in the item panel.
+- (Carlo, Nov 10: "change all of these into small square apps".) In the item's Stock section, each place under **Where:** (Adam 1, Counted Inventory 35, Dave 1…) is a small blue square (84px, `.pb-st-sq`): the count big on top, the place's name under it; red when the count is below zero. They wrap under the word "Where:". They only show; a click does nothing (they are in `ECO_IDLE`, so the nothing-to-do rule answers). `stockShow` in the item panel. **Each tech's square has his picture** (Carlo, Nov 10, 8:00 p.m.: "on the item page add the tech pictures to the buttons"): the Staff page picture of the person the truck belongs to (`stock_locations.assigned_employee_id`, sent as `emp` by `pb_item_stock`: `sync/extra/255_stock_place_emp.sql`, an in-place patch; `empPhoto`, `loadEmpPhotos`, `.pb-st-ph`). A truck with nobody on it (Nissan Spare) shows 🚚, a warehouse (Counted Inventory) 🏬. The squares are 100px now. I took "the buttons" to mean these squares.
 
 ## Price book item: How is it sold?
 
