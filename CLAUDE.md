@@ -132,6 +132,13 @@
 - West: Kanata & Stittsville (blue) · Nepean (green) · Barrhaven, Riverside South & Manotick (orange) · Central (purple) · South Ottawa (red) · Gloucester & Vanier (teal) · Orléans & east (yellow) · Out of town (grey).
 - Neighbourhoods, communities and towns are text only now, not colours. Don't bring back a second "border" colour.
 
+## Dispatch board: what ServiceTitan's board shows and ours did not (George's email, Nov 10)
+
+- (George emailed Carlo at 8:37 p.m. with four pictures of Mon Nov 9: our board had Adonay on "Abu Bakar 2 pm" while ServiceTitan's board did not, and ServiceTitan showed grey events, "George" on Adonay and "off sick today" on Dayton, that ours did not. Carlo: "help me with this email George sent".) Both were about what the board **shows**; the sync had the right data.
+- **A call whose job is on hold in ServiceTitan is off our board.** ServiceTitan takes a held appointment off the tech's line; our sync keeps the visit as `scheduled` with its tech (appointment status Hold → `scheduled`, job status Hold → `on_hold`), so the board kept drawing it (job 155562365). `dispatch_day` (with a date) and `dispatch_range` now leave out a visit when `j.status = 'on_hold' AND v.status = 'scheduled' AND j.st_id IS NOT NULL` (written into their own files, `sync/extra/011_dispatch_walks.sql` and `077_dispatch_range.sql`, and patched live). Only 3 such visits between Nov 3 and Nov 20. The job itself is untouched and still shows on the customer's page. A job put on hold in our own app (no `st_id`) still shows.
+- **The grey events on the techs' ServiceTitan schedules show on our board** (off sick, meetings, holds: `st_nonjob_appts`, already copied every hour for payroll). `staff_blocks_list` (`sync/extra/078_staff_blocks.sql`, live) now adds the active ones to the busy times it returns (`st: true`, id negative, `can_delete` false), so they are on the day board (grey 📅 box on the tech's line, `.tl-block-st` in `dspBlocksHtml`), the week and month views, and where a tech's free time is checked for booking. The 3:30 a.m. "CALL PAST THIS ARE FOR THE NEXT DAY!" marker every tech has is left out (anything that ends by 6 a.m.). They are as fresh as the hourly events sync.
+- **Not looked into yet**: George wrote "throughout the entire dispatch board". Other ways the two boards can differ (a call moved to another tech or time in ServiceTitan between two syncs; how often the sync runs) were not checked; ask George for another example if he sees one after this.
+
 ## Dispatch ✨ Optimize
 
 - Flags calls outside the tech's area for the day, then suggests a move to a tech with room in that area, or, if nobody has room, a swap of two calls between two techs (ticked/unticked and undone together). Nothing changes until Carlo approves.

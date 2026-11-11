@@ -14,7 +14,7 @@ AS $function$
   JOIN customers c ON c.id = j.customer_id
   LEFT JOIN locations l ON l.id = j.location_id
   WHERE public.current_staff_role() IS NOT NULL AND p_to - p_from <= 62
-    AND v.scheduled_date BETWEEN p_from AND p_to AND v.status <> 'cancelled'
+    AND v.scheduled_date BETWEEN p_from AND p_to AND v.status <> 'cancelled' AND NOT (j.status = 'on_hold' AND v.status = 'scheduled' AND j.st_id IS NOT NULL)   -- on hold in ServiceTitan: off the board (George, Nov 10, 2026)
   ORDER BY v.scheduled_date, v.arrival_start NULLS LAST, v.id
   LIMIT 5000
 $function$;

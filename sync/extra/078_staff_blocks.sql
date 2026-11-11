@@ -15,14 +15,30 @@ ALTER TABLE public.staff_blocks ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.staff_blocks FROM PUBLIC, anon, authenticated;
 
 -- everyone's (for the board), or one person's
+-- George, Nov 10, 2026: "you are not adding the events that are Grey": the events on a tech's ServiceTitan schedule (st_nonjob_appts: "off sick today",
+-- a meeting, a hold) come back here too, as busy times ('st' true, can not be deleted here), so they show on the dispatch board, the week and month
+-- views and when picking a tech. Only active ones; the nightly 3:30 a.m. "calls past this are for the next day" marker is left out.
 CREATE OR REPLACE FUNCTION public.staff_blocks_list(p_from date, p_to date, p_employee bigint DEFAULT NULL) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE v_st boolean := to_regclass('public.st_nonjob_appts') IS NOT NULL; v_ev jsonb := '[]'::jsonb;
 BEGIN
   IF public.current_staff_role() IS NULL THEN RETURN '[]'::jsonb; END IF;
+  IF v_st THEN
+    SELECT coalesce(jsonb_agg(jsonb_build_object('id', -x.id, 'employee_id', x.emp, 'name', public._emp_name(x.emp), 'day', x.d,
+        'start', CASE WHEN x.all_day THEN NULL ELSE to_char(x.s, 'HH24:MI') END,
+        'end', CASE WHEN x.all_day THEN NULL WHEN (x.s + make_interval(mins => greatest(x.mins, 15)))::date > x.d THEN '23:59' ELSE to_char(x.s + make_interval(mins => greatest(x.mins, 15)), 'HH24:MI') END,
+        'title', x.title, 'mine', x.emp = public._my_employee(), 'can_delete', false, 'st', true) ORDER BY x.d, x.s), '[]'::jsonb) INTO v_ev
+    FROM (SELECT n.id, coalesce(e.merged_into, e.id) AS emp, (n.starts_at AT TIME ZONE 'America/Toronto') AS s, (n.starts_at AT TIME ZONE 'America/Toronto')::date AS d,
+                 coalesce(n.duration_min, 60) AS mins, coalesce(n.all_day, false) AS all_day, coalesce(nullif(btrim(n.name), ''), 'Busy') AS title
+          FROM st_nonjob_appts n JOIN employees e ON e.st_id = n.technician_id
+          WHERE n.active AND n.starts_at >= (p_from::timestamp AT TIME ZONE 'America/Toronto') AND n.starts_at < ((p_to + 1)::timestamp AT TIME ZONE 'America/Toronto')) x
+    WHERE (p_employee IS NULL OR x.emp = p_employee)
+      AND NOT (NOT x.all_day AND (x.s + make_interval(mins => x.mins))::time <= time '06:00' AND (x.s + make_interval(mins => x.mins))::date = x.d);
+  END IF;
   RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('id', b.id, 'employee_id', b.employee_id, 'name', public._emp_name(b.employee_id), 'day', b.day,
       'start', to_char(b.start_time, 'HH24:MI'), 'end', to_char(b.end_time, 'HH24:MI'), 'title', b.title,
       'mine', b.employee_id = public._my_employee(), 'can_delete', b.employee_id = public._my_employee() OR b.created_by = public.current_app_user_id() OR public.has_permission('calls.dispatch') OR public.current_staff_role() = 'owner')
       ORDER BY b.day, b.start_time NULLS FIRST, b.id)
-    FROM staff_blocks b WHERE b.day BETWEEN p_from AND p_to AND (p_employee IS NULL OR b.employee_id = p_employee)), '[]'::jsonb);
+    FROM staff_blocks b WHERE b.day BETWEEN p_from AND p_to AND (p_employee IS NULL OR b.employee_id = p_employee)), '[]'::jsonb) || v_ev;
 END $function$;
 
 CREATE OR REPLACE FUNCTION public.staff_block_add(p_day date, p_start time, p_end time, p_title text) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$

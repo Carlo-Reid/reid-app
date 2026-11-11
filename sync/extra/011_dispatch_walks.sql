@@ -22,7 +22,7 @@ AS $function$
   LEFT JOIN neighbourhoods h ON h.id = l.neighbourhood_id
   LEFT JOIN communities cm ON cm.id = l.community_id
   WHERE public.current_staff_role() IS NOT NULL
-    AND ((p_date IS NOT NULL AND v.scheduled_date = p_date)
+    AND ((p_date IS NOT NULL AND v.scheduled_date = p_date AND NOT (j.status = 'on_hold' AND v.status = 'scheduled' AND j.st_id IS NOT NULL))   -- on hold in ServiceTitan: off the board, as on theirs (George, Nov 10, 2026)
          OR (p_date IS NULL AND v.status = 'unscheduled' AND v.created_at > now() - interval '1 year'))
   ORDER BY v.arrival_start NULLS LAST, v.id
   LIMIT 1000
