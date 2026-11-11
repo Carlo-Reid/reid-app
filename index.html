@@ -6357,10 +6357,15 @@ html body #update-box { display: none !important; } html body #update-box.ready.
 .bkw-cells .bkw-cell + .bkw-cell { border-left: 1px solid #7d8791; }
 .bkw-cells .bkw-crumb, .bkw-cells .bkw-crumb.on { border: 0; background: none; color: var(--ink); font-size: 16px; font-weight: 400; padding: 2px 3px; border-radius: 3px; }
 .bkw-cells .bkw-crumb:hover { background: color-mix(in srgb, #23415f 12%, transparent); } .bkw-cells .bkw-arr { margin: 0; }
+.bkw-crumbs.bkw-cells { align-items: stretch; } .bkw-cells .bkw-cell { align-self: stretch; height: auto; } .bkw-cells .bkw-cell-r2 { border-top: 1px solid #7d8791; } .bkw-cells .bkw-cell-wide { grid-column: span 2; } .bkw-cells .bkw-cell-r2 b { font-weight: 700; }
+@media (min-width: 701px) { .bkw-cells .bkw-cell-r2:not(.bkw-cell-wide) { border-left: 0; } }
 .bkw-cells .bkw-dept b { font-weight: 400; } .bkw-cells .bkw-dept select { font-size: 15px; }
-@media (max-width: 700px) { .bkw-crumbs.bkw-cells { grid-template-columns: 1fr; } .bkw-cells .bkw-cell + .bkw-cell { border-left: 0; border-top: 1px solid #7d8791; } }
+@media (max-width: 700px) { .bkw-crumbs.bkw-cells { grid-template-columns: 1fr; } .bkw-cells .bkw-cell-wide { grid-column: auto; } .bkw-cells .bkw-cell + .bkw-cell { border-left: 0; border-top: 1px solid #7d8791; } }
 .bk-reasons { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; max-width: 640px; } .bk-reasons-row { margin-top: -6px; }
 .bk-reason { font: inherit; font-size: 12px; line-height: 1.15; height: 32px; padding: 2px 5px; margin: 0; display: flex; align-items: center; justify-content: center; text-align: center; border: 1px solid #23415f; border-radius: 4px; background: var(--panel, #fff); color: #23415f; font-weight: 600; cursor: pointer; overflow: hidden; }
+.bk-reasons-drag .bk-reason { touch-action: none; user-select: none; -webkit-user-select: none; } .bk-reasons-moving .bk-reason { cursor: grabbing; }
+.bk-reason.bk-reason-drag { outline: 3px solid #ffd966; outline-offset: 1px; box-shadow: 0 6px 16px rgba(0, 0, 0, .3); transform: scale(1.06); position: relative; z-index: 2; }
+.bk-reasons-tip { font-size: 12px; font-weight: 400; color: var(--steel, #5b6670); line-height: 1.25; display: block; }
 .bk-reason:hover { background: color-mix(in srgb, #23415f 10%, transparent); } .bk-reason[aria-pressed="true"] { background: #23415f; color: #fff; }
 @media (max-width: 700px) { .bk-reasons { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .sinv-memo-tag { background: #e3f4e8; color: #14703a; border: 1px solid #b9d8c2; font-weight: 700; white-space: nowrap; }
@@ -12692,10 +12697,38 @@ const BK_REASONS = ["Furnace / or Heating System", "Fireplace", "Pool heater", "
 const bkReasonParts = v => String(v || "").split(/\s+\+\s+/).map(x => x.trim()).filter(Boolean);
 function bkReasonsHtml(F, t) {
   if (bkSales() || F.mode !== "new" || Number(F.forP) || !t || !BKW_SC.test(t.name)) return "";
-  const on = bkReasonParts(F.summary);
-  return `<div class="bk-row bk-reasons-row"><span class="bk-label"></span><span class="bk-reasons">${BK_REASONS.map(r => `<button type="button" class="bk-reason" data-bk-reason="${esc(r)}" aria-pressed="${on.includes(r)}">${esc(r)}</button>`).join("")}</span></div>`;
+  const on = bkReasonParts(F.summary), own = ME.role === "owner";
+  bkReasonOrderLoad();
+  return `<div class="bk-row bk-reasons-row"><span class="bk-label">${own ? `<span class="bk-reasons-tip">Hold a button, then drag it, to change the order.</span>` : ""}</span><span class="bk-reasons${own ? " bk-reasons-drag" : ""}">${bkReasonList().map(r => `<button type="button" class="bk-reason" data-bk-reason="${esc(r)}" aria-pressed="${on.includes(r)}">${esc(r)}</button>`).join("")}</span></div>`;
 }
+// The order of the buttons: an owner holds a button about a third of a second, then drags it to its new spot. It is saved for everyone
+// (company_settings.bk_reason_order; kept on this computer too, so the page draws in the right order at once).
+const BK_RO = { list: (() => { try { return JSON.parse(localStorage.getItem("reid.bk.reasons") || "null"); } catch { return null; } })(), at: 0, drag: null, skipClick: 0 };
+const bkReasonList = () => { const L = Array.isArray(BK_RO.list) ? BK_RO.list.filter(x => BK_REASONS.includes(x)) : []; return L.concat(BK_REASONS.filter(x => !L.includes(x))); };
+function bkReasonOrderLoad() {
+  if (Date.now() - BK_RO.at < 600000) return; BK_RO.at = Date.now();
+  db.rpc("bk_reason_order").then(({ data, error }) => { if (error || !Array.isArray(data) || BK_RO.drag) return;
+    if (JSON.stringify(data) === JSON.stringify(BK_RO.list || [])) return;
+    BK_RO.list = data; try { localStorage.setItem("reid.bk.reasons", JSON.stringify(data)); } catch {}
+    const box = document.querySelector(".bk-reasons"); if (box) bkReasonList().forEach(r => { const b = [...box.children].find(x => x.dataset.bkReason === r); if (b) box.append(b); }); });
+}
+document.addEventListener("pointerdown", e => { const b = e.target.closest?.(".bk-reasons-drag [data-bk-reason]"); if (!b || e.button > 0) return;
+  const d = BK_RO.drag = { b, x: e.clientX, y: e.clientY, on: false, id: e.pointerId };
+  d.t = setTimeout(() => { if (BK_RO.drag !== d) return; d.on = true; b.classList.add("bk-reason-drag"); b.parentElement.classList.add("bk-reasons-moving"); try { b.setPointerCapture(d.id); } catch {} }, 320); });
+document.addEventListener("pointermove", e => { const d = BK_RO.drag; if (!d) return;
+  if (!d.on) { if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 8) { clearTimeout(d.t); BK_RO.drag = null; } return; }
+  e.preventDefault(); const over = [...d.b.parentElement.children].find(x => { if (x === d.b) return false; const r = x.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; });
+  if (!over) return; const kids = [...d.b.parentElement.children];
+  kids.indexOf(d.b) < kids.indexOf(over) ? over.after(d.b) : over.before(d.b); }, { passive: false });
+const bkReasonDrop = async e => { const d = BK_RO.drag; if (!d) return; clearTimeout(d.t); BK_RO.drag = null; if (!d.on) return;
+  d.b.classList.remove("bk-reason-drag"); d.b.parentElement.classList.remove("bk-reasons-moving"); BK_RO.skipClick = Date.now();
+  const list = [...d.b.parentElement.children].map(x => x.dataset.bkReason).filter(Boolean);
+  if (JSON.stringify(list) === JSON.stringify(bkReasonList())) return;
+  BK_RO.list = list; BK_RO.at = Date.now(); try { localStorage.setItem("reid.bk.reasons", JSON.stringify(list)); } catch {}
+  const { error } = await db.rpc("set_bk_reason_order", { p: list }); alertMsg(error ? "The new order was not saved: " + rpcErr(error) : "✓ The new order is saved for everyone."); };
+document.addEventListener("pointerup", bkReasonDrop); document.addEventListener("pointercancel", bkReasonDrop);
 document.addEventListener("click", e => { const b = e.target.closest?.("[data-bk-reason]"); if (!b) return; e.preventDefault();
+  if (Date.now() - BK_RO.skipClick < 400) return;   // the click that ends a drag does not pick the button
   const inp = document.getElementById("bk-summary"); if (!inp) return; const r = b.dataset.bkReason; let L = bkReasonParts(inp.value);
   if (L.includes(r)) L = L.filter(x => x !== r);
   else { if ((L.concat(r).join(" + ")).length > 200) return alertMsg("The Reason for Call box is full. Take one out first."); L.push(r); }
@@ -12784,8 +12817,12 @@ function bkCrumbs(F) {
     <span class="bkw-cell"><button type="button" class="bkw-crumb" data-bkw-go="cat" title="Change the kind of call">${cat ? cat[2] + " " + esc(cat[1]) : "Kind of call"}</button><span class="bkw-arr">›</span>
     <button type="button" class="bkw-crumb on" data-bkw-go="type" title="Change the job">${t ? (BKW_WC.test(t.name) && !Number(F.forP) ? "Warranty Call" + (F.ah ? " · after hours" : "") : esc(bkwLabel(t.name)) + (F.cbJob ? " for Job " + esc(F.cbJob.job_number) : "")) : "Pick the job"}</button></span>
     <span class="bkw-cell bkw-dept">Department: ${u && !F.unitEdit ? `<b>${esc(u.name)}</b> <button class="link" type="button" data-bk-unitedit>change</button>`
-      : `<select id="bk-unit" required><option value="">Pick one…</option>${(BOOK.units || []).map(x => `<option value="${x.id}" ${String(x.id) === String(F.unit) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>`}</span></span>`;
+      : `<select id="bk-unit" required><option value="">Pick one…</option>${(BOOK.units || []).map(x => `<option value="${x.id}" ${String(x.id) === String(F.unit) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>`}</span>
+    <span class="bkw-cell bkw-cell-r2">Customer Name: <b>${esc(F.cust?.display_name || "")}</b></span>
+    <span class="bkw-cell bkw-cell-r2 bkw-cell-wide">Customer Address: <b data-bkw-addr>${esc(bkAddrText(F))}</b></span></span>`;
 }
+// the address the call is for, in words (the second grey row; Carlo, Nov 11)
+function bkAddrText(F) { const l = (F.locs || []).find(x => x.id === F.loc) || (F.locs || [])[0]; return l ? [l.street, l.unit && "Unit " + l.unit, l.city].filter(Boolean).join(", ") : "No address on file"; }
 function bkWizard(msg) {
   const F = BK, step = F.step;
   const p = Number(F.forP) ? (BK_PARTNERS || []).find(x => x.id === Number(F.forP)) : null, who = p ? bkwPName(p) : "Reid";
@@ -13351,7 +13388,7 @@ function renderBooking(msg) {
   document.querySelectorAll("[data-bk-seller]").forEach(b => b.addEventListener("click", () => { F.seller = Number(F.seller) === Number(b.dataset.bkSeller) ? null : Number(b.dataset.bkSeller); redraw(); }));
   document.querySelectorAll("[data-bk-sk]").forEach(b => b.addEventListener("click", () => { F.sk = b.dataset.bkSk; F.later = F.sk === "est" || F.sk === "phone"; redraw(); if (F.sk === "walk") loadTechLoad(); }));
   $("#bk-job")?.addEventListener("change", e => { keep(); F.jobId = Number(e.target.value) || null; bkVisitFill(F); renderBooking(); });
-  $("#bk-loc")?.addEventListener("change", e => { F.loc = Number(e.target.value); });
+  $("#bk-loc")?.addEventListener("change", e => { F.loc = Number(e.target.value); const a = document.querySelector("[data-bkw-addr]"); if (a) a.textContent = bkAddrText(F); });
   $("#bk-type")?.addEventListener("change", e => {
     F.type = e.target.value; const x = BOOK.job_types.find(j => String(j.id) === F.type);
     if (x) { if (x.unit_id) F.unit = String(x.unit_id); F.dur = String(x.duration || 60); }
