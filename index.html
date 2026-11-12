@@ -7032,6 +7032,8 @@ body[data-page="supplier-invoices"] .apb.sci-big.apb-green { background: linear-
 body[data-page="supplier-invoices"] .apb.sci-big.apb-green:hover, body[data-page="supplier-invoices"] .apb.sci-big.apb-green:focus-visible { border-color: #6fb886 !important; background: linear-gradient(180deg, #ffffff, #dff1e5) !important; }
 body[data-page="supplier-invoices"] .apb.sci-big.apb-green .apb-ic { background: #d3ecda; color: #1b6b36; }
 body[data-page="supplier-invoices"] .apb.sci-big:disabled { opacity: .6; }
+body[data-page="supplier-invoices"] .sci-apps.sci-drag > [data-sci-kind] { touch-action: none; }
+body[data-page="supplier-invoices"] .sci-apps > .sci-moving .apb.sci-big { outline: 3px solid #ffd43b; outline-offset: 2px; box-shadow: 0 8px 20px rgba(35, 65, 95, .25) !important; cursor: grabbing; }
 /* Supplier invoices: a picked month opens its statement page; the table of that month is not shown under it (Carlo, Nov 12) */
 article.sinv.sinv-monthpop .sinv-bar, article.sinv.sinv-monthpop .staff-wrap:has(> .sinv-t), article.sinv.sinv-monthpop .stv-back { display: none; }
 .stv-t td.stv-c > .st-no, .stv-t td.stv-po > .st-no { color: #c92a2a; }
@@ -19824,6 +19826,33 @@ function sinvPoTile(r, edit) {
   return `<div class="sci-app"><button class="apb apb-blue sci-big" type="button" ${edit ? `data-sci-pofind="${r.id}"` : "disabled"} title="Find the PO for this invoice"><span class="sci-app-k">Supplier P.O.</span><span class="apb-ic" aria-hidden="true">🔎</span><span class="apb-tn">${edit ? "Click to find the PO" : "No PO yet"}</span></button></div>`;
 }
 // the third app box (Carlo, Nov 10): "Click here if it's a Packing Slip" marks the document as a packing slip, so it is under View Packing Slips; green once it is one
+// The app boxes at the top of an open supplier invoice can be moved: an owner holds one, then drags it; the order is saved for everyone (Carlo, Nov 12)
+const SCI_KINDS = ["po", "memo", "inv", "slip", "stock"];
+const SCI_RO = { list: (() => { try { return JSON.parse(localStorage.getItem("reid.sci.order") || "null"); } catch { return null; } })(), at: 0, drag: null, skipClick: 0 };
+const sciOrder = () => { const L = Array.isArray(SCI_RO.list) ? SCI_RO.list.filter(x => SCI_KINDS.includes(x)) : []; return L.concat(SCI_KINDS.filter(x => !L.includes(x))); };
+function sciBoxes(parts) {
+  if (Date.now() - SCI_RO.at > 600000) { SCI_RO.at = Date.now();
+    db.rpc("sci_box_order").then(({ data, error }) => { if (error || !Array.isArray(data) || !data.length || SCI_RO.drag || JSON.stringify(data) === JSON.stringify(SCI_RO.list || [])) return;
+      SCI_RO.list = data; try { localStorage.setItem("reid.sci.order", JSON.stringify(data)); } catch {}
+      const box = document.querySelector(".sci-apps.sci-top"); if (box) sciOrder().forEach(k => [...box.children].filter(x => x.dataset.sciKind === k).forEach(x => box.append(x))); }); }
+  return sciOrder().map(k => String(parts[k] || "").replace(/<div class="sci-app"/g, `<div class="sci-app" data-sci-kind="${k}"`)).join("");
+}
+document.addEventListener("pointerdown", e => { const b = e.target.closest?.(".sci-apps.sci-drag > [data-sci-kind]"); if (!b || e.button > 0) return;
+  const d = SCI_RO.drag = { b, x: e.clientX, y: e.clientY, on: false, id: e.pointerId };
+  d.t = setTimeout(() => { if (SCI_RO.drag !== d) return; d.on = true; b.classList.add("sci-moving"); try { b.setPointerCapture(d.id); } catch {} }, 320); });
+document.addEventListener("pointermove", e => { const d = SCI_RO.drag; if (!d) return;
+  if (!d.on) { if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 8) { clearTimeout(d.t); SCI_RO.drag = null; } return; }
+  e.preventDefault(); const kids = [...d.b.parentElement.children], over = kids.find(x => { if (x === d.b) return false; const r = x.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; });
+  if (over) kids.indexOf(d.b) < kids.indexOf(over) ? over.after(d.b) : over.before(d.b); }, { passive: false });
+const sciBoxDrop = async () => { const d = SCI_RO.drag; if (!d) return; clearTimeout(d.t); SCI_RO.drag = null; if (!d.on) return;
+  d.b.classList.remove("sci-moving"); SCI_RO.skipClick = Date.now();
+  const seen = [...new Set([...d.b.parentElement.children].map(x => x.dataset.sciKind).filter(Boolean))], old = sciOrder();
+  const list = seen.concat(old.filter(k => !seen.includes(k)));            // boxes not on this invoice keep their place after the ones that are
+  if (JSON.stringify(list) === JSON.stringify(old)) return;
+  SCI_RO.list = list; SCI_RO.at = Date.now(); try { localStorage.setItem("reid.sci.order", JSON.stringify(list)); } catch {}
+  const { error } = await db.rpc("set_sci_box_order", { p: list }); alertMsg(error ? "The new order was not saved: " + rpcErr(error) : "✓ The new order is saved for everyone."); };
+document.addEventListener("pointerup", sciBoxDrop); document.addEventListener("pointercancel", sciBoxDrop);
+window.addEventListener("click", e => { if (Date.now() - SCI_RO.skipClick < 400 && e.target.closest?.(".sci-apps")) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);   // the click that ends a drag does not press the box
 function sinvSlipTile(r, edit, d) {
   // green when the paper is a packing slip: marked by a person, or read as one. The same test as the "This paper is the packing slip" line above it, so the two never disagree (Carlo, Nov 12)
   const byHand = /Marked as a packing slip in the app/i.test(r.read_notes || ""), is = byHand || /packing[ -]slip/i.test(r.read_notes || "");
@@ -19886,7 +19915,7 @@ function sinvCustHtml(r, d, edit) {
   const invTiles = C.linked.length ? C.linked.map((i, ix) => `<div class="sci-app"><button class="apb apb-green sci-big" type="button" data-sci-open="${i.id}" title="Open invoice ${esc(String(i.number || i.id))}${i.who ? " · " + esc(i.who) : ""}"><span class="sci-app-k">Customer Invoice</span><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">Invoice Found and Matched</span><span class="sci-app-n">#${esc(String(i.number || i.id))}</span></button>${edit ? `<button class="link danger" type="button" data-sci-off="${i.id}" title="Take this invoice off">✕ Take it off</button>${ix === C.linked.length - 1 ? `<button class="link" type="button" data-sci-invfind="${r.id}">＋ Attach another invoice</button>` : ""}` : ""}</div>`).join("")
     : `<div class="sci-app"><button class="apb apb-blue sci-big" type="button" ${edit ? `data-sci-invfind="${r.id}"` : "disabled"} title="Find our invoice for these parts"><span class="sci-app-k">Customer Invoice</span><span class="apb-ic" aria-hidden="true">🔎</span><span class="apb-tn">${edit ? "Click to find the invoice" : "No invoice yet"}</span></button></div>`;
   return `<section class="sinv-cust" data-sci="${r.id}">${sinvNeedsHtml(r, d)}
-    <div class="sci-apps sci-top">${sinvPoTile(r, edit)}${sinvMemoTile(r, d, edit)}${invTiles}${sinvSlipTile(r, edit, d)}${sinvStockTile(r, d, edit)}</div>
+    <div class="sci-apps sci-top${ME.role === "owner" ? " sci-drag" : ""}">${sciBoxes({ po: sinvPoTile(r, edit), memo: sinvMemoTile(r, d, edit), inv: invTiles, slip: sinvSlipTile(r, edit, d), stock: sinvStockTile(r, d, edit) })}</div>
     ${sinvPoFindHtml(r, edit)}
     ${showFind && C.suggest.length ? `<div class="sci-sug"><span class="cl-label">On this PO's job</span>${C.suggest.map(i => row(i, `<button class="btn quiet-btn vtp-small" type="button" data-sci-on="${i.id}">＋ Attach</button>`)).join("")}</div>` : ""}
     ${showFind ? `<div class="sci-find"><label>Find our invoice <input type="search" data-sci-q="${r.id}" value="${esc(F?.q || "")}" placeholder="Invoice #, job #, customer or street" autocomplete="off"></label>
