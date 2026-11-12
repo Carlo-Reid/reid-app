@@ -7001,6 +7001,17 @@ article.sinv.sinv-monthpop .sinv-bar, article.sinv.sinv-monthpop .staff-wrap:has
 /* the statement's lines: the whole line opens its invoice (Carlo, Nov 12) */
 .stv-t tr.stv-go { cursor: pointer; } .stv-t tr.stv-go:hover > td, .stv-t tr.stv-go:focus-visible > td { background: #eef4fb; } .stv-t tr.stv-go:focus-visible { outline: 2px solid #23415f; outline-offset: -2px; }
 @media print { .stv-t tr.stv-go:hover > td { background: none; } }
+
+/* Open supplier invoice: what it still needs, in plain words (Carlo, Nov 12) */
+.sinv-needs { margin: 0 0 12px; padding: 12px 16px; border: 1px solid #c9d6e6; border-left: 5px solid #b7791f; border-radius: 6px; background: #fff; }
+.sinv-needs.sn-done { border-left-color: #1f9d4a; }
+.sinv-needs .sn-h { font-size: 17px; font-weight: 800; color: #23415f; margin: 0 0 6px; }
+.sinv-needs ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.sinv-needs li { display: flex; gap: 10px; align-items: flex-start; font-size: 17px; line-height: 1.4; color: var(--ink, #1c2733); }
+.sinv-needs .sn-m { flex: 0 0 24px; height: 24px; border-radius: 4px; display: grid; place-items: center; font-size: 14px; font-weight: 900; color: #fff; margin-top: 1px; }
+.sinv-needs .sn-ok .sn-m { background: #1f9d4a; } .sinv-needs .sn-need .sn-m { background: #b7791f; }
+.sinv-needs .sn-need { font-weight: 600; }
+.stv-t tr.stv-was > td { background: #fff6cf; box-shadow: inset 0 2px 0 #e0b100, inset 0 -2px 0 #e0b100; }
 </style>
 </head>
 <body>
@@ -19671,7 +19682,7 @@ function sinvHistory(C) {
 // The top of an open supplier invoice (Carlo, Nov 10): two app boxes side by side. "Supplier P.O." says "Click to find the PO" (a click shows the search box)
 // or "P.O. Found and Matched" (a click opens the PO); "Customer Invoice" does the same for our invoice. Read it again and Print sit on the line under them.
 function sinvPoTile(r, edit) {
-  if (r.po_id) return `<div class="sci-app"><button class="apb apb-green sci-big" type="button" data-sci-poopen="${r.po_id}" title="Open PO ${esc(r.po_number || "")}"><span class="sci-app-k">Supplier P.O.</span><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">P.O. Found and Matched</span><span class="sci-app-n">${esc(r.po_number || "")}</span></button>${edit && r.po_by_hand ? `<button class="link" type="button" data-sinv-unpo="${r.id}">Wrong PO? Take it off</button>` : ""}</div>`;
+  if (r.po_id) return `<div class="sci-app"><button class="apb apb-green sci-big" type="button" data-sci-poopen="${r.po_id}" title="Open PO ${esc(r.po_number || "")}"><span class="sci-app-k">Supplier P.O.</span><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">${(st => st.po != null && Number(r.po_lines) && Math.abs(st.diff) > 1 && !sinvIsCredit(r) && r.doc_type === "invoice" ? `P.O. Found. Off by ${money(Math.abs(st.diff))}` : "P.O. Found and Matched")(sinvState(r))}</span><span class="sci-app-n">${esc(r.po_number || "")}</span></button>${edit && r.po_by_hand ? `<button class="link" type="button" data-sinv-unpo="${r.id}">Wrong PO? Take it off</button>` : ""}</div>`;
   return `<div class="sci-app"><button class="apb apb-blue sci-big" type="button" ${edit ? `data-sci-pofind="${r.id}"` : "disabled"} title="Find the PO for this invoice"><span class="sci-app-k">Supplier P.O.</span><span class="apb-ic" aria-hidden="true">🔎</span><span class="apb-tn">${edit ? "Click to find the PO" : "No PO yet"}</span></button></div>`;
 }
 // the third app box (Carlo, Nov 10): "Click here if it's a Packing Slip" marks the document as a packing slip, so it is under View Packing Slips; green once it is one
@@ -19709,13 +19720,34 @@ document.addEventListener("click", async e => { const b = e.target.closest?.("[d
   if (error) { b.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
   if (typeof TANK_CO !== "undefined") TANK_CO.at = 0;
   SINV.data = null; SINV.det.delete(id); await openSupInv(on ? `✓ Credit Memo ${data?.number || ""} made.${data?.credit_order ? ` It answered Credit Order ${data.credit_order}.` : ""}${data?.replaced_po ? ` P.O. ${data.replaced_po} was made from this credit by mistake, so I cancelled it.` : ""}` : "The Credit Memo was taken off."); }, true);
+// What an open supplier invoice still needs, in plain words (Carlo, Nov 12): the P.O. and how far off it is, our customer invoice or our stock, the packing slip.
+const sinvNumBase = n => String(n || "").trim().toUpperCase().replace(/[.\-]0\d\d$/, "");
+function sinvNeedsHtml(r, d) {
+  if (sinvIsCredit(r) || r.doc_type === "charge" || r.doc_type === "return") return "";
+  const st = sinvState(r), L = [], ok = t => L.push(`<li class="sn-ok"><span class="sn-m" aria-hidden="true">✔</span><span>${t}</span></li>`), need = t => L.push(`<li class="sn-need"><span class="sn-m" aria-hidden="true">!</span><span>${t}</span></li>`);
+  if (!r.po_id) need(r.po_text ? `P.O. <b>${esc(r.po_text)}</b> is printed on it, but that P.O. is not in our system.` : "Need to find the P.O.");
+  else if (st.po == null || !Number(r.po_lines)) need(`Found the P.O. <b>${esc(r.po_number || "")}</b>. But the P.O. has no amounts on it, so I can not compare.`);
+  else if (Math.abs(st.diff) <= 1) ok(`Found the P.O. <b>${esc(r.po_number || "")}</b>. It matches.`);
+  else need(`Found the P.O. <b>${esc(r.po_number || "")}</b>. But it is off by <b>${money(Math.abs(st.diff))}</b>. ${st.billed !== st.before ? "The invoices on this P.O. are" : "The invoice is"} ${money(st.billed)} before tax. The P.O. is ${money(st.po)}.`);
+  const C = d.cinv, K = d.stock;
+  if (C?.linked?.length) ok(`Found the customer invoice: ${C.linked.map(i => `<b>#${esc(String(i.number || i.id))}</b>`).join(", ")}.`);
+  else if (K?.done) ok("It is in our stock.");
+  else if (C || (K && !K.not_invoice)) need("Need to find the customer invoice, or put it in our stock still.");
+  if (/packing[ -]slip/i.test(r.read_notes || "")) ok("This paper is the packing slip.");
+  else if (d.slips?.length) ok(`Found the packing slip: ${d.slips.slice(0, 3).map(x => `<b>${esc(x.number || "no number")}</b>`).join(", ")}. <button class="link" type="button" data-sci-slipsee="${esc(d.slipQ || "")}">Open it</button>`);
+  else if (d.slips) need("Need to find the packing slip.");
+  if (!L.length) return "";
+  const n = L.filter(x => x.includes("sn-need")).length;
+  return `<div class="sinv-needs${n ? "" : " sn-done"}"><div class="sn-h">${n ? `This invoice still needs ${n} ${n === 1 ? "thing" : "things"}` : "This invoice has everything"}</div><ul>${L.join("")}</ul></div>`;
+}
+document.addEventListener("click", e => { const b = e.target.closest?.("[data-sci-slipsee]"); if (!b) return; e.preventDefault(); SLIPS.q = b.dataset.sciSlipsee || ""; openPackingSlips(null); });
 function sinvCustHtml(r, d, edit) {
-  const C = d.cinv; if (!C) return `<section class="sinv-cust"><div class="sci-apps sci-top">${sinvPoTile(r, edit)}${sinvMemoTile(r, d, edit)}${sinvSlipTile(r, edit, d)}</div>${sinvPoFindHtml(r, edit)}${sinvToolsHtml(r, edit, d)}</section>`;
+  const C = d.cinv; if (!C) return `<section class="sinv-cust">${sinvNeedsHtml(r, d)}<div class="sci-apps sci-top">${sinvPoTile(r, edit)}${sinvMemoTile(r, d, edit)}${sinvSlipTile(r, edit, d)}</div>${sinvPoFindHtml(r, edit)}${sinvToolsHtml(r, edit, d)}</section>`;
   const row = (i, act) => `<div class="sci-row"><button class="link" type="button" data-sci-open="${i.id}"><b>#${esc(i.number || i.id)}</b></button> <span>${esc(fmtDate(i.date))}</span> <span><b>${esc(i.who || "")}</b>${i.street ? ` · ${esc(i.street)}` : ""}${i.job ? ` · job ${esc(i.job)}` : ""}</span> <span class="r">${money(i.total)}${Number(i.balance) > 0.004 ? ` <span class="quiet">(${money(i.balance)} owing)</span>` : ""}</span>${act}</div>`;
   const F = SINV.sciFind?.id === r.id ? SINV.sciFind : null, showFind = edit && (SINV.invFind === r.id || !!F);
   const invTiles = C.linked.length ? C.linked.map((i, ix) => `<div class="sci-app"><button class="apb apb-green sci-big" type="button" data-sci-open="${i.id}" title="Open invoice ${esc(String(i.number || i.id))}${i.who ? " · " + esc(i.who) : ""}"><span class="sci-app-k">Customer Invoice</span><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">Invoice Found and Matched</span><span class="sci-app-n">#${esc(String(i.number || i.id))}</span></button>${edit ? `<button class="link danger" type="button" data-sci-off="${i.id}" title="Take this invoice off">✕ Take it off</button>${ix === C.linked.length - 1 ? `<button class="link" type="button" data-sci-invfind="${r.id}">＋ Attach another invoice</button>` : ""}` : ""}</div>`).join("")
     : `<div class="sci-app"><button class="apb apb-blue sci-big" type="button" ${edit ? `data-sci-invfind="${r.id}"` : "disabled"} title="Find our invoice for these parts"><span class="sci-app-k">Customer Invoice</span><span class="apb-ic" aria-hidden="true">🔎</span><span class="apb-tn">${edit ? "Click to find the invoice" : "No invoice yet"}</span></button></div>`;
-  return `<section class="sinv-cust" data-sci="${r.id}">
+  return `<section class="sinv-cust" data-sci="${r.id}">${sinvNeedsHtml(r, d)}
     <div class="sci-apps sci-top">${sinvPoTile(r, edit)}${sinvMemoTile(r, d, edit)}${invTiles}${sinvSlipTile(r, edit, d)}${sinvStockTile(r, d, edit)}</div>
     ${sinvPoFindHtml(r, edit)}
     ${showFind && C.suggest.length ? `<div class="sci-sug"><span class="cl-label">On this PO's job</span>${C.suggest.map(i => row(i, `<button class="btn quiet-btn vtp-small" type="button" data-sci-on="${i.id}">＋ Attach</button>`)).join("")}</div>` : ""}
@@ -19767,8 +19799,13 @@ document.addEventListener("click", async e => { const on = e.target.closest?.("[
 async function sinvLoadDet(id) {
   if (SINV.det.has(id) || SINV.detBusy === id) return; SINV.detBusy = id;
   const [{ data, error }, rt, ci, sk, pl, cm] = await Promise.all([db.rpc("supplier_invoice_get", { p_id: id }), db.rpc("supplier_returns_list", { p_invoice: id }), db.rpc("sinv_cust_invoices", { p_id: id }),
-    db.rpc("supplier_invoice_to_stock", { p_id: id, p_dry: true }), SINV.places ? { data: null } : db.rpc("stock_places"), db.rpc("credit_memo_for", { p_invoice: id })]); SINV.detBusy = null; if (pl.data?.places) SINV.places = pl.data.places;
+    db.rpc("supplier_invoice_to_stock", { p_id: id, p_dry: true }), SINV.places ? { data: null } : db.rpc("stock_places"), db.rpc("credit_memo_for", { p_invoice: id })]); SINV.detBusy = null;
+  const R0 = (SINV.data?.rows || []).find(x => x.id === id) || (STV.all || []).find(x => x.id === id), slipQ = R0 ? String(R0.po_number || R0.po_text || sinvNumBase(R0.number) || "").trim() : ""; if (pl.data?.places) SINV.places = pl.data.places;
   SINV.det.set(id, error ? { lines: [], po_lines: [], pages: [], err: rpcErr(error) } : { ...data, returns: rt.error ? [] : rt.data || [], cinv: ci.error ? null : ci.data || { linked: [], suggest: [] }, stock: sk.error ? null : sk.data, memo: cm.error ? null : cm.data || null });
+  if (!error && R0 && slipQ.length >= 4) db.rpc("sinv_packing_slips", { p_q: slipQ, p_supplier: null, p_limit: 50 }).then(sl => { const d = SINV.det.get(id); if (!d || sl.error) return;   // is its packing slip in the system? (same P.O., or the same number)
+    const po = String(R0.po_number || "").trim(), pt = String(R0.po_text || "").trim(), nb = sinvNumBase(R0.number);
+    d.slips = (sl.data || []).filter(x => x.id !== id && ((po && String(x.po_number || "").trim() === po) || (pt && String(x.po_text || "").trim() === pt) || (nb && sinvNumBase(x.number) === nb))); d.slipQ = slipQ;
+    if (SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } });
   if (SINV.open === id && document.body.dataset.page === "supplier-invoices") { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; }
   for (const p of (data?.pages || [])) if (!SINV.img.has(p.id)) { const r = await db.rpc("supplier_doc_page", { p_id: p.id }); if (r.data) SINV.img.set(p.id, "data:image/jpeg;base64," + r.data);
     const fig = document.querySelector(`[data-sinv-img="${p.id}"]`); if (fig && r.data) fig.innerHTML = `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">`; }
@@ -19829,9 +19866,14 @@ function drawSupStatement() {
       <label class="btn"><input type="file" id="stv-file" accept="application/pdf,image/*" multiple hidden>⬆ Compare with ${esc(sinvShort(S.supplier || "the supplier"))}'s statement (PDF or photo)</label></div>
     <div id="stv-read"></div></div>`;
   // a click anywhere on a line opens its invoice, not only on the reference (Carlo, Nov 12)
+  if (STV.inline && SINV.backScroll && SINV.open == null && SINV.backScroll.st === STV.id) { const bs = SINV.backScroll; SINV.backScroll = null;
+    const put = () => { const m = $("#main"); if (!m || SINV.open != null) return; m.scrollTop = bs.top; const tr = stvPaper().querySelector(`[data-stv-inv="${bs.inv}"]`)?.closest("tr");
+      if (tr) { const a = tr.getBoundingClientRect(), mm = m.getBoundingClientRect(); if (a.top < mm.top + 60 || a.bottom > mm.bottom - 20) tr.scrollIntoView({ block: "center" }); tr.classList.add("stv-was"); } };
+    put(); requestAnimationFrame(put); setTimeout(put, 120); }
   stvPaper().querySelectorAll("tr.stv-go").forEach(tr => { const go = e => { if (e.target.closest("button, a, input, label")) return; if (String(getSelection?.() || "").trim()) return; tr.querySelector("[data-stv-inv]")?.click(); };
     tr.addEventListener("click", go); tr.addEventListener("keydown", e => { if (e.key === "Enter") go(e); }); });
   stvPaper().querySelectorAll("[data-stv-inv]").forEach(b => b.addEventListener("click", async () => {   // open that invoice's record (lines, PO, scans), with a way back to the statement
+    if (STV.inline) SINV.backScroll = { top: $("#main").scrollTop, inv: Number(b.dataset.stvInv), st: STV.id };   // so Back lands on the line that was clicked, not the top of the page
     closeInvoice(); SINV.sup = STV.sup; SINV.st = STV.id; SINV.f = "all"; SINV.q = ""; SINV.open = Number(b.dataset.stvInv); SINV.backTo = { id: STV.id, sup: STV.sup }; sinvSaveTab();
     await openSupInv(); let row = document.querySelector(`.sinv-row[data-sinv="${SINV.open}"]`);
     if (!row) { SINV.st = 0; SINV.pick = "all"; SINV.q = b.textContent.trim(); await openSupInv(); row = document.querySelector(`.sinv-row[data-sinv="${SINV.open}"]`); }   // billed in an earlier month: find it among all of theirs
