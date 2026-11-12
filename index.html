@@ -6990,6 +6990,7 @@ body[data-page="supplier-invoices"] .apb.sci-big { width: 240px; min-height: 204
 /* Supplier invoices: a picked month opens its statement page; the table of that month is not shown under it (Carlo, Nov 12) */
 article.sinv.sinv-monthpop .sinv-bar, article.sinv.sinv-monthpop .staff-wrap:has(> .sinv-t), article.sinv.sinv-monthpop .stv-back { display: none; }
 .stv-t th.stv-file, .stv-t td.stv-file { white-space: nowrap; font-weight: 700; }
+.stv-t th.stv-po, .stv-t td.stv-po { white-space: nowrap; } .stv-t td.stv-po > span { font-weight: 700; } .stv-t td.stv-po .quiet { font-weight: 400; }
 .stv-inline { margin: 14px 0 20px; background: #fff; border: 1px solid #c9d6e6; border-radius: 8px; padding: 18px 20px; overflow-x: auto; }
 /* Customer page, Photos and files: the pictures and the documents each have their own part (Carlo, Nov 12) */
 .files-part { border: 1px solid var(--line, #d9dfe5); border-radius: 8px; padding: 12px 14px 14px; background: var(--panel, #fff); } .files-part + .files-part { margin-top: 16px; }
@@ -18816,11 +18817,11 @@ function sinvPendStmt(rows, D) {
       <div class="stv-box"><div class="stv-ttl">STATEMENT SO FAR</div><table><tr><th>PAGES</th><th>DATE</th></tr><tr><td>—</td><td>${esc(stDate(asOf))}</td></tr>
         <tr><th colspan="2">CUSTOMER NO.</th></tr><tr><td colspan="2">${esc(acct || "—")}</td></tr></table></div></div>
     <div class="stv-to">${esc((co.company_name || "Home Service Group Inc.").toUpperCase())}</div>
-    ${L.length ? `<table class="stv-t"><thead><tr><th>Date</th><th>Reference</th><th>Br.</th><th>CD</th><th class="r">Amount</th><th class="r">Balance due</th><th class="stv-our">Our records</th><th class="stv-file">Supplier invoice</th></tr></thead>
-      <tbody>${L.map(r => { const s = r._s || sinvState(r), good = s.k === "ok" || s.k === "match";
+    ${L.length ? `<table class="stv-t"><thead><tr><th>Date</th><th>Reference</th><th>Br.</th><th>CD</th><th class="r">Amount</th><th class="r">Balance due</th><th class="stv-our">Our records</th><th class="stv-file">Supplier invoice</th><th class="stv-po">P.O.</th></tr></thead>
+      <tbody>${L.map(r => { const s = r._s || sinvState(r), good = s.k === "ok";
         return `<tr class="stv-go" data-sinv="${r.id}" tabindex="0" title="Click to open this invoice"><td>${esc(stDate(r.invoice_date))}</td><td><button class="link" type="button" data-pend-inv>${esc(r.number)}</button></td>
         <td></td><td>${["credit", "return"].includes(r.doc_type) || Number(r.total) < 0 ? "C" : r.doc_type === "charge" ? "D" : "I"}</td><td class="r num">${stMoney(r.total)}</td><td class="r num">${stMoney(r.total)}</td>
-        <td class="stv-our"><span class="${good ? "st-ok" : s.look ? "st-look" : ""}">${esc(good ? "✓ " + s.label : s.label)}</span>${r.po_number ? ` <span class="quiet">PO ${esc(r.po_number)}</span>` : ""}</td>${stvFileCell(r)}</tr>`; }).join("")}</tbody></table>
+        <td class="stv-our"><span class="${good ? "st-ok" : s.k === "nocopy" ? "st-look" : ""}">${esc(good ? "✓ " + s.label : stvOurWords(s))}</span></td>${stvFileCell(r)}${stvPoCell(r)}</tr>`; }).join("")}</tbody></table>
     <div class="stv-codes">I = Invoice · C = Credit note · D = Debit memo</div>
     <div class="stv-foot"><div class="stv-age"></div><div class="stv-tot"><span>TOTAL SO FAR</span><b>${stMoney(tot)}</b></div></div>` : `<p class="quiet">Nothing is loaded for this month yet.</p>`}
     <p class="quiet stv-note">${L.length} line${L.length === 1 ? "" : "s"}, from our own records. ${esc(sinvShort(name))}'s statement for ${esc(sinvPendName(SINV.pend))} is not in yet.</p></div></section>`;
@@ -19852,6 +19853,17 @@ const stDate = d => { if (!d) return ""; const [y, m, dd] = String(d).slice(0, 1
 // where the statement is drawn: in the page under the month squares (Carlo, Nov 12: "appear below and stay there… not a pop up"), or in the pop-up page
 // last column of a statement: do we have the supplier's own invoice paper? (Carlo, Nov 12)
 const stvFileCell = r => `<td class="stv-file">${r && Number(r.pages) > 0 ? `<span class="st-ok">On file</span>` : `<span class="st-no">Missing</span>`}</td>`;
+// the P.O. column of a statement: Match, Over by, Under by, or None (Carlo, Nov 12)
+function stvPoCell(r) {
+  if (!r || !r.po_id) return `<td class="stv-po"><span class="st-no">None</span></td>`;
+  const s = r._s || sinvState(r), num = `<div class="quiet">PO ${esc(r.po_number || "")}</div>`;
+  if (r.doc_type !== "invoice") return `<td class="stv-po">${num}</td>`;   // a credit, return or charge is not compared with the P.O.
+  if (s.po == null || !Number(r.po_lines)) return `<td class="stv-po"><span class="st-look">No amounts on it</span>${num}</td>`;
+  if (Math.abs(s.diff) <= 1) return `<td class="stv-po"><span class="st-ok">Match</span>${num}</td>`;
+  return `<td class="stv-po"><span class="st-look">${s.diff > 0 ? "Over" : "Under"} by ${money(Math.abs(s.diff))}</span>${num}</td>`;
+}
+// "Our records" no longer repeats what the P.O. column says
+const stvOurWords = s => ["match", "differs", "nopo", "notfound"].includes(s.k) ? "In our system" : s.label;
 const stvPaper = () => (STV.inline && document.getElementById("stv-inline")) || $("#inv-paper");
 async function openSupStatement(stId, sup, inline) {
   const same = inline && STV.inline && STV.id === stId && STV.D && STV.src === SINV.data;   // the page was only drawn again: show what we have, no reload
@@ -19876,7 +19888,7 @@ function drawSupStatement() {
   SL.forEach(l => { if (!l.invoice_id) { const r = byNum.get(String(l.reference || "").trim()); if (r) l.invoice_id = r.id; } });   // found in an earlier month's load
   const ag = S.aging || {}, mon = String(S.date || "").slice(0, 7), co = COMPANY || {};
   const ours = l => { const r = l.invoice_id && rows.get(l.invoice_id); if (!r) return { t: "Invoice not loaded in our system", c: "st-no" }; const s = sinvState(r);
-    return { t: s.k === "ok" || s.k === "match" ? "✓ " + s.label : s.label, c: s.k === "ok" || s.k === "match" ? "st-ok" : s.look ? "st-look" : "", r }; };
+    return { t: s.k === "ok" ? "✓ " + s.label : stvOurWords(s), c: s.k === "ok" ? "st-ok" : s.k === "nocopy" ? "st-look" : "", r }; };
   const sum = SL.reduce((a, l) => a + Number(l.amount || 0), 0), R = STV.read;
   const miss = SL.filter(l => !l.invoice_id && ["I", "C", "D", "S"].includes(l.code || "I")).length;   // lines with no supplier invoice in the app
   if (STV.id && STV.accFor !== STV.id) { const id = STV.accFor = STV.id; STV.acc = null;   // accepted? (who and when)
@@ -19888,10 +19900,10 @@ function drawSupStatement() {
         <tr><th colspan="2">CUSTOMER NO.</th></tr><tr><td colspan="2">${esc(S.account || ag.account_name || "—")}</td></tr></table></div></div>
     <div class="stv-to">${esc((co.company_name || "Home Service Group Inc.").toUpperCase())}</div>
     ${cmp ? stCompareHtml(cmp, R, S) : ""}
-    <table class="stv-t"><thead><tr><th>Date</th><th>Reference</th><th>Br.</th><th>CD</th><th class="r">Amount</th><th class="r">Balance due</th><th class="stv-our">Our records</th><th class="stv-file">Supplier invoice</th></tr></thead>
+    <table class="stv-t"><thead><tr><th>Date</th><th>Reference</th><th>Br.</th><th>CD</th><th class="r">Amount</th><th class="r">Balance due</th><th class="stv-our">Our records</th><th class="stv-file">Supplier invoice</th><th class="stv-po">P.O.</th></tr></thead>
       <tbody>${SL.map(l => { const o = ours(l), d = cmp?.byRef.get(l.reference); return `<tr class="${d ? "stv-diff" : ""} ${l.invoice_id ? "stv-go" : ""}" ${l.invoice_id ? `tabindex="0" title="Click to open this invoice"` : ""}><td>${esc(stDate(l.date))}</td><td>${l.invoice_id ? `<button class="link" type="button" data-stv-inv="${l.invoice_id}">${esc(l.reference)}</button>` : esc(l.reference)}</td>
         <td>${esc(l.branch || "")}</td><td>${esc(l.code || "")}</td><td class="r num">${String(l.date || "").slice(0, 7) === mon ? stMoney(l.amount) : ""}</td><td class="r num">${stMoney(l.amount)}</td>
-        <td class="stv-our"><span class="${o.c}">${esc(o.t)}</span>${o.r?.po_number ? ` <span class="quiet">PO ${esc(o.r.po_number)}</span>` : ""}${d ? `<div class="st-bad">${esc(d)}</div>` : ""}</td>${stvFileCell(o.r)}</tr>`; }).join("")}</tbody></table>
+        <td class="stv-our"><span class="${o.c}">${esc(o.t)}</span>${d ? `<div class="st-bad">${esc(d)}</div>` : ""}</td>${stvFileCell(o.r)}${stvPoCell(o.r)}</tr>`; }).join("")}</tbody></table>
     <div class="stv-codes">I = Invoice · C = Credit note · A = Adjustment · S = Finance charge · D = Debit memo · P = Payment · U = Unapplied</div>
     <div class="stv-foot"><div class="stv-age">${[["CURRENT", ag.current], ["31-60 DAYS", ag.d31_60], ["61-90 DAYS", ag.d61_90], ["91-120 DAYS", ag.d91_120], ["OVER 120 DAYS", ag.over120]].map(([t, v]) => `<div><span>${t}</span><b>${v == null ? "" : stMoney(v)}</b></div>`).join("")}</div>
       <div class="stv-tot"><span>TOTAL</span><b>${stMoney(S.total)}</b>${ag.discount ? `<small>You may deduct ${stMoney(ag.discount)} if paid in full by term</small>` : ""}</div></div>
