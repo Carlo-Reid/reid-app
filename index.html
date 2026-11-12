@@ -19235,8 +19235,18 @@ const sinvSupWords = id => sinvShort(sinvSupList().get(id) || "").toUpperCase().
 const sinvSupOnPage = (T, id) => { const U = String(T || "").toUpperCase(), W = sinvSupWords(id); if (!W.length) return false;
   if (W.length > 1 && new RegExp("\\b" + W.join("\\W{0,3}") + "\\b").test(U)) return true;
   const w = W[0]; return w.length >= 3 && !SINV_COMMON.test(w) && new RegExp("\\b" + w + "\\b").test(U); };
+// Trent Metal prints as "TML Supply Company". A statement line: "03/02/26 S1525441.001 28191335 1744.72 1744.72" (the S is often read as $ or 5)
+const ST_TML_LINE = /^\W{0,3}(\d{1,2}\/\d{2}\/\d{2})(?!\d)\s+\W{0,2}[S$5§]?\s?(\d{7})\s?[.,]\s?(\d{3})\b(.*)$/;
+const stTmlLines = t => String(t || "").split(/\n/).filter(l => ST_TML_LINE.test(l)).length;
+// Trent has two accounts with us, kept as two suppliers: the water heater account's papers say "WATER HEATER ACCOUNT ONLY" under our name
+function sinvTrentSup(T) {
+  T = String(T || "").toUpperCase(); if (!(/\bT[MU]L\s+SUPPL|TRENT\s+METAL|LA\s+PERRIERE/.test(T) || stTmlLines(T) >= 3)) return null;
+  const L = [...sinvSupList()], wh = L.find(([, n]) => /trent/i.test(n) && /water\s*heater/i.test(n))?.[0], main = L.find(([, n]) => /trent/i.test(n) && !/water\s*heater/i.test(n))?.[0];
+  return (/WATER\s*HEATER\s*ACC/.test(T) ? wh : main) || null;
+}
 function sinvWhichSup(text, cur) {
   const T = String(text || "").toUpperCase();
+  { const tr = sinvTrentSup(T); if (tr) return tr === cur ? null : tr; }
   if (cur && sinvSupOnPage(T, cur)) return null;
   const bySign = supplierBySign(T); if (bySign) { const id = [...sinvSupList()].find(([, n]) => n.toLowerCase().startsWith(bySign.toLowerCase()))?.[0]; if (id && id !== cur) return id; }
   return [...sinvSupList().keys()].find(id => id !== cur && sinvSupOnPage(T, id)) || null;
@@ -19364,7 +19374,7 @@ function dropInGroups(PT, cv, HT, KL) {
   const stLines = t => (String(t).match(/^\s*\d{1,2}\/\d{1,2}\/\d{2,4}[\s|]+(?:[A-Za-z1|!$]{1,2}[\s|]*)?-?\s*\d{6,9}(?:-\d{2})?\s+\d{5,}\s.*\d\.\d{2}/gm) || []).length;
   const moLines = t => (String(t).match(/^\W{0,3}[A-Za-z]{3}[a-z]*\.?\s+\d{1,2},?\s+\d{4}\s+\d{4,9}[A-Z]?\b.*\d[.,]\d{2}/gm) || []).length;   // Breezehill: date, number, type, amounts
   const woLines = t => (String(t).match(/^\W{0,2}[O0-9]{2}\S{2,5}?\d{2}\W*\s*\d{7}\b.*\bNET\b/gim) || []).length;   // Wolseley: 20JUL26 7085161 C/N- 543853 CN NET 30TH …
-  const kindOf = t => { const U = String(t).toUpperCase(); if (woLines(t) >= 2 || (/ETAT\s*DE\s*COMPTE/.test(U) && /REMITTANCE/.test(U))) return "statement"; if ((stLines(t) >= 2 || moLines(t) >= 3) && !/INVOICE\s*(?:NUMBER|NO)\s*[:#]/.test(U)) return "statement"; if (/\bSTATEMENT\b/.test(U) && /31\s*-\s*60|61\s*-\s*90|OVER\s*120|1\s*-\s*30\s*DAYS|91\s*\+\s*DAYS|BALANCE\s*DUE|OVER\s*\d{2,3}\b|STATEMENT\s*DATE|AMOUNT\s*REMITTED|RETURN\s*THIS\s*PORTION/.test(U)) return "statement";   // Breezehill: Current / 30-62 / Over 62
+  const kindOf = t => { const U = String(t).toUpperCase(); if (stTmlLines(t) >= 3) return "statement"; if (woLines(t) >= 2 || (/ETAT\s*DE\s*COMPTE/.test(U) && /REMITTANCE/.test(U))) return "statement"; if ((stLines(t) >= 2 || moLines(t) >= 3) && !/INVOICE\s*(?:NUMBER|NO)\s*[:#]/.test(U)) return "statement"; if (/\bSTATEMENT\b/.test(U) && /31\s*-\s*60|61\s*-\s*90|OVER\s*120|1\s*-\s*30\s*DAYS|91\s*\+\s*DAYS|BALANCE\s*DUE|OVER\s*\d{2,3}\b|STATEMENT\s*DATE|AMOUNT\s*REMITTED|RETURN\s*THIS\s*PORTION/.test(U)) return "statement";   // Breezehill: Current / 30-62 / Over 62
     // the word "Statement" sits in a heavy box on some forms (Heating Parts Central) and the reader can miss it: a page with the aging boxes (1-30 Days · 31-60 Days · 61-90 Days · 91+ Days)
     // and "Balance Due" or "Credit Limit" is a statement all the same, even with one line on it that says SALES INVOICE (Carlo, Nov 10)
     if ((U.match(/1\s*-\s*30\s*DAYS|31\s*-\s*60\s*DAYS|61\s*-\s*90\s*DAYS|91\s*\+\s*DAYS|OVER\s*(?:90|120)/g) || []).length >= 3 && /BALANCE\s*DUE|CREDIT\s*LIMIT/.test(U) && !/WORK\s*ORDER|PACKING\s*(?:SLIP|LIST)/.test(U)) return "statement";
@@ -19924,6 +19934,8 @@ async function stReadFiles(files, S) {
       const pg = String(data.text).match(/\bPage\s+(\d{1,2})\s+(?:of|de)\s+(\d{1,2})\b/i);
       if (i === 0 && pg && Number(pg[1]) === 1 && Number(pg[2]) < canvases.length && /STATEMENT|ETAT DE COMPTE|REMITTANCE/i.test(data.text)) stop = Number(pg[2]);
       else if (i > 0 && stop < canvases.length && !(pg && Number(pg[1]) === i + 1)) stop = canvases.length;   // the pages don't follow on: read them all after all
+      // Trent Metal: each statement page but the last says "** Continued on Next Page **"; the pages after the last one are its ship tickets
+      if (stop === canvases.length && i < canvases.length - 1 && stTmlLines(texts[0]) >= 3 && !/Continued\s+on\s+Next\s+Page/i.test(data.text)) stop = i + 1;
     }
     await worker.terminate();
     const extra = canvases.length - stop; if (extra > 0) canvases.length = stop;
@@ -19965,13 +19977,26 @@ function stParse(texts, known) {
   const refOf = d => { d = d.length === 7 && d[0] === "0" ? d.slice(1) : d; return K.get(d.slice(-6)) || (PFX ? PFX + d : d); };
   const CODE = { I: "I", "1": "I", l: "I", T: "I", r: "I", z: "I", Z: "I", x: "I", X: "I", i: "I", C: "C", c: "C", e: "C", "©": "C", A: "A", D: "D", S: "S", P: "P", U: "U" };
   const lines = [], seen = new Set(), cands = []; let date = null, total = null, aging = null, discount = null, last = null, balDue = null;
-  const WOL = { n: 0, tot: {}, date: null }, TR = { n: 0, date: null, total: null, aging: null }, fixes = [];
+  const WOL = { n: 0, tot: {}, date: null }, TR = { n: 0, date: null, total: null, aging: null }, TM = { n: 0, date: null, total: null, acct: null, boxes: [] }, fixes = [];
+  const tmAmts = t => (String(t).match(/-?\d[\d,]*[.,]\d{2}(?!\d)-?/g) || []).map(x => { const v = Number(x.replace(/-/g, "").replace(/,(\d{2})$/, ".$1").replace(/,/g, "")); return isFinite(v) ? (/^-|-$/.test(x) ? -v : v) : null; }).filter(v => v != null);
   texts.forEach(T => {
     const L = T.split(/\n/);
     L.forEach((raw, idx) => {
       const s = raw.replace(/[^0-9A-Za-z.,\/\-]/g, " ").replace(/\s+/g, " ").trim();
       // Trane: "Statement Date: 31-AUG-26"; the boxes "Due this Month · Current · 1-30 Days · 31-60 Days · 60+ Days · Credits · Total (CAD)" with the amounts under them;
       // each line "980026908 07/27/2026 106607062 CGL005 CG01005 08/26/2026 676.24" (transaction #, invoice date, PO, sales order, reference, due date, amount due; a credit in brackets)
+      // Trent Metal (TML Supply): date, invoice # (S1525441.001), our PO, invoice amount, payments / credits, net due. The amount is the net due (the last one); a ".002" line with a minus is the credit for that invoice.
+      // Pen marks sit between the number and the PO; a minus can be missed on one of the two readings of a credit.
+      { const tm = raw.match(ST_TML_LINE);
+        if (tm) { const ref = `S${tm[2]}.${tm[3]}`; let rest = tm[4]; const po = (rest.match(/(?:^|\s)(\d{6,10})(?=\s|$)/) || [])[1]; if (po) rest = rest.replace(po, " ");
+          const am = tmAmts(rest); if (am.length && !seen.has(ref)) { let a = am[am.length - 1]; if (am.some(v => v < 0)) a = -Math.abs(a);
+            seen.add(ref); TM.n++; lines.push({ reference: ref, branch: "", date: toIso(tm[1]), code: a < 0 ? "C" : "I", amount: a, ...(po ? { po } : {}) }); last = { T, idx }; } return; }
+        const uc = raw.match(/^\W{0,3}(\d{1,2})\/(\d{2})\/(\d{2})(?!\d)\s+Unappl\w*\s+CR\b(.*)$/i);   // "12/03/25 Unapplied CR APPLY -87.52": a credit not put against an invoice yet
+        if (uc) { const ref = `UnappliedCR-${uc[1].padStart(2, "0")}${uc[2]}${uc[3]}`, am = tmAmts(uc[4]);
+          if (am.length && !seen.has(ref)) { seen.add(ref); TM.n++; lines.push({ reference: ref, branch: "", date: toIso(`${uc[1]}/${uc[2]}/${uc[3]}`), code: "C", amount: -Math.abs(am[am.length - 1]) }); last = { T, idx }; } return; }
+        const hd = idx < 10 && raw.match(/\b(\d{4})\s+(\d{2}\/\d{2}\/\d{2})(?!\d)\s*(?:\d\s*[o0]\s*f\s*\d)?\s*$/);   // the boxes at the top: customer number, statement date
+        if (hd && toIso(hd[2])) { TM.acct = TM.acct || hd[1]; TM.date = TM.date || toIso(hd[2]); }
+        if (TM.n && !/[A-Za-z]{4}/.test(raw)) { const v = tmAmts(raw); if (v.length >= 3) TM.boxes.push(v); } }   // PREV BALANCE · PAYMENTS · CREDITS · PURCHASES · SERVICE CHARGE · NEW BALANCE
       { const sd = raw.match(/Statement\s*Date\W{0,3}\s*(\d{1,2})\s*-\s*([A-Za-z]{3})\s*-\s*(\d{2,4})\b/i); if (sd) TR.date = stMonIso(sd[2], sd[1], sd[3].length === 2 ? "20" + sd[3] : sd[3]); }
       if (/Due\s*this\s*Month/i.test(raw) && /Total/i.test(raw)) { for (let j = 1; j <= 3; j++) { const vs = (L[idx + j] || "").match(/\(?\d{1,3}(?:,\d{3})*\.\d{2}\)?/g); if (!vs || vs.length < 5) continue;
           const v = vs.map(x => (/^\(/.test(x) ? -1 : 1) * Number(x.replace(/[(),]/g, ""))); TR.total = v[v.length - 1];
@@ -20073,6 +20098,10 @@ function stParse(texts, known) {
         const pick = hit.length === 1 ? hit[0] : hit.filter(l => l.marked).length === 1 ? hit.find(l => l.marked) : null;
         if (pick) { const was = pick.amount; pick.amount = Math.round((pick.amount - off) * 100) / 100; fixes.push(`${pick.reference}: read as ${money(was)}, corrected to ${money(pick.amount)} so the lines add up to the statement's total`); } } }
     lines.forEach(l => delete l.marked); }
+  if (TM.n >= 2) {   // Trent Metal: its own date; the NEW BALANCE is the last box of the row that adds up (previous balance + payments + credits + purchases)
+    const nw = lines.map(l => l.date).filter(Boolean).sort().pop(); date = TM.date || (nw ? (() => { const [y, mo] = nw.split("-").map(Number), e = new Date(y, mo, 0); return `${e.getFullYear()}-${String(e.getMonth() + 1).padStart(2, "0")}-${String(e.getDate()).padStart(2, "0")}`; })() : date);
+    const sm = Math.round(lines.reduce((a, l) => a + l.amount, 0) * 100) / 100, row = TM.boxes.find(v => Math.abs(v.slice(0, -1).reduce((a, b) => a + b, 0) - v[v.length - 1]) < 0.02) || TM.boxes.find(v => Math.abs(v[v.length - 1] - sm) < 0.02);
+    balDue = row ? row[row.length - 1] : sm; aging = null; }
   if (TR.n || TR.date) { if (TR.date) date = TR.date; if (TR.total != null) balDue = TR.total; if (TR.aging) aging = TR.aging; }   // Trane's own date, total and aging boxes
   if (aging && discount != null) aging.discount = discount;
   if (balDue != null) total = balDue;   // the statement's own BALANCE DUE is what we owe, not a TOTALS column or an aging box
@@ -20095,7 +20124,7 @@ function stParse(texts, known) {
   if (!aging && date && lines.length) { const D = new Date(date + "T12:00"), ag = { current: 0, d31_60: 0, d61_90: 0, d91_120: 0, over120: 0, from_lines: true };
     lines.forEach(l => { if (!l.date || l.code === "P") return; const d = Math.round((D - new Date(l.date + "T12:00")) / 864e5), k = d <= 30 ? "current" : d <= 60 ? "d31_60" : d <= 90 ? "d61_90" : d <= 120 ? "d91_120" : "over120"; ag[k] = Math.round((ag[k] + Number(l.amount || 0)) * 100) / 100; });
     aging = ag; }
-  return { lines, date, total: total ?? sum, aging, sum: Math.round(lines.reduce((a, l) => a + l.amount, 0) * 100) / 100, fixes };
+  return { lines, date, total: total ?? sum, aging, sum: Math.round(lines.reduce((a, l) => a + l.amount, 0) * 100) / 100, fixes, ...(TM.n >= 2 && TM.acct ? { account: TM.acct } : {}) };
 }
 function stCompare(SL, PL) {
   const A = new Map(SL.map(l => [l.reference, l])), B = new Map(PL.map(l => [l.reference, l])), byRef = new Map();
@@ -20143,7 +20172,7 @@ async function stSave(S) {
   if (!date) return alertMsg("Put in the statement date first.");
   const k = await askChoice("Save their statement?", `${R.lines.length} lines, total ${money(R.total)}, dated ${esc(stDate(date))}.${STV.id ? " It replaces the lines we had for that month (what it replaced is recorded)." : ""}`, [["yes", "Save it", true], ["", "Not now"]]);
   if (k !== "yes") return;
-  const { data, error } = await db.rpc("supplier_statement_save", { p: { supplier_id: STV.sup, statement_date: date, account: S.account || "", total: R.total, aging: R.aging, file_name: R.file, pages: R.pages, lines: R.lines } });
+  const { data, error } = await db.rpc("supplier_statement_save", { p: { supplier_id: STV.sup, statement_date: date, account: S.account || R.account || "", total: R.total, aging: R.aging, file_name: R.file, pages: R.pages, lines: R.lines } });
   if (error) return alertMsg("Not saved: " + rpcErr(error));
   if (data && R.imgs?.length) { const pg = await db.rpc("supplier_statement_pages_set", { p_statement: data, p_pages: R.imgs }); if (pg.error) console.warn("statement pages", pg.error.message); }   // its scanned pages, to view and print later
   alertMsg("Statement saved."); SINV.data = null; if (SINV.sup != null && SINV.sup !== STV.sup) { SINV.sup = STV.sup; SINV.st = 0; sinvSaveTab(); } closeInvoice(); await openSupInv();   // saved: close the window
