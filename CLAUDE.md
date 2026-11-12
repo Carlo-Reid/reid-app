@@ -319,7 +319,7 @@
 
 ## On call (dispatch board)
 
-- Who is on call each day: `on_call` table (`sync/extra/224_on_call.sql`), loaded with Nov–Dec 2026 from Carlo's Shifter calendar screenshots (top name = on call, bottom name, Adam or Dave = 2nd on call). Seed rows only fill empty days, so changes made in the app stay. Day view shows an orange "📟 On call … · 2nd: …" strip above Waiting for a day (Change = pick from drop-downs, owners/dispatch) and a 📟 tag on those people's lines. January isn't in yet.
+- Who is on call each day: `on_call` table (`sync/extra/224_on_call.sql`), loaded with Nov–Dec 2026 from Carlo's Shifter calendar screenshots (top name = on call, bottom name, Adam or Dave = 2nd on call). Seed rows only fill empty days, so changes made in the app stay. Day view shows an orange "📟 On call … · 2nd: …" strip above Waiting for a day (Change = pick from drop-downs, owners/dispatch) and a 📟 tag on those people's lines. January isn't in yet. **The on-call tech's whole box on his line is orange** (Carlo, Nov 12, 4:54 p.m.: "have the whole box orange if they are on call, not just a small spot"): the box with his picture and name (`.tl-row > header:has(.oc-tag)`) is orange (#e8590c) with white words, the 2nd on call a lighter orange (#fd7e14); the small tag in it is white with orange words. CSS only. **Not looked at in a picture and not seen on the live app.**
 
 ## Eco Man (the mascot)
 
