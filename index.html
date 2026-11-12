@@ -15368,10 +15368,21 @@ function dspCard(r, from) {
 // The timeline: hours across the top; each call sits under its arrival time and spans its arrival window.
 const hourOf = iso => { const d = new Date(iso); return d.getHours() + d.getMinutes() / 60; };
 // a person's own busy times (My calendar) on their line, under the calls
-function dspBlocksHtml(id, pos) {
-  if (!id) return ""; const hr = s => { const [a, b] = String(s).split(":").map(Number); return a + (b || 0) / 60; };
-  return (DSP.blocks || []).filter(b => b.employee_id === id).map(b => { const a = b.start ? hr(b.start) : 7, z = b.start ? (b.end ? hr(b.end) : a + 1) : 19;
-    return `<div class="tl-block ${b.st ? "tl-block-st" : ""}" style="${pos(a, z)}top:4px" title="${esc(b.name)}: ${esc(b.title)} (${b.start ? esc(winText(b.start, b.end)) : "all day"})${b.st ? ". An event on the ServiceTitan schedule." : ""}">${b.st ? "📅" : "⛔"} ${esc(b.title)} <span>${b.start ? esc(winText(b.start, b.end)) : "All day"}</span></div>`; }).join("");
+// An event (off sick, a meeting, a hold) and a call at the same time both show, side by side: each gives up part of its time on the line so
+// neither sits under the other (Carlo, Nov 12: "I do not want the event to be under the appointment or it will get missed"). The words on each
+// still say its real time. dspBlockSpans = the tech's events as hours; dspBlockFit trims the calls; dspBlocksHtml draws the event in the time the calls left.
+function dspBlockSpans(id) { if (!id) return []; const hr = s => { const [a, b] = String(s).split(":").map(Number); return a + (b || 0) / 60; };
+  return (DSP.blocks || []).filter(b => b.employee_id === id).map(b => { const a = b.start ? hr(b.start) : 7, z = b.start ? (b.end ? hr(b.end) : a + 1) : 19; return { b, a, z }; }); }
+function dspBlockFit(id, timed) { const evs = dspBlockSpans(id); if (!evs.length) return;
+  timed.forEach(p => evs.forEach(e => { const o1 = Math.max(p.a, e.a), o2 = Math.min(p.z, e.z); if (o2 - o1 < 0.05) return;   // they do not share any time
+    if (e.a <= p.a + 0.01) { if (p.a - e.a >= 0.5) return;   // the event starts at least half an hour before the call: it shows in front of the call (and after it, if it goes on)
+      const cut = Math.min((o1 + o2) / 2, o1 + 1); if (p.z - cut >= 0.25) p.a = cut; }   // they start together: the event gets the front (an hour at most), the call starts after it
+    else { const cut = e.a - p.a >= 0.5 ? e.a : Math.max((o1 + o2) / 2, o2 - 1); if (cut - p.a >= 0.25) p.z = cut; } })); }   // the call starts first: on the line it ends where the event starts
+function dspBlocksHtml(id, pos, timed) {
+  return dspBlockSpans(id).map(({ b, a, z }) => { let segs = [[a, z]];
+    (timed || []).forEach(p => { segs = segs.flatMap(([x, y]) => p.z <= x + 0.01 || p.a >= y - 0.01 ? [[x, y]] : [[x, Math.min(y, p.a)], [Math.max(x, p.z), y]].filter(q => q[1] - q[0] > 0.1)); });
+    if (!segs.length) segs = [[a, z]];
+    return segs.map(([x, y]) => `<div class="tl-block ${b.st ? "tl-block-st" : ""}${segs.length > 1 || y - x < z - a - 0.01 ? " tl-block-fit" : ""}" style="${pos(x, y)}top:4px" title="${esc(b.name)}: ${esc(b.title)} (${b.start ? esc(winText(b.start, b.end)) : "all day"})${b.st ? ". An event on the ServiceTitan schedule." : ""}${y - x < z - a - 0.01 ? " It is drawn shorter here so the call at the same time shows too." : ""}">${b.st ? "📅" : "⛔"} ${esc(b.title)} <span>${b.start ? esc(winText(b.start, b.end)) : "All day"}</span></div>`).join(""); }).join("");
 }
 function dspTimeline(rows, techs, none, colOf, mins, isToday) {
   // the whole day is on the board; the screen shows a few hours of it (dspHrs) and you scroll for the rest
@@ -15400,6 +15411,7 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
       let a = hourOf(r.arrival_start), z = Math.max(a + 0.75, r.arrival_end ? hourOf(r.arrival_end) : a + (r.duration || 60) / 60);
       if (z <= h0 + 0.01) { a = h0; z = h0 + 0.75; } else if (a >= h1 - 0.01) { a = h1 - 0.75; z = h1; }   // outside the hours shown: at the edge
       return { r, a, z }; }).sort((x, y) => x.a - y.a);
+    dspBlockFit(id, timed);   // a call at the same time as an event: both show, each a little shorter
     // each call's front edge shows the area colour of the tech's call before it, the back edge the call after it (Carlo, Nov 7)
     DSP_NB.clear(); timed.forEach((p, k) => { const c = x => x ? dspKey(x.r, "area").color : null; DSP_NB.set(p.r.visit_id, { prev: c(timed[k - 1]), next: c(timed[k + 1]) }); });
     const anyTime = list.filter(r => !r.arrival_start);
@@ -15415,7 +15427,7 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
       return `<section class="dcol tl-row ${extra} ${id && DSP.techSel === id ? "tech-sel" : ""} ${DSP.techSel != null && DSP.techSel !== id ? "tech-dim" : ""}" data-col="${id}" style="--lanes:${Math.max(1, lanes.length)}">
         <header ${id ? `class="tl-tech" data-tech="${id}" role="button" tabindex="0" title="Show ${esc(name)}'s day on the map with the driving route"` : ""}>${empPhoto(id, "tl-photo")}<strong>${esc(name)}</strong>${dspOnCallTag(name)}<span class="quiet tl-sub">${sub}${warn && overN ? ` <span class="tl-warn" title="Calls with times that overlap">${overN} overlap</span>` : ""}</span></header>
         <div class="tl-any">${anyTime.map(r => dspTlCard(r, id)).join("") || (timed.length ? "" : `<span class="quiet tl-empty">${id ? "Free" : "Drop here to unassign"}</span>`)}</div>
-        <div class="tl-track" style="--hours:${span}">${nowLine}${dspBlocksHtml(id, pos)}${html}</div>
+        <div class="tl-track" style="--hours:${span}">${nowLine}${dspBlocksHtml(id, pos, timed)}${html}</div>
       </section>`;
     }
     clusters.forEach(c => {
@@ -15453,7 +15465,7 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
     return `<section class="dcol tl-row ${extra} ${id && DSP.techSel === id ? "tech-sel" : ""} ${DSP.techSel != null && DSP.techSel !== id ? "tech-dim" : ""}" data-col="${id}" style="--lanes:1">
       <header ${id ? `class="tl-tech" data-tech="${id}" role="button" tabindex="0" title="Show ${esc(name)}'s day on the map with the driving route"` : ""}>${empPhoto(id, "tl-photo")}<strong>${esc(name)}</strong>${dspOnCallTag(name)}<span class="quiet tl-sub">${sub}${warn && overN ? ` <span class="tl-warn" title="Calls with times that overlap">${overN} overlap</span>` : ""}</span></header>
       <div class="tl-any ${anyTime.length > 1 ? "tl-any-" + am : ""}">${anyHtml}</div>
-      <div class="tl-track" style="--hours:${span}">${nowLine}${dspBlocksHtml(id, pos)}${html}</div>
+      <div class="tl-track" style="--hours:${span}">${nowLine}${dspBlocksHtml(id, pos, timed)}${html}</div>
     </section>`;
   };
   return `<div class="tl-head"><div class="tl-corner">Tech</div><div class="tl-any-head">Any time</div>
