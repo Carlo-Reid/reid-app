@@ -6989,6 +6989,9 @@ body[data-page="supplier-invoices"] .sci-apps > .sci-app { grid-row: span 2; gri
 body[data-page="supplier-invoices"] .apb.sci-big { width: 240px; min-height: 204px; height: 100%; gap: 8px; } body[data-page="supplier-invoices"] .sci-big .apb-tn { font-size: calc(19px * var(--fs, 1)); overflow-wrap: break-word; } body[data-page="supplier-invoices"] .sci-big .sci-app-k { font-size: calc(15px * var(--fs, 1)); } body[data-page="supplier-invoices"] .sci-big .sci-app-n { font-size: calc(16px * var(--fs, 1)); overflow-wrap: anywhere; }
 /* Supplier invoices: a picked month opens its statement page; the table of that month is not shown under it (Carlo, Nov 12) */
 article.sinv.sinv-monthpop .sinv-bar, article.sinv.sinv-monthpop .staff-wrap:has(> .sinv-t) { display: none; }
+/* Customer page, Photos and files: the pictures and the documents each have their own part (Carlo, Nov 12) */
+.files-part { border: 1px solid var(--line, #d9dfe5); border-radius: 8px; padding: 12px 14px 14px; background: var(--panel, #fff); } .files-part + .files-part { margin-top: 16px; }
+.files-h { margin: 0 0 8px; font-size: calc(18px * var(--fs, 1)); font-weight: 800; color: #23415f; display: flex; gap: 10px; align-items: baseline; } .files-h .quiet { font-size: calc(14px * var(--fs, 1)); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -9830,9 +9833,20 @@ async function fillFiles() {
   FILES = fresh ? { ...FILES, shown: 0 } : { rows: data, shown: 0, urls: new Map(), key, t: Date.now() };
   setCount(data.length ? Number(data[0].total_count) : 0);
   if (!data.length) { box.innerHTML = `<div class="quiet">No photos or files for ${lid ? "this address" : "this customer"} yet.</div>`; return; }
-  box.innerHTML = `<div id="files-list"></div><div class="files-more"></div>`;
-  do { await moreFiles(); } while ($("#files-list") && FILES.shown < keepShown && FILES.shown < FILES.rows.length);
+  // pictures and documents each have their own part (Carlo, Nov 12: "they should not be in the same spot")
+  FILES.pics = []; FILES.docs = []; data.forEach((f, i) => (isPic(f) ? FILES.pics : FILES.docs).push(i));
+  const nOf = (n, a, b) => `${n.toLocaleString()} ${n === 1 ? a : b}`;
+  box.innerHTML = `<div class="files-part files-part-pics"><h3 class="files-h">Pictures <span class="quiet">${nOf(FILES.pics.length, "picture", "pictures")}</span></h3>${FILES.pics.length ? `<div id="files-list"></div><div class="files-more"></div>` : `<div class="quiet">No pictures for ${lid ? "this address" : "this customer"} yet.</div>`}</div>
+    <div class="files-part files-part-docs"><h3 class="files-h">Documents <span class="quiet">${nOf(FILES.docs.length, "document", "documents")}</span></h3>${FILES.docs.length ? `<div id="files-docs"><div class="quiet">Loading…</div></div>` : `<div class="quiet">No documents for ${lid ? "this address" : "this customer"} yet.</div>`}</div>`;
+  if (FILES.pics.length) do { await moreFiles(); } while ($("#files-list") && FILES.shown < keepShown && FILES.shown < FILES.pics.length);
+  if (FILES.docs.length) { const rows = FILES.docs.map(i => FILES.rows[i]); await signFiles(rows); const d = $("#files-docs"); if (!d || Number($("#files-box")?.dataset.cust) !== cid) return;
+    let last, html = "";
+    rows.forEach(f => { if (String(f.job_id) !== last) { if (last !== undefined) html += `</div>`; html += filesJobHead(f) + `<div class="files-grid">`; last = String(f.job_id); }
+      const url = FILES.urls.get(tileKey(f));
+      html += `<a class="file-tile file-doc" ${url ? `href="${esc(url)}" target="_blank" rel="noopener"` : ""} title="${esc(f.file_name)}"><span class="file-ext">${esc(((f.file_name.match(/\.([a-z0-9]{1,5})$/i) || [])[1] || (f.mime_type || "file").split("/").pop()).toUpperCase().slice(0, 5))}</span><span class="file-name">${esc(f.file_name)}</span>${url ? "" : `<span class="quiet">not available</span>`}</a>`; });
+    d.innerHTML = html + `</div>`; }
 }
+const filesJobHead = f => `<div class="files-job" data-job="${f.job_id}">Job ${esc(f.job_number)} · ${fmtDate(f.job_date)}${f.job_type ? " · " + esc(f.job_type) : ""}</div>`;
 const isPic = f => /^image\//.test(f.mime_type || "") && (!/heic|heif|tiff/i.test(f.mime_type) || f.thumb_key);
 const tileKey = f => isPic(f) && f.thumb_key ? f.thumb_key : f.storage_key;   // the small preview when there is one
 async function signFiles(rows, full) {
@@ -9844,18 +9858,18 @@ async function signFiles(rows, full) {
 }
 async function moreFiles() {
   const list = $("#files-list"); if (!list) return;
-  const from = FILES.shown, rows = FILES.rows.slice(from, from + 48); FILES.shown += rows.length;
+  const from = FILES.shown, idx = (FILES.pics || []).slice(from, from + 48), rows = idx.map(i => FILES.rows[i]); FILES.shown += rows.length;
   await signFiles(rows);
   if (!$("#files-list")) return;
   let lastJob = list.querySelector(".files-job:last-of-type")?.dataset.job, html = "";
   rows.forEach((f, k) => {
-    const i = from + k, url = FILES.urls.get(tileKey(f));
+    const i = idx[k], url = FILES.urls.get(tileKey(f));
     if (String(f.job_id) !== lastJob) {
       if (lastJob !== undefined && html) html += `</div>`;
-      html += `<div class="files-job" data-job="${f.job_id}">Job ${esc(f.job_number)} · ${fmtDate(f.job_date)}${f.job_type ? " · " + esc(f.job_type) : ""}</div><div class="files-grid">`;
+      html += filesJobHead(f) + `<div class="files-grid">`;
       lastJob = String(f.job_id);
     } else if (k === 0) html += `<div class="files-grid">`;
-    html += isPic(f) && url
+    html += url
       ? `<button class="file-tile" type="button" data-fi="${i}" title="${esc(f.file_name)}${f.taken_by ? " · taken by " + esc(f.taken_by) : ""}"><img loading="lazy" alt="${esc(f.file_name)}" src="${esc(url)}">${f.taken_by ? `<span class="file-by">📷 ${esc(f.taken_by)}</span>` : ""}</button>`
       : `<a class="file-tile file-doc" ${url ? `href="${esc(url)}" target="_blank" rel="noopener"` : ""} title="${esc(f.file_name)}"><span class="file-ext">${esc(((f.file_name.match(/\.([a-z0-9]{1,5})$/i) || [])[1] || (f.mime_type || "file").split("/").pop()).toUpperCase().slice(0, 5))}</span><span class="file-name">${esc(f.file_name)}</span>${url ? "" : `<span class="quiet">not available</span>`}</a>`;
   });
@@ -9864,7 +9878,7 @@ async function moreFiles() {
   // a job split over two "show more" pages: join its two grids
   list.querySelectorAll(".files-grid + .files-grid").forEach(g => { g.previousElementSibling.append(...g.children); g.remove(); });
   list.querySelectorAll("[data-fi]:not([data-wired])").forEach(b => { b.dataset.wired = 1; b.addEventListener("click", () => showFile(Number(b.dataset.fi))); });
-  const left = FILES.rows.length - FILES.shown, more = document.querySelector(".files-more");
+  const left = FILES.pics.length - FILES.shown, more = document.querySelector(".files-more");
   more.innerHTML = left > 0 ? `<button class="btn quiet-btn" type="button">Show ${Math.min(48, left)} more <span class="quiet">(${left} left)</span></button>` : "";
   more.querySelector("button")?.addEventListener("click", moreFiles);
 }
