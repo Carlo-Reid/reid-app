@@ -3238,6 +3238,7 @@ button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 
   .live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); display: inline-block; }
   .live-dot.on { background: var(--green); }
   .dsp-wait { background: var(--amber-wash); border: 2px solid var(--amber); border-radius: var(--radius-m); padding: 8px 12px; }
+  .dsp-wait.dsp-pastopen { background: #fbf1f0; border-color: #b3261e; margin-bottom: 4px; }
   .dsp-wait summary { cursor: pointer; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
   .dsp-wait-list { display: flex; gap: 8px; overflow-x: auto; padding: 10px 2px 4px; }
   .dsp-wait-list .dc { min-width: 220px; max-width: 240px; }
@@ -15294,6 +15295,7 @@ async function loadDispatch() {
   if (!document.querySelector(".dsp, .loading") || DSP.date !== d) return;
   if (day.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the board</h2>${esc(rpcErr(day.error))}</div></div>`; return; }
   DSP.rows = day.data; DSP.waiting = wait.error ? [] : wait.data;
+  { const po = await db.rpc("dispatch_past_open", { p_today: dspToday() }); DSP.pastOpen = po.error ? [] : (po.data || []).map(x => Object.assign(x, { pastOpen: true })); if (DSP.date !== d) return; }
   { const n = await db.rpc("board_notes_for", { p_date: d }); DSP.notes = n.error ? [] : n.data || []; if (DSP.date !== d) return; }
   { const b = await db.rpc("staff_blocks_list", { p_from: d, p_to: d }); DSP.blocks = b.error ? [] : b.data || []; if (DSP.date !== d) return; }
   { const b = await db.rpc("install_holds_list", { p_from: d, p_to: d }); DSP.holds = b.error ? [] : b.data || []; if (DSP.date !== d) return; }
@@ -15357,7 +15359,7 @@ function dspTint(r) { const c = typeof dspMarkColor === "function" ? dspMarkColo
   if (!c || c === MAP_GREY) return ["", "", ""];
   const c2 = dspColor2(r, c)?.color;
   return c2 ? ["zc zc2", `style="--zc:${esc(c)};--zc2:${esc(c2)}"`, `;--zc:${esc(c)};--zc2:${esc(c2)}`] : ["zc", `style="--zc:${esc(c)}"`, `;--zc:${esc(c)}`]; }
-const dspCall = id => DSP.rows.find(r => r.visit_id === id) || DSP.waiting.find(r => r.visit_id === id);
+const dspCall = id => DSP.rows.find(r => r.visit_id === id) || DSP.waiting.find(r => r.visit_id === id) || (DSP.pastOpen || []).find(r => r.visit_id === id);
 const dspIsWalk = r => /^walk the site/i.test(r.summary || "");   // a walk booked after a sale (a visit on the install job)
 function dspCard(r, from) {
   const helpers = r.techs.filter(t => t.id !== from).map(t => t.name), arr = dspArrive(r);
@@ -15672,9 +15674,10 @@ function openBoardNote(o) {
           .map(([k, t]) => `<option value="${k}" ${F.repeat === k ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
         ${F.repeat !== "none" ? `<label>Until (optional)<input type="date" name="until" value="${esc(F.until)}"></label>` : ""}</div>
       <div class="pp-nf-row"><button class="btn" type="submit">Save</button><button class="link" type="button" data-bn-x>Cancel</button>
-        ${n ? (n.repeat !== "none" ? `<button class="link danger" type="button" data-bn-del="day">Delete just ${esc(longDate(DSP.date))}</button><button class="link danger" type="button" data-bn-del="all">Delete every time</button>`
+        ${n ? (n.repeat !== "none" ? `<button class="link danger" type="button" data-bn-del="day">Delete just ${esc(longDate(DSP.date))}</button><button class="link danger" type="button" data-bn-del="all">${n.start_date < dspToday() ? "Delete it from today on" : "Delete every time"}</button>`
                                    : `<button class="link danger" type="button" data-bn-del="all">Delete</button>`) : ""}
         <span class="staff-msg ${err ? "err" : "ok"}">${esc(msg || "")}</span></div>
+      ${n && n.repeat !== "none" && n.start_date < dspToday() && DSP.date >= dspToday() ? `<div class="quiet">This one repeats. A change counts from today on. The days in the past stay as they were.</div>` : ""}
       ${n?.by ? `<div class="quiet">Added by ${esc(n.by)}</div>` : ""}</form>`;
     const f = d.querySelector("form"), keep = () => { F.body = f.body.value; F.date = f.date.value || F.date; F.start = f.start.value; F.end = f.end.value; F.repeat = f.repeat.value; F.until = f.until ? f.until.value : F.until; };
     d.querySelectorAll("[data-bn-kind]").forEach(b => b.addEventListener("click", () => { keep(); F.kind = b.dataset.bnKind; draw(); }));
@@ -15683,12 +15686,12 @@ function openBoardNote(o) {
     f.repeat.addEventListener("change", () => { keep(); draw(); });
     d.querySelector("[data-bn-x]").addEventListener("click", () => d.remove());
     d.querySelectorAll("[data-bn-del]").forEach(b => b.addEventListener("click", async () => { if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure? " + b.textContent; return; }
-      const { error } = await db.rpc("delete_board_note", { p_id: n.id, p_day: b.dataset.bnDel === "day" ? DSP.date : null });
+      const { error } = b.dataset.bnDel === "day" ? await db.rpc("delete_board_note", { p_id: n.id, p_day: DSP.date }) : await db.rpc("board_note_stop", { p_id: n.id, p_today: dspToday() });
       if (error) return draw("Not deleted: " + rpcErr(error), true); d.remove(); loadDispatch(); }));
     f.addEventListener("submit", async e => { e.preventDefault(); keep();
       if (!F.techs.length) return draw("Pick at least one tech.", true);
       if (!F.start || !F.end || F.end <= F.start) return draw("The end time has to be after the start time.", true);
-      const { error } = await db.rpc("save_board_note", { p_id: n ? n.id : null, p: { kind: F.kind, body: F.body.trim(), start_date: F.date, start: F.start, end: F.end, repeat: F.repeat, until: F.repeat === "none" ? null : F.until || null, techs: F.techs } });
+      const { error } = await db.rpc(n ? "board_note_change" : "save_board_note", { ...(n ? { p_id: n.id, p_today: dspToday() } : { p_id: null }), p: { kind: F.kind, body: F.body.trim(), start_date: F.date, start: F.start, end: F.end, repeat: F.repeat, until: F.repeat === "none" ? null : F.until || null, techs: F.techs } });
       if (error) return draw((/PGRST202|could not find/i.test(error.message || "") ? "Run RUN SETUP NOW.bat first (file 99u)." : "Not saved: " + rpcErr(error)), true);
       d.remove(); if (F.date !== DSP.date) DSP.date = F.date; loadDispatch(); });
     if (n && DSP.date < dspToday()) {          // from a day in the past: it can be read, not changed or deleted
@@ -15696,7 +15699,7 @@ function openBoardNote(o) {
       f.querySelectorAll("button[type=submit], [data-bn-del], [data-bn-all]").forEach(x => x.remove());
       f.querySelectorAll("input, textarea, select, [data-bn-kind], [data-bn-tech]").forEach(x => { x.disabled = true; });
       f.querySelector("[data-bn-x]").textContent = "Close"; f.querySelector("[data-bn-x]").className = "btn";
-      f.querySelector(".staff-msg").className = "staff-msg"; f.querySelector(".staff-msg").textContent = "This day is in the past. It can not be changed or deleted any more.";
+      f.querySelector(".staff-msg").className = "staff-msg"; f.querySelector(".staff-msg").textContent = "This day is in the past. It can not be changed or deleted here." + (n.repeat !== "none" ? " It repeats: open it on today's board to change it from today on." : "");
       return; }
     setTimeout(() => f.body.focus({ preventScroll: true }), 0);
   };
@@ -15956,6 +15959,9 @@ function renderDispatch() {
       ${dspLegendRow(rows)}
     </div>
     ${dspOnCallStrip()}
+    ${(DSP.pastOpen || []).length && DSP.date >= dspToday() ? `<details class="dsp-wait dsp-pastopen" ${DSP.pastOpenShut ? "" : "open"}><summary><strong>Past calls not complete yet</strong> <span class="count">${DSP.pastOpen.length}</span>
+        <span class="quiet">Their day has passed and they were not done. Drag one onto a tech to book it for ${isToday ? "today" : "this day"}, or click it to pick the time.</span></summary>
+      <div class="dsp-wait-list">${DSP.pastOpen.map(r => `<div class="dw-item"><span class="dw-age old" title="It was booked for ${esc(fmtDate(String(r.scheduled_date).slice(0, 10)))}">${esc(new Date(String(r.scheduled_date).slice(0, 10) + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric" }))}</span>${dspCard(r, 0)}</div>`).join("")}</div></details>` : ""}
     ${DSP.waiting.length ? `<details class="dsp-wait" ${DSP.waitOpen ? "open" : ""}><summary><strong>Waiting for a day</strong> <span class="count">${DSP.waiting.length}</span>
         <span class="quiet">Drag one onto a tech to book it for ${isToday ? "today" : "this day"}, or click it to pick the time.</span></summary>
       <div class="dsp-wait-list" data-col="wait">${DSP.waiting.slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map(r => { const d = r.created_at ? Math.floor((Date.now() - Date.parse(r.created_at)) / 864e5) : null;
@@ -15990,7 +15996,8 @@ function renderDispatch() {
   document.querySelectorAll(".dc-pile").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); openPile(b); }));
   $("#dsp-cby")?.addEventListener("change", e => { DSP.colorBy = e.target.value; saveDspMap(); if (DSP.mp && DSP.mp.same !== false) DSP.mp.group = DSP.colorBy; renderDispatch(); });
   if (DSP.map) mountDspMap();
-  $(".dsp-wait")?.addEventListener("toggle", e => { DSP.waitOpen = e.target.open; saveDsp(); });
+  $(".dsp-wait:not(.dsp-pastopen)")?.addEventListener("toggle", e => { DSP.waitOpen = e.target.open; saveDsp(); });
+  $(".dsp-pastopen")?.addEventListener("toggle", e => { DSP.pastOpenShut = !e.target.open; });
   document.querySelectorAll(".dc").forEach(c => {
     c.addEventListener("click", () => { DSP.sel = Number(c.dataset.visit); document.querySelectorAll(".dc.sel").forEach(x => x.classList.remove("sel"));
       document.querySelectorAll(`.dc[data-visit="${DSP.sel}"]`).forEach(x => x.classList.add("sel")); renderDspPanel(); if (DSP.map) drawDspMap(); });
@@ -16013,20 +16020,22 @@ function renderDispatch() {
 }
 // Nothing from the past can be moved on the board (Carlo, Nov 12): a call, a note or a held spot on a day before today.
 const dspToday = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
-const dspPast = r => !!(r && r.scheduled_date) && String(r.scheduled_date).slice(0, 10) < dspToday();
+// A past call that was not done sits in "Past calls not complete yet" at the top of the board (pastOpen): from there it can be moved.
+const dspPast = r => !!(r && r.scheduled_date) && !r.pastOpen && String(r.scheduled_date).slice(0, 10) < dspToday();
 async function dropCall(vid, from, to) {
   if (dspPast(dspCall(vid))) return dspToast("This call is from a day in the past. It can not be moved any more.");
   // a call that is done can not be moved from the board any more (Carlo, Nov 12)
   if ((DSP.rows || []).find(x => x.visit_id === vid)?.status === "completed") return dspToast("This call is done. It can not be moved any more.");
   const r = dspCall(vid); if (!r) return;
-  const waiting = !r.scheduled_date;
+  const waiting = !r.scheduled_date || !!r.pastOpen;
   if (!waiting && from === to) return;
   let techs = r.techs.map(t => t.id);
   const at = techs.indexOf(from);
   if (from) techs = techs.filter(x => x !== from);
-  if (to && !techs.includes(to)) { if (at >= 0) techs.splice(at, 0, to); else techs.push(to); }
+  if (r.pastOpen) { if (to && !techs.includes(to)) techs = [to].concat(techs.slice(1)); }       // from the past: the tech it is dropped on takes the lead's place
+  else if (to && !techs.includes(to)) { if (at >= 0) techs.splice(at, 0, to); else techs.push(to); }
   if (waiting) {
-    const m = await db.rpc("move_call", { p_visit_id: vid, p_date: DSP.date, p_start: null, p_end: null, p_method: "drag" });
+    const m = await db.rpc("move_call", { p_visit_id: vid, p_date: DSP.date, p_start: r.pastOpen && r.arrival_start ? hhmm(r.arrival_start) : null, p_end: r.pastOpen && r.arrival_end ? hhmm(r.arrival_end) : null, p_method: "drag" });
     if (m.error) return dspToast("Not moved: " + rpcErr(m.error));
   }
   const before = r.techs.map(t => t.id);
@@ -16102,7 +16111,7 @@ function renderDspPanel() {
     ${done ? "" : `
     <details class="dp-movebox" ${DSP.moveOpen === r.visit_id ? "open" : ""}><summary>Change time</summary>
     <div class="dp-move">
-      <input type="date" id="dp-date" value="${esc(r.scheduled_date || DSP.date)}" aria-label="Day">
+      <input type="date" id="dp-date" value="${esc(r.pastOpen ? DSP.date : r.scheduled_date || DSP.date)}" aria-label="Day">
       <div class="bk-chips">${BOOK.windows.map(([a, b]) => `<button class="chip small" type="button" data-dp-win="${a}-${b}" aria-pressed="${!!curWin && curWin[0] === a && curWin[1] === b}">${winText(a, b)}</button>`).join("")}
         <button class="chip small" type="button" data-dp-win="any" aria-pressed="${!curWin && !!r.scheduled_date}">Any time</button></div>
       <div class="bk-times">Or <input type="time" id="dp-start" step="900" value="${curWin ? curWin[0] : ""}" aria-label="From"> to <input type="time" id="dp-end" step="900" value="${curWin ? curWin[1] : ""}" aria-label="To">
@@ -16124,7 +16133,7 @@ function renderDspPanel() {
       <button class="chip small danger-chip" type="button" data-dp-reason="cancelled">Cancel the call…</button>` : ""}</div>
     <form class="dp-reason hidden" id="dp-reason"><textarea rows="2" maxlength="2000" required></textarea>
       <button class="btn" type="submit"></button> <button class="link" type="button" data-dp-reason-x>Never mind</button></form>`}
-    ${r.status !== "completed" && dspPast(r) ? `<p class="dp-locked">This call is on a day in the past. It can not be moved from the board any more. If the work still has to be done, press “Book another visit on this job”.</p>` : ""}
+    ${r.status !== "completed" && dspPast(r) ? `<p class="dp-locked">This call is on a day in the past. It can not be moved from here. If it was not done, it is in “Past calls not complete yet” at the top of today's board. Move it from there.</p>` : ""}
     ${r.status === "completed" ? `<p class="dp-locked">✓ This call is done. It can not be moved or changed from the board any more.</p>` : ""}
     ${r.status === "cancelled" || (r.status === "completed" && ME.role === "owner") ? `<div class="bk-chips"><button class="chip small" type="button" data-dp-status="scheduled">${r.status === "completed" ? "Marked done by mistake? Put it back on the schedule" : "Put it back on the schedule"}</button></div>` : ""}
     <div class="staff-msg" id="dp-msg" role="status"></div>`;
