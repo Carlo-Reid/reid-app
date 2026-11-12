@@ -10232,9 +10232,7 @@ function noteHtml(n, hide, job, rank, pinCount) {
   const pinTools = !can("notes.edit") || rank === undefined ? "" : n.pinned
     ? `${rank > 0 ? `<button class="link" data-pin-move="up" data-note-id="${n.id}" title="Move up" aria-label="Move pinned note up">&uarr; Up</button>` : ""}${rank < pinCount - 1 ? `<button class="link" data-pin-move="down" data-note-id="${n.id}" title="Move down" aria-label="Move pinned note down">&darr; Down</button>` : ""}<button class="link" data-pin-set="0" data-note-id="${n.id}">Unpin</button>`
     : `<button class="link" data-pin-set="1" data-note-id="${n.id}">Pin</button>`;
-  // A note from the past (written before today) can not be changed or deleted any more; owners keep both, to fix a mistake.
-  const past = !!n.created_at && new Date(n.created_at).toDateString() !== new Date().toDateString() && ME?.role !== "owner";
-  const actions = `<span class="note-actions"><button class="link" type="button" data-copy-note="${n.id ?? ""}" title="Copy this note">Copy</button>${pinTools}${past ? "" : can("notes.edit") && rank !== undefined ? `<button class="link" data-edit-note="${n.id}">Edit</button>` : ""}${!past && can("notes.delete") && rank !== undefined ? `<button class="link danger" data-delete-note="${n.id}">Delete</button>` : ""}</span>`;
+  const actions = `<span class="note-actions"><button class="link" type="button" data-copy-note="${n.id ?? ""}" title="Copy this note">Copy</button>${pinTools}${can("notes.edit") && rank !== undefined ? `<button class="link" data-edit-note="${n.id}">Edit</button>` : ""}${can("notes.delete") && rank !== undefined ? `<button class="link danger" data-delete-note="${n.id}">Delete</button>` : ""}</span>`;
   const pinStyle = n.pinned && rank != null ? ` style="--pin:${pinColor(rank)}"` : "";
   return `<div class="note${n.pinned ? " pin" : ""}${n.fresh ? " fresh" : ""}${hide === true ? " hidden" : ""}"${pinStyle} data-note="${n.id}">${n.pinned ? `<span class="pin-label">Pinned${rank != null ? " " + (rank + 1) : ""}</span>` : ""}${jobLabel}<span class="body">${n.source === "podium" ? podiumBody(n.body) : esc(n.body)}</span>${n.source === "podium" && n.id && noteRecCan() && /call duration|a call was|voicemail/i.test(n.body || "") ? noteRecSlot(n.id) : ""}<span class="when"><b class="ndate">${fmtDate(n.created_at)}</b>${who ? ", by " + esc(who) : ""}${actions}</span></div>`;
 }
@@ -15363,7 +15361,7 @@ const dspCall = id => DSP.rows.find(r => r.visit_id === id) || DSP.waiting.find(
 const dspIsWalk = r => /^walk the site/i.test(r.summary || "");   // a walk booked after a sale (a visit on the install job)
 function dspCard(r, from) {
   const helpers = r.techs.filter(t => t.id !== from).map(t => t.name), arr = dspArrive(r);
-  return `<div class="dc ${arr?.cls || ""} st-${r.status} pr-${r.priority} ${DSP.sel === r.visit_id ? "sel" : ""} ${dspTint(r)[0]}" ${dspTint(r)[1]} draggable="${r.status === "completed" ? "false" : "true"}" tabindex="0" data-visit="${r.visit_id}" data-from="${from}">
+  return `<div class="dc ${arr?.cls || ""} st-${r.status} pr-${r.priority} ${DSP.sel === r.visit_id ? "sel" : ""} ${dspTint(r)[0]}" ${dspTint(r)[1]} draggable="${r.status === "completed" || dspPast(r) ? "false" : "true"}" tabindex="0" data-visit="${r.visit_id}" data-from="${from}">
     <div class="dc-time">${r.scheduled_date ? esc(winText(r.arrival_start, r.arrival_end)) : "Not booked yet"}${r.priority !== "normal" ? ` <span class="dc-prio">${r.priority === "emergency" ? "Emergency" : "High"}</span>` : ""}</div>
     <div class="dc-name">${esc(r.customer_name)}</div>
     ${arr ? `<div class="dc-arr">${esc(arr.text)}</div>` : ""}
@@ -15693,6 +15691,13 @@ function openBoardNote(o) {
       const { error } = await db.rpc("save_board_note", { p_id: n ? n.id : null, p: { kind: F.kind, body: F.body.trim(), start_date: F.date, start: F.start, end: F.end, repeat: F.repeat, until: F.repeat === "none" ? null : F.until || null, techs: F.techs } });
       if (error) return draw((/PGRST202|could not find/i.test(error.message || "") ? "Run RUN SETUP NOW.bat first (file 99u)." : "Not saved: " + rpcErr(error)), true);
       d.remove(); if (F.date !== DSP.date) DSP.date = F.date; loadDispatch(); });
+    if (n && DSP.date < dspToday()) {          // from a day in the past: it can be read, not changed or deleted
+      f.querySelector("h3").textContent = F.kind === "hold" ? "A held spot from the past" : "A note from the past";
+      f.querySelectorAll("button[type=submit], [data-bn-del], [data-bn-all]").forEach(x => x.remove());
+      f.querySelectorAll("input, textarea, select, [data-bn-kind], [data-bn-tech]").forEach(x => { x.disabled = true; });
+      f.querySelector("[data-bn-x]").textContent = "Close"; f.querySelector("[data-bn-x]").className = "btn";
+      f.querySelector(".staff-msg").className = "staff-msg"; f.querySelector(".staff-msg").textContent = "This day is in the past. It can not be changed or deleted any more.";
+      return; }
     setTimeout(() => f.body.focus({ preventScroll: true }), 0);
   };
   draw();
@@ -15900,7 +15905,7 @@ function dspTlCard(r, from, style = "", cls = "") {
   const helpers = r.techs.filter(t => t.id !== from).map(t => t.name);
   const tip = [winText(r.arrival_start, r.arrival_end), r.customer_name, [r.city, r.job_type].filter(Boolean).join(" · "), r.summary, helpers.length ? "With " + helpers.join(", ") : "", VISIT_STATUS[r.status] || r.status, dspArrive(r)?.text || ""].filter(Boolean).join("\n");
   const tint = dspTint(r), arr = dspArrive(r);
-  return `<div class="dc tl-card ${cls} ${arr?.cls || ""} st-${r.status} pr-${r.priority} ${DSP.sel === r.visit_id ? "sel" : ""} ${tint[0]}${nb ? " nb" : ""}${DSP.opt?.flags?.has(r.visit_id) ? " oz" : ""}" style="${style}${tint[2]}${nbStyle}" draggable="${r.status === "completed" ? "false" : "true"}" tabindex="0"
+  return `<div class="dc tl-card ${cls} ${arr?.cls || ""} st-${r.status} pr-${r.priority} ${DSP.sel === r.visit_id ? "sel" : ""} ${tint[0]}${nb ? " nb" : ""}${DSP.opt?.flags?.has(r.visit_id) ? " oz" : ""}" style="${style}${tint[2]}${nbStyle}" draggable="${r.status === "completed" || dspPast(r) ? "false" : "true"}" tabindex="0"
       data-visit="${r.visit_id}" data-from="${from}" title="${esc(tip)}">
     <div class="dc-name">${DSP.opt?.flags?.has(r.visit_id) ? `<span class="dc-oz" title="Outside this tech's area for the day: see ✨ Optimize">⚠</span>` : ""}${r.priority !== "normal" ? `<span class="dc-prio">${r.priority === "emergency" ? "!!" : "!"}</span>` : ""}${esc(r.customer_name)}</div>
     ${arr ? `<div class="dc-arr">${esc(arr.text)}</div>` : `<div class="dc-sub">${esc(winText(r.arrival_start, r.arrival_end))} · ${esc(r.city || "")}</div>`}
@@ -16006,7 +16011,11 @@ function renderDispatch() {
     });
   });
 }
+// Nothing from the past can be moved on the board (Carlo, Nov 12): a call, a note or a held spot on a day before today.
+const dspToday = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+const dspPast = r => !!(r && r.scheduled_date) && String(r.scheduled_date).slice(0, 10) < dspToday();
 async function dropCall(vid, from, to) {
+  if (dspPast(dspCall(vid))) return dspToast("This call is from a day in the past. It can not be moved any more.");
   // a call that is done can not be moved from the board any more (Carlo, Nov 12)
   if ((DSP.rows || []).find(x => x.visit_id === vid)?.status === "completed") return dspToast("This call is done. It can not be moved any more.");
   const r = dspCall(vid); if (!r) return;
@@ -16080,7 +16089,7 @@ function renderDspPanel() {
     ${r.summary && r.summary.trim().toLowerCase() !== String(r.job_type || "").trim().toLowerCase() ? `<div>${esc(r.summary)}</div>` : ""}
     <div class="dp-when"><span class="vstat ${r.status}">${esc(VISIT_STATUS[r.status] || r.status)}</span>
       ${r.scheduled_date ? esc(dayText(r.scheduled_date)) + ", " + esc(winText(r.arrival_start, r.arrival_end)) : "Not booked yet"}${r.duration ? " · " + durText(r.duration) : ""}</div>
-    ${done ? "" : dspOptBox(r)}
+    ${done || dspPast(r) ? "" : dspOptBox(r)}
     ${(() => { const k = dspKey(r), two = dspColor2(r, k.color), b = r.border_zone ? zoneByKey(r.border_zone) : null;
       return `<details class="dp-zonebox" ${DSP.zoneOpen === r.visit_id || DSP.zoneEdit === r.visit_id ? "open" : ""}><summary class="dp-zone"><span class="dm-dot" style="background:${esc(k.color)}"></span>${two ? `<span class="dm-dot" style="background:${esc(two.color)}"></span>` : ""}
         <span>Zone: <b>${esc(k.label)}</b>${two ? ` · ↔ ${esc(two.name)}` : ""}</span></summary><div class="dp-zonein">
@@ -16115,9 +16124,11 @@ function renderDspPanel() {
       <button class="chip small danger-chip" type="button" data-dp-reason="cancelled">Cancel the call…</button>` : ""}</div>
     <form class="dp-reason hidden" id="dp-reason"><textarea rows="2" maxlength="2000" required></textarea>
       <button class="btn" type="submit"></button> <button class="link" type="button" data-dp-reason-x>Never mind</button></form>`}
+    ${r.status !== "completed" && dspPast(r) ? `<p class="dp-locked">This call is on a day in the past. It can not be moved from the board any more. If the work still has to be done, press “Book another visit on this job”.</p>` : ""}
     ${r.status === "completed" ? `<p class="dp-locked">✓ This call is done. It can not be moved or changed from the board any more.</p>` : ""}
     ${r.status === "cancelled" || (r.status === "completed" && ME.role === "owner") ? `<div class="bk-chips"><button class="chip small" type="button" data-dp-status="scheduled">${r.status === "completed" ? "Marked done by mistake? Put it back on the schedule" : "Put it back on the schedule"}</button></div>` : ""}
     <div class="staff-msg" id="dp-msg" role="status"></div>`;
+  if (dspPast(r)) { p.querySelector(".dp-movebox")?.remove(); const tc = p.querySelector(".dp-techs"); if (tc) { if (tc.previousElementSibling?.tagName === "H3") tc.previousElementSibling.remove(); tc.remove(); } p.querySelectorAll("[data-dp-techs-save], [data-dp-techs-undo]").forEach(x => x.remove()); }
   const say = (t, err) => { const m = $("#dp-msg"); if (m) { m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; } };
   p.querySelector("[data-dp-close]").addEventListener("click", () => { DSP.sel = null; DSP.panelTechs = null; p.classList.add("hidden"); document.querySelectorAll(".dc.sel").forEach(x => x.classList.remove("sel")); });
   p.querySelector("[data-dp-open]").addEventListener("click", () => openCustomer(r.customer_id));
