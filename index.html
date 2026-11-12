@@ -15382,14 +15382,24 @@ function dspBlockSpans(id) { if (!id) return []; const hr = s => { const [a, b] 
 function dspBlockFit(id, timed) { const evs = dspBlockSpans(id); if (!evs.length) return;
   timed.forEach(p => evs.forEach(e => { const o1 = Math.max(p.a, e.a), o2 = Math.min(p.z, e.z); if (o2 - o1 < 0.05) return;   // they do not share any time
     if (e.a <= p.a + 0.01) { if (p.a - e.a >= 0.5) return;   // the event starts at least half an hour before the call: it shows in front of the call (and after it, if it goes on)
-      const cut = Math.min((o1 + o2) / 2, o1 + 1); if (p.z - cut >= 0.25) p.a = cut; }   // they start together: the event gets the front (an hour at most), the call starts after it
-    else { const cut = e.a - p.a >= 0.5 ? e.a : Math.max((o1 + o2) / 2, o2 - 1); if (cut - p.a >= 0.25) p.z = cut; } })); }   // the call starts first: on the line it ends where the event starts
-function dspBlocksHtml(id, pos, timed) {
-  return dspBlockSpans(id).map(({ b, a, z }) => { let segs = [[a, z]];
+      const cut = Math.min((o1 + o2) / 2, o1 + 1); if (p.z - cut >= DSP_MIN) p.a = cut; }   // they start together: the event gets the front (an hour at most), the call starts after it
+    else { const cut = e.a - p.a >= 0.5 ? e.a : Math.max((o1 + o2) / 2, o2 - 1); if (cut - p.a >= DSP_MIN) p.z = cut; } })); }   // the call starts first: on the line it ends where the event starts
+// The smallest a call box or an event box is ever drawn on a tech's line: half an hour of the board (the size of the second of two calls booked
+// for the same time with the next call an hour later; Carlo, Nov 12, looking at such a call: "do not ever let a call or event box become smaller than that size…
+// if need shrink other calls before or after to do it").
+const DSP_MIN = 0.5;
+// boxes = [{ x, y }] in hours, in the order they sit on the line. A box under the smallest size grows to it; the boxes after it start later (they get
+// shorter, and only move when they are at the smallest size themselves); if that runs past the end of the board, the boxes before give the room back.
+function dspMinFit(boxes, lo, hi) { boxes.sort((p, q) => p.x - q.x || p.y - q.y); let end = -1e9;
+  boxes.forEach(b => { if (b.x < end) b.x = end; if (b.y - b.x < DSP_MIN) b.y = b.x + DSP_MIN; end = b.y; });
+  let start = hi; for (let k = boxes.length - 1; k >= 0; k--) { const b = boxes[k]; if (b.y > start) b.y = start; if (b.y - b.x < DSP_MIN) b.x = Math.max(lo, b.y - DSP_MIN); start = b.x; }
+  return boxes; }
+function dspBlockSegs(id, timed) {   // each event of the tech as the pieces of time the calls left it: [{ x, y, draw(pos, x, y) }]
+  return dspBlockSpans(id).flatMap(({ b, a, z }) => { let segs = [[a, z]];
     (timed || []).forEach(p => { segs = segs.flatMap(([x, y]) => p.z <= x + 0.01 || p.a >= y - 0.01 ? [[x, y]] : [[x, Math.min(y, p.a)], [Math.max(x, p.z), y]].filter(q => q[1] - q[0] > 0.1)); });
     if (!segs.length) segs = [[a, z]];
-    return segs.map(([x, y]) => `<div class="tl-block ${b.st ? "tl-block-st" : ""}${segs.length > 1 || y - x < z - a - 0.01 ? " tl-block-fit" : ""}" style="${pos(x, y)}top:4px" title="${esc(b.name)}: ${esc(b.title)} (${b.start ? esc(winText(b.start, b.end)) : "all day"})${b.st ? ". An event on the ServiceTitan schedule." : ""}${y - x < z - a - 0.01 ? " It is drawn shorter here so the call at the same time shows too." : ""}"><div class="tlb-name">${b.st ? "📅" : "⛔"} ${esc(b.title)}</div><div class="tlb-sub">${b.start ? esc(winText(b.start, b.end)) : "All day"}</div></div>`).join(""); }).join("");
-}
+    return segs.map(([x, y]) => ({ x, y, draw: (pos, x2, y2) => `<div class="tl-block ${b.st ? "tl-block-st" : ""}${segs.length > 1 || y - x < z - a - 0.01 ? " tl-block-fit" : ""}" style="${pos(x2, y2)}top:4px" title="${esc(b.name)}: ${esc(b.title)} (${b.start ? esc(winText(b.start, b.end)) : "all day"})${b.st ? ". An event on the ServiceTitan schedule." : ""}${y - x < z - a - 0.01 ? " It is drawn shorter here so the call at the same time shows too." : ""}"><div class="tlb-name">${b.st ? "📅" : "⛔"} ${esc(b.title)}</div><div class="tlb-sub">${b.start ? esc(winText(b.start, b.end)) : "All day"}</div></div>` })); }); }
+function dspBlocksHtml(id, pos, timed) { return dspBlockSegs(id, timed).map(g => g.draw(pos, g.x, g.y)).join(""); }
 function dspTimeline(rows, techs, none, colOf, mins, isToday) {
   // the whole day is on the board; the screen shows a few hours of it (dspHrs) and you scroll for the rest
   const h0 = 0, h1 = 24;
@@ -15424,7 +15434,7 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
     // groups of calls whose times overlap
     const clusters = []; timed.forEach(p => { const c = clusters[clusters.length - 1]; if (c && p.a < c.z - 0.01) { c.list.push(p); c.z = Math.max(c.z, p.z); } else clusters.push({ a: p.a, z: p.z, list: [p] }); });
     const pos = (a, z) => `left:${pct(Math.max(a, h0))};width:calc(${pct(Math.min(z, h1) + h0 - Math.max(a, h0))} - 4px);`;
-    let html = "", overN = 0;
+    let html = "", overN = 0; const boxes = [];
     if (ovMode === "expand") {   // the original board: the row grows a lane for every call that overlaps
       const lanes = [];
       timed.forEach(p => { let ln = lanes.findIndex(end => end <= p.a + 0.01); if (ln < 0) { ln = lanes.length; lanes.push(p.z); } else lanes[ln] = p.z;
@@ -15443,13 +15453,13 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
       const ends = []; c.list.forEach(p => { const i = ends.findIndex(e => e <= p.a + 0.01); if (i < 0) ends.push(p.z); else ends[i] = p.z; });
       const peak = ends.length;
       const mode = n === 1 ? "one" : ovMode === "auto" ? (peak <= 3 ? "thin" : "stack") : ovMode;
-      if (mode === "one") { const p = c.list[0]; html += dspTlCard(p.r, id, pos(p.a, p.z) + "top:4px"); return; }
+      if (mode === "one") { const p = c.list[0]; boxes.push({ x: p.a, y: p.z, draw: (x, y) => dspTlCard(p.r, id, pos(x, y) + "top:4px") }); return; }
       if (mode === "fit") {   // side by side: each call is cut short where the next one starts (calls at the very same time share the space)
         const starts = [...new Set(c.list.map(p => Math.round(p.a * 60)))].sort((x, y) => x - y).map(m => m / 60);
         starts.forEach((a, si) => {
           const same = c.list.filter(p => Math.abs(p.a - a) < 0.01), next = starts[si + 1];
           const end = next != null ? next : Math.max(...same.map(p => p.z)), w = (end - a) / same.length;
-          same.forEach((p, k) => { html += dspTlCard(p.r, id, pos(a + k * w, a + (k + 1) * w) + "top:4px", "fit" + (w < 0.75 ? " fit-narrow" : "")); });
+          same.forEach((p, k) => { boxes.push({ x: a + k * w, y: a + (k + 1) * w, draw: (x, y) => dspTlCard(p.r, id, pos(x, y) + "top:4px", "fit" + (y - x < 0.75 ? " fit-narrow" : "")) }); });
         });
         return;
       }
@@ -15461,6 +15471,9 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
       }
       html += pile(c.list.map(p => p.r), id, pos(c.a, c.z) + "top:4px", mode === "summary" ? "summary" : "stack");
     });
+    // the calls drawn one by one or side by side, and the events, are never under the smallest size (DSP_MIN): the others around them give the room
+    dspBlockSegs(id, timed).forEach(g => boxes.push({ x: g.x, y: g.y, draw: (x, y) => g.draw(pos, x, y) }));
+    html += dspMinFit(boxes.filter(b => b.y > h0 && b.x < h1).map(b => { b.x = Math.max(b.x, h0); b.y = Math.min(b.y, h1); return b; }), h0, h1).map(b => b.draw(b.x, b.y)).join("");
     // "any time" calls: same rules, so this box doesn't grow either
     let anyHtml;
     const am = anyTime.length <= 1 ? "one" : ovMode === "auto" || ovMode === "fit" ? (anyTime.length === 2 ? "thin" : "stack") : ovMode;
@@ -15471,7 +15484,7 @@ function dspTimeline(rows, techs, none, colOf, mins, isToday) {
     return `<section class="dcol tl-row ${extra} ${id && DSP.techSel === id ? "tech-sel" : ""} ${DSP.techSel != null && DSP.techSel !== id ? "tech-dim" : ""}" data-col="${id}" style="--lanes:1">
       <header ${id ? `class="tl-tech" data-tech="${id}" role="button" tabindex="0" title="Show ${esc(name)}'s day on the map with the driving route"` : ""}>${empPhoto(id, "tl-photo")}<strong>${esc(name)}</strong>${dspOnCallTag(name)}<span class="quiet tl-sub">${sub}${warn && overN ? ` <span class="tl-warn" title="Calls with times that overlap">${overN} overlap</span>` : ""}</span></header>
       <div class="tl-any ${anyTime.length > 1 ? "tl-any-" + am : ""}">${anyHtml}</div>
-      <div class="tl-track" style="--hours:${span}">${nowLine}${dspBlocksHtml(id, pos, timed)}${html}</div>
+      <div class="tl-track" style="--hours:${span}">${nowLine}${html}</div>
     </section>`;
   };
   return `<div class="tl-head"><div class="tl-corner">Tech</div><div class="tl-any-head">Any time</div>
