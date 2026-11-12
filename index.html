@@ -6990,6 +6990,13 @@ body[data-page="supplier-invoices"] .apb.sci-big { width: 240px; min-height: 204
 /* Supplier invoices: a picked month opens its statement page; the table of that month is not shown under it (Carlo, Nov 12) */
 article.sinv.sinv-monthpop .sinv-bar, article.sinv.sinv-monthpop .staff-wrap:has(> .sinv-t), article.sinv.sinv-monthpop .stv-back { display: none; }
 .stv-t td.stv-c > .st-no, .stv-t td.stv-po > .st-no { color: #c92a2a; }
+.stv-scroll, .stv-topbar { overflow-x: auto; scrollbar-width: auto; scrollbar-color: #7d8894 #e3e6ea; }
+.stv-topbar { margin-bottom: 4px; } .stv-topbar > div { height: 1px; }
+.stv-scroll::-webkit-scrollbar, .stv-topbar::-webkit-scrollbar { height: 16px; } .stv-scroll::-webkit-scrollbar-track, .stv-topbar::-webkit-scrollbar-track { background: #e3e6ea; border-radius: 4px; }
+.stv-scroll::-webkit-scrollbar-thumb, .stv-topbar::-webkit-scrollbar-thumb { background: #7d8894; border-radius: 4px; border: 2px solid #e3e6ea; } .stv-scroll::-webkit-scrollbar-thumb:hover, .stv-topbar::-webkit-scrollbar-thumb:hover { background: #23415f; }
+.stv-inline > .stv { max-width: 1240px; }
+.stv-scrollhint { font: 600 14px Inter, system-ui, sans-serif; color: #23415f; margin: 6px 0 4px; }
+@media print { .stv-topbar { display: none; } .stv-scroll { overflow: visible; } }
 .stv-t th.stv-c, .stv-t td.stv-c { white-space: nowrap; } .stv-t td.stv-c > span { font-weight: 700; } .stv-t td.stv-c .quiet { font-weight: 400; } .stv-t th.stv-c { white-space: normal; min-width: 76px; }
 .stv-t th.stv-po, .stv-t td.stv-po { white-space: nowrap; } .stv-t td.stv-po > span { font-weight: 700; } .stv-t td.stv-po .quiet { font-weight: 400; }
 .stv-inline { margin: 14px 0 20px; background: #fff; border: 1px solid #c9d6e6; border-radius: 8px; padding: 18px 20px; overflow-x: auto; }
@@ -19875,6 +19882,20 @@ function stvCols(r, diff) {
   const slip = !inv ? stvC("quiet", "Not needed") : !f ? stvC("quiet", "…") : f.is_slip ? stvC("st-ok", "This paper is it") : f.slip ? stvC("st-ok", "Found", `<div class="quiet">${esc(f.slip)}</div>`) : stvC("st-no", "Missing");
   return stvC("st-ok", "Yes", bad) + stvFileCell(r) + stvPoCell(r) + cust + slip + (r.match_state === "ok" ? stvC("st-ok", "Yes") : stvC("st-look", "Not yet"));
 }
+// a sideways scroll bar for the statement when it is wider than the screen (Carlo, Nov 12): one above the table and one under it, only when it does not fit
+function stvScrollWrap(root) {
+  (root || document).querySelectorAll("table.stv-t").forEach(t => { if (!t.querySelector("th.stv-c") || t.parentElement.classList.contains("stv-scroll")) return;
+    const w = document.createElement("div"); w.className = "stv-scroll"; const top = document.createElement("div"); top.className = "stv-topbar"; top.innerHTML = `<div></div>`;
+    const hint = document.createElement("div"); hint.className = "stv-scrollhint no-print"; hint.textContent = "This list is wider than your screen. Slide the grey bar sideways to see the rest. →";
+    t.before(hint, top, w); w.appendChild(t);
+    let lock = false; const sync = (a, b) => a.addEventListener("scroll", () => { if (lock) return; lock = true; b.scrollLeft = a.scrollLeft; requestAnimationFrame(() => { lock = false; }); }); sync(top, w); sync(w, top); });
+  stvScrollFit();
+}
+function stvScrollFit() {
+  document.querySelectorAll(".stv-scroll").forEach(w => { const top = w.previousElementSibling, hint = top?.previousElementSibling, over = w.scrollWidth > w.clientWidth + 2;
+    if (top?.classList.contains("stv-topbar")) { top.firstElementChild.style.width = w.scrollWidth + "px"; top.hidden = !over; } if (hint?.classList.contains("stv-scrollhint")) hint.hidden = !over; });
+}
+addEventListener("resize", () => { clearTimeout(stvScrollFit.t); stvScrollFit.t = setTimeout(stvScrollFit, 120); });
 // the two columns that need a look-up are filled in a moment after the statement is drawn
 function stvFlagsLoad(ids, redraw) {
   const need = [...new Set(ids.filter(id => id && !STV_FLAGS.has(id)))]; if (!need.length || stvFlagsLoad.busy) return;
@@ -19930,6 +19951,7 @@ function drawSupStatement() {
       <span class="stv-actmsg" role="status"></span>
       <label class="btn"><input type="file" id="stv-file" accept="application/pdf,image/*" multiple hidden>⬆ Compare with ${esc(sinvShort(S.supplier || "the supplier"))}'s statement (PDF or photo)</label></div>
     <div id="stv-read"></div></div>`;
+  stvScrollWrap(stvPaper());
   stvFlagsLoad(SL.map(l => l.invoice_id), () => { if (stvPaper().querySelector(".stv")) drawSupStatement(); });
   // a click anywhere on a line opens its invoice, not only on the reference (Carlo, Nov 12)
   if (STV.inline && SINV.backScroll && SINV.open == null && SINV.backScroll.st === STV.id) { const bs = SINV.backScroll; SINV.backScroll = null;
@@ -20234,6 +20256,7 @@ async function stSave(S) {
   alertMsg("Statement saved."); SINV.data = null; if (SINV.sup != null && SINV.sup !== STV.sup) { SINV.sup = STV.sup; SINV.st = 0; sinvSaveTab(); } closeInvoice(); await openSupInv();   // saved: close the window
 }
 function wireSupInv() {
+  stvScrollWrap($("#main"));
   poFilesFill();
   const redo = () => { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; };
   $("#sinv-pos")?.addEventListener("click", () => openPOs());
