@@ -18290,8 +18290,9 @@ function renderSupInv(msg) {
         <span class="status ${cls[r._s.k] || ""} sinv-page-st">${esc(r._s.label)}</span></div>
       <div class="sinv-page-body">${sinvDetail(r, edit)}</div></article>`;
     wireSupInv(); return; }
+  const pendIn = SINV.sup != null && !qq && SINV.st === 0 && !!SINV.pend;   // a month with no statement yet: drawn like a statement too (Carlo, Nov 12)
   const stIn = SINV.sup != null && !qq && SINV.st !== 0 && !!S;   // a statement month is picked: its statement page is drawn in the page, in place of the table
-  $("#main").innerHTML = `<article class="staff sinv ${stIn ? "sinv-monthpop" : ""}" data-hero="1">
+  $("#main").innerHTML = `<article class="staff sinv ${stIn || pendIn ? "sinv-monthpop" : ""}" data-hero="1">
     <div class="sinv-top"><h1>Supplier invoices</h1>${D.can_edit ? `<button class="btn quiet-btn" type="button" data-sinv-logos>${SINV.logoEd ? "Close the logos" : "🖼 Supplier logos"}</button>` : ""}</div>
     ${msg ? `<div class="staff-msg ok sl-toast" role="status">${esc(msg)}</div>` : ""}
     ${SINV.backTo ? `<div class="stv-back"><button class="btn" type="button" data-stv-back>‹ Back to the statement</button><button class="link" type="button" data-stv-backx>✕</button></div>` : ""}
@@ -18310,6 +18311,7 @@ function renderSupInv(msg) {
       ${S.aging?.current != null ? agCard("Current", "current") + agCard("31–60 days", "d31_60") + agCard("61–90 days", "d61_90") + (S.aging.d91_120 ? agCard("91–120 days", "d91_120") : "") + (S.aging.over120 ? agCard("Over 120 days", "over120") : "") : ""}
     </section>` : ""}
     ${stIn ? `<section class="stv-inline" id="stv-inline" data-st="${S.id}"></section>` : ""}
+    ${pendIn ? sinvPendStmt(rows, D) : ""}
     <div class="sinv-bar"><span class="seg">${SINV_F.map(([k, t]) => { const L = rows.filter(r => inF(r, k)); return `<button type="button" data-sinv-f="${k}" aria-pressed="${SINV.f === k && !qq}">${t} <b>${L.length}</b></button>`; }).join("")}</span>
       <input type="search" id="sinv-q" value="${esc(SINV.q)}" placeholder="Invoice #, PO #, customer, job, note…" aria-label="Search supplier invoices" autocomplete="off">
       <span class="quiet">${list.length} · ${money(sum(list))}</span></div>
@@ -18801,6 +18803,26 @@ function sinvPendHead() {
   const C = sinvPendCalc(SINV.pend), sup = sinvShort(sinvSupList().get(SINV.sup) || "");
   return `<section class="sinv-st sinv-panel sinv-stcards"><div><span class="quiet">Not on a statement yet</span><b>${esc(sup)} · ${esc(sinvPendName(SINV.pend))} so far</b>
     <span class="quiet">${C.n} invoice${C.n == 1 ? "" : "s"} loaded for ${esc(sinvPendName(SINV.pend).split(" ")[0])}. ${esc(sup)}'s statement for it comes after the month ends; until then, the amount due is worked out from ${C.L ? `the ${esc(fmtDate(C.L.date))} statement` : "these invoices"}.</span></div></section>`;
+}
+// a month with no statement yet, laid out like their statement, from our own invoices (Carlo, Nov 12: "it should still look like this one")
+function sinvPendStmt(rows, D) {
+  const name = sinvSupList().get(SINV.sup) || rows[0]?.supplier || "", lg = SINV.logos?.get(SINV.sup), co = COMPANY || {};
+  const acct = (D.statements || []).find(x => x.account)?.account || "";
+  const L = [...rows].sort((a, b) => String(a.invoice_date || "").localeCompare(String(b.invoice_date || "")) || String(a.number || "").localeCompare(String(b.number || "")));
+  const tot = L.reduce((a, r) => a + Number(r.total || 0), 0), [py, pm] = SINV.pend.split("-").map(Number), end = ymd(new Date(py, pm, 0)), asOf = end < ymd(new Date()) ? end : ymd(new Date());
+  return `<section class="stv-inline"><div class="stv">
+    <div class="stv-hd"><div class="stv-sup">${lg ? `<img class="stv-logo-img" alt="${esc(sinvShort(name))}" src="${lg}">` : `<div class="stv-logo">${esc(sinvShort(name))}</div>`}<div class="stv-supn">${esc(name)}</div></div>
+      <div class="stv-box"><div class="stv-ttl">STATEMENT SO FAR</div><table><tr><th>PAGES</th><th>DATE</th></tr><tr><td>—</td><td>${esc(stDate(asOf))}</td></tr>
+        <tr><th colspan="2">CUSTOMER NO.</th></tr><tr><td colspan="2">${esc(acct || "—")}</td></tr></table></div></div>
+    <div class="stv-to">${esc((co.company_name || "Home Service Group Inc.").toUpperCase())}</div>
+    ${L.length ? `<table class="stv-t"><thead><tr><th>Date</th><th>Reference</th><th>Br.</th><th>CD</th><th class="r">Amount</th><th class="r">Balance due</th><th class="stv-our">Our records</th></tr></thead>
+      <tbody>${L.map(r => { const s = r._s || sinvState(r), good = s.k === "ok" || s.k === "match";
+        return `<tr class="stv-go" data-sinv="${r.id}" tabindex="0" title="Click to open this invoice"><td>${esc(stDate(r.invoice_date))}</td><td><button class="link" type="button" data-pend-inv>${esc(r.number)}</button></td>
+        <td></td><td>${["credit", "return"].includes(r.doc_type) || Number(r.total) < 0 ? "C" : r.doc_type === "charge" ? "D" : "I"}</td><td class="r num">${stMoney(r.total)}</td><td class="r num">${stMoney(r.total)}</td>
+        <td class="stv-our"><span class="${good ? "st-ok" : s.look ? "st-look" : ""}">${esc(good ? "✓ " + s.label : s.label)}</span>${r.po_number ? ` <span class="quiet">PO ${esc(r.po_number)}</span>` : ""}</td></tr>`; }).join("")}</tbody></table>
+    <div class="stv-codes">I = Invoice · C = Credit note · D = Debit memo</div>
+    <div class="stv-foot"><div class="stv-age"></div><div class="stv-tot"><span>TOTAL SO FAR</span><b>${stMoney(tot)}</b></div></div>` : `<p class="quiet">Nothing is loaded for this month yet.</p>`}
+    <p class="quiet stv-note">${L.length} line${L.length === 1 ? "" : "s"}, from our own records. ${esc(sinvShort(name))}'s statement for ${esc(sinvPendName(SINV.pend))} is not in yet.</p></div></section>`;
 }
 function sinvPendCards() {
   const C = sinvPendCalc(SINV.pend), mo = sinvPendName(SINV.pend).split(" ")[0];
@@ -20210,7 +20232,8 @@ function wireSupInv() {
   }));
   document.querySelectorAll("[data-sinv-f]").forEach(b => b.addEventListener("click", () => { SINV.f = b.dataset.sinvF; SINV.q = ""; try { localStorage.setItem("reid.sinvF", SINV.f); } catch {} redo(); }));
   let t; $("#sinv-q")?.addEventListener("input", e => { clearTimeout(t); t = setTimeout(() => { SINV.q = e.target.value; const pos = e.target.selectionStart; redo(); const q = $("#sinv-q"); q.focus(); try { q.setSelectionRange(pos, pos); } catch {} }, 200); });
-  document.querySelectorAll("tr[data-sinv]").forEach(tr => tr.addEventListener("click", e => { if (e.target.closest("button, a, input")) return; SINV.listTop = $("#main").scrollTop; SINV.open = Number(tr.dataset.sinv); renderSupInv(); $("#main").scrollTop = 0; }));
+  document.querySelectorAll("tr[data-sinv]").forEach(tr => tr.addEventListener("keydown", e => { if (e.key === "Enter" && tr.matches(".stv-go")) tr.click(); }));
+  document.querySelectorAll("tr[data-sinv]").forEach(tr => tr.addEventListener("click", e => { if (e.target.closest("button:not([data-pend-inv]), a, input")) return; SINV.listTop = $("#main").scrollTop; SINV.open = Number(tr.dataset.sinv); renderSupInv(); $("#main").scrollTop = 0; }));
   document.querySelector("[data-sinv-pageback]")?.addEventListener("click", () => { SINV.open = null; renderSupInv(); $("#main").scrollTop = SINV.listTop || 0; });
   document.querySelectorAll("[data-sinv-po]").forEach(b => b.addEventListener("click", () => { POP.q = b.dataset.sinvPo; openPOs(); }));
   document.querySelectorAll("[data-sci-poopen]").forEach(b => b.addEventListener("click", () => openPOPage(Number(b.dataset.sciPoopen))));   // the "PO found" square opens that PO (Carlo, Nov 10)
