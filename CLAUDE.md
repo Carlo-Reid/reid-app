@@ -99,6 +99,8 @@
 
 ## Customer page: note tabs
 
+- **A note from the past can not be changed or deleted** (Carlo, Nov 12, 4:44 p.m., right after the done-call rule: "do the same rule for notes as well from the past"). In `noteHtml`, a note written before today (`past`: its `created_at` day is not today) has no **Edit** and no **Delete**; Copy, Pin / Unpin and Up / Down stay (they do not change the note). A note written today can still be fixed by people who could before. **Owners keep Edit and Delete on every note**, the same way they kept the way back on a done call; told him, his call to take it off. It is only what the screen offers: `edit_note` / `delete_note` in the database were not changed. Sales people's own job notes on the Sales page (`data-sl-note-edit`) were not touched. I took "from the past" to mean written before today. Checked: the script parses. **Not run and not seen on the live app.**
+
 - (Carlo, Nov 10.) **Podium notes is the second tab, right after Location notes**, and it always shows (it used to be the sixth tab, hidden under "More ▾" with Vista and Emails, so he could not find a customer's 265 Podium notes). Order now: Location notes · Podium notes · Customer notes · Vista · Job notes · Tech notes from calls · Emails. "More ▾" holds only Vista, Emails and From old home.
 
 ## Customer page: what is attached to each job, invoice and proposal
