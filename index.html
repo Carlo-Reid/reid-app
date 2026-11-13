@@ -7196,6 +7196,7 @@ article.bank .ow-af-res tr:not(.ow-pair-head) td.bank-amt-attcell { display: blo
 :is(article.owing, article.bank) .ow-tools-perm .ow-af-then { font-size: 14px; } :is(article.owing, article.bank) .ow-tools-perm .ow-af-res .ow-amt-msg, :is(article.owing, article.bank) .ow-tools-perm .ow-af-res td { font-size: 14px; }
 .ow-tools-perm .bank-amt-for { font-size: 14px; padding: 8px 10px; } .ow-tools-perm .bank-amt-for strong { font-size: 17px; } .ow-tools-perm .bank-amt-msg { font-size: 14px; } .ow-tools-perm .bank-amt-att { font-size: 14px; padding: 7px 8px; }
 /* copy buttons an owner put on a page (Carlo, Nov 12) */
+.cpy-pasted { outline: 3px solid #1f9d4a !important; outline-offset: 1px; transition: outline-color .3s; }
 .cpy-btn { display: inline-grid; place-items: center; vertical-align: middle; width: 26px; height: 26px; margin: 0 0 0 6px; padding: 0; border: 1px solid #9fb6cc; border-radius: 5px; background: #fff; color: #23415f; font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 1px 2px rgba(35, 65, 95, .15); font-weight: 700; text-indent: 0; letter-spacing: 0; text-transform: none; }
 .cpy-btn:hover, .cpy-btn:focus-visible { background: #e6eff8; border-color: #23415f; } .cpy-btn.cpy-ok { background: #1f9d4a; border-color: #1f9d4a; color: #fff; } .cpy-btn.cpy-sure { width: auto; padding: 0 8px; background: #c0392b; border-color: #c0392b; color: #fff; }
 body.cpy-on #main, body.cpy-on #search-page { cursor: crosshair; } body.cpy-on #main *, body.cpy-on #search-page * { cursor: crosshair !important; } body.cpy-on .cpy-btn { cursor: pointer !important; outline: 2px solid #c0392b; }
@@ -28262,6 +28263,7 @@ function cpySet(on) { CPY.on = !!on; CPY.pick = null; CPY.msg = ""; document.que
 document.getElementById("cpy-edit-btn")?.addEventListener("click", () => cpySet(!CPY.on));
 async function cpyCopy(b) { const prev = b.previousElementSibling, h = prev && /^(INPUT|TEXTAREA|SELECT)$/.test(prev.tagName) ? prev : b.parentElement, t = cpyTextOf(h);
   let ok = false; try { await navigator.clipboard.writeText(t); ok = true; } catch { try { const a = document.createElement("textarea"); a.value = t; a.style.cssText = "position:fixed;left:-9999px"; document.body.append(a); a.select(); ok = document.execCommand("copy"); a.remove(); } catch {} }
+  CPY.armed = t ? { t, at: Date.now() } : null;   // the next typing box that is clicked gets it pasted in, once (Carlo, Nov 12)
   b.textContent = ok ? "✓" : "✕"; b.classList.toggle("cpy-ok", ok); b.title = ok ? "Copied" : "I could not copy it"; setTimeout(() => { if (b.isConnected) { b.textContent = "📋"; b.classList.remove("cpy-ok"); b.title = "Copy this"; } }, 1400); }
 // window, capture: before every other click handler, so while an owner is picking, a click on a button or a line of the page does not press it
 window.addEventListener("click", async e => { const t = e.target; if (!t.closest) return;
@@ -28285,7 +28287,16 @@ window.addEventListener("click", async e => { const t = e.target; if (!t.closest
   if (!sel) { CPY.pick = null; CPY.msg = "I could not tell which spot that is. Try the words right beside it."; cpyBar(); return; }
   try { selx && selx.removeAllRanges(); } catch {}
   el.classList.add("cpy-picked"); CPY.pick = { el, sel: rk + " " + sel, text: cpyTextOf(el).replace(/\s+/g, " ") }; cpyBar(); }, true);
-window.addEventListener("keydown", e => { if (CPY.on && e.key === "Escape") cpySet(false); });
+window.addEventListener("keydown", e => { if (CPY.on && e.key === "Escape") cpySet(false); if (e.key === "Escape") CPY.armed = null; });
+// after a 📋 is clicked, the first typing box that is clicked gets the copied words pasted in, one time (Carlo, Nov 12, 9:12 p.m.)
+window.addEventListener("click", e => { const A = CPY.armed; if (!A || CPY.on) return; if (Date.now() - A.at > 300000) { CPY.armed = null; return; }
+  const el = e.target && e.target.closest ? e.target.closest("input, textarea") : null; if (!el || el.disabled || el.readOnly) return;
+  const ty = (el.getAttribute("type") || "text").toLowerCase(); if (el.tagName === "INPUT" && !/^(text|search|tel|url|email|number|)$/.test(ty)) return;
+  let t = A.t; if (el.tagName === "INPUT") t = t.replace(/\s*\n\s*/g, " ");
+  if (ty === "number" || el.inputMode === "decimal" || el.inputMode === "numeric") { const n = t.replace(/[$,\s]/g, ""); if (/^-?\d*\.?\d+$/.test(n)) t = n; else if (ty === "number") return; }
+  CPY.armed = null;
+  try { if (ty === "number" || ty === "email") el.value = t; else { const a = el.selectionStart ?? el.value.length, z = el.selectionEnd ?? a; el.value = el.value.slice(0, a) + t + el.value.slice(z); const at = a + t.length; el.setSelectionRange(at, at); } } catch { el.value = t; }
+  el.dispatchEvent(new Event("input", { bubbles: true })); el.classList.add("cpy-pasted"); setTimeout(() => el.classList.remove("cpy-pasted"), 1200); });
 // the path to a piece of the page: stops at a piece with its own plain id; else tag, up to two plain classes, and which one of its kind it is
 const ECO_SPOT_SKIP = /^(on|off|open|closed|active|sel|selected|hidden|show|busy|loading|dirty|cur|current|done|err|ok|picked|save-go|btn-clean|eco-.*|train-.*|is-.*|has-.*)$/;
 function ecoSelOf(el, root) { if (el === root) return ":scope"; const parts = []; let n = el, viaId = false;
