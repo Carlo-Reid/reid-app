@@ -7573,6 +7573,22 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
 /* The walk box on the invoice, and the To be Booked page (Carlo, Nov 13) */
   .ie-walk { background: linear-gradient(180deg, #ffffff, #eef4fa); border: 2px solid #23415f; border-radius: 14px; padding: 14px 16px; margin: 0 0 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 8px rgba(35, 65, 95, .12); }
   .ie-walk h2 { margin: 0; font-size: 22px; color: #23415f; }
+  /* the 4 questions of a walk: a picture or N/A for each (Carlo, Nov 13) */
+  .ie-walk-qs { display: flex; flex-direction: column; gap: 8px; }
+  .ie-walk-qh { font-size: 16px; color: #23415f; } .ie-walk-left { color: #b45309; } .ie-walk-all { color: #1b6b36; }
+  .ie-walk-q { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; background: #fff; border: 1.5px solid #bcd0e3; border-radius: 12px; padding: 10px 12px; }
+  .ie-walk-q.done { background: #e9f6ed; border-color: #a9d6b7; }
+  .ie-walk-qt { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: 16px; color: var(--ink); overflow-wrap: anywhere; }
+  .ie-walk-qa { font-size: 14.5px; color: #b45309; font-weight: 700; } .ie-walk-q.done .ie-walk-qa { color: #1b6b36; }
+  .ie-walk-th { width: 96px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid #bcd0e3; }
+  .ie-walk-qb { display: flex; gap: 8px; align-items: stretch; } .ie-walk-qb .mc-sq { width: 112px; height: 104px; min-height: 0; margin: 0; cursor: pointer; }
+  .ie-walk-qb .mc-sq[aria-pressed="true"] { background: #e9f6ed; border-color: #1b6b36; }
+  .ie-walk-msg.err { color: #b42318; font-weight: 700; font-size: 16px; }
+  .tob-qs { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; } .tob-q { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+  .tob-qedit { background: linear-gradient(180deg, #fff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 12px; padding: 12px 14px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 8px; }
+  .tob-qedit h2 { margin: 0; font-size: 19px; color: #23415f; } .tob-qedit p { margin: 0; }
+  .tob-qedit label { display: flex; flex-direction: column; gap: 3px; } .tob-qedit textarea { font: inherit; font-size: 16px; padding: 6px 8px; border: 1.5px solid #bcd0e3; border-radius: 8px; }
+  .tob-qedit-b { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .tob-qedit-b .err { color: #b42318; font-weight: 700; }
   .ie-walk-p { margin: 0; font-size: 16px; }
   .ie-walk-l { display: flex; flex-direction: column; gap: 4px; font-size: 16px; color: #23415f; margin: 0; }
   .ie-walk-l textarea { font: inherit; font-size: 16px; padding: 8px 10px; border: 2px solid #23415f; border-radius: 8px; background: #fff; color: var(--ink); width: 100%; box-sizing: border-box; min-height: 96px; }
@@ -17269,7 +17285,7 @@ async function openOnSite(jobId, jobType, jobClass, c) {
     SALES.rows = null; return openEstEdit(data, "You're on site. Here's the proposal.");
   }
   const walk = mcIsWalk(c), walkSay = "You are on site for the walk. The job is below. Type your notes for the walk in the box at the top.";
-  const setWalk = inv => { if (walk && !(WALK && WALK.visit === c.visit_id)) WALK = { visit: c.visit_id, job: jobId, inv, notes: "", done: false, png: null, signer: c.customer_name || "" }; else if (walk) WALK.inv = inv; };
+  const setWalk = inv => { if (walk && !(WALK && WALK.visit === c.visit_id)) WALK = { visit: c.visit_id, job: jobId, inv, notes: "", done: false, png: null, signer: c.customer_name || "", qs: null, ans: {} }; else if (walk) WALK.inv = inv; };
   const ji = await db.rpc("job_invoice", { p_job: jobId });   // the job's own finished invoice, with all its details: open that one, do not start a second one
   if (!ji.error && ji.data) { setWalk(ji.data); return openInvoiceEditor(ji.data, walk ? walkSay : "You're on site. Here's the invoice for this job."); }
   const { data, error } = await db.rpc("new_invoice", { p_job: jobId });
@@ -21670,7 +21686,7 @@ function wireSupInv() {
   if (SINV.open && !SINV.det.has(SINV.open)) sinvLoadDet(SINV.open);
 }
 // To be Booked page (Carlo, Nov 13: "it sends the call back to the system under a new tab called To be Booked… listed under category walk done, Install date needs to be booked")
-const TOB = { data: null, seq: 0, msg: "" };
+const TOB = { data: null, seq: 0, msg: "", qEdit: false, qs: null };
 async function openToBook(msg) {
   setPage("tobook", "tobook", "To be Booked"); TOB.msg = msg || "";
   if (!TOB.data) $("#main").innerHTML = `<div class="loading">Loading…</div>`;
@@ -21685,6 +21701,11 @@ function renderToBook() {
     <h1>To be Booked</h1>
     <p class="lead">These calls came back from the techs. Each one needs its next day booked.</p>
     ${TOB.msg ? `<p class="staff-msg" role="status">${esc(TOB.msg)}</p>` : ""}
+    ${ME.role === "owner" ? (TOB.qEdit ? `<section class="tob-qedit"><h2>The 4 questions a tech answers on a walk</h2>
+        <p>Each one gets a picture, or N/A. Type the words the tech will read.</p>
+        ${[0, 1, 2, 3].map(i => `<label><b>Question ${i + 1}</b><textarea rows="2" maxlength="300" data-tob-q="${i}">${esc((TOB.qs || [])[i] || "")}</textarea></label>`).join("")}
+        <div class="tob-qedit-b"><button class="btn primary" type="button" id="tob-q-save">Save the questions</button><button class="btn" type="button" id="tob-q-x">Cancel</button><span id="tob-q-msg" role="status"></span></div></section>`
+      : `<p><button class="btn" type="button" id="tob-q-open">✎ Change the 4 walk questions</button></p>`) : ""}
     ${pgNow(["Walk done: Install date needs to be booked", `${n} call${n === 1 ? "" : "s"}`])}
     <section class="tob-cat"><h2><span aria-hidden="true">🚶</span> Walk done: Install date needs to be booked <span class="tob-n">${n}</span></h2>
       ${n ? R.map((r, i) => `<div class="tob-card">
@@ -21693,6 +21714,8 @@ function renderToBook() {
           <div>${esc(r.address || "")}</div>
           <div class="quiet">Job ${esc(r.job_number || "")} · ${esc(r.job_type || "")}${r.what ? " · " + esc(r.what) : ""}</div>
           <div><b>Walk done</b> ${r.done_at ? esc(day(r.done_at)) : ""}${r.tech ? " by " + esc(r.tech) : ""}</div>
+          ${(r.answers || []).length ? `<div class="tob-qs"><b>The 4 questions:</b>${r.answers.map(a => `<div class="tob-q"><span>${a.q}. ${esc(a.question || "")}</span>
+            ${a.key ? `<button class="btn" type="button" data-tob-pic="${esc(a.key)}" data-tob-picname="Question ${a.q}: ${esc(a.question || "")}">📷 See the picture</button>` : `<span class="quiet">N/A: no picture</span>`}</div>`).join("")}</div>` : ""}
           ${r.notes ? `<div class="tob-notes"><b>Notes from the walk:</b> ${esc(r.notes)}</div>` : `<div class="quiet">No notes from the walk.</div>`}
           ${r.signed ? `<div class="tob-sig"><img alt="Signature" src="data:image/png;base64,${r.sig}"><span class="quiet">✔ Signed${r.signer ? " by " + esc(r.signer) : ""}</span></div>` : `<div class="quiet">The customer did not sign.</div>`}
         </div>
@@ -21701,6 +21724,14 @@ function renderToBook() {
       </div>`).join("") : `<p class="staff-msg">Nothing to book right now.</p>`}
     </section>
   </article>`;
+  $("#tob-q-open")?.addEventListener("click", async () => { const { data } = await db.rpc("walk_questions"); TOB.qs = Array.isArray(data) ? data : []; TOB.qEdit = true; renderToBook(); });
+  $("#tob-q-x")?.addEventListener("click", () => { TOB.qEdit = false; renderToBook(); });
+  $("#tob-q-save")?.addEventListener("click", async () => { const qs = [...document.querySelectorAll("[data-tob-q]")].map(t => t.value.trim()), m = $("#tob-q-msg");
+    if (qs.some(t => !t)) { m.className = "err"; m.textContent = "Type all 4 questions."; return; }
+    const { error } = await db.rpc("set_walk_questions", { p: qs }); if (error) { m.className = "err"; m.textContent = "Not saved: " + rpcErr(error); return; }
+    TOB.qEdit = false; TOB.msg = "✓ The 4 walk questions are saved. Techs see them on their next walk."; renderToBook(); });
+  document.querySelectorAll("[data-tob-pic]").forEach(b => b.addEventListener("click", async () => { const { data } = await db.storage.from("job-files").createSignedUrl(b.dataset.tobPic, 3600);
+    attPop(b.dataset.tobPicname, data?.signedUrl ? `<p><img alt="" style="max-width:100%;height:auto" src="${esc(data.signedUrl)}"></p>` : `<p>This picture isn't available.</p>`); }));
   document.querySelectorAll("[data-tob-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.tobCust))));
   document.querySelectorAll("[data-tob-inv]").forEach(b => b.addEventListener("click", () => openInvoiceEditor(Number(b.dataset.tobInv))));
   document.querySelectorAll("[data-tob-book]").forEach(b => b.addEventListener("click", () => { const r = R[Number(b.dataset.tobBook)]; if (!r) return;
@@ -26853,7 +26884,8 @@ function ieWalkHtml(I) {
   const W = WALK; if (!W) return "";
   return `<section class="ie-walk" id="ie-walk">
     <h2><span aria-hidden="true">🚶</span> The walk</h2>
-    <p class="ie-walk-p">Look at the job below. Then type what you see here, so we can get ready for the install.</p>
+    <p class="ie-walk-p">Look at the job below. Then answer the 4 questions, and type what you see, so we can get ready for the install.</p>
+    ${walkQsHtml(W)}
     <label class="ie-walk-l"><b>Notes for the walk</b>
       <textarea id="ie-walk-notes" rows="4" maxlength="8000" placeholder="Where the tank goes. What is in the way. What parts we need to bring.">${esc(W.notes || "")}</textarea></label>
     ${!W.done ? `<div class="ie-actions"><button class="ie-sq ie-sq-go" type="button" id="ie-walk-done"><span class="ie-sq-ic" aria-hidden="true">✅</span><b>Walk completed</b></button></div>`
@@ -26867,11 +26899,71 @@ function ieWalkHtml(I) {
     <div class="ie-walk-msg" id="ie-walk-msg" role="status"></div>
   </section>`;
 }
+// The 4 questions of a walk (Carlo, Nov 13: "ask him 4 questions and take a picture to upload to the file for each question, and if he can't then
+// have the option to click N/A… all questions have to be answered before he can close the call"). The words come from walk_questions() (owners change them
+// on the To be Booked page); each answer is saved at once (walk_answer_set), the picture goes in the job's photos and files.
+const walkLeft = W => 4 - [1, 2, 3, 4].filter(q => W.ans && W.ans[q]).length;
+function walkQsHtml(W) {
+  if (!W.qs) return `<p class="ie-walk-p quiet">Loading the 4 questions…</p>`;
+  const left = walkLeft(W);
+  return `<div class="ie-walk-qs" id="ie-walk-qs">
+    <b class="ie-walk-qh">Answer these 4 questions. Take a picture for each one. If you can not take the picture, press N/A.
+      <span class="${left ? "ie-walk-left" : "ie-walk-all"}">${left ? `${left} of 4 still to do.` : "✔ All 4 are done."}</span></b>
+    ${W.qs.map((t, i) => { const q = i + 1, a = W.ans[q], busy = W.busy === q;
+      return `<div class="ie-walk-q${a ? " done" : ""}" data-walk-q="${q}">
+        <span class="ie-sec-n" aria-hidden="true">${q}</span>
+        <div class="ie-walk-qt"><b>${esc(t)}</b>
+          <span class="ie-walk-qa">${busy ? "Saving the picture…" : !a ? "Not answered yet." : a.na ? "✔ N/A: no picture." : "✔ The picture is saved in the job's photos."}</span></div>
+        ${a && a.url ? `<img class="ie-walk-th" alt="The picture for question ${q}" src="${a.url}">` : ""}
+        <div class="ie-walk-qb">
+          <label class="mc-sq${a ? "" : " mc-sq-go"}${busy ? " ie-off" : ""}"><input type="file" accept="image/*" capture="environment" hidden data-walk-pic="${q}" ${busy ? "disabled" : ""}>
+            <span class="mc-sq-ic" aria-hidden="true">📷</span><span class="mc-sq-tn">${a && !a.na ? "Take another picture" : "Take a picture"}</span></label>
+          <button class="mc-sq" type="button" data-walk-na="${q}" ${busy ? "disabled" : ""} aria-pressed="${!!(a && a.na)}"><span class="mc-sq-ic" aria-hidden="true">🚫</span><span class="mc-sq-tn">N/A</span></button>
+        </div></div>`; }).join("")}
+  </div>`;
+}
+async function walkLoadQs(W) {
+  if (W.qs || W.qLoading) return; W.qLoading = true;
+  const [q, a] = await Promise.all([db.rpc("walk_questions"), db.rpc("walk_answers_for", { p_visit_id: W.visit })]);
+  W.qLoading = false; if (WALK !== W) return;
+  W.qs = Array.isArray(q.data) && q.data.length === 4 ? q.data : ["Question 1", "Question 2", "Question 3", "Question 4"];
+  (a.data || []).forEach(x => { if (!W.ans[x.q]) W.ans[x.q] = { na: !!x.na, key: x.key || null }; });
+  if (document.querySelector("#ie-walk")) renderInvoiceEditor();
+}
+// a phone's picture is made smaller (1600px at most, JPEG) before it is saved, so it loads fast for the office
+async function walkShrink(file) {
+  let src; try { src = await createImageBitmap(file); } catch (e) {
+    src = await new Promise((ok, no) => { const i = new Image(), u = URL.createObjectURL(file); i.onload = () => { URL.revokeObjectURL(u); ok(i); }; i.onerror = () => { URL.revokeObjectURL(u); no(new Error("bad picture")); }; i.src = u; }); }
+  const w0 = src.width, h0 = src.height, k = Math.min(1, 1600 / Math.max(w0, h0)), cv = document.createElement("canvas");
+  cv.width = Math.round(w0 * k); cv.height = Math.round(h0 * k); cv.getContext("2d").drawImage(src, 0, 0, cv.width, cv.height);
+  return await new Promise((ok, no) => cv.toBlob(b => b ? ok(b) : no(new Error("bad picture")), "image/jpeg", .82));
+}
+async function walkAnswer(q, file) {
+  const W = WALK; if (!W || W.busy) return; const say = t => { const m = $("#ie-walk-msg"); if (m) { m.className = "ie-walk-msg" + (t ? " err" : ""); m.textContent = t || ""; } };
+  const t = (W.qs || [])[q - 1] || "";
+  if (!file) {   // N/A
+    const { error } = await db.rpc("walk_answer_set", { p_visit_id: W.visit, p_q: q, p_question: t, p_na: true, p_key: null, p_size: null });
+    if (error) return say("Not saved: " + rpcErr(error));
+    W.ans[q] = { na: true }; renderInvoiceEditor(); return; }
+  W.busy = q; renderInvoiceEditor();
+  try {
+    const blob = await walkShrink(file), key = `forms/${W.job}/walk-${W.visit}-q${q}-${Date.now()}.jpg`;
+    const up = await db.storage.from("job-files").upload(key, blob, { contentType: "image/jpeg" }); if (up.error) throw new Error(up.error.message);
+    const { error } = await db.rpc("walk_answer_set", { p_visit_id: W.visit, p_q: q, p_question: t, p_na: false, p_key: key, p_size: blob.size }); if (error) throw new Error(rpcErr(error));
+    W.ans[q] = { na: false, key, url: URL.createObjectURL(blob) }; W.busy = null; renderInvoiceEditor();
+  } catch (e) { W.busy = null; renderInvoiceEditor(); say("The picture for question " + q + " was not saved: " + (e.message || "try again") + ". Take it again, or press N/A."); }
+}
 function ieWalkWire() {
   const W = WALK, box = $("#ie-walk"); if (!W || !box) return;
+  walkLoadQs(W);
+  box.querySelectorAll("[data-walk-pic]").forEach(i => i.addEventListener("change", () => { const f = i.files && i.files[0]; if (f) walkAnswer(Number(i.dataset.walkPic), f); }));
+  box.querySelectorAll("[data-walk-na]").forEach(b => b.addEventListener("click", () => walkAnswer(Number(b.dataset.walkNa), null)));
   $("#ie-walk-notes")?.addEventListener("input", e => { W.notes = e.target.value; });
   $("#ie-walk-signer")?.addEventListener("input", e => { W.signer = e.target.value; });
-  $("#ie-walk-done")?.addEventListener("click", () => { W.done = true; renderInvoiceEditor(); document.querySelector("#ie-walk")?.scrollIntoView({ block: "start" }); });
+  $("#ie-walk-done")?.addEventListener("click", () => {
+    const left = !W.qs ? 4 : walkLeft(W);
+    if (left) { const m = $("#ie-walk-msg"); m.className = "ie-walk-msg err"; m.textContent = `Answer all 4 questions first. ${left} ${left === 1 ? "is" : "are"} left: take a picture, or press N/A.`; document.querySelector(".ie-walk-q:not(.done)")?.scrollIntoView({ block: "center" }); return; }
+    W.done = true; renderInvoiceEditor(); document.querySelector("#ie-walk")?.scrollIntoView({ block: "start" }); });
   $("#ie-walk-back")?.addEventListener("click", () => { W.done = false; renderInvoiceEditor(); });
   $("#ie-walk-unsign")?.addEventListener("click", () => { W.png = null; renderInvoiceEditor(); });
   const pad = $("#ie-walk-pad canvas");

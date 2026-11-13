@@ -6,6 +6,13 @@ CREATE TABLE IF NOT EXISTS public.walk_results (
   notes text, signer_name text, signature_png text,
   done_at timestamptz NOT NULL DEFAULT now(), done_by bigint);
 ALTER TABLE public.walk_results ENABLE ROW LEVEL SECURITY;   -- no policies: only through the functions below
+-- Nov 13 (Carlo): the tech answers 4 questions on a walk, each with a picture or N/A; all 4 before the call can be completed (see 288_walk_questions.sql)
+CREATE TABLE IF NOT EXISTS public.walk_answers (
+  visit_id bigint NOT NULL REFERENCES public.visits(id) ON DELETE CASCADE, q int NOT NULL CHECK (q BETWEEN 1 AND 4),
+  question text, na boolean NOT NULL DEFAULT false, storage_key text, attachment_id bigint,
+  at timestamptz NOT NULL DEFAULT now(), by_user bigint, PRIMARY KEY (visit_id, q));
+ALTER TABLE public.walk_answers ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.walk_answers FROM PUBLIC, anon, authenticated;
 
 -- the job's own finished invoice (the one made when the job was sold), so "I'm here" opens it and does not start a second one
 CREATE OR REPLACE FUNCTION public.job_invoice(p_job bigint) RETURNS bigint
@@ -28,6 +35,9 @@ BEGIN
     RAISE EXCEPTION 'You can only finish calls you''re on';
   END IF;
   IF v.status IN ('completed', 'cancelled') THEN RAISE EXCEPTION 'That call is already %', CASE v.status WHEN 'completed' THEN 'done' ELSE 'cancelled' END; END IF;
+  IF (SELECT count(*) FROM walk_answers a WHERE a.visit_id = p_visit_id AND (a.na OR a.storage_key IS NOT NULL)) < 4 THEN
+    RAISE EXCEPTION 'Answer all 4 questions first: a picture, or N/A, for each one';
+  END IF;
   IF length(coalesce(v_png, '')) > 400000 THEN RAISE EXCEPTION 'That signature is too big'; END IF;
   IF length(coalesce(v_notes, '')) > 8000 THEN RAISE EXCEPTION 'The notes are too long'; END IF;
   INSERT INTO walk_results (visit_id, job_id, notes, signer_name, signature_png, done_at, done_by)
@@ -52,6 +62,7 @@ BEGIN
       'customer_id', c.id, 'customer', c.display_name, 'address', concat_ws(', ', l.street, 'Unit ' || nullif(btrim(l.unit), ''), l.city),
       'done_at', w.done_at,
       'tech', (SELECT string_agg(public._emp_name(va.employee_id), ' and ' ORDER BY (va.role <> 'lead'), va.id) FROM visit_assignments va WHERE va.visit_id = v.id),
+      'answers', (SELECT coalesce(jsonb_agg(jsonb_build_object('q', a.q, 'question', a.question, 'na', a.na, 'key', a.storage_key) ORDER BY a.q), '[]'::jsonb) FROM walk_answers a WHERE a.visit_id = w.visit_id),
       'notes', w.notes, 'signed', w.signature_png IS NOT NULL, 'signer', w.signer_name, 'sig', w.signature_png,
       'invoice', (SELECT i.id FROM invoices i WHERE i.job_id = j.id AND i.status NOT IN ('void', 'draft') AND i.store_copy_of IS NULL ORDER BY i.id LIMIT 1)) AS x
     FROM walk_results w
