@@ -1789,6 +1789,8 @@
   /* Payroll → Source payment (George, Nov 13): the theme (dark blue bar, white panels, green only for paid / save), big and plain */
   .src { margin: 10px 0 18px; border: 1px solid #d3dbe4; border-radius: 8px; background: #fff; overflow: hidden; }
   .src-bar { background: linear-gradient(180deg, #2b4f73, #23415f); color: #fff; padding: 12px 16px; }
+  .src-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .src-bar button.src-older { background: linear-gradient(180deg, #ffffff, #eef4fa) !important; color: #23415f !important; border: 1.5px solid #bcd0e3 !important; border-radius: 12px; padding: 10px 14px; font-weight: 700; font-size: 15px; }
   .src-bar h2 { margin: 0; font-size: 22px; color: #fff; } .src-bar h2 span { display: block; font-size: 14px; font-weight: 500; opacity: .85; margin-top: 2px; }
   .src > .staff-msg, .src-none { margin: 12px 16px; } .src-none { font-size: 17px; font-weight: 700; color: #1f6b3a; }
   .src-card { margin: 12px 16px; padding: 14px 16px; border: 1px solid #d3dbe4; border-left: 6px solid #23415f; border-radius: 6px; background: #fff; }
@@ -33073,7 +33075,7 @@ async function srcBox(msg) {
   const rows = SRC.rows, open = rows.filter(r => !r.paid && (r.to < salesToday() || r.state !== "due")).sort((a, b) => a.due < b.due ? -1 : 1);
   const now = rows.filter(r => !r.paid && !open.includes(r)), done = rows.filter(r => r.paid);
   host.innerHTML = `<section class="src" aria-label="Source payments">
-    <div class="src-bar"><h2>Source payment <span>CRA payroll deductions: tax, CPP and EI</span></h2></div>
+    <div class="src-bar"><h2>Source payment <span>CRA payroll deductions: tax, CPP and EI</span></h2><button type="button" class="btn src-older" data-src-older>＋ Add older payments</button></div>
     ${msg ? `<div class="staff-msg ok" role="status">${esc(msg)}</div>` : ""}
     ${open.length ? open.map(srcCard).join("") : `<p class="src-none">✓ Nothing to pay right now.${now.length ? ` Next: ${esc(srcPeriod(now[0]))}, due ${esc(longDate(now[0].due))}.` : ""}</p>`}
     ${now.length ? `<details class="src-more"><summary>This period (${esc(srcPeriod(now[0]))}): not over yet</summary>${now.map(srcCard).join("")}</details>` : ""}
@@ -33110,6 +33112,31 @@ function srcEmailBox(r) {
 }
 const srcDueOf = from => { const d = new Date(from + "T12:00:00Z"); let x = d.getUTCDate() === 1 ? new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 25)) : new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 10));
   const w = x.getUTCDay(); if (w === 6) x = new Date(x.getTime() + 2 * 864e5); if (w === 0) x = new Date(x.getTime() + 864e5); return x.toISOString().slice(0, 10); };
+// the half month a PDF is for: by the date paid to employees (how the CRA counts it), else by its due date (George, Nov 13)
+const srcPerOf = d => { if (!d) return null; const [y, m, dd] = d.split("-").map(Number), last = new Date(Date.UTC(y, m, 0)).getUTCDate(), mm = String(m).padStart(2, "0");
+  return dd <= 15 ? { from: `${y}-${mm}-01`, to: `${y}-${mm}-15` } : { from: `${y}-${mm}-16`, to: `${y}-${mm}-${last}` }; };
+const srcPerOfPdf = o => o?.emp_paid_on ? srcPerOf(o.emp_paid_on) : o?.due ? (() => { const [y, m, d] = o.due.split("-").map(Number);
+  return d >= 20 ? srcPerOf(`${y}-${String(m).padStart(2, "0")}-01`) : srcPerOf(new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10)); })() : null;
+// ＋ Add older payments: pick one or many confirmation PDFs; each is read and saved on its own period, then a list says what happened
+function srcOlderBox() {
+  const me = (() => { try { return smMyFirst?.() || ""; } catch { return ""; } })();
+  const { w } = srcModal("Add older payments", `<p class="src-hint">Pick the payment confirmation PDFs from the bank. You can pick many at once. I read each one and put it on its own period, by the date the employees were paid (or its due date). A period that already has a payment is left alone.</p>
+    <label class="src-file"><span>📄 Payment confirmation PDFs</span><input type="file" accept="application/pdf,.pdf" multiple></label>
+    <div class="src-read"></div><div class="src-pop-btns"><button type="button" class="btn quiet-btn" data-src-x>Close</button></div>`);
+  const inp = w.querySelector('input[type="file"]'), out = w.querySelector(".src-read");
+  inp.addEventListener("change", async () => { const fs = [...inp.files]; if (!fs.length) return; inp.disabled = true; let ok = 0; out.innerHTML = "";
+    for (const [i, f] of fs.entries()) { const line = document.createElement("p"); line.className = "src-chk"; line.textContent = `Reading ${i + 1} of ${fs.length}: ${f.name}…`; out.append(line);
+      let o; try { o = await srcReadPdf(f); } catch (e) { line.className = "src-chk bad"; line.textContent = `✗ ${f.name}: I could not read it (${e.message || e}).`; continue; }
+      const per = srcPerOfPdf(o);
+      if (!o.confirmation || !o.paid_on || o.paid_amount == null || !per) { line.className = "src-chk bad"; line.textContent = `✗ ${f.name}: not saved. I could not find ${[!o.confirmation && "the confirmation number", !o.paid_on && "the payment date", o.paid_amount == null && "the amount", !per && "the period"].filter(Boolean).join(", ")} on it. Is it a payment confirmation?`; continue; }
+      const { data, error } = await db.rpc("source_add_paid", { p: { ...o, paid_by: me } });
+      if (error) { line.className = "src-chk bad"; line.textContent = `✗ ${f.name}: not saved. ${rpcErr(error)}`; continue; }
+      ok++; const late = data.paid_on > data.due;
+      line.className = `src-chk ${late ? "bad" : "ok"}`; line.textContent = `✓ ${srcPeriod(data)}: ${money(data.paid_amount)} paid ${longDate(data.paid_on)}, confirmation ${data.confirmation}${late ? ` (${srcDays(data.due, data.paid_on)} days after the due date)` : ""}.`; }
+    inp.disabled = false; inp.value = "";
+    out.insertAdjacentHTML("beforeend", `<p class="src-chk${ok ? " ok" : ""}">${ok} of ${fs.length} saved. You can pick more, or Close.</p>`);
+    srcBox(ok ? `Added ${ok} older payment${ok === 1 ? "" : "s"}.` : ""); srcRefreshDue(); });
+}
 function srcPayBox(r) {
   const me = (() => { try { return smMyFirst?.() || ""; } catch { return ""; } })();
   const { w, close } = srcModal(`Mark it paid: ${srcPeriod(r)}`, `<p class="src-hint">Attach the payment confirmation PDF from the bank. It can't be marked paid without it. The app reads the confirmation number, the payment date and the amount from it; check them, then save.</p>
@@ -33130,8 +33157,8 @@ function srcPayBox(r) {
     if (r.total != null && amt != null) bits.push(Math.abs(amt - Number(r.total)) < 0.005 ? `<p class="src-chk ok">✓ ${money(amt)} is the accountant's amount.</p>` : `<p class="src-chk bad">⚠ ${money(amt)} is ${money(Math.abs(amt - Number(r.total)))} ${amt > Number(r.total) ? "more" : "less"} than the accountant's amount (${money(r.total)}).</p>`);
     if (r.total == null) bits.push(`<p class="src-chk">No amount from the accountant yet. The amount on the PDF will be used.</p>`);
     if (day && day > r.due) bits.push(`<p class="src-chk bad">⚠ The payment date (${esc(longDate(day))}) is ${srcDays(r.due, day)} day${srcDays(r.due, day) === 1 ? "" : "s"} after the due date (${esc(longDate(r.due))}). The CRA can charge a penalty and interest on a late payment.</p>`);
-    if (got.due && got.due !== r.due) bits.push(`<p class="src-chk bad">⚠ The PDF's due date is ${esc(longDate(got.due))}, but this period is due ${esc(longDate(r.due))}. Is it the PDF for this period?</p>`);
-    if (got.emp_paid_on && (got.emp_paid_on < r.from || got.emp_paid_on > r.to)) bits.push(`<p class="src-chk bad">⚠ The PDF says the employees were paid ${esc(longDate(got.emp_paid_on))}, which is not in ${esc(srcPeriod(r))}.</p>`);
+    const per = srcPerOfPdf(got);
+    if (per && (per.from !== r.from || per.to !== r.to)) bits.push(`<p class="src-chk bad">⚠ This PDF is for <b>${esc(srcPeriod(per))}</b>${got.emp_paid_on ? ` (the employees were paid ${esc(longDate(got.emp_paid_on))})` : ""}, not ${esc(srcPeriod(r))}. It will be saved on ${esc(srcPeriod(per))}.</p>`);
     if (got.gross != null && r.gross != null && Math.abs(got.gross - Number(r.gross)) >= 0.005) bits.push(`<p class="src-chk bad">⚠ Gross payroll is ${money(got.gross)} on the PDF and ${money(r.gross)} in the accountant's email.</p>`);
     if (got.bank_status && day > salesToday()) bits.push(`<p class="src-chk">The bank says "${esc(got.bank_status)}". It will show as scheduled until ${esc(longDate(day))}.</p>`);
     out.innerHTML = bits.join("");
@@ -33146,15 +33173,16 @@ function srcPayBox(r) {
   form.addEventListener("input", check);
   sv.addEventListener("click", async () => { sv.disabled = true;
     const p = { ...got, confirmation: F("confirmation").value.trim(), paid_on: F("paid_on").value, paid_amount: srcNum(F("paid_amount").value), paid_by: F("paid_by").value.trim(), paid_how: F("paid_how").value.trim(), total: got.paid_amount };
-    const { data, error } = await db.rpc("source_mark_paid", { p_id: r.id, p });
+    const { data, error } = await db.rpc("source_add_paid", { p: { ...p, from: r.from, to: r.to } });   // filed on the PDF's own period
     if (error) { sv.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
-    close(); srcBox(data?.state === "scheduled" ? `Saved: scheduled for ${longDate(data.paid_on)}, confirmation ${data.confirmation}.` : `Saved: paid, confirmation ${data?.confirmation || ""}.`); srcRefreshDue(); });
+    close(); srcBox(`Saved on ${srcPeriod(data)}: ${data?.state === "scheduled" ? `scheduled for ${longDate(data.paid_on)}` : "paid"}, confirmation ${data?.confirmation || ""}.`); srcRefreshDue(); });
 }
 // one click handler for the whole box (it is drawn again often)
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-src-pay],[data-src-email],[data-src-pdf],[data-src-unpay],[data-src-gross],[data-src-open],[data-src-person],[data-src-go]"); if (!t) return;
+  const t = e.target.closest("[data-src-pay],[data-src-email],[data-src-pdf],[data-src-unpay],[data-src-gross],[data-src-open],[data-src-person],[data-src-go],[data-src-older]"); if (!t) return;
   const id = Number(t.dataset.srcPay || t.dataset.srcEmail || t.dataset.srcPdf || t.dataset.srcUnpay || t.dataset.srcGross || t.dataset.srcOpen || 0), r = (SRC.rows || []).find(x => x.id === id);
   if (t.dataset.srcGo != null) { e.preventDefault(); return openPayroll(); }
+  if (t.dataset.srcOlder != null) return srcOlderBox();
   if (t.dataset.srcPerson) return openPayrollPerson(Number(t.dataset.srcPerson));
   if (t.dataset.srcPdf) return srcOpenPdf(id);
   if (!r) return;
