@@ -25541,7 +25541,7 @@ async function openInvoiceEditor(id, msg) {
   if (data && !cost.error && cost.data) cost.data.plan = await costPlan(data.lines).catch(() => null);
   if (data) { data.cost = cost.error ? null : cost.data; data.bill = bill.error || !bill.data ? null : { ...bill.data, invoice_id: id }; data.prule = prule.error ? null : prule.data; }
   if (data) { data.tankpo = null;   // a Vista tank job: the tank's P.O. (and credit order) at the bottom of the invoice
-    if (["reid", "partner"].includes(data.prule?.tank)) { const [t] = await Promise.all([db.rpc("tank_order_for", { p_invoice: id }), loadSuppliers()]); data.tankpo = t.error ? null : t.data; } }
+    if (["reid", "partner"].includes(data.prule?.tank)) { const [t, ts] = await Promise.all([db.rpc("tank_order_for", { p_invoice: id }), db.rpc("tank_suppliers_for", { p_invoice: id }), loadSuppliers()]); data.tankpo = t.error ? null : t.data; data.tanksups = ts.error ? null : ts.data; } }
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the invoice</h2>${esc(error ? rpcErr(error) : "It no longer exists")}</div></div>`; return; }
   if (ME.role === "sales" && (data.looks || []).length) {   // a sales person only sees the partners they're allowed to sell for (Staff page, "Sales call for")
     const sp = await db.rpc("sales_people"), me = (sp.data || []).find(x => x.me), allowed = me && Array.isArray(me.sales_for) ? me.sales_for.map(Number) : null;
@@ -26060,6 +26060,14 @@ function iePartnerRuleHtml(I, edit) {
       <button class="btn" type="button" id="ie-prates">Use ${nm} rates</button></div>` : ""}</div>`;
 }
 // Vista tank job: the tank's P.O. at the bottom of the invoice. We pay → a P.O.; Vista pays → a P.O. and a Credit Order that waits for the supplier's credit.
+// the suppliers offered for a tank: only the ones we buy that tank from (its supplier part numbers and its usual supplier); if the item has none, the ones we buy tanks from;
+// "Another supplier…" opens the whole list, so nobody is stuck (Carlo, Nov 13: "only list suppliers that we buy them from, not all of them")
+function ieTankSupOpts(I, lineId, all) {
+  const S = SUPPLIERS || [], TS = I.tanksups, L = (I.tankpo?.lines || []).find(x => x.id === Number(lineId));
+  let ids = !all && TS ? ((TS.by_item || {})[String(L?.item_id)] || []) : []; if (!all && TS && !ids.length) ids = TS.tanks || [];
+  const list = ids.length ? S.filter(x => ids.includes(x.id)) : S, short = ids.length && list.length && list.length < S.length;
+  return `<option value="">Pick the supplier…</option>${(short ? list : S).map(x => `<option value="${x.id}" ${short && list.length === 1 ? "selected" : ""}>${esc(x.name)}</option>`).join("")}${short ? `<option value="all">Another supplier…</option>` : `<option value="other">Someone else…</option>`}`;
+}
 function ieTankPoHtml(I) {
   const T = I.tankpo; if (!T || !["reid", "partner"].includes(T.payer)) return "";
   const nm = esc(String(I.prule?.name || "Vista").replace(/\s*\(.*\)\s*$/, "").replace(/ credit$/i, "")), vista = T.payer === "partner";
@@ -26080,7 +26088,7 @@ function ieTankPoHtml(I) {
         <div class="ie-tpo-q"><span class="ie-tpo-n">1</span><b>Which line is the tank?</b></div>
         <div class="ie-tpo-lines">${L.map(x => `<label><input type="radio" name="line" value="${x.id}" ${x.id === pick ? "checked" : ""}> <span>${esc(pbName(x.description || ""))}${x.sku ? ` <i>${esc(x.sku)}</i>` : ""} · ${Number(x.quantity)}${x.unit_cost != null ? " × " + m(x.unit_cost) : ""}</span></label>`).join("")}</div>
         <div class="ie-tpo-q"><span class="ie-tpo-n">2</span><b>Which supplier did we buy the tank from?</b></div>
-        <select name="supplier" required><option value="">Pick the supplier…</option>${(SUPPLIERS || []).map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}<option value="other">Someone else…</option></select>
+        <select name="supplier" required>${ieTankSupOpts(I, pick, false)}</select>
         <input name="other" class="hidden" placeholder="Type the supplier's name" maxlength="120">
         <button class="btn save-go ie-tpo-go" type="submit">${vista ? "Create the P.O. and the Credit Order" : "Create the P.O."}</button><span class="ie-tpo-msg" role="status"></span>
       </form>`;
@@ -26097,7 +26105,10 @@ function ieTankPoWire(I, reload) {
   document.querySelectorAll("[data-ie-tpo-open]").forEach(b => b.addEventListener("click", () => openPOPage(Number(b.dataset.ieTpoOpen))));
   $("[data-ie-tpo-more]")?.addEventListener("click", () => { IE.tpoMore = true; renderInvoiceEditor(); });
   const f = $("#ie-tpo-f");
-  if (f) { f.supplier.addEventListener("change", () => { f.other.classList.toggle("hidden", f.supplier.value !== "other"); if (f.supplier.value === "other") f.other.focus(); });
+  if (f) { f.supplier.addEventListener("change", () => {
+      if (f.supplier.value === "all") { f.supplier.innerHTML = ieTankSupOpts(I, f.line.value, true); f.supplier.focus(); }   // Another supplier…: the whole list
+      f.other.classList.toggle("hidden", f.supplier.value !== "other"); if (f.supplier.value === "other") f.other.focus(); });
+    f.querySelectorAll('input[name="line"]').forEach(r => r.addEventListener("change", () => { f.supplier.innerHTML = ieTankSupOpts(I, f.line.value, false); f.other.classList.add("hidden"); }));   // another tank line: its own suppliers
     f.addEventListener("submit", async e => { e.preventDefault(); const msg = f.querySelector(".ie-tpo-msg"), other = f.supplier.value === "other", line = Number(f.line.value);
       if (!line) { msg.textContent = "Pick which line is the tank."; return; }
       if (other && !f.other.value.trim()) { msg.textContent = "Type the supplier's name."; return; }
