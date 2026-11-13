@@ -7381,6 +7381,11 @@ article.ie .ie-notes2 textarea { width: 100%; min-width: 0; box-sizing: border-b
 article.ie .ie-notes2 .ie-note-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 article.ie .ie-notes2 .ie-note-msg { font-size: 13.5px; font-weight: 600; color: #1b6b36; }
 article.ie .ie-notes2 .ie-note-saved { display: grid; gap: 3px; font-size: 13.5px; font-weight: 500; color: #1b6b36; }
+.note .note-techonly { display: block; width: fit-content; margin-bottom: 3px; padding: 2px 8px; border: 1px solid #d8c79a; border-radius: 6px; background: #fbf6e8; color: #6b5310; font-size: 12.5px; font-weight: 700; }
+article.ie .ie-notes2 .ie-note-saved b { font-weight: 750; color: #6b5310; }
+article.ie .ie-notes2 .ie-note-saved i { font-style: normal; color: #5a6f84; font-size: 12.5px; }
+article.ie .ie-technotes-box .ie-notes2 { margin-top: 0; padding-top: 0; border-top: 0; }
+@media print { .note-techonly, .ie-notes2, .ie-technotes-box { display: none !important; } }
 /* copy buttons an owner put on a page (Carlo, Nov 12) */
 .cpy-pasted { outline: 3px solid #1f9d4a !important; outline-offset: 1px; transition: outline-color .3s; }
 .cpy-btn { display: inline-grid; place-items: center; vertical-align: middle; width: 26px; height: 26px; margin: 0 0 0 6px; padding: 0; border: 1px solid #9fb6cc; border-radius: 5px; background: #fff; color: #23415f; font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 1px 2px rgba(35, 65, 95, .15); font-weight: 700; text-indent: 0; letter-spacing: 0; text-transform: none; }
@@ -10644,7 +10649,7 @@ function noteHtml(n, hide, job, rank, pinCount) {
     : `<button class="link" data-pin-set="1" data-note-id="${n.id}">Pin</button>`;
   const actions = `<span class="note-actions"><button class="link" type="button" data-copy-note="${n.id ?? ""}" title="Copy this note">Copy</button>${pinTools}${can("notes.edit") && rank !== undefined ? `<button class="link" data-edit-note="${n.id}">Edit</button>` : ""}${can("notes.delete") && rank !== undefined ? `<button class="link danger" data-delete-note="${n.id}">Delete</button>` : ""}</span>`;
   const pinStyle = n.pinned && rank != null ? ` style="--pin:${pinColor(rank)}"` : "";
-  return `<div class="note${n.pinned ? " pin" : ""}${n.fresh ? " fresh" : ""}${hide === true ? " hidden" : ""}"${pinStyle} data-note="${n.id}">${n.pinned ? `<span class="pin-label">Pinned${rank != null ? " " + (rank + 1) : ""}</span>` : ""}${jobLabel}<span class="body">${n.source === "podium" ? podiumBody(n.body) : esc(n.body)}</span>${n.source === "podium" && n.id && noteRecCan() && /call duration|a call was|voicemail/i.test(n.body || "") ? noteRecSlot(n.id) : ""}<span class="when"><b class="ndate">${fmtDate(n.created_at)}</b>${who ? ", by " + esc(who) : ""}${actions}</span></div>`;
+  return `<div class="note${n.pinned ? " pin" : ""}${n.fresh ? " fresh" : ""}${hide === true ? " hidden" : ""}"${pinStyle} data-note="${n.id}">${n.pinned ? `<span class="pin-label">Pinned${rank != null ? " " + (rank + 1) : ""}</span>` : ""}${jobLabel}${isTechNote(n.body) ? `<span class="note-techonly">🔧 For the techs only. Never printed. Never sent to the customer.</span>` : ""}<span class="body">${n.source === "podium" ? podiumBody(n.body) : esc(isTechNote(n.body) ? String(n.body).slice(TECH_NOTE.length) : n.body)}</span>${n.source === "podium" && n.id && noteRecCan() && /call duration|a call was|voicemail/i.test(n.body || "") ? noteRecSlot(n.id) : ""}<span class="when"><b class="ndate">${fmtDate(n.created_at)}</b>${who ? ", by " + esc(who) : ""}${actions}</span></div>`;
 }
 
 function alertNote(btn, text) {
@@ -18661,7 +18666,7 @@ async function nfRun(show) {
       const { data, error } = await db.rpc("partner_file_notes", { p_partner: PP.store, p_rows: chunk, p_note_count: 5, p_podium: true });
       if (error && /timeout|canceling statement/i.test(error.message || "") && size > 5) { size = Math.max(5, Math.floor(size / 3)); continue; }
       if (error) { N.busy = false; N.err = true; N.msg = "Stopped: " + (/PGRST202|could not find/i.test(error.message || "") ? "run RUN SETUP NOW.bat first (file 99p)." : rpcErr(error)); return show(); }
-      found.push(...data); i += chunk.length;
+      found.push(...nfNoTech(data)); i += chunk.length;
       N.msg = `Matching… ${i.toLocaleString()} of ${N.rows.length.toLocaleString()}`; show();
     }
     N.found = found; N.busy = false; N.msg = "";
@@ -23068,7 +23073,7 @@ async function htinMatch() {
     const { data, error } = await db.rpc("partner_file_notes", { p_partner: PBL.partner, p_rows: chunk, p_note_count: 5, p_podium: true });
     if (error && /timeout|canceling statement/i.test(error.message || "") && size > 5) { size = Math.max(5, Math.floor(size / 3)); continue; }
     if (error) { N.busy = false; N.err = true; N.msg = "Couldn't load our notes: " + (/PGRST202|could not find/i.test(error.message || "") ? "run RUN SETUP NOW.bat first (file 99p)." : rpcErr(error)); htinBar(); return; }
-    for (const d of data) { const k = N.found.findIndex(f => f.i === d.i); if (k < 0) continue; N.found[k] = d; htinApply(d); N.matched++; if (PBL.nf === N) nfRedrawRowQuiet(d.i); }
+    for (const d of nfNoTech(data)) { const k = N.found.findIndex(f => f.i === d.i); if (k < 0) continue; N.found[k] = d; htinApply(d); N.matched++; if (PBL.nf === N) nfRedrawRowQuiet(d.i); }
     at += chunk.length; N.msg = `Loading our notes… ${Math.min(at, todo.length)} of ${todo.length}`; htinBar();
   }
   N.busy = false; N.msg = ""; htinSave(); htinBar();
@@ -25596,6 +25601,8 @@ async function openInvoiceEditor(id, msg) {
     if (allowed) data.looks = data.looks.filter(l => allowed.includes(Number(l.id)) || Number(l.id) === Number(data.look_partner_id));
   }
   IE = { ...(IE?.id === id ? IE : {}), ...data, id };
+  if (data.job_id) { const tn = await db.from("notes").select("id, body, created_at").eq("entity_type", "job").eq("entity_id", data.job_id).like("body", "For the techs (the customer does not see this)%").order("created_at");
+    IE.techNotes = tn.error ? (IE.techNotes || []) : tn.data || []; } else IE.techNotes = [];
   if (await ieAutoRates()) return openInvoiceEditor(id, msg);   // the partner's rates were put on new lines: load the invoice again with them
   await pbLoadLooks((data.lines || []).map(l => l.item_id).filter(Boolean)).catch(() => {});
   nameCurrentPage("invoice " + data.number);
@@ -25986,9 +25993,9 @@ function renderInvoiceEditor(msg) {
             <input name="p" inputmode="decimal" placeholder="Price (minus for a discount)" required><label class="pb-check"><input type="checkbox" name="t" checked> HST</label><button class="btn quiet-btn" type="submit">Add</button></form></details>
         ${notesUp ? `<div class="ie-notes2">
           <label class="ie-notes ie-note-cust"><span>📄 Notes for the job <small>The customer sees this. It prints on the invoice.</small></span><textarea id="ie-notes" rows="3" placeholder="Type a note the customer will see">${esc(I.notes || "")}</textarea><span class="ie-note-msg" id="ie-notes-msg" role="status"></span></label>
-          <label class="ie-notes ie-note-tech"><span>🔧 Notes for the techs <small>The customer does not see this. It is saved on the job.</small></span><textarea id="ie-technote" rows="3" maxlength="4000" placeholder="Type a note only our techs will see">${esc(IE.techDraft || "")}</textarea>
+          <label class="ie-notes ie-note-tech"><span>🔧 Notes for the techs <small>The customer does not see this. It is saved on the job.</small></span><textarea id="ie-technote" rows="3" maxlength="4000" placeholder="${(IE.techNotes || []).length ? "Type another note only our techs will see" : "Type a note only our techs will see"}">${esc(IE.techDraft || "")}</textarea>
             <span class="ie-note-row"><button class="btn" type="button" id="ie-technote-save">Save the note for the techs</button><span class="ie-note-msg" id="ie-technote-msg" role="status"></span></span>
-            ${(IE.techSaved || []).length ? `<span class="ie-note-saved">${IE.techSaved.map(t => `<span>✓ Saved for the techs: ${esc(t)}</span>`).join("")}</span>` : ""}</label>
+            ${(IE.techNotes || []).length ? `<span class="ie-note-saved"><b>Saved for the techs (${IE.techNotes.length}). Never printed. Never sent to the customer.</b>${IE.techNotes.map(n => `<span>🔧 ${esc(String(n.body || "").slice(TECH_NOTE.length))}${n.created_at ? ` <i>${esc(fmtDate(String(n.created_at).slice(0, 10)))}</i>` : ""}</span>`).join("")}</span>` : ""}</label>
         </div>` : ""}
       </div></section>` : ""}
       <section class="ie-card" data-ie-card="lines">${H("What is on this invoice", edit ? "Change a number in its box. × takes a line off." : "")}
@@ -26031,6 +26038,9 @@ function renderInvoiceEditor(msg) {
         : `<button class="link danger" type="button" id="ie-cancel">Cancel this invoice (made by mistake)</button>`}</div>` : ""}
       ${I.status === "void" ? `<div class="approve-banner"><div><strong>This invoice was cancelled (void).</strong> It doesn't count toward anything owing.</div></div>` : ""}
     </section></div>
+    ${!notesUp && I.can_edit && I.job_id && I.status !== "void" && (I.lines.length || (IE.techNotes || []).length) ? `<section class="cl-tools ie-technotes-box"><div class="ie-notes2"><label class="ie-notes ie-note-tech"><span>🔧 Notes for the techs <small>The customer does not see this. It is saved on the job. It is never printed and never sent.</small></span><textarea id="ie-technote" rows="3" maxlength="4000" placeholder="Type a note only our techs will see">${esc(IE.techDraft || "")}</textarea>
+        <span class="ie-note-row"><button class="btn" type="button" id="ie-technote-save">Save the note for the techs</button><span class="ie-note-msg" id="ie-technote-msg" role="status"></span></span>
+        ${(IE.techNotes || []).length ? `<span class="ie-note-saved"><b>Saved for the techs (${IE.techNotes.length}). Never printed. Never sent to the customer.</b>${IE.techNotes.map(n => `<span>🔧 ${esc(String(n.body || "").slice(TECH_NOTE.length))}${n.created_at ? ` <i>${esc(fmtDate(String(n.created_at).slice(0, 10)))}</i>` : ""}</span>`).join("")}</span>` : ""}</label></div></section>` : ""}
     ${!draft && I.status !== "void" && signHere ? `<section class="cl-tools ie-sign-box"><h2>${NO.sign ? `<span class="ie-sec-n ie-sec-n-sm">${NO.sign}</span> ` : ""}The customer signs</h2>
       ${I.signature ? `<div class="ie-sig"><img alt="Signature" src="data:image/png;base64,${I.signature}"><div class="quiet">${esc(I.signer_name || "")} · signed ${esc(sfWhen(I.signed_at))}</div>
           ${I.can_edit ? `<button class="link" type="button" id="ie-unsign">Clear and sign again</button>` : ""}</div>`
@@ -26268,6 +26278,11 @@ document.addEventListener("click", async e => { const c = e.target.closest("[dat
   if (i) { e.preventDefault(); return openInvoiceEditor(Number(i.dataset.tcoInv)); }
   if (po) { e.preventDefault(); return openPOPage(Number(po.dataset.tcoPo)); }
   if (!dn) return; e.preventDefault(); const r = await tankCreditStep(Number(dn.dataset.tcoDone), "received", dn.dataset.amt); if (r) { alertMsg(r); tankCreditBox(true); } });
+// Notes for the techs: job notes that start with these words. The customer never sees them: they are not on the printed or emailed invoice
+// (that only carries the invoice's own note), and they are taken out of the notes offered for a partner's list (Carlo, Nov 13).
+var TECH_NOTE = "For the techs (the customer does not see this): ";   // var and function: they are used by code higher up in this file
+function isTechNote(b) { return String(b || "").startsWith("For the techs (the customer does not see this)"); }
+function nfNoTech(rows) { (rows || []).forEach(f => { if (f && Array.isArray(f.notes)) f.notes = f.notes.filter(n => !isTechNote(n.body)); }); return rows || []; }
 // A partner's job: the partner's labour and service call rates (set on the Partners page) go on by themselves (Carlo, Nov 13: "I want the rates from
 // the Partners page to go on by themselves"; the Use rates button is gone). Once for each line: a labour or service call line that this computer has
 // not seen on this invoice before is set to the partner's rate. After that the line is left alone, so a price typed by hand on it stays.
@@ -26350,9 +26365,9 @@ function wireInvoiceEditor() {
   $("#ie-technote")?.addEventListener("input", e => { IE.techDraft = e.target.value; });
   $("#ie-technote-save")?.addEventListener("click", async e => { const t = ($("#ie-technote")?.value || "").trim(), m = $("#ie-technote-msg");
     if (!t) { if (m) m.textContent = "Type the note first."; return; } if (!I.job_id) { if (m) m.textContent = "This invoice has no job, so I can not save a note for the techs."; return; }
-    e.currentTarget.disabled = true; const { error } = await db.rpc("add_note", { p_entity_type: "job", p_entity_id: I.job_id, p_body: "For the techs (the customer does not see this): " + t, p_pinned: false });
+    e.currentTarget.disabled = true; const { error } = await db.rpc("add_note", { p_entity_type: "job", p_entity_id: I.job_id, p_body: TECH_NOTE + t, p_pinned: false });
     if (error) { e.currentTarget.disabled = false; if (m) m.textContent = "Not saved: " + rpcErr(error); return; }
-    IE.techSaved = [...(IE.techSaved || []), t]; IE.techDraft = ""; renderInvoiceEditor(); });
+    IE.techDraft = ""; openInvoiceEditor(I.id, "✓ The note is saved for the techs. The customer will not see it."); });
   $("#ie-finish")?.addEventListener("click", () => call("inv_finish", { p_invoice: I.id, p_notes: $("#ie-notes")?.value || null }, I.bill?.partner?.name || I.store ? "Finished. The customer can sign. The partner pays this one, so there is no payment to take." : "Finished. The customer can sign, then take the payment."));
   $("#ie-reopen")?.addEventListener("click", () => call("inv_reopen", { p_invoice: I.id }, "Open again: change what you need, then finish it again."));
   // a ServiceTitan invoice: edit it here; ServiceTitan changed it since: apply their changes or keep ours
