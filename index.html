@@ -13246,6 +13246,7 @@ document.addEventListener("input", e => { if (e.target.id === "bkw-mlist") windo
 const BKW_SC = /^service call\s*-\s*(regular|after)/i;   // Service Call - Regular Hours / After Hours: one button, then "Regular or after hours?"
 const bkAfterHours = F => !!F.ah || /after\s*hours/i.test((BOOK?.job_types || []).find(x => String(x.id) === String(F.type))?.name || "");
 // what a job type's button says on Book a call (the job type itself keeps its ServiceTitan name)
+const BKW_VK = [["tank", "🛢", "Hot Water Tank", "A tank water heater", "Install: Hot Water Tank"], ["tankless", "♨", "Tankless", "A tankless water heater", "Install: Tankless water heater"], ["hvac", "🔥", "HVAC", "Furnace, air conditioner, heat pump…", "Install: HVAC"]];   // Vista → Install choices
 const bkwLabel = n => { const x = String(n || "").trim(); return /^hvac\s*quote$/i.test(x) ? "Book a Sales Consultant" : /^walk\s*site\s*for\s*job$/i.test(x) ? "Book Tech to Walk Site for Job" : n; };
 const BKW_WC = /^warranty\s*-\s*hvac/i;   // Reid's "Warranty Call" (regular or after hours)
 const bkwPName = p => String(p?.name || "").replace(/\s*\(.*\)\s*$/, "");
@@ -13258,7 +13259,7 @@ function bkwTypes(F) {   // the job types for who the call is for: the partner's
     .sort((a, b) => (b.own - a.own) || ((b.used || 0) - (a.used || 0)) || a.name.localeCompare(b.name));
 }
 // Vista: who pays for the tank is asked only for an install or a water heater job
-const bkNeedTank = F => bkIsVista(F.forP) && (() => { const t = (BOOK.job_types || []).find(x => String(x.id) === String(F.type)); return !t || t.job_class === "install" || /water heater|tank/i.test(t.name); })();
+const bkNeedTank = F => bkIsVista(F.forP) && F.vk !== "hvac" && (() => { const t = (BOOK.job_types || []).find(x => String(x.id) === String(F.type)); return !t || t.job_class === "install" || /water heater|tank/i.test(t.name); })();
 const bkwUnit = id => (BOOK.units || []).find(u => String(u.id) === String(id));
 function bkCrumbs(F) {
   if (F.mode === "visit" && F.instEst) return `<span class="bkw-crumbs"><button type="button" class="bkw-crumb" data-bkw-go="who">🏠 Reid</button><span class="bkw-arr">›</span><button type="button" class="bkw-crumb" data-bkw-go="cat">🏗️ Install</button><span class="bkw-arr">›</span><button type="button" class="bkw-crumb on" data-bkw-go="inst">Sold estimate ${esc(F.instEst.number)}${F.instEst.option ? " · " + esc(F.instEst.option) : ""}</button></span>`;
@@ -13337,7 +13338,9 @@ function bkWizard(msg) {
     const timeBox = t => F.cat !== "maintenance" ? "" : `<div class="bkw-time">${canTime ? `<label>⏱ Time given <input type="number" min="5" max="600" step="5" value="${Number(t.duration) || 60}" data-bkw-min="${t.id}" aria-label="Minutes for ${esc(t.name)}"> min</label><span class="quiet" data-bkw-mint="${t.id}">${durText(Number(t.duration) || 60)}</span>` : `⏱ ${durText(Number(t.duration) || 60)}`}</div>`;
     const wc = !Number(F.forP) && F.cat === "service" ? types.find(t => BKW_WC.test(t.name)) : null;
     const reidInst = !Number(F.forP) && F.cat === "install";   // Reid installs from scratch: Gas Piping or Price Book only (Carlo, Nov 8)
-    grid = (sc.length ? `<button type="button" class="bkw-btn" data-bkw-sc><b>Service Call</b><small>Regular hours or after hours: asked next</small></button>` : "")
+    if (bkIsVista(F.forP) && F.cat === "install") { q = "What is being installed?";   // Vista → Install: three choices only (Carlo, Nov 12)
+      grid = BKW_VK.map(k => `<button type="button" class="bkw-btn big" data-bkw-vk="${k[0]}"><span class="bkw-ic">${k[1]}</span><b>${k[2]}</b><small>${k[3]}</small></button>`).join(""); }
+    else grid = (sc.length ? `<button type="button" class="bkw-btn" data-bkw-sc><b>Service Call</b><small>Regular hours or after hours: asked next</small></button>` : "")
       + (wc ? `<button type="button" class="bkw-btn" data-bkw-wc><b>Warranty Call</b><small>Regular hours or after hours: asked next</small></button>` : "")
       + (reidInst ? `<button type="button" class="bkw-btn" data-bkw-pb><span class="bkw-ic">📖</span><b>Price Book</b><small>Pick what's being installed; the install length comes from its labour hours</small></button>` : "")
       + types.filter(t => bkwCatOf(t, F) === F.cat && !(sc.length && BKW_SC.test(t.name)) && t !== wc && (!reidInst || /gas\s*piping/i.test(t.name))).map(t => `${F.cat === "maintenance" ? `<div class="bkw-tw">` : ""}<button type="button" class="bkw-btn${t.own ? " own" : ""}" data-bkw-type="${t.id}"><b>${esc(bkwLabel(t.name))}</b>
@@ -13375,6 +13378,11 @@ function bkWizard(msg) {
       return go("inst"); }
     if (F.cat === "maintenance" && !Number(F.forP) && BKW_MT(1)) { F.mpick = []; if (!BKW_MOPT) db.rpc("maint_options_get").then(({ data }) => { BKW_MOPT = data || []; if (BK === F && F.step === "maint") renderBooking(); }); return go("maint"); }
     if (list.length === 1) return bkwPick(list[0]); go("type"); }));
+  document.querySelectorAll("#main [data-bkw-vk]").forEach(b => b.addEventListener("click", () => { const k = BKW_VK.find(x => x[0] === b.dataset.bkwVk), L = BOOK.job_types || [];
+    const t = (k[0] === "tank" && L.find(x => /^hot\s*water\s*tank$/i.test(x.name))) || L.find(x => /^install\s*x\s*1$/i.test(x.name)) || L.find(x => x.job_class === "install" && !bkwPfx(x.name));
+    if (!t) return alertMsg("I can not find the install job type. Tell Carlo or George.");
+    F.vkNext = k[0]; if (!F.summary || F.summary === F.autoSum) { F.summary = k[4]; F.autoSum = k[4]; }
+    bkwPick(t); F.cat = "install"; renderBooking(); }));
   document.querySelectorAll("#main [data-bkw-type]").forEach(b => b.addEventListener("click", () => { const t = (BOOK.job_types || []).find(x => String(x.id) === b.dataset.bkwType);
     if (t && /^call\s*back$/i.test(t.name)) { F.cbType = t; F.cbList = null; db.rpc("callback_jobs", { p_customer: F.cust.id }).then(({ data, error }) => { F.cbList = error ? [] : data || []; if (BK === F && F.step === "cb") renderBooking(); }); return go("cb"); }
     if (t && /^maintenance\s*\d+$/i.test(t.name) && !Number(F.forP)) { if (F.mtype?.id !== t.id) F.mpick = []; F.mtype = t; if (!BKW_MOPT) db.rpc("maint_options_get").then(({ data }) => { BKW_MOPT = data || []; if (BK === F && F.step === "maint") renderBooking(); }); return go("maint"); }
@@ -13435,7 +13443,7 @@ function bkWizard(msg) {
     bkwPick(list.find(t => ah ? /after/i.test(t.name) : /regular/i.test(t.name)) || list[0]); }));
 }
 function bkwPick(t, ah = false) {   // the job is picked: its department and length fill in, and the rest of the booking opens
-  const F = BK; if (!t) return; F.cbJob = null;
+  const F = BK; if (!t) return; F.cbJob = null; F.vk = F.vkNext || null; F.vkNext = null;   // vk: Vista install → tank / tankless / hvac
   F.mode = "new"; F.jobId = null; F.type = String(t.id); F.cat = bkwCatOf(t, F) || t.job_class; F.ah = !!ah; F.prio = /after\s*hours/i.test(t.name) || F.ah ? "emergency" : "normal"; F.dur = String(t.duration || F.dur || 60); F.unit = t.unit_id ? String(t.unit_id) : ""; F.unitEdit = !t.unit_id;
   if (t.job_class === "sales" && /walk/i.test(t.name) && !F.summary) F.summary = "Walk the site";
   F.step = "done"; if (bkAH(F)) bkAHSetup(F); else if (F.oc) { F.oc = null; F.win = ["08:00", "11:00"]; F.techs = []; F.date = ymd(addDays(new Date(), 1)); }
