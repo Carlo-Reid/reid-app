@@ -7599,6 +7599,16 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
 /* The walk box on the invoice, and the To be Booked page (Carlo, Nov 13) */
   .ie-walk { background: linear-gradient(180deg, #ffffff, #eef4fa); border: 2px solid #23415f; border-radius: 14px; padding: 14px 16px; margin: 0 0 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 8px rgba(35, 65, 95, .12); }
   .ie-walk h2 { margin: 0; font-size: 22px; color: #23415f; }
+  /* the walk's camera (Carlo, Nov 13) */
+  #walk-cam { position: fixed; inset: 0; z-index: 9000; background: rgba(16, 35, 61, .72); display: flex; align-items: center; justify-content: center; padding: 12px; }
+  #walk-cam .wc-box { background: linear-gradient(180deg, #fff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 16px; padding: 14px; width: min(760px, 100%); max-height: 100%; overflow: auto; display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; }
+  #walk-cam .wc-h { font-size: 18px; color: #23415f; overflow-wrap: anywhere; }
+  #walk-cam .wc-view { position: relative; background: #10233d; border-radius: 12px; overflow: hidden; min-height: 220px; display: flex; align-items: center; justify-content: center; }
+  #walk-cam video { width: 100%; max-height: 60vh; display: block; object-fit: contain; }
+  #walk-cam .wc-msg { position: absolute; left: 0; right: 0; margin: 0; padding: 10px 14px; text-align: center; color: #fff; font-size: 17px; font-weight: 700; } #walk-cam .wc-msg:empty { display: none; }
+  #walk-cam .wc-msg.err { color: #ffd9d4; }
+  #walk-cam .wc-acts { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; } #walk-cam .wc-acts .mc-sq { width: 132px; height: 112px; min-height: 0; }
+  #walk-cam .mc-sq:disabled { opacity: .5; cursor: default; }
   /* the 4 questions of a walk: a picture or N/A for each (Carlo, Nov 13) */
   .ie-walk-qs { display: flex; flex-direction: column; gap: 8px; }
   .ie-walk-qh { font-size: 16px; color: #23415f; } .ie-walk-left { color: #b45309; } .ie-walk-all { color: #1b6b36; }
@@ -26943,8 +26953,8 @@ function walkQsHtml(W) {
           <span class="ie-walk-qa">${busy ? "Saving the picture…" : !a ? "Not answered yet." : a.na ? "✔ N/A: no picture." : "✔ The picture is saved in the job's photos."}</span></div>
         ${a && a.url ? `<img class="ie-walk-th" alt="The picture for question ${q}" src="${a.url}">` : ""}
         <div class="ie-walk-qb">
-          <label class="mc-sq${a ? "" : " mc-sq-go"}${busy ? " ie-off" : ""}"><input type="file" accept="image/*" capture="environment" hidden data-walk-pic="${q}" ${busy ? "disabled" : ""}>
-            <span class="mc-sq-ic" aria-hidden="true">📷</span><span class="mc-sq-tn">${a && !a.na ? "Take another picture" : "Take a picture"}</span></label>
+          <input type="file" accept="image/*" capture="environment" hidden data-walk-pic="${q}">
+          <button class="mc-sq${a ? "" : " mc-sq-go"}" type="button" data-walk-cam="${q}" ${busy ? "disabled" : ""}><span class="mc-sq-ic" aria-hidden="true">📷</span><span class="mc-sq-tn">${a && !a.na ? "Take another picture" : "Take a picture"}</span></button>
           <button class="mc-sq" type="button" data-walk-na="${q}" ${busy ? "disabled" : ""} aria-pressed="${!!(a && a.na)}"><span class="mc-sq-ic" aria-hidden="true">🚫</span><span class="mc-sq-tn">N/A</span></button>
         </div></div>`; }).join("")}
   </div>`;
@@ -26965,6 +26975,38 @@ async function walkShrink(file) {
   cv.width = Math.round(w0 * k); cv.height = Math.round(h0 * k); cv.getContext("2d").drawImage(src, 0, 0, cv.width, cv.height);
   return await new Promise((ok, no) => cv.toBlob(b => b ? ok(b) : no(new Error("bad picture")), "image/jpeg", .82));
 }
+// Take a picture = the device's camera, right in the page (Carlo, Nov 13, 5:22 p.m.: "when I click take a pic it tries to open a file, it should look for a
+// camera and take the pic"). The back camera on a phone, the webcam on a computer. No camera, or the person says no to it: it says so and offers the file
+// picker (on a phone that one opens the camera app).
+function walkCam(q) {
+  const W = WALK; if (!W || W.busy) return;
+  const pickFile = () => document.querySelector(`[data-walk-pic="${q}"]`)?.click();
+  if (!navigator.mediaDevices?.getUserMedia) return pickFile();
+  document.getElementById("walk-cam")?.remove();
+  const o = document.createElement("div"); o.id = "walk-cam"; o.setAttribute("role", "dialog"); o.setAttribute("aria-modal", "true"); o.setAttribute("aria-label", "Take a picture");
+  o.innerHTML = `<div class="wc-box"><b class="wc-h">Question ${q}: ${esc((W.qs || [])[q - 1] || "")}</b>
+    <div class="wc-view"><video autoplay playsinline muted></video><p class="wc-msg" role="status">Looking for the camera…</p></div>
+    <div class="wc-acts"><button type="button" class="mc-sq mc-sq-go" data-wc="shot" disabled><span class="mc-sq-ic" aria-hidden="true">📸</span><span class="mc-sq-tn">Take the picture</span></button>
+      <button type="button" class="mc-sq" data-wc="file"><span class="mc-sq-ic" aria-hidden="true">📁</span><span class="mc-sq-tn">Pick a file</span></button>
+      <button type="button" class="mc-sq" data-wc="x"><span class="mc-sq-ic" aria-hidden="true">✕</span><span class="mc-sq-tn">Cancel</span></button></div></div>`;
+  document.body.appendChild(o);
+  const v = o.querySelector("video"), msg = o.querySelector(".wc-msg"), shot = o.querySelector('[data-wc="shot"]'); let stream = null, shut = false;
+  const close = () => { shut = true; try { stream?.getTracks().forEach(t => t.stop()); } catch (e) {} document.removeEventListener("keydown", onKey, true); o.remove(); };
+  const onKey = e => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+  document.addEventListener("keydown", onKey, true);
+  o.addEventListener("click", e => { if (e.target === o) close(); });
+  o.querySelector('[data-wc="x"]').addEventListener("click", close);
+  o.querySelector('[data-wc="file"]').addEventListener("click", () => { close(); pickFile(); });
+  shot.addEventListener("click", () => {
+    if (!v.videoWidth) return; const cv = document.createElement("canvas"); cv.width = v.videoWidth; cv.height = v.videoHeight; cv.getContext("2d").drawImage(v, 0, 0);
+    cv.toBlob(b => { close(); if (b) walkAnswer(q, b); }, "image/jpeg", .9); });
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }).then(st => {
+    if (shut) return st.getTracks().forEach(t => t.stop());
+    stream = st; v.srcObject = st; v.onloadedmetadata = () => { msg.textContent = ""; shot.disabled = false; shot.focus(); };
+  }).catch(err => { if (shut) return; const no = err && (err.name === "NotAllowedError" || err.name === "SecurityError");
+    msg.className = "wc-msg err"; msg.textContent = no ? "The camera is blocked on this device. Allow the camera for this page, then press Take a picture again. Or press Pick a file, or N/A."
+      : "I could not find a camera on this device. Press Pick a file, or Cancel and press N/A."; });
+}
 async function walkAnswer(q, file) {
   const W = WALK; if (!W || W.busy) return; const say = t => { const m = $("#ie-walk-msg"); if (m) { m.className = "ie-walk-msg" + (t ? " err" : ""); m.textContent = t || ""; } };
   const t = (W.qs || [])[q - 1] || "";
@@ -26984,6 +27026,7 @@ function ieWalkWire() {
   const W = WALK, box = $("#ie-walk"); if (!W || !box) return;
   walkLoadQs(W);
   box.querySelectorAll("[data-walk-pic]").forEach(i => i.addEventListener("change", () => { const f = i.files && i.files[0]; if (f) walkAnswer(Number(i.dataset.walkPic), f); }));
+  box.querySelectorAll("[data-walk-cam]").forEach(b => b.addEventListener("click", () => walkCam(Number(b.dataset.walkCam))));
   box.querySelectorAll("[data-walk-na]").forEach(b => b.addEventListener("click", () => walkAnswer(Number(b.dataset.walkNa), null)));
   $("#ie-walk-notes")?.addEventListener("input", e => { W.notes = e.target.value; });
   $("#ie-walk-signer")?.addEventListener("input", e => { W.signer = e.target.value; });
