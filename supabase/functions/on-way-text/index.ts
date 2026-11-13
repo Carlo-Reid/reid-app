@@ -1,6 +1,7 @@
 // Supabase Edge Function: on-way-text   (keep "Verify JWT" ON: only signed-in staff use it)
 // Tech Calls, "On my way": one text to the customer through Podium with the tech's first name, about how many minutes, and his picture.
-//   { visit_id, lat, lng }  → { sent, minutes, pic, tech, test_to } | { already } | { error }
+//   { visit_id, lat, lng, card }  → (card: the picture the app drew, a JPEG as base64: the tech's picture with the side bar; without it the plain Staff page picture goes)
+//   { sent, minutes, pic, tech, test_to } | { already } | { error }
 // Who may, which number, the minutes and the picture come from the database (on_way_text_info, sync/extra/286_on_my_way_text.sql).
 // Once for each call. Test mode (Settings: Sending to customers) sends it to the test number instead of the customer.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
@@ -18,7 +19,7 @@ Deno.serve(async (req) => {
   const url = Deno.env.get("SUPABASE_URL")!, auth = req.headers.get("Authorization") ?? "";
   const asUser = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } }, auth: { persistSession: false } });
   const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
-  let body: { visit_id?: number; lat?: number | null; lng?: number | null } = {};
+  let body: { visit_id?: number; lat?: number | null; lng?: number | null; card?: string | null } = {};
   try { body = await req.json(); } catch { return json({ error: "bad_request" }, 400);  }
   const visit = Number(body.visit_id) || 0, num = (v: unknown) => v != null && Number.isFinite(Number(v)) ? Number(v) : null;
   if (!visit) return json({ error: "bad_request" }, 400);
@@ -47,12 +48,14 @@ Deno.serve(async (req) => {
 
   const mins = Number(way.minutes) > 0 ? Number(way.minutes) : null, pre = testTo ? "[TEST: this would go to " + d.replace(/(\d{3})(\d{3})(\d{4})/, "$1-$2-$3") + "] " : "";
   const words = "Hi, this is " + (way.company || "the office") + ". " + (way.tech ? "Your technician " + way.tech : "Your technician") + " is on the way" + (mins ? " and should be there in about " + mins + " minutes" : "") + ".";
-  const picWords = " This is " + (way.tech || "your technician") + "'s picture, so you know who is coming.";
+  const card = typeof body.card === "string" && body.card.startsWith("/9j/") && body.card.length < 900000 && /^[A-Za-z0-9+/=]+$/.test(body.card) ? body.card : null;
+  const pict = card ?? way.image ?? null, pictMime = card ? "image/jpeg" : (way.mime || "image/jpeg");
+  const picWords = !pict ? "" : " This is " + (way.tech || "your technician") + "'s picture, so you know who is coming.";
   const msg = (text: string) => ({ channel: { type: "phone", identifier: "+1" + to }, body: text, locationUid: loc, ...(way.tech ? { senderName: way.tech } : {}) });
   let ok = false, pic = false, sent = pre + words, why = "", j: Record<string, unknown> = {};
-  if (way.image) {   // with his picture: Podium's "message with attachment" (a form with the file and the message). Two ways to write the message part, in case Podium wants one of them.
+  if (pict) {   // with his picture: Podium's "message with attachment" (a form with the file and the message). Two ways to write the message part, in case Podium wants one of them.
     try {
-      const bin = Uint8Array.from(atob(way.image), c => c.charCodeAt(0)), mime = way.mime || "image/jpeg", ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
+      const bin = Uint8Array.from(atob(pict), c => c.charCodeAt(0)), mime = pictMime, ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
       for (const asJson of [false, true]) {
         const f = new FormData(), data = JSON.stringify(msg(pre + words + picWords));
         f.append("attachment", new Blob([bin], { type: mime }), "technician." + ext);
@@ -74,5 +77,5 @@ Deno.serve(async (req) => {
   const m = (j.data && typeof j.data === "object" ? j.data : j) as Record<string, unknown>;
   await admin.rpc("_podium_msg_in", { p_dir: "out", p_status: "sent", p: { uid: m.uid ?? null, body: sent, phone: d, createdAt: new Date().toISOString() }, p_sent_by: way.user ?? null, p_test_to: testTo });
   await admin.rpc("_on_way_text_sent", { p_visit: visit, p_user: way.user ?? null, p: { minutes: mins, km: way.km ?? null, phone: d, tech: way.tech ?? null, pic, test_to: testTo } });
-  return json({ sent: true, test_to: testTo, minutes: mins, pic, tech: way.tech ?? null, pic_why: way.image && !pic ? why : null });
+  return json({ sent: true, test_to: testTo, minutes: mins, pic, tech: way.tech ?? null, pic_why: pict && !pic ? why : null });
 });

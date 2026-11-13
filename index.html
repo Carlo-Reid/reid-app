@@ -17284,9 +17284,37 @@ const mcWhere = () => new Promise(res => {
   setTimeout(() => fin(null), 7000);
   try { navigator.geolocation.getCurrentPosition(p => fin({ lat: p.coords.latitude, lng: p.coords.longitude }), () => fin(null), { enableHighAccuracy: false, timeout: 6000, maximumAge: 120000 }); } catch { fin(null); }
 });
+// the picture that goes with the text: the tech's Staff page picture with a dark blue side bar: "Years with REID" and "<name> is a Lead Technician" (Carlo, Nov 13)
+function mcWayCardDraw(img, c) {
+  const H = 600, PW = 600, SW = 400, cv = document.createElement("canvas"); cv.width = PW + SW; cv.height = H;
+  const g = cv.getContext("2d"), k = Math.max(PW / img.width, H / img.height), w = img.width * k, h = img.height * k;
+  g.fillStyle = "#ffffff"; g.fillRect(0, 0, cv.width, H);
+  g.drawImage(img, (PW - w) / 2, (H - h) / 2 * .6, w, h);                       // fill the square; keep a little more of the top (the face)
+  const gr = g.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "#2b4f73"); gr.addColorStop(1, "#23415f");
+  g.fillStyle = gr; g.fillRect(PW, 0, SW, H); g.fillStyle = "#c62828"; g.fillRect(PW, 0, 8, H);
+  const cx = PW + 8 + (SW - 8) / 2, F = "Arial, Helvetica, sans-serif"; g.textAlign = "center"; g.fillStyle = "#ffffff";
+  const fit = (t, px, wt) => { do { g.font = `${wt} ${px}px ${F}`; px -= 2; } while (g.measureText(t).width > SW - 48 && px > 18); };
+  let y = 0; const yrs = c.years, hasY = yrs != null && yrs >= 0, hasT = !!c.title, name = c.tech || "Your technician";
+  if (hasY) {
+    y = hasT ? 96 : 190; fit("Years with REID", 44, 700); g.fillText("Years with REID", cx, y);
+    g.fillStyle = "#ffd24a"; g.font = `800 ${yrs < 1 ? 64 : 190}px ${F}`;
+    if (yrs < 1) { g.fillText("First year", cx, y + 120); y += 170; } else { g.fillText(String(yrs), cx, y + 190); y += 230; }
+    g.fillStyle = "#ffffff";
+  } else y = hasT ? 170 : 250;
+  if (hasT) { g.fillStyle = "rgba(255,255,255,.35)"; if (hasY) g.fillRect(PW + 48, y, SW - 88, 2); g.fillStyle = "#ffffff";
+    fit(name + " is a", 46, 700); g.fillText(name + " is a", cx, y + 70);
+    const [a, b] = c.title.split(" "); g.font = `800 58px ${F}`; g.fillText(a, cx, y + 142); fit(b, 52, 800); g.fillText(b, cx, y + 204); }
+  else if (!hasY) { fit(name, 72, 800); g.fillText(name, cx, y); fit("Your technician", 42, 700); g.fillText("Your technician", cx, y + 70); g.fillText("from REID", cx, y + 124); }
+  return cv.toDataURL("image/jpeg", .86).split(",")[1];
+}
+async function mcWayCard(id) {
+  try { const { data: c } = await db.rpc("on_way_card_info", { p_visit: id }); if (!c?.image) return null;
+    const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = `data:${c.mime || "image/jpeg"};base64,${c.image}`; });
+    return mcWayCardDraw(img, c); } catch { return null; }
+}
 async function mcOnWayText(id) {
   let d = null;
-  try { const at = await mcWhere(); const r = await db.functions.invoke("on-way-text", { body: { visit_id: id, lat: at?.lat ?? null, lng: at?.lng ?? null } }); d = r.error ? null : r.data; } catch { }
+  try { const [at, card] = await Promise.all([mcWhere(), mcWayCard(id)]); const r = await db.functions.invoke("on-way-text", { body: { visit_id: id, lat: at?.lat ?? null, lng: at?.lng ?? null, card } }); d = r.error ? null : r.data; } catch { }
   if (!d) return "The customer was not texted: I could not reach the texting service. Please call them.";
   if (d.already) return "";
   if (d.sent) return `✓ I texted the customer: ${d.tech || "the tech"} is on the way${d.minutes ? ", about " + d.minutes + " minutes" : ""}${d.pic ? ", with the tech's picture" : ""}.`
@@ -33676,6 +33704,7 @@ async function openStaff() {
   for (const r of pbc.error ? [] : pbc.data || []) { if (!STAFF_PBCATS.has(r.app_user_id)) STAFF_PBCATS.set(r.app_user_id, []); STAFF_PBCATS.get(r.app_user_id).push(r.category_id); }
   if (!PB.cats) await loadPbCats().catch(() => {});
   { const st = await db.rpc("staff_started_list"); STAFF_STARTED = new Map((st.data || []).map(x => [Number(x.user), String(x.started).slice(0, 10)])); }
+  { const st = await db.rpc("staff_text_title_list"); STAFF_TITLE = new Map((st.data || []).map(x => [Number(x.user), x.title])); }
   if (ME.role === "owner") { const tr = await db.rpc("staff_training_list"); STAFF_TRAIN = new Map((tr.data || []).map(x => [x.user, x])); }
   await loadPbBooks().catch(() => {}); STAFF_BOOK = new Map(); for (const b of PB.books || []) for (const u of b.people) STAFF_BOOK.set(u.id, b.id);
   STAFF_RESETS = resets.error ? [] : resets.data || [];
@@ -35002,7 +35031,7 @@ async function loadEmpPhotos(force) {
   return EMP_PHOTOS;
 }
 const empPhoto = (id, cls) => id && EMP_PHOTOS?.get(Number(id)) ? `<img class="${cls || "emp-photo"}" alt="" src="${EMP_PHOTOS.get(Number(id))}">` : "";
-let STAFF_STARTED = new Map();
+let STAFF_STARTED = new Map(), STAFF_TITLE = new Map();
 let STAFF_PENDING = [], STAFF_RESETS = [], STAFF_LOGINS = null, STAFF_PBCATS = new Map(), STAFF_BOOK = new Map(), STAFF_POS = null, STAFF_POSCOL = true;
 const STAFF_OPEN = new Set(); let STAFF_POS_EDIT = null;
 // Staff page: limit a person's price book to the categories ticked (none ticked = all)
@@ -35168,7 +35197,8 @@ function renderStaff(users, perms, note) {
                 ${BOOK ? `<label title="Which name on the schedule is this person? Their calls show on Tech Calls.">On the schedule as<select data-staff-tech ${highLocked ? "disabled" : ""}>
                   ${u.employee_id && !BOOK.techs.some(t => t.id === u.employee_id) ? `<option value="keep" selected>Not a tech</option>` : `<option value="">Not a tech</option>`}
                   ${BOOK.techs.map(t => `<option value="${t.id}" ${t.id === u.employee_id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>` : ""}
-                <label title="Used for the HSG Pro messages: how long they've been with us">Started working here<input type="date" data-staff-started value="${esc(STAFF_STARTED.get(u.id) || "")}" max="${ymd(new Date())}" ${highLocked ? "disabled" : ""}></label>
+                <label title="Used for the HSG Pro messages, and for Years with REID on the picture a customer gets by text when this tech is on the way">Started working here<input type="date" data-staff-started value="${esc(STAFF_STARTED.get(u.id) || "")}" max="${ymd(new Date())}" ${highLocked ? "disabled" : ""}></label>
+                <label title="It is written beside the tech's picture in the text a customer gets when the tech is on the way">On the customer's text, this person is a<select data-staff-title ${highLocked ? "disabled" : ""}><option value="">Not shown</option>${["Lead Technician", "Service Technician"].map(t => `<option ${STAFF_TITLE.get(u.id) === t ? "selected" : ""}>${t}</option>`).join("")}</select></label>
                 ${(PB.books || []).length ? `<label>Price book<select data-staff-book><option value="">Normal</option>${PB.books.map(b => `<option value="${b.id}" ${STAFF_BOOK.get(u.id) === b.id ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>` : ""}
                 <div><span class="cl-label">Price book categories</span><div>${u.role === "owner" ? `<span class="quiet">All</span>` : `<button class="link" type="button" data-pbcats="${u.id}">${(STAFF_PBCATS.get(u.id) || []).length ? `${STAFF_PBCATS.get(u.id).length} picked` : "All"}</button>`}</div></div>
                 ${u.role === "sales" ? `<div class="st-sf-wrap"><span class="cl-label">Sales call for</span><div class="st-sf" data-sf-user="${u.id}">Loading…</div></div>` : ""}
@@ -35279,6 +35309,12 @@ function renderStaff(users, perms, note) {
       if (error) { m.textContent = "Not saved: " + rpcErr(error); e.target.value = STAFF_STARTED.get(id) || ""; return; }
       if (v) STAFF_STARTED.set(id, v); else STAFF_STARTED.delete(id);
       m.textContent = v ? `Saved: ${tr.dataset.first || tr.dataset.email} started ${longDate(v)}.` : "Start date taken off."; });
+    tr.querySelector("[data-staff-title]")?.addEventListener("change", async e => {
+      const v = e.target.value || null, { error } = await db.rpc("staff_text_title_set", { p_user: id, p_title: v });
+      const m = $("#staff-msg"); m.className = "staff-msg " + (error ? "err" : "ok");
+      if (error) { m.textContent = "Not saved: " + rpcErr(error); e.target.value = STAFF_TITLE.get(id) || ""; return; }
+      if (v) STAFF_TITLE.set(id, v); else STAFF_TITLE.delete(id);
+      m.textContent = v ? `Saved: the customer's text will say ${tr.dataset.first || tr.dataset.email} is a ${v}.` : "Saved: no title on the customer's text."; });
     tr.querySelector("[data-staff-book]")?.addEventListener("change", async e => {
       const v = e.target.value, { error } = await db.rpc("set_user_price_book", { p_user: id, p_book: v ? Number(v) : null });
       const m = $("#staff-msg"); m.className = "staff-msg " + (error ? "err" : "ok");
