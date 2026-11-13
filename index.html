@@ -33663,11 +33663,18 @@ async function prSlipsLoad(files) {
   // rows: one per slip; the same person and cheque twice with other amounts = pick one
   const R = slips.map((s, i) => { const m = paysMatch(s.name, people); return { i, s, who: m ? paysKey(m) : "new", block: m?.block && m.block !== "past" ? m.block : (s.kind === "commission" || s.kind === "hourly_commission" && s.commission > 0 ? "sales" : "office"), use: true, pick: null }; });
   const groups = new Map(); R.forEach(r => { const k = r.s.name.toLowerCase() + "|" + r.s.cheque; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
-  for (const g of groups.values()) if (g.length > 1) g.forEach((r, j) => { r.dup = g; r.use = j === 0; });
+  // the same person twice on one cheque date with other amounts: two cheques (pay and a separate salary or vacation cheque); both are kept unless one is unticked (George, Nov 13)
+  for (const g of groups.values()) if (g.length > 1) g.forEach(r => { r.dup = g; r.use = true; });
   const personOf = k => people.find(p => paysKey(p) === k);
-  const fileOf = r => { const p = personOf(r.who); return p ? onFile.find(o => String(o.cheque).slice(0, 10) === r.s.cheque && (p.user ? Number(o.user) === Number(p.user) : Number(o.staff) === Number(p.staff))) : null; };
+  const sameAmt = (o, s) => Math.abs(o.net - s.net) < 0.01 && Math.abs(o.gross - s.gross) < 0.01;
+  const listOf = r => { const p = personOf(r.who); return p ? onFile.filter(o => String(o.cheque).slice(0, 10) === r.s.cheque && (p.user ? Number(o.user) === Number(p.user) : Number(o.staff) === Number(p.staff))) : []; };
+  const exactOf = r => listOf(r).find(o => sameAmt(o, r.s)) || null;
+  // the slip on file this one would replace: on file for that date, not the same as any slip in this batch (only when there is exactly one)
+  const freeOf = r => { const sib = R.filter(o => o.who === r.who && o.s.cheque === r.s.cheque && o.use);
+    const f = listOf(r).filter(o => !sib.some(x => sameAmt(o, x.s))); return f; };
+  const fileOf = r => exactOf(r) || (freeOf(r).length ? freeOf(r)[0] : null);
   const draw = () => {
-    const dups = R.filter(r => r.dup), conflicts = R.filter(r => r.use && r.who !== "skip" && (o => o && (Math.abs(o.net - r.s.net) >= 0.01 || Math.abs(o.gross - r.s.gross) >= 0.01))(fileOf(r)));
+    const dups = R.filter(r => r.dup), conflicts = R.filter(r => r.use && r.who !== "skip" && !exactOf(r) && freeOf(r).length);
     const need = conflicts.filter(r => !r.pick).length, noDate = R.filter(r => r.use && r.who !== "skip" && !r.s.cheque).length;
     const same = R.filter(r => r.use && r.who !== "skip" && (o => o && !(Math.abs(o.net - r.s.net) >= 0.01 || Math.abs(o.gross - r.s.gross) >= 0.01))(fileOf(r)));
     const tot = R.filter(r => r.use && r.who !== "skip").reduce((t, r) => t + r.s.gross, 0);
@@ -33675,18 +33682,18 @@ async function prSlipsLoad(files) {
       ${noDate ? `<p class="src-bad"><b>⚠ I could not read the cheque date on ${noDate} slip${noDate === 1 ? "" : "s"}.</b> Type it in the red box on ${noDate === 1 ? "that line" : "those lines"}, or pick "Leave this slip out".</p>` : ""}
       ${twice ? `<p class="pr-ld-dupok"><b>⚠ ${twice} slip${twice === 1 ? " was" : "s were"} in ${files.length > 1 ? "these files" : "this file"} twice: the same person, the same cheque date and the same amounts.</b> I kept one of each.</p>` : ""}
       ${same.length ? `<p class="pr-ld-dupok"><b>⚠ ${same.length} slip${same.length === 1 ? " is" : "s are"} already on file: the same cheque date and the same amounts</b> (${esc(same.slice(0, 4).map(r => r.s.name + ", " + fmtDate(r.s.cheque)).join(" · "))}${same.length > 4 ? " …" : ""}). They are marked <b>Duplicate</b> below and will not be saved again.</p>` : ""}
-      ${dups.length ? `<p class="src-bad"><b>⚠ The same person is in here twice for the same cheque date, with other amounts</b> (${esc([...new Set(dups.map(r => r.s.name + ", " + fmtDate(r.s.cheque)))].slice(0, 4).join(" · "))}). Pick the right one in the Use column.</p>` : ""}
-      ${need ? `<p class="src-bad"><b>⚠ ${need} slip${need === 1 ? " is" : "s are"} already on file for the same cheque date, with other amounts.</b> Pick which to keep on each one (it is in red below).</p>` : ""}
+      ${dups.length ? `<p class="pr-ld-dupok"><b>The same person has two slips for the same cheque date, with other amounts</b> (${esc([...new Set(dups.map(r => r.s.name + ", " + fmtDate(r.s.cheque)))].slice(0, 4).join(" · "))}). These are two cheques, so both are saved. Untick one in the Use column only if it is a mistake.</p>` : ""}
+      ${need ? `<p class="src-bad"><b>⚠ ${need} slip${need === 1 ? " has" : "s have"} another slip already on file for the same person and cheque date, with other amounts.</b> On each one (in red below), pick: keep what is on file, use this one instead, or add it too as a second cheque.</p>` : ""}
       <div class="src-tw"><table class="pr-ldt"><thead><tr><th>Use</th><th>Name on the slip</th><th>Who in the app</th><th>Block</th><th>Cheque · pay period</th><th>Pay on the slip</th><th>In the app now</th><th>Gross · net</th></tr></thead><tbody>
-      ${R.map(r => { const s = r.s, p = personOf(r.who), o = fileOf(r), diff = o && (Math.abs(o.net - s.net) >= 0.01 || Math.abs(o.gross - s.gross) >= 0.01);
+      ${R.map(r => { const s = r.s, p = personOf(r.who), o = fileOf(r), diff = o && !sameAmt(o, s), fr = freeOf(r);
         const now = p?.rate ? (p.rate.kind === "salary" ? `${money(p.rate.amount)} a year` : `${money(p.rate.amount)} an hour`) : p?.pay_kind === "commission" ? "Commission" : "—";
         const slipRate = s.rate, differs = p && s.rate != null && (!p.rate || Math.abs(Number(p.rate.amount) - slipRate) >= 0.01);
         // an older slip never takes the pay back in time: only the newest pay on file can change the rate now (George, Nov 13)
-        const newest = p && s.cheque && !R.some(o => o !== r && o.who === r.who && o.use && o.s.cheque > s.cheque) && (!p.last_pay || s.cheque >= String(p.last_pay).slice(0, 10))
+        const newest = p && s.cheque && !R.some(o => o !== r && o.who === r.who && o.use && (o.s.cheque > s.cheque || o.s.cheque === s.cheque && o.s.gross > s.gross)) && (!p.last_pay || s.cheque >= String(p.last_pay).slice(0, 10))
           && (p.rate?.from === "app" ? (s.from || s.cheque) >= String(p.rate.starts_on || "").slice(0, 10) : srcDays(s.cheque, salesToday()) <= 30);
         const changed = differs && newest, hist = differs && !newest;
         return `<tr class="${r.who === "skip" || !r.use ? "pr-ld-off" : ""}${diff ? " pr-ld-conf" : ""}" data-r="${r.i}">
-          <td>${r.dup ? `<input type="radio" name="dup${groups.size}-${esc(s.name)}-${s.cheque}" data-use ${r.use ? "checked" : ""} aria-label="Use this one">` : "✓"}</td>
+          <td>${r.dup ? `<input type="checkbox" data-use ${r.use ? "checked" : ""} aria-label="Save this slip">` : "✓"}</td>
           <td><b>${esc(s.name)}</b></td>
           <td><select data-who><option value="new"${r.who === "new" ? " selected" : ""}>＋ New person</option><option value="skip"${r.who === "skip" ? " selected" : ""}>✕ Leave this slip out</option>
             ${people.map(q => `<option value="${paysKey(q)}"${paysKey(q) === r.who ? " selected" : ""}>${esc(q.name)}${q.user ? "" : " (payroll only)"}</option>`).join("")}</select></td>
@@ -33695,23 +33702,27 @@ async function prSlipsLoad(files) {
           <td>${esc(paysPayLab(s))}${s.commission ? `<div class="quiet">Commission ${money(s.commission)}</div>` : ""}</td>
           <td class="${changed ? "pr-ld-chg" : ""}">${now}${changed ? `<div class="quiet">${p.rate ? "will change to the slip's rate" : "will be set"}</div>` : hist ? `<div class="quiet" title="This slip is older than the pay on file. Its rate goes in the person's pay history; the rate now does not change.">stays · this slip goes in the pay history</div>` : ""}</td>
           <td><b>${money(s.gross)}</b><div class="quiet">net ${money(s.net)}</div>${diff ? `<div class="pr-ld-of">On file: gross ${money(o.gross)}, net ${money(o.net)}${o.file ? ` (${esc(o.file)})` : ""}
-            <select data-pick><option value="">Pick one…</option><option value="keep"${r.pick === "keep" ? " selected" : ""}>Keep what is on file</option><option value="new"${r.pick === "new" ? " selected" : ""}>Use this one</option></select></div>` : o ? `<div class="pr-ld-dupt">Duplicate: already on file with the same date and amounts</div>` : ""}</td></tr>`; }).join("")}
+            <select data-pick><option value="">Pick one…</option><option value="keep"${r.pick === "keep" ? " selected" : ""}>Keep what is on file</option>${fr.length === 1 ? `<option value="new"${r.pick === "new" ? " selected" : ""}>Use this one instead</option>` : ""}<option value="add"${r.pick === "add" ? " selected" : ""}>Add it too: a second cheque</option></select></div>` : o ? `<div class="pr-ld-dupt">Duplicate: already on file with the same date and amounts</div>` : ""}</td></tr>`; }).join("")}
       </tbody></table></div>
       <p class="quiet">An older slip never changes the rate now: its rate goes in the person's pay history (for example "$27.00 → $32.50"). Each slip's page is kept with it (a SIN, if one is printed, is covered before it is saved), and the address on the slip goes in the person's address history. Family support (FRO) deductions are not kept.</p>
       <div class="src-pop-btns"><button type="button" class="btn" id="pr-ld-save"${need || noDate ? " disabled" : ""}>Save the pay slips</button><button type="button" class="btn quiet-btn" data-src-x>Cancel</button>${need ? ` <span class="src-bad">Pick one on each slip already on file first.</span>` : ""}</div>`;
     body.querySelectorAll("tr[data-r]").forEach(tr => { const r = R[Number(tr.dataset.r)];
       tr.querySelector("[data-who]")?.addEventListener("change", e => { r.who = e.target.value; draw(); });
       tr.querySelector("[data-blk]")?.addEventListener("change", e => { r.block = e.target.value; r.blockSet = true; });
-      tr.querySelector("[data-use]")?.addEventListener("change", () => { r.dup.forEach(o => { o.use = o === r; }); draw(); });
+      tr.querySelector("[data-use]")?.addEventListener("change", e => { r.use = e.target.checked; draw(); });
       tr.querySelector("[data-pick]")?.addEventListener("change", e => { r.pick = e.target.value || null; draw(); });
       tr.querySelector("[data-chq]")?.addEventListener("change", e => { if (e.target.value) { r.s.cheque = e.target.value; draw(); } }); });
     body.querySelector("#pr-ld-save")?.addEventListener("click", async e => { e.target.disabled = true;
-      const out = R.filter(r => r.use && r.who !== "skip").filter(r => { const o = fileOf(r); if (!o) return true; const diff = Math.abs(o.net - r.s.net) >= 0.01 || Math.abs(o.gross - r.s.gross) >= 0.01; return diff ? r.pick === "new" : false; })
-        .map(r => { const p = personOf(r.who), blkSel = !p || !p.user;
-          return { ...r.s, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: blkSel ? (r.block || p?.block || "office") : "", block_set: blkSel && (!p || !!r.blockSet) }; });
+      // each slip's number for its person and cheque date: the one it replaces, else the next free one (two cheques on one date are two slips)
+      const taken = new Map(), keyOf = r => r.who + "|" + r.s.cheque, nextNo = r => { const k = keyOf(r);
+        if (!taken.has(k)) taken.set(k, new Set(listOf(r).map(o => Number(o.slip_no || 1)))); const t = taken.get(k); let n = 1; while (t.has(n)) n++; t.add(n); return n; };
+      const out = R.filter(r => r.use && r.who !== "skip" && !exactOf(r)).filter(r => !freeOf(r).length || r.pick === "new" || r.pick === "add")
+        .map(r => { const p = personOf(r.who), blkSel = !p || !p.user, fr = freeOf(r);
+          const slip_no = r.pick === "new" && fr.length === 1 ? Number(fr[0].slip_no || 1) : nextNo(r);
+          return { ...r.s, slip_no, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: blkSel ? (r.block || p?.block || "office") : "", block_set: blkSel && (!p || !!r.blockSet) }; });
       // slips already on file with the same amounts but no page yet: only their page and address are added
-      R.filter(r => r.use && r.who !== "skip").forEach(r => { const o = fileOf(r); if (o && !o.page && !(Math.abs(o.net - r.s.net) >= 0.01 || Math.abs(o.gross - r.s.gross) >= 0.01)) {
-        const p = personOf(r.who); out.push({ ...r.s, user: p?.user || null, staff: p && !p.user ? p.staff : null, page_only: true }); } });
+      R.filter(r => r.use && r.who !== "skip").forEach(r => { const o = exactOf(r); if (o && !o.page) {
+        const p = personOf(r.who); out.push({ ...r.s, slip_no: Number(o.slip_no || 1), user: p?.user || null, staff: p && !p.user ? p.staff : null, page_only: true }); } });
       if (!out.length) { close(); return alertMsg("Nothing new to save: every slip is already on file, with its page."); }
       const say = body.querySelector(".src-pop-btns"); let k = 0;
       for (const x of out) { k++; if (say) say.innerHTML = `<span class="src-hint">Saving the pay slip pages: ${k} of ${out.length}…</span>`;

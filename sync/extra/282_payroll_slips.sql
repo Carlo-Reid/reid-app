@@ -24,6 +24,10 @@ REVOKE ALL ON public.payroll_staff, public.payroll_slips, public.payroll_staff_l
 -- the slip's page (a picture, any SIN covered before it is saved) and the address printed on it (George, Nov 13: "keep it in history… for reference")
 ALTER TABLE public.payroll_slips ADD COLUMN IF NOT EXISTS address text;
 ALTER TABLE public.payroll_slips ADD COLUMN IF NOT EXISTS page_path text;
+-- a person can get two cheques on one date (e.g. their pay and a separate salary or vacation cheque): slip_no tells them apart (George, Nov 13)
+ALTER TABLE public.payroll_slips ADD COLUMN IF NOT EXISTS slip_no int NOT NULL DEFAULT 1;
+ALTER TABLE public.payroll_slips DROP CONSTRAINT IF EXISTS payroll_slips_staff_id_cheque_date_key;
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_slips_one ON public.payroll_slips (staff_id, cheque_date, slip_no);
 DO $do$ BEGIN
   INSERT INTO storage.buckets (id, name, public, file_size_limit) VALUES ('payroll-slips', 'payroll-slips', false, 5242880) ON CONFLICT (id) DO NOTHING;
   DROP POLICY IF EXISTS payroll_slips_read ON storage.objects;
@@ -76,7 +80,7 @@ END $function$;
 
 -- slips already on file for these cheque dates (to warn when a slip loaded again has other amounts)
 CREATE OR REPLACE FUNCTION public.payroll_slips_on_file(p_cheques date[]) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
-  SELECT CASE WHEN public._src_owner() THEN coalesce((SELECT jsonb_agg(jsonb_build_object('staff', s.staff_id, 'user', ps.app_user_id, 'cheque', s.cheque_date, 'gross', s.gross, 'net', s.net, 'file', s.file_name, 'page', s.page_path IS NOT NULL))
+  SELECT CASE WHEN public._src_owner() THEN coalesce((SELECT jsonb_agg(jsonb_build_object('staff', s.staff_id, 'user', ps.app_user_id, 'cheque', s.cheque_date, 'gross', s.gross, 'net', s.net, 'file', s.file_name, 'page', s.page_path IS NOT NULL, 'slip_no', s.slip_no))
     FROM payroll_slips s JOIN payroll_staff ps ON ps.id = s.staff_id WHERE s.cheque_date = ANY (p_cheques)), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
 
 -- after slips change: the person's details from their newest slip, the pay history notes, and (app users) their pay rates from the slips
@@ -84,14 +88,14 @@ CREATE OR REPLACE FUNCTION public._payroll_staff_refresh(p_staff bigint) RETURNS
 DECLARE ps payroll_staff; s record; p_kind text; p_rate numeric; p_per numeric; first boolean := true; amt numeric; k text; st_wage numeric; nw record;
 BEGIN
   SELECT * INTO ps FROM payroll_staff WHERE id = p_staff; IF NOT FOUND THEN RETURN; END IF;
-  SELECT * INTO s FROM payroll_slips WHERE staff_id = p_staff ORDER BY cheque_date DESC LIMIT 1;
+  SELECT * INTO s FROM payroll_slips WHERE staff_id = p_staff ORDER BY cheque_date DESC, gross DESC NULLS LAST LIMIT 1;
   IF FOUND THEN
     UPDATE payroll_staff SET pay_kind = s.kind, rate = s.rate, per_pay = s.per_pay, reg_hours = s.reg_hours, vac_pct = s.vac_pct, on_call = nullif(s.on_call, 0),
       ot_rate = s.ot_rate, benefits = s.benefits, vehicle = s.vehicle, updated_at = now() WHERE id = p_staff;
   END IF;
   DELETE FROM payroll_staff_log WHERE staff_id = p_staff AND auto;
   IF ps.app_user_id IS NOT NULL THEN DELETE FROM staff_pay_rates WHERE app_user_id = ps.app_user_id AND set_by IN ('Payroll PDF', 'Kept from before'); END IF;
-  FOR s IN SELECT * FROM payroll_slips WHERE staff_id = p_staff ORDER BY cheque_date LOOP
+  FOR s IN SELECT DISTINCT ON (cheque_date) * FROM payroll_slips WHERE staff_id = p_staff ORDER BY cheque_date, gross DESC NULLS LAST LOOP
     IF first THEN
       INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, s.cheque_date, 'First pay on file: cheque of ' || to_char(s.cheque_date, 'Mon DD, YYYY')
         || CASE WHEN s.kind = 'salary' THEN ', salary ' || to_char(s.per_pay, 'FM$999,990.00') || ' a pay'
@@ -115,7 +119,7 @@ BEGIN
   -- a rate in the app with no rate set by hand (ServiceTitan's wage), that rate stays the rate now, from the day after that slip's pay period
   IF ps.app_user_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM staff_pay_rates WHERE app_user_id = ps.app_user_id AND set_by NOT IN ('Payroll PDF', 'Kept from before')) THEN
     SELECT e.hourly_wage INTO st_wage FROM app_users a JOIN employees e ON e.id = a.employee_id WHERE a.id = ps.app_user_id;
-    SELECT * INTO nw FROM payroll_slips WHERE staff_id = p_staff ORDER BY cheque_date DESC LIMIT 1;
+    SELECT * INTO nw FROM payroll_slips WHERE staff_id = p_staff ORDER BY cheque_date DESC, gross DESC NULLS LAST LIMIT 1;
     IF coalesce(st_wage, 0) > 0 AND nw.cheque_date IS NOT NULL AND nw.cheque_date < public._src_today() - 30
        AND coalesce(nw.kind, '') <> 'salary' AND nw.rate IS DISTINCT FROM st_wage THEN
       INSERT INTO staff_pay_rates (app_user_id, kind, amount, starts_on, set_by) VALUES (ps.app_user_id, 'hourly', st_wage, coalesce(nw.period_to, nw.cheque_date) + 1, 'Kept from before')
@@ -148,16 +152,16 @@ BEGIN
       WHERE id = sid;
     IF (x ->> 'page_only')::boolean THEN   -- a slip already on file with the same amounts: only add its page and address
       UPDATE payroll_slips SET page_path = coalesce(nullif(x ->> 'page', ''), page_path), address = coalesce(nullif(btrim(x ->> 'addr'), ''), address)
-        WHERE staff_id = sid AND cheque_date = (x ->> 'cheque')::date;
+        WHERE staff_id = sid AND cheque_date = (x ->> 'cheque')::date AND slip_no = coalesce((x ->> 'slip_no')::int, 1);
       CONTINUE;
     END IF;
-    INSERT INTO payroll_slips (staff_id, cheque_date, period_from, period_to, slip_name, address, page_path, kind, rate, per_pay, reg_hours, hours, gross, net, commission, vac, vac_pct,
+    INSERT INTO payroll_slips (staff_id, cheque_date, slip_no, period_from, period_to, slip_name, address, page_path, kind, rate, per_pay, reg_hours, hours, gross, net, commission, vac, vac_pct,
         on_call, ot_rate, ot_pay, cpp, ei, tax, benefits, vehicle, earn, dfg, adj, file_name, loaded_by)
-      VALUES (sid, (x ->> 'cheque')::date, (x ->> 'from')::date, (x ->> 'to')::date, nm, nullif(btrim(x ->> 'addr'), ''), nullif(x ->> 'page', ''), x ->> 'kind', (x ->> 'rate')::numeric, (x ->> 'per_pay')::numeric,
+      VALUES (sid, (x ->> 'cheque')::date, coalesce((x ->> 'slip_no')::int, 1), (x ->> 'from')::date, (x ->> 'to')::date, nm, nullif(btrim(x ->> 'addr'), ''), nullif(x ->> 'page', ''), x ->> 'kind', (x ->> 'rate')::numeric, (x ->> 'per_pay')::numeric,
         (x ->> 'reg_hours')::numeric, (x ->> 'hours')::numeric, (x ->> 'gross')::numeric, (x ->> 'net')::numeric, (x ->> 'commission')::numeric, (x ->> 'vac')::numeric,
         (x ->> 'vac_pct')::numeric, (x ->> 'on_call')::numeric, (x ->> 'ot_rate')::numeric, (x ->> 'ot_pay')::numeric, (x ->> 'cpp')::numeric, (x ->> 'ei')::numeric,
         (x ->> 'tax_inc')::numeric, (x ->> 'benefits')::boolean, (x ->> 'vehicle')::boolean, x -> 'earn', x -> 'dfg', x -> 'adj', p ->> 'file', who)
-      ON CONFLICT (staff_id, cheque_date) DO UPDATE SET address = coalesce(EXCLUDED.address, payroll_slips.address), page_path = coalesce(EXCLUDED.page_path, payroll_slips.page_path), period_from = EXCLUDED.period_from, period_to = EXCLUDED.period_to, slip_name = EXCLUDED.slip_name,
+      ON CONFLICT (staff_id, cheque_date, slip_no) DO UPDATE SET address = coalesce(EXCLUDED.address, payroll_slips.address), page_path = coalesce(EXCLUDED.page_path, payroll_slips.page_path), period_from = EXCLUDED.period_from, period_to = EXCLUDED.period_to, slip_name = EXCLUDED.slip_name,
         kind = EXCLUDED.kind, rate = EXCLUDED.rate, per_pay = EXCLUDED.per_pay, reg_hours = EXCLUDED.reg_hours, hours = EXCLUDED.hours, gross = EXCLUDED.gross,
         net = EXCLUDED.net, commission = EXCLUDED.commission, vac = EXCLUDED.vac, vac_pct = EXCLUDED.vac_pct, on_call = EXCLUDED.on_call, ot_rate = EXCLUDED.ot_rate,
         ot_pay = EXCLUDED.ot_pay, cpp = EXCLUDED.cpp, ei = EXCLUDED.ei, tax = EXCLUDED.tax, benefits = EXCLUDED.benefits, vehicle = EXCLUDED.vehicle,
