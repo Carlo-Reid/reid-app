@@ -1892,6 +1892,10 @@
   .pr-ptools > * { margin: 0 !important; vertical-align: middle; }
   .pr-ptools > .btn, .pr-ptools > .pr-wsib > summary { min-height: 42px; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; }
   .pr-ldpdf { cursor: pointer; } .pr-ldhint { font-weight: 500; opacity: .8; font-size: .9em; }
+  .pr-privban { background: repeating-linear-gradient(135deg, #9a4d00, #9a4d00 14px, #a85800 14px, #a85800 28px); color: #fff; font-weight: 800; letter-spacing: .5px; text-align: center; padding: 8px 12px; border-radius: 10px; font-size: 17px; margin-bottom: 10px; }
+  .pr-ownb > summary { cursor: pointer; list-style: none; } .pr-ownb > summary::-webkit-details-marker { display: none; }
+  .pr-ownb > summary h2::before { content: "▸ "; color: #23415f; } .pr-ownb[open] > summary h2::before { content: "▾ "; }
+  .pr-tot { margin-bottom: 14px; } .pr-tot-now { margin: 10px 16px !important; font-size: 16px !important; }
   .pr-ld-dupok { background: #fff6e0; border: 1px solid #f0c38a; border-radius: 10px; padding: 8px 12px; color: #7a4a00; }
   .pr-ld-dupt { color: #9a4d00; font-weight: 700; font-size: 12.5px; }
   .pr-privzone.pr-drop-on { outline: 3px dashed #1f9d4a; outline-offset: -3px; background: #eef9f1; }
@@ -33224,24 +33228,28 @@ async function openPayroll() {
     return `<section class="block"><h2>${title} <span class="pr-n">${xs.length}</span></h2><div class="pr-people">${xs.map(row).join("") || `<p class="muted">Nobody.</p>`}</div></section>`; };
   const past = by("past");
   const noRate = PR.people.filter(x => !["owner", "past"].includes(x.block) && !x.rate && x.pay_kind !== "commission");
-  $("#main").innerHTML = `<article class="staff pr-page pg-clean"><div class="pr-toph"><h1>Payroll</h1>${prPrivBtn()}</div>
+  $("#main").innerHTML = `<article class="staff pr-page pg-clean">${priv ? `<div class="pr-privban" role="note">🔒 PRIVATE · owners only</div>` : ""}<div class="pr-toph"><h1>Payroll</h1>${prPrivBtn()}</div>
     ${priv ? `<div class="pr-privzone">
       <div class="pr-ptools"><label class="btn pr-ldpdf" title="Click to pick the PDF, or drag it here">📄 Load a payroll PDF <span class="pr-ldhint">or drop it here</span><input type="file" accept=".pdf,application/pdf" id="pr-slips-in" multiple hidden></label>
         <button type="button" class="btn" id="pr-addp">＋ Add someone to payroll</button>
         <details class="pr-wsib" id="pr-wsib"><summary>WSIB rates</summary><div class="pr-wsib-b">Loading…</div></details></div>
       <p class="quiet">Load the accountant's pay slips (a PDF) to set each person's pay, raises and gross pay from them. Nothing is saved until you check it.</p>
       ${noRate.length ? `<p class="pr-norate-note">⚠ <b>${noRate.length} ${noRate.length === 1 ? "person has" : "people have"} no pay rate:</b> ${noRate.map(x => `<button type="button" class="link" ${x.user ? `data-pr-user="${x.user}"` : `data-pr-staff="${x.staff}"`}>${esc(x.name)}</button>`).join(", ")}. Load a payroll PDF, or click a name to set it.</p>` : ""}
+      <div id="pr-tot-box"><div class="loading">Loading the payroll totals…</div></div>
       <div id="src-box"><div class="loading">Loading the source payments…</div></div></div>` : ""}
     <p class="lead">Click a person to open their page. Hours worked this period: <b>${fmtDate(p.from)} – ${fmtDate(p.to)}</b>, paid on <b>${fmtDate(p.pay)}</b>.</p>
-    ${priv ? blk("owner", "Owners") : ""}${blk("tech", "Techs")}${blk("sales", "Sales")}${blk("office", "Office")}${blk("greeter", "Store Greeters")}
+    ${priv ? (xs => `<details class="block pr-ownb"><summary><h2>Owners <span class="pr-n">${xs.length}</span></h2></summary><div class="pr-people">${xs.map(row).join("") || `<p class="muted">Nobody.</p>`}</div></details>`)(by("owner")) : ""}${blk("tech", "Techs")}${blk("sales", "Sales")}${blk("office", "Office")}${blk("greeter", "Store Greeters")}
     ${past.length ? `<details class="block pr-pastb"${PR.pastOpen ? " open" : ""}><summary><h2>Past employees <span class="pr-n">${past.length}</span></h2></summary><div class="pr-people">${past.map(row).join("")}</div></details>` : ""}
   </article>`;
   document.querySelectorAll("[data-pr-user]").forEach(b => b.addEventListener("click", () => openPayrollPerson(Number(b.dataset.prUser))));
   document.querySelectorAll("[data-pr-staff]").forEach(b => b.addEventListener("click", () => openPayrollStaff(Number(b.dataset.prStaff))));
   document.querySelector(".pr-pastb")?.addEventListener("toggle", e => { PR.pastOpen = e.target.open; });
+  // the Owners block stays closed; opening it asks first, in case it was clicked by mistake (George, Nov 13)
+  document.querySelector(".pr-ownb > summary")?.addEventListener("click", async e => { const d = e.currentTarget.parentElement; if (d.open) return;
+    e.preventDefault(); const k = await askChoice("You sure?", "This opens the owners' payroll.", [["yes", "Yes", true], ["no", "No"]]); if (k === "yes") d.open = true; });
   prPrivWire(() => openPayroll());
   if (priv) {
-    srcBox();
+    prTotBox(); srcBox();
     $("#pr-slips-in")?.addEventListener("change", e => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) prSlipsLoad(fs); });
     // a payroll PDF can be dropped anywhere on the private part (George, Nov 13)
     const zone = $(".pr-privzone"), isPdf = f => /pdf/i.test(f.type) || /\.pdf$/i.test(f.name);
@@ -33255,6 +33263,35 @@ async function openPayroll() {
     $("#pr-addp")?.addEventListener("click", prAddPerson);
     prWsibBox();
   }
+}
+// ===== Payroll totals (George, Nov 13: "show me the totals for payroll like it does for the source"): from the pay slips loaded, by the cheque's month.
+async function prTotBox() {
+  const host = document.getElementById("pr-tot-box"); if (!host) return;
+  let T = [];
+  try { const [a, b] = await Promise.all([db.rpc("payroll_totals"), SRC.sum ? Promise.resolve({ data: SRC.sum }) : db.rpc("source_summary")]);
+    if (a.error) throw a.error; T = a.data || []; if (!b.error && b.data) SRC.sum = b.data; }
+  catch (e) { host.innerHTML = `<div class="error">Couldn't load the payroll totals: ${esc(rpcErr(e))}</div>`; return; }
+  if (!document.getElementById("pr-tot-box")) return;
+  const M = new Map(T.map(x => [x.m, x])), S = new Map((SRC.sum || []).map(x => [x.m, x])), today = salesToday(), cy = Number(today.slice(0, 4)), cm = Number(today.slice(5, 7));
+  const key = (y, m) => `${y}-${String(m).padStart(2, "0")}`, N = v => v == null ? null : Number(v);
+  const sum = (y, m1, m2) => { const o = { pays: 0, people: 0, gross: 0, vac: 0, tax: 0, cpp: 0, ei: 0, net: 0, co: 0, cost: 0, sales: null, n: 0 };
+    for (let m = m1; m <= m2; m++) { const x = M.get(key(y, m)); if (x) { o.n++; ["pays", "gross", "vac", "tax", "cpp", "ei", "net", "co", "cost"].forEach(k => o[k] += Number(x[k] || 0)); o.people = Math.max(o.people, Number(x.people || 0)); }
+      const sa = S.get(key(y, m)); if (x && sa && sa.sales != null) o.sales = (o.sales || 0) + Number(sa.sales); }
+    return o; };
+  const years = [...new Set(T.map(x => Number(x.m.slice(0, 4))))].sort((a, b) => b - a);
+  const head = `<div class="src-bar"><h2>Payroll totals <span>From the pay slips loaded: what we paid, and what it cost us</span></h2></div>`;
+  if (!years.length) { host.innerHTML = `<section class="src pr-tot">${head}<p class="src-none" style="color:#5f6b78">No pay slips loaded yet. Load a payroll PDF above and the totals show here.</p></section>`; return; }
+  const row = (lab, o, prev, cls) => `<tr class="${cls || ""}"><td>${lab}</td><td>${o.pays}</td><td>${o.people || "—"}</td><td><b>${money(o.gross)}</b></td><td>${money(o.vac)}</td><td>${money(o.tax + o.cpp + o.ei)}</td><td>${money(o.net)}</td><td>${money(o.co)}</td><td><b>${money(o.cost)}</b></td><td>${prev && prev.n ? srcDiff(o.cost, prev.cost) : `<span class="quiet">—</span>`}</td><td>${o.sales ? srcPctC(o.gross, o.sales, "pay") : `<span class="quiet">—</span>`}</td></tr>`;
+  const thisY = sum(cy, 1, cm);
+  host.innerHTML = `<section class="src pr-tot">${head}
+    <p class="pr-tot-now">This year so far: gross pay <b>${money(thisY.gross)}</b> · it cost us <b>${money(thisY.cost)}</b> with our share of CPP and EI · ${thisY.pays} pay${thisY.pays === 1 ? "" : "s"} loaded</p>
+    <div class="src-years">${years.map(y => { const last = y === cy ? cm : 12, ytd = sum(y, 1, last), prev = sum(y - 1, 1, last), open = PR.totOpen?.[y] ?? (y === years[0]);
+      const months = []; for (let m = 1; m <= last; m++) { const x = M.get(key(y, m)); if (!x) continue; months.push(row(`${SRC_MN[m - 1]} ${y}`, sum(y, m, m), sum(y - 1, m, m))); }
+      return `<details class="src-year" data-pr-ty="${y}"${open ? " open" : ""}><summary><b>${y}</b> <span>Gross ${money(ytd.gross)}${y === cy ? " so far" : ""}</span> <span>Cost us ${money(ytd.cost)}</span>${prev.n ? ` <span>${y === cy ? `vs Jan–${SRC_MN[last - 1]} ${y - 1}` : `vs ${y - 1}`}: ${srcDiff(ytd.cost, prev.cost)}</span>` : ""}${ytd.sales ? ` <span>Payroll ${srcPctC(ytd.gross, ytd.sales, "pay")} of sales</span>` : ""}</summary>
+        <div class="src-tw"><table class="src-sumt"><thead><tr><th>Month</th><th title="How many pay days (cheque dates) are loaded for the month">Pays</th><th title="The most people paid on one cheque that month">People</th><th title="Before any deductions, with vacation pay, overtime, on call and commission">Gross pay</th><th>Vacation pay</th><th title="Taken off their pay: income tax, CPP and EI">Tax, CPP, EI</th><th title="What went into their bank accounts">Net paid</th><th title="The company's own CPP (the same as theirs) and EI (1.4 times theirs)">Our CPP and EI</th><th title="Gross pay plus our share of CPP and EI (WSIB not counted)">Cost us</th><th>Same month last year (cost)</th><th title="Gross pay ÷ our sales before HST">Payroll % of sales</th></tr></thead><tbody>
+          ${months.join("")}${row(y === cy ? `Year to date (Jan–${SRC_MN[last - 1]})` : `Year ${y}`, ytd, prev, "src-ytd")}
+        </tbody></table></div><p class="quiet src-sumnote">A slip counts in the month of its cheque date. Only the pay slips loaded are counted, so a month with a missing PDF is low. WSIB is not in "Cost us".</p></details>`; }).join("")}</div></section>`;
+  host.querySelectorAll("[data-pr-ty]").forEach(d => d.addEventListener("toggle", () => { (PR.totOpen = PR.totOpen || {})[d.dataset.prTy] = d.open; }));
 }
 // ===== Payroll: what shows to staff, and the private part (George, Nov 13). The Source/Private button turns on rates, money, Source payments
 // and the pay slips. It is off each time Payroll is opened from another page, so nothing private is up when a staff member sits down.
