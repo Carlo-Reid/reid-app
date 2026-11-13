@@ -26043,7 +26043,9 @@ function ieTodoHtml(I, o) {
   const rows = [];
   rows.push([I.lines.length > 0, o.bk ? `Add an item from the ${o.bk.name} price book` : "Add the equipment and the work", "add"]);
   // in the order the work is done (Carlo, Nov 13: "question 2 on the side bar should be Which supplier did we buy the tank from; why is it not in order"): the item, then the tank's supplier and P.O., then the credit, then the partner's numbers
-  if (tank) rows.push([O.length > 0, `Pick the supplier we bought the tank from, and create the P.O.${T.payer === "partner" ? " and the Credit Order" : ""}`, "tank"]);
+  // two lines, so picking the supplier shows as done right away (Carlo, Nov 13: "when I pick the supplier the right side bar should show it right away"); ieTodoSync sets the first one from the drop-down
+  if (tank) rows.push([O.length > 0, "Pick the supplier we bought the tank from", "tank", "", "tanksup"]);
+  if (tank) rows.push([O.length > 0, `Create the P.O.${T.payer === "partner" ? " and the Credit Order" : ""}`, "tank"]);
   if (tank && T.payer === "partner") rows.push([O.length > 0 && O.every(x => !x.credit_number || x.credit_status === "received"), "The supplier's credit comes back (Credit Order)", "tank", O.length && O.some(x => x.credit_number && x.credit_status !== "received") ? "Waiting" : ""]);
   if (P && (P.needs_account || P.needs_approval)) rows.push([(!P.needs_account || !!(B.account || "").trim()) && (!P.needs_approval || !!(B.approval || "").trim()),
     `Type ${P.name.replace(/\s*\(.*\)\s*$/, "")}'s ${[P.needs_account ? "account number" : "", P.needs_approval ? "approval number" : ""].filter(Boolean).join(" and ")}`, "partner"]);
@@ -26053,7 +26055,7 @@ function ieTodoHtml(I, o) {
   const left = rows.filter(r => !r[0]).length;
   return `<div class="ie-todo"><h2>What is done</h2>
     <p class="ie-todo-sum ${voided ? "" : left ? "no" : "ok"}">${voided ? "This invoice was cancelled." : left ? `${left} of ${rows.length} still to do.` : "Everything is done. ✔"}</p>
-    <ol>${rows.map((r, n) => `<li class="${r[0] ? "ok" : "no"}"><button type="button" data-ie-go="${r[2]}"><span class="ie-todo-n">${n + 1}</span><span class="ie-todo-w">${esc(r[1])}</span><span class="ie-todo-t">${r[0] ? "✔ Done" : r[3] || "Incomplete"}</span></button></li>`).join("")}</ol>
+    <ol>${rows.map((r, n) => `<li class="${r[0] ? "ok" : "no"}"${r[4] ? ` data-ie-todo="${r[4]}"` : ""}><button type="button" data-ie-go="${r[2]}"><span class="ie-todo-n">${n + 1}</span><span class="ie-todo-w">${esc(r[1])}</span><span class="ie-todo-t">${r[0] ? "✔ Done" : r[3] || "Incomplete"}</span></button></li>`).join("")}</ol>
     <p class="quiet">Click a line to go to that part of the page.</p></div>`;
 }
 document.addEventListener("click", e => {
@@ -26170,6 +26172,14 @@ function ieTankPoHtml(I) {
     <p class="ie-tpo-who">${vista ? `<b>${nm} pays for the tank.</b> I make a P.O. for the tank, then a Credit Order that waits for the credit to come back from the supplier.` : `<b>We pay for the tank.</b> I make a P.O. for the tank and keep it with this invoice.`}</p>
     ${made}${form}</section>`;
 }
+// the side bar's "Pick the supplier" line follows the drop-down at once, with no reload
+function ieTodoSync() {
+  const li = document.querySelector('.ie-todo li[data-ie-todo="tanksup"]'), f = document.getElementById("ie-tpo-f"); if (!li) return;
+  if (f) { const v = f.supplier.value, ok = !!v && v !== "all" && (v !== "other" || !!f.other.value.trim());
+    li.className = ok ? "ok" : "no"; const t = li.querySelector(".ie-todo-t"); if (t) t.textContent = ok ? "✔ Done" : "Incomplete"; }
+  const sum = document.querySelector(".ie-todo-sum"), all = document.querySelectorAll(".ie-todo li").length, left = document.querySelectorAll(".ie-todo li.no").length;
+  if (sum && !/cancelled/.test(sum.textContent)) { sum.textContent = left ? `${left} of ${all} still to do.` : "Everything is done. ✔"; sum.className = "ie-todo-sum " + (left ? "no" : "ok"); }
+}
 function ieTankPoWire(I, reload) {
   const q = $("#ie-q"), T = I.tankpo;
   if (T && ["reid", "partner"].includes(T.payer) && !(T.orders || []).length && !(T.lines || []).length && q) {   // nothing picked yet: point at the price book search
@@ -26179,10 +26189,17 @@ function ieTankPoWire(I, reload) {
   document.querySelectorAll("[data-ie-tpo-open]").forEach(b => b.addEventListener("click", () => openPOPage(Number(b.dataset.ieTpoOpen))));
   $("[data-ie-tpo-more]")?.addEventListener("click", () => { IE.tpoMore = true; renderInvoiceEditor(); });
   const f = $("#ie-tpo-f");
-  if (f) { f.supplier.addEventListener("change", () => {
+  if (f) {
+    if (IE.tpoSup && IE.tpoFor === I.id) {   // the supplier picked before the page was drawn again stays picked
+      if (![...f.supplier.options].some(o => o.value === IE.tpoSup)) f.supplier.innerHTML = ieTankSupOpts(I, f.line.value, true);
+      if ([...f.supplier.options].some(o => o.value === IE.tpoSup)) { f.supplier.value = IE.tpoSup; if (IE.tpoSup === "other") { f.other.classList.remove("hidden"); f.other.value = IE.tpoOther || ""; } } }
+    ieTodoSync();
+    f.supplier.addEventListener("change", () => {
       if (f.supplier.value === "all") { f.supplier.innerHTML = ieTankSupOpts(I, f.line.value, true); f.supplier.focus(); }   // Another supplier…: the whole list
-      f.other.classList.toggle("hidden", f.supplier.value !== "other"); if (f.supplier.value === "other") f.other.focus(); });
-    f.querySelectorAll('input[name="line"]').forEach(r => r.addEventListener("change", () => { f.supplier.innerHTML = ieTankSupOpts(I, f.line.value, false); f.other.classList.add("hidden"); }));   // another tank line: its own suppliers
+      f.other.classList.toggle("hidden", f.supplier.value !== "other"); if (f.supplier.value === "other") f.other.focus();
+      IE.tpoSup = f.supplier.value; IE.tpoFor = I.id; ieTodoSync(); });
+    f.other.addEventListener("input", () => { IE.tpoOther = f.other.value; ieTodoSync(); });
+    f.querySelectorAll('input[name="line"]').forEach(r => r.addEventListener("change", () => { f.supplier.innerHTML = ieTankSupOpts(I, f.line.value, false); f.other.classList.add("hidden"); IE.tpoSup = f.supplier.value; IE.tpoFor = I.id; ieTodoSync(); }));   // another tank line: its own suppliers
     f.addEventListener("submit", async e => { e.preventDefault(); const msg = f.querySelector(".ie-tpo-msg"), other = f.supplier.value === "other", line = Number(f.line.value);
       if (!line) { msg.textContent = "Pick which line is the tank."; return; }
       if (other && !f.other.value.trim()) { msg.textContent = "Type the supplier's name."; return; }
