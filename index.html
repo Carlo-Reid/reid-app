@@ -6694,6 +6694,12 @@ a.htd-call { text-decoration: none; display: inline-flex; align-items: center; c
 .rules-box summary { cursor: pointer; font-weight: 700; font-size: 13.5px; } .rules-box[open] summary { margin-bottom: 8px; }
 .ask:has(.rules) { max-width: 640px; max-height: 85vh; overflow: auto; }
 .ec-how { font-size: 12px; margin-left: 6px; }
+.cust-ptns { display: inline-flex; flex-wrap: wrap; gap: 6px; vertical-align: middle; margin-left: 10px; }
+.cust-ptn { box-sizing: border-box; width: 56px; height: 56px; padding: 5px; display: inline-flex; align-items: center; justify-content: center; overflow: hidden;
+  background: linear-gradient(180deg, #ffffff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 12px; box-shadow: 0 1px 3px rgba(35, 65, 95, .12); }
+.cust-ptn img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.cust-ptn-w { font-size: 9.5px; line-height: 1.1; font-weight: 700; color: #23415f; text-align: center; letter-spacing: 0; text-transform: none; overflow-wrap: anywhere; max-height: 100%; overflow: hidden; }
+@media print { .cust-ptns { display: none; } }
 .pap-tag { display: inline-block; vertical-align: middle; margin-left: 10px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .02em; background: #e7f5ee; color: #1b6e43; border: 1px solid #b5e0c8; }
 .sec-safe { margin: 8px 0 0; font-size: 13px; }
 .sec-inbox .sec-safe { margin: 0 0 10px; }
@@ -10122,7 +10128,7 @@ async function openCustomer(id) {
   const [cust, plans, jobs, invoices, estimates, eq, emails] = await Promise.all([
     custQ,
     db.from("memberships").select("*, plan_types(name)").eq("customer_id", id).order("start_date", { ascending: false }),
-    db.from("jobs").select("id, job_number, status, summary, description, priority, created_at, completed_at, location_id, tank_payer, job_types(name), business_units(name), partners(name), visits(id, visit_number, scheduled_date, status, visit_assignments(role, employees(first_name, last_name)))")
+    db.from("jobs").select("id, job_number, status, summary, description, priority, created_at, completed_at, location_id, tank_payer, partner_id, job_types(name), business_units(name), partners(name), visits(id, visit_number, scheduled_date, status, visit_assignments(role, employees(first_name, last_name)))")
       .eq("customer_id", id).order("created_at", { ascending: false }).limit(300),
     invQ,
     db.from("estimates").select("id, estimate_number, status, created_at, job_id, location_id, st_id, cancelled_at, sold_by_employee_id, estimate_options!estimate_options_estimate_id_fkey(name, estimate_lines(line_total))")
@@ -10323,6 +10329,19 @@ async function loadPinSlots() {
 }
 const pinColor = rank => (PIN_SLOTS[Math.min(rank, PIN_SLOTS.length - 1)] || {}).color || "#FBF0DD";
 
+// The partners a customer has had a job from: each one's logo as a small app box beside the customer's name (Carlo, Nov 13: "if a customer ever has a
+// job booked from a partner have the partner logo show up next to their name as a small app box… a customer can have more than one partner"). It is read
+// from the customer's own jobs each time the page opens (jobs.partner_id, cancelled jobs left out), so a new job shows it and old customers have it already.
+function custPtnHtml(jobs) {
+  const M = new Map(); (jobs || []).forEach(j => { if (j.partner_id && j.status !== "cancelled") { const x = M.get(j.partner_id) || { id: j.partner_id, name: j.partners?.name || "Partner", n: 0 }; x.n++; M.set(j.partner_id, x); } });
+  const L = [...M.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name)); if (!L.length) return "";
+  return `<span class="cust-ptns">${L.map(x => { const u = BKW_PLOGO ? BKW_PLOGO.get(x.id) : "", t = `${x.name}: ${x.n} job${x.n === 1 ? "" : "s"} from this partner`;
+    return `<span class="cust-ptn" data-cust-ptn="${x.id}" title="${esc(t)}" aria-label="${esc(t)}">${u ? `<img alt="" src="${esc(u)}">` : `<span class="cust-ptn-w">${esc(x.name)}</span>`}</span>`; }).join("")}</span>`;
+}
+async function custPtnFill() {
+  const els = [...document.querySelectorAll("[data-cust-ptn]")].filter(e => !e.querySelector("img")); if (!els.length) return;
+  for (const e of els) { const u = await bkPLogo(e.dataset.custPtn); if (u && e.isConnected) e.innerHTML = `<img alt="" src="${esc(u)}">`; }
+}
 function renderFile() {
   if (current.c && NAV.stack.length && NAV.stack[NAV.stack.length - 1].hash === "#customer=" + current.c.id) nameCurrentPage(current.c.display_name);
   if (current.pendingNotes) { current.notes = current.pendingNotes; current.pendingNotes = null; }
@@ -10379,7 +10398,7 @@ function renderFile() {
     <div class="sec1a ${zoneOf2(l || {})?.color ? "zoned" + (isDark(zoneOf2(l || {}).color) && (!zoneOf2(l || {}).color2 || isDark(zoneOf2(l || {}).color2)) ? " zone-dark" : "") + (zoneOf2(l || {}).color2 ? " zoned2" : "") : ""}" data-tag="Section 1" style="--zc:${esc(zoneOf2(l || {})?.color || "")};--zc2:${esc(zoneOf2(l || {})?.color2 || "")}"><div class="s1-scroll">
     <div class="plate">
       <div>
-        <h1>${esc(c.display_name)}${c.pap_list ? `<span class="pap-tag" title="Pays by pre-authorized payment (PAP)">PAP · ${esc(papName(c.pap_list))}</span>` : ""}${can("customers.edit") ? `<button class="pencil" type="button" data-edit-cust title="Edit this customer's name, phones, emails and addresses" aria-label="Edit customer"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z M14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>` : ""}</h1>
+        <h1>${esc(c.display_name)}${custPtnHtml(jobs)}${c.pap_list ? `<span class="pap-tag" title="Pays by pre-authorized payment (PAP)">PAP · ${esc(papName(c.pap_list))}</span>` : ""}${can("customers.edit") ? `<button class="pencil" type="button" data-edit-cust title="Edit this customer's name, phones, emails and addresses" aria-label="Edit customer"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z M14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>` : ""}</h1>
         <div class="meta">Customer ${esc(c.customer_number)}${c.customer_type === "commercial" ? ", commercial" : ""}${(() => { const d = [custSince(c, jobs, invoices), current.move?.since].filter(Boolean).sort()[0]; if (!d) return ""; const y = custYears(d);
           return `, since ${monthYear(d)} <span class="cust-years" title="A customer since ${esc(fmtDate(d))} (their first job, invoice or when they were added, whichever came first${current.move?.from ? ", counting their old home" : ""})">${y < 1 ? "under 1 year with us" : y === 1 ? "1 year with us" : y + " years with us"}</span>`; })()}</div>
     <div class="s1-addr">
@@ -10600,6 +10619,7 @@ function renderFile() {
   buildFileNav();
   fillTechBox();
   fillFiles();
+  custPtnFill();
   $("#inv-start-btn")?.addEventListener("click", invoicePicker);
 }
 
