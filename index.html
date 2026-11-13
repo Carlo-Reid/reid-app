@@ -1898,7 +1898,11 @@
   .pr-tot { margin-bottom: 14px; } .pr-tot-now { margin: 10px 16px !important; font-size: 16px !important; }
   .pr-ld-dupok { background: #fff6e0; border: 1px solid #f0c38a; border-radius: 10px; padding: 8px 12px; color: #7a4a00; }
   .pr-ld-dupt { color: #9a4d00; font-weight: 700; font-size: 12.5px; }
-  .pr-person .pr-pwage { grid-column: 1 / -1 !important; grid-row: auto !important; align-self: start; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin-top: 4px; padding-top: 5px; border-top: 1px solid #e3e9f0; min-width: 0; }
+  .pr-noslip .pr-ns-run { margin-top: 10px; } .pr-noslip h5 { margin: 6px 0 4px; font-size: 14px; color: #23415f; }
+.pr-noslip .pr-ns-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 6px 8px; background: #fff; border: 1px solid #f0c9a0; border-radius: 8px; margin: 4px 0; }
+.pr-noslip .pr-ns-who { flex: 1 1 200px; display: flex; flex-direction: column; } .pr-noslip .pr-ns-who small { color: #5f6b78; }
+.pr-noslip .pr-ns-acts { display: flex; flex-wrap: wrap; gap: 6px; } .pr-noslip .pr-ns-done { color: #1b6b36; font-weight: 600; }
+.pr-person .pr-pwage { grid-column: 1 / -1 !important; grid-row: auto !important; align-self: start; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin-top: 4px; padding-top: 5px; border-top: 1px solid #e3e9f0; min-width: 0; }
   .pr-pwage small.pr-ytd { display: inline; font-size: 12.5px; color: #1b6b36; font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
   .pr-pwage .pr-vacp { font-size: 12px; color: #23415f; background: #eef4fa; border: 1px solid #bcd0e3; border-radius: 6px; padding: 0 5px; font-weight: 700; white-space: nowrap; }
   .pr-person > * { min-width: 0; overflow-wrap: anywhere; }
@@ -33309,8 +33313,9 @@ async function openPayroll() {
 async function prTotBox() {
   const host = document.getElementById("pr-tot-box"); if (!host) return;
   let T = [];
-  try { const [a, b] = await Promise.all([db.rpc("payroll_totals"), SRC.sum ? Promise.resolve({ data: SRC.sum }) : db.rpc("source_summary")]);
-    if (a.error) throw a.error; T = a.data || []; if (!b.error && b.data) SRC.sum = b.data; }
+  let NS = [];
+  try { const [a, b, c] = await Promise.all([db.rpc("payroll_totals"), SRC.sum ? Promise.resolve({ data: SRC.sum }) : db.rpc("source_summary"), db.rpc("payroll_missing_slips")]);
+    if (a.error) throw a.error; T = a.data || []; if (!b.error && b.data) SRC.sum = b.data; if (!c.error) NS = c.data || []; }
   catch (e) { host.innerHTML = `<div class="error">Couldn't load the payroll totals: ${esc(rpcErr(e))}</div>`; return; }
   if (!SRC.rows) try { await srcLoad(); } catch { }
   if (!document.getElementById("pr-tot-box")) return;
@@ -33347,6 +33352,7 @@ async function prTotBox() {
       <div class="src-misslist">${miss.miss.map(d => `<span>${esc(fmtDate(d))}</span>`).join("")}</div>
       <button type="button" class="btn" data-pr-loadmiss>📄 Load the missing ones</button> <span class="quiet">Load the accountant's PDF for each of those pay days.</span></div>` : PR.ov && miss.first ? `<p class="pr-tot-ok">✓ No pay day is missing from ${esc(fmtDate(miss.first))} to today.</p>` : ""}
     ${prGrossCheck(PR.ov?.cheques || [], miss.first)}
+    ${prNoSlipHtml(NS)}
     <details class="src-more pr-totall"${PR.totAll ? " open" : ""}><summary>Totals by year and by block (${years.length} year${years.length === 1 ? "" : "s"})</summary>
     <div class="src-years">${years.map(y => { const last = y === cy ? cm : 12, ytd = sum(y, 1, last), prev = sum(y - 1, 1, last), open = PR.totOpen?.[y] ?? (y === years[0]);
       const months = []; for (let m = 1; m <= last; m++) { const x = M.get(key(y, m)); if (!x) continue; const k = key(y, m), op = !!PR.mOpen?.[k];
@@ -33364,6 +33370,7 @@ async function prTotBox() {
   host.querySelectorAll(".pr-tgo[data-pr-user]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollPerson(Number(b.dataset.prUser)); }));
   host.querySelectorAll(".pr-tgo[data-pr-staff]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollStaff(Number(b.dataset.prStaff)); }));
   host.querySelector("[data-pr-loadmiss]")?.addEventListener("click", () => $("#pr-slips-in")?.click());
+  prNoSlipWire(host, NS);
   const mWire = cell => { cell.querySelectorAll(".pr-tgo[data-pr-user]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollPerson(Number(b.dataset.prUser)); }));
     cell.querySelectorAll(".pr-tgo[data-pr-staff]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollStaff(Number(b.dataset.prStaff)); }));
     cell.querySelectorAll("[data-pr-slippg]").forEach(b => b.addEventListener("click", () => prSlipPage(b.dataset.prSlippg, b.dataset.prSlipd))); };
@@ -33373,6 +33380,35 @@ async function prTotBox() {
   host.querySelectorAll("tr.pr-mrow").forEach(tr => { if (tr.classList.contains("on")) mLoad(tr.dataset.prM);
     tr.addEventListener("click", () => { const k = tr.dataset.prM, d = host.querySelector(`tr[data-pr-md="${k}"]`); if (!d) return;
     d.hidden = !d.hidden; tr.classList.toggle("on", !d.hidden); (PR.mOpen = PR.mOpen || {})[k] = !d.hidden; if (!d.hidden) mLoad(k); }); });
+}
+// someone who is usually paid but has no pay slip on a pay run (George, Nov 13): one line each, newest pay run first, with
+// ✓ That is right, no cheque · 📄 Load it · 👋 No longer with us. payroll_missing_slips() decides who is asked.
+function prNoSlipHtml(NS) {
+  if (!NS.length) return "";
+  const runs = [...new Set(NS.map(x => String(x.d).slice(0, 10)))];
+  return `<div class="src-missbox pr-noslip"><b>⚠ ${NS.length} pay slip${NS.length === 1 ? "" : "s"} I did not see</b> <span>These people are usually paid, but I have no cheque for them on the pay run. Tell me which it is:</span>
+    ${runs.map(d => `<div class="pr-ns-run"><h5>Pay run of ${esc(fmtDate(d))}</h5>${NS.filter(x => String(x.d).slice(0, 10) === d).map(x => `<div class="pr-ns-row" data-pr-ns="${x.staff}|${d}">
+      <span class="pr-ns-who">${x.user || x.staff ? `<button type="button" class="link pr-tgo" ${x.user ? `data-pr-user="${x.user}"` : `data-pr-staff="${x.staff}"`}>${esc(x.name || "Someone")} ›</button>` : esc(x.name || "Someone")}<small>${x.last ? `Last cheque on file: ${esc(fmtDate(String(x.last).slice(0, 10)))}` : ""}</small></span>
+      <span class="pr-ns-acts"><button type="button" class="btn" data-pr-ns-ok>✓ That is right, no cheque this period</button><button type="button" class="btn" data-pr-ns-load>📄 Load it</button><button type="button" class="btn" data-pr-ns-gone>👋 No longer with us</button></span></div>`).join("")}</div>`).join("")}</div>`;
+}
+function prNoSlipWire(host, NS) {
+  host.querySelectorAll(".pr-noslip .pr-tgo[data-pr-user]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollPerson(Number(b.dataset.prUser)); }));
+  host.querySelectorAll(".pr-noslip .pr-tgo[data-pr-staff]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollStaff(Number(b.dataset.prStaff)); }));
+  host.querySelectorAll(".pr-ns-row").forEach(row => {
+    const [staff, d] = row.dataset.prNs.split("|"), x = NS.find(o => String(o.staff) === staff && String(o.d).slice(0, 10) === d) || {};
+    row.querySelector("[data-pr-ns-load]").addEventListener("click", () => $("#pr-slips-in")?.click());
+    row.querySelector("[data-pr-ns-ok]").addEventListener("click", async e => { e.target.disabled = true;
+      const r = await db.rpc("payroll_no_slip_set", { p_staff: Number(staff), p_d: d, p_on: true });
+      if (r.error) { e.target.disabled = false; alertMsg("Not saved: " + rpcErr(r.error)); return; }
+      row.innerHTML = `<span class="pr-ns-done">✓ ${esc(x.name || "")}: no cheque on the ${esc(fmtDate(d))} pay run. Noted in their pay history.</span>`; });
+    row.querySelector("[data-pr-ns-gone]").addEventListener("click", async () => {
+      const last = String(x.last || d).slice(0, 10);
+      const k = await askChoice(`${x.name || "This person"} is no longer with us?`, `Their last day is set to ${esc(fmtDate(last))} (their last cheque on file). They move to Past employees. You can change the day on their page.`, [["yes", "Yes, they left"], ["", "No, go back"]]);
+      if (k !== "yes") return;
+      const r = await db.rpc("payroll_staff_set", { p: { staff: Number(staff), left_on: last } });
+      if (r.error) { alertMsg("Not saved: " + rpcErr(r.error)); return; }
+      PR.people = null; prKeep(); openPayroll(); });
+  });
 }
 // pay days with no pay slips, from the first cheque on file to today (pay day is every second Thursday; a cheque within 4 days counts),
 // and pay days with far fewer slips than usual (George, Nov 13: "I need to know what payroll is missing from the first one entered")

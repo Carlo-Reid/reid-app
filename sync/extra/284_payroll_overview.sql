@@ -35,3 +35,37 @@ CREATE OR REPLACE FUNCTION public.payroll_month_slips(p_m text) RETURNS jsonb LA
 REVOKE EXECUTE ON FUNCTION public.payroll_month_slips(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.payroll_month_slips(text) TO authenticated;
 NOTIFY pgrst, 'reload schema';
+
+-- someone who is usually paid but has no pay slip on a pay run (George, Nov 13: "let me know that maybe you did not see a cheque from
+-- someone on the pay run… then I can check off that is correct no cheque this period, or upload one, or they are no longer with us").
+-- A pay run = a cheque date with 3 or more slips. Usually paid = a slip on at least 2 of the 3 pay runs before it. A slip within 4 days
+-- of the run counts. Not asked: after their last day, or once marked "no cheque this period" (payroll_no_slip).
+CREATE TABLE IF NOT EXISTS public.payroll_no_slip (
+  staff_id bigint NOT NULL REFERENCES public.payroll_staff(id) ON DELETE CASCADE, run_date date NOT NULL, by_name text, at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (staff_id, run_date));
+ALTER TABLE public.payroll_no_slip ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.payroll_no_slip FROM PUBLIC, anon, authenticated;
+CREATE OR REPLACE FUNCTION public.payroll_missing_slips() RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
+  WITH runs AS (SELECT cheque_date AS d FROM payroll_slips GROUP BY 1 HAVING count(*) >= 3),
+  r AS (SELECT d, row_number() OVER (ORDER BY d) AS i FROM runs),
+  cand AS (
+    SELECT r.d, ps.id AS staff, ps.app_user_id AS u, ps.name, ps.left_on,
+      (SELECT count(*) FROM r p WHERE p.i BETWEEN r.i - 3 AND r.i - 1
+         AND EXISTS (SELECT 1 FROM payroll_slips s WHERE s.staff_id = ps.id AND s.cheque_date BETWEEN p.d - 4 AND p.d + 4)) AS seen
+    FROM r CROSS JOIN payroll_staff ps WHERE r.i > 3)
+  SELECT CASE WHEN public._src_owner() THEN coalesce((SELECT jsonb_agg(jsonb_build_object('d', c.d, 'staff', c.staff, 'user', c.u,
+      'name', coalesce((SELECT nullif(btrim(z.slip_name), '') FROM payroll_slips z WHERE z.staff_id = c.staff ORDER BY z.cheque_date DESC LIMIT 1), c.name),
+      'last', (SELECT max(z.cheque_date) FROM payroll_slips z WHERE z.staff_id = c.staff AND z.cheque_date < c.d)) ORDER BY c.d DESC, c.name)
+    FROM cand c WHERE c.seen >= 2 AND (c.left_on IS NULL OR c.left_on > c.d)
+      AND NOT EXISTS (SELECT 1 FROM payroll_slips s WHERE s.staff_id = c.staff AND s.cheque_date BETWEEN c.d - 4 AND c.d + 4)
+      AND NOT EXISTS (SELECT 1 FROM payroll_no_slip n WHERE n.staff_id = c.staff AND n.run_date = c.d)), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
+CREATE OR REPLACE FUNCTION public.payroll_no_slip_set(p_staff bigint, p_d date, p_on boolean) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+BEGIN
+  IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can change payroll'; END IF;
+  IF p_on THEN INSERT INTO payroll_no_slip (staff_id, run_date, by_name) VALUES (p_staff, p_d, public._staff_name(public.current_app_user_id())) ON CONFLICT DO NOTHING;
+    INSERT INTO payroll_staff_log (staff_id, day, note, by_name) VALUES (p_staff, p_d, 'No cheque on the pay run of ' || to_char(p_d, 'Mon DD, YYYY') || ' (checked: that is right).', public._staff_name(public.current_app_user_id()));
+  ELSE DELETE FROM payroll_no_slip WHERE staff_id = p_staff AND run_date = p_d; END IF;
+END $f$;
+REVOKE EXECUTE ON FUNCTION public.payroll_missing_slips(), public.payroll_no_slip_set(bigint, date, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.payroll_missing_slips(), public.payroll_no_slip_set(bigint, date, boolean) TO authenticated;
+NOTIFY pgrst, 'reload schema';
