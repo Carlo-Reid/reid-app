@@ -25932,7 +25932,8 @@ function renderInvoiceEditor(msg) {
   const ah = /after\s*hours/i.test([I.job_type, I.summary, I.job_summary].filter(Boolean).join(" "));
   // the page in numbered steps, one under the other, the thing to do first on top (Carlo, Nov 12: "page is hard to follow")
   // each step is its own soft card, and the page has a Help button (Carlo, Nov 12, 10:08 p.m.: "i still do not like the look of the page try again to make it easier and add a help button")
-  let sn = 0; const H = (t, sub) => `<h2 class="ie-sec-h"><span class="ie-sec-n">${++sn}</span><span>${t}${sub ? `<small>${sub}</small>` : ""}</span></h2>`;
+  // the page's numbers are the side bar list's numbers, so step 3 on the page is step 3 in the list (Carlo, Nov 13: "why is step 3 above step 1 and not after step 2"). A card that is not a step has no number.
+  const H = (t, sub, n) => `<h2 class="ie-sec-h">${n ? `<span class="ie-sec-n">${n}</span>` : ""}<span>${t}${sub ? `<small>${sub}</small>` : ""}</span></h2>`;
   const card = (key, head, body) => body.trim() || head ? `<section class="ie-card" data-ie-card="${key}">${head}${body}</section>` : "";
   const bk = I.pbook, bkNm = bk ? esc(String(bk.name || "")) : "", pbOf = x => I.member && pbHasMember(x) ? `<s class="quiet">${money(x.unit_price)}</s> ${money(x.member_price)}` : money(x.unit_price);
   const tankFirst = bk && ["reid", "partner"].includes(I.tankpo?.payer) && !(I.tankpo.orders || []).length && !(I.tankpo.lines || []).length;
@@ -25940,10 +25941,12 @@ function renderInvoiceEditor(msg) {
   const lookH = `${I.looks?.length && I.can_look && !I.prule ? `<div class="ie-look"><span class="cl-label">Invoice look</span>
         <div class="seg" role="group"><button type="button" data-ie-look="" aria-pressed="${!I.look_partner_id}">Reid Heating &amp; Cooling</button>${I.looks.map(l =>
           `<button type="button" data-ie-look="${l.id}" aria-pressed="${I.look_partner_id === l.id}">${esc(l.name)} <span class="ie-look-sub">installed by Reid</span></button>`).join("")}</div></div>` : ""}`;
-  const billH = billToHtml(I.bill, "ie", !!I.prule), ruleH = I.prule && !I.prule.tank && edit ? iePartnerRuleHtml(I, edit) : "", tankH = ieTankPoHtml(I);
+  const billH = billToHtml(I.bill, "ie", !!I.prule), ruleH = I.prule && !I.prule.tank && edit ? iePartnerRuleHtml(I, edit) : "";
   const pnm = esc(String(I.bill?.partner?.name || I.prule?.name || "the partner").replace(/\s*\(.*\)\s*$/, ""));
   // a partner pays this invoice (it is billed to the partner, or it is a store job): no "Take the payment" (Carlo, Nov 12, 10:37 p.m.). Billed to the customer, the payment box shows as always.
   const ppay = I.bill?.partner?.name ? String(I.bill.partner.name).replace(/\s*\(.*\)\s*$/, "") : I.store ? String(I.store) : "";
+  const NO = {}; ieTodoRows(I, { draft, ppay, bk, pnm }).forEach((r, n) => { NO[r[4]] = n + 1; }); IE.stepNo = NO;
+  const tankH = ieTankPoHtml(I);
   const sideTab = I.cost && IE_SIDE.tab === "cost" ? "cost" : "todo";
   $("#main").innerHTML = `<article class="staff ie${ah ? " ie-ah" : ""}">
     ${ah ? `<div class="ah-banner" role="status"><span>🌙</span><div><b>AFTER HOURS CALL</b><small>Charge after-hours rates on this invoice</small></div></div>` : ""}
@@ -25960,8 +25963,8 @@ function renderInvoiceEditor(msg) {
     <div class="ie-lines-box ie-cards">
       <div class="ie-steps"${edit && draft ? " hidden" : ""}>${["Add the work", "Finish", "Customer signs", ppay ? ppay + " pays" : "Payment"].map((x, n) => { const done = [!draft, !draft, !!I.signature, Number(I.balance) <= 0.004 && !draft][n];
         return `<span class="ie-step ${done ? "done" : ""}"><b>${done ? "✓" : n + 1}</b>${x}</span>`; }).join("")}</div>
-      ${edit ? `<section class="ie-card" data-ie-card="add">${bk ? H(`Add from the ${bkNm} price book`, "Click the button. Then click Add on what you are putting in.")
-          : H("Add the equipment and the work", "Type its name in the box. Then click it in the list.")}<div class="ie-add">
+      ${edit ? `<section class="ie-card" data-ie-card="add">${bk ? H(`Add from the ${bkNm} price book`, "Click the button. Then click Add on what you are putting in.", NO.add)
+          : H("Add the equipment and the work", "Type its name in the box. Then click it in the list.", NO.add)}<div class="ie-add">
         ${MYDISC.size ? `<div class="ie-mydisc"><span class="cl-label">Your discounts</span>${[...MYDISC.values()].map(d => { return `<button class="btn quiet-btn" type="button" data-ie-adddisc="${d.item_id}" title="Adds it with your discount">${esc(pbName(d.name))} <b>${discWord(d, d.unit_price)}</b></button>`; }).join("")}</div>` : ""}
         ${bk ? "" : `<div class="ie-find"><div class="ie-find-row"><input type="search" id="ie-q" placeholder="Add from the price book: name, code or model" autocomplete="off"><button class="btn" type="button" id="ie-pbook" title="Your price book with pictures: click Add on what you want">Price book</button></div><div class="ie-res" id="ie-res"></div></div>`}
         ${bookH}
@@ -25994,9 +25997,9 @@ function renderInvoiceEditor(msg) {
         ${(I.payments || []).map(p => `<tr><td>Paid ${esc(fmtDate(p.on))} · ${esc((PAY_METHODS.find(m => m[0] === p.method) || [0, PAY_NAMES?.[p.method] || p.method])[1])}${p.reference ? " · " + esc(p.reference) : ""}</td><td class="r num">−${money(p.amount)}${can("invoices.adjust") || ["owner", "admin", "accounting"].includes(ME.role) ? ` <button class="link danger" type="button" data-ie-unpay="${p.id}" title="Take this payment off">×</button>` : ""}</td></tr>`).join("")}
         ${!draft ? `<tr class="ie-bal ${Number(I.balance) > 0.004 ? "" : "zero"}"><td>Still owing</td><td class="r num">${money(I.balance)}</td></tr>` : ""}
       </table></div></section>
-      ${tankH ? card("tank", H("The P.O. for the tank", "Pick the supplier we bought the tank from. Then press the green box."), tankH) : ""}
-      ${(lookH + billH + ruleH).trim() ? card("partner", H(billH || ruleH ? `What ${pnm} needs` : "How the invoice looks", billH || ruleH ? `Fill in ${pnm}'s numbers when you have them.` : ""), lookH + billH + ruleH) : ""}
-      <section class="ie-card ie-card-end" data-ie-card="finish">${edit && !I.st_edit ? H("Finish", "Press the green button when everything is on the invoice.") : ""}
+      ${tankH ? card("tank", H("The P.O. for the tank", "Do the numbered steps in this box, in order."), tankH) : ""}
+      ${(lookH + billH + ruleH).trim() ? card("partner", H(billH || ruleH ? `What ${pnm} needs` : "How the invoice looks", billH || ruleH ? `Fill in ${pnm}'s numbers when you have them.` : "", NO.partner), lookH + billH + ruleH) : ""}
+      <section class="ie-card ie-card-end" data-ie-card="finish">${edit && !I.st_edit ? H("Finish", "Press the green button when everything is on the invoice.", NO.finish) : ""}
       ${edit ? `<label class="ie-notes">Note on the invoice <span class="quiet">(optional, the customer sees it)</span><textarea id="ie-notes" rows="2">${esc(I.notes || "")}</textarea></label>
         ${I.st_edit ? `<div class="ie-actions"><button class="btn quiet-btn" type="button" id="ie-stnote">Save the note</button><span class="quiet">Changes save as you go. It keeps its number, date and payments.</span></div>`
           : `<div class="ie-actions"><button class="ie-sq ie-sq-go" type="button" id="ie-finish" ${I.lines.length ? "" : "disabled"}><span class="ie-sq-ic" aria-hidden="true">✅</span><b>Finish the invoice</b></button><span class="quiet">Changes save as you go.</span></div>`}` : ""}
@@ -26038,20 +26041,24 @@ function renderInvoiceEditor(msg) {
 }
 // The right side bar's list of what is done and what is still needed on this invoice (Carlo, Nov 13: "a list of what is done and what is still needed for the call. example 1 Add item from price book. Marked Done or Incomplete")
 const IE_SIDE = { tab: (() => { try { return localStorage.getItem("reid.ie.side") || "todo"; } catch { return "todo"; } })() };
-function ieTodoHtml(I, o) {
+function ieTodoRows(I, o) {
   const T = I.tankpo, tank = T && ["reid", "partner"].includes(T.payer), O = (T && T.orders) || [], P = I.bill?.partner, B = I.bill || {}, voided = I.status === "void";
   const rows = [];
-  rows.push([I.lines.length > 0, o.bk ? `Add an item from the ${o.bk.name} price book` : "Add the equipment and the work", "add"]);
+  rows.push([I.lines.length > 0, o.bk ? `Add an item from the ${o.bk.name} price book` : "Add the equipment and the work", "add", "", "add"]);
   // in the order the work is done (Carlo, Nov 13: "question 2 on the side bar should be Which supplier did we buy the tank from; why is it not in order"): the item, then the tank's supplier and P.O., then the credit, then the partner's numbers
   // two lines, so picking the supplier shows as done right away (Carlo, Nov 13: "when I pick the supplier the right side bar should show it right away"); ieTodoSync sets the first one from the drop-down
   if (tank) rows.push([O.length > 0, "Pick the supplier we bought the tank from", "tank", "", "tanksup"]);
-  if (tank) rows.push([O.length > 0, `Create the P.O.${T.payer === "partner" ? " and the Credit Order" : ""}`, "tank"]);
-  if (tank && T.payer === "partner") rows.push([O.length > 0 && O.every(x => !x.credit_number || x.credit_status === "received"), "The supplier's credit comes back (Credit Order)", "tank", O.length && O.some(x => x.credit_number && x.credit_status !== "received") ? "Waiting" : ""]);
+  if (tank) rows.push([O.length > 0, `Create the P.O.${T.payer === "partner" ? " and the Credit Order" : ""}`, "tank", "", "tankpo"]);
+  if (tank && T.payer === "partner") rows.push([O.length > 0 && O.every(x => !x.credit_number || x.credit_status === "received"), "The supplier's credit comes back (Credit Order)", "tank", O.length && O.some(x => x.credit_number && x.credit_status !== "received") ? "Waiting" : "", "credit"]);
   if (P && (P.needs_account || P.needs_approval)) rows.push([(!P.needs_account || !!(B.account || "").trim()) && (!P.needs_approval || !!(B.approval || "").trim()),
-    `Type ${P.name.replace(/\s*\(.*\)\s*$/, "")}'s ${[P.needs_account ? "account number" : "", P.needs_approval ? "approval number" : ""].filter(Boolean).join(" and ")}`, "partner"]);
-  rows.push([!o.draft, "Finish the invoice", "finish"]);
-  rows.push([!!I.signature, "The customer signs", "sign"]);
-  rows.push([!o.draft && Number(I.balance) <= 0.004, o.ppay ? `${o.ppay} pays us` : "Take the payment", "pay", o.ppay && !o.draft && Number(I.balance) > 0.004 ? "Waiting" : ""]);
+    `Type ${P.name.replace(/\s*\(.*\)\s*$/, "")}'s ${[P.needs_account ? "account number" : "", P.needs_approval ? "approval number" : ""].filter(Boolean).join(" and ")}`, "partner", "", "partner"]);
+  rows.push([!o.draft, "Finish the invoice", "finish", "", "finish"]);
+  rows.push([!!I.signature, "The customer signs", "sign", "", "sign"]);
+  rows.push([!o.draft && Number(I.balance) <= 0.004, o.ppay ? `${o.ppay} pays us` : "Take the payment", "pay", o.ppay && !o.draft && Number(I.balance) > 0.004 ? "Waiting" : "", "pay"]);
+  return rows;
+}
+function ieTodoHtml(I, o) {
+  const rows = ieTodoRows(I, o), voided = I.status === "void";
   const left = rows.filter(r => !r[0]).length;
   return `<div class="ie-todo"><h2>What is done</h2>
     <p class="ie-todo-sum ${voided ? "" : left ? "no" : "ok"}">${voided ? "This invoice was cancelled." : left ? `${left} of ${rows.length} still to do.` : "Everything is done. ✔"}</p>
@@ -26161,11 +26168,12 @@ function ieTankPoHtml(I) {
       </div></div>`).join("")}` : "";
   const form = !open || !I.can_edit ? "" : O.length && L.length && !IE.tpoMore ? `<button class="link ie-tpo-more" type="button" data-ie-tpo-more>＋ Make a P.O. for another tank on this invoice</button>` : !L.length ? (O.length ? "" : `<p class="ie-tpo-wait">I can not make the P.O. yet. First add the tank to this invoice from the price book (the search box above).</p>`)
     : `<form class="ie-tpo-f" id="ie-tpo-f">
-        <div class="ie-tpo-q"><span class="ie-tpo-n">1</span><b>Which line is the tank?</b></div>
+        <div class="ie-tpo-q"><b>Which line is the tank?</b></div>
         <div class="ie-tpo-lines">${L.map(x => `<label><input type="radio" name="line" value="${x.id}" ${x.id === pick ? "checked" : ""}> <span>${esc(pbName(x.description || ""))}${x.sku ? ` <i>${esc(x.sku)}</i>` : ""} · ${Number(x.quantity)}${x.unit_cost != null ? " × " + m(x.unit_cost) : ""}</span></label>`).join("")}</div>
-        <div class="ie-tpo-q"><span class="ie-tpo-n">2</span><b>Which supplier did we buy the tank from?</b></div>
+        <div class="ie-tpo-q"><span class="ie-tpo-n">${(IE.stepNo || {}).tanksup || 2}</span><b>Which supplier did we buy the tank from?</b></div>
         <select name="supplier" required>${ieTankSupOpts(I, pick, false)}</select>
         <input name="other" class="hidden" placeholder="Type the supplier's name" maxlength="120">
+        <div class="ie-tpo-q"><span class="ie-tpo-n">${(IE.stepNo || {}).tankpo || 3}</span><b>Press this box</b></div>
         <button class="ie-sq ie-sq-go ie-tpo-go" type="submit"><span class="ie-sq-ic" aria-hidden="true">📦</span><b>${vista ? "Create the P.O. and the Credit Order" : "Create the P.O."}</b></button><span class="ie-tpo-msg" role="status"></span>
       </form>`;
   return `<section class="ie-tankpo"><h3>📦 Tank P.O.</h3>
