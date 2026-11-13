@@ -8,9 +8,12 @@ CREATE TABLE IF NOT EXISTS public.walk_results (
 ALTER TABLE public.walk_results ENABLE ROW LEVEL SECURITY;   -- no policies: only through the functions below
 -- Nov 13 (Carlo): the tech answers 4 questions on a walk, each with a picture or N/A; all 4 before the call can be completed (see 288_walk_questions.sql)
 CREATE TABLE IF NOT EXISTS public.walk_answers (
-  visit_id bigint NOT NULL REFERENCES public.visits(id) ON DELETE CASCADE, q int NOT NULL CHECK (q BETWEEN 1 AND 4),
+  visit_id bigint NOT NULL REFERENCES public.visits(id) ON DELETE CASCADE, q int NOT NULL CHECK (q BETWEEN 1 AND 20),
   question text, na boolean NOT NULL DEFAULT false, storage_key text, attachment_id bigint,
   at timestamptz NOT NULL DEFAULT now(), by_user bigint, PRIMARY KEY (visit_id, q));
+-- the number of questions is set on Settings -> Job Types (1 to 20), so the old 1-to-4 check is replaced
+ALTER TABLE public.walk_answers DROP CONSTRAINT IF EXISTS walk_answers_q_check;
+ALTER TABLE public.walk_answers ADD CONSTRAINT walk_answers_q_check CHECK (q BETWEEN 1 AND 20);
 ALTER TABLE public.walk_answers ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.walk_answers FROM PUBLIC, anon, authenticated;
 
@@ -35,8 +38,10 @@ BEGIN
     RAISE EXCEPTION 'You can only finish calls you''re on';
   END IF;
   IF v.status IN ('completed', 'cancelled') THEN RAISE EXCEPTION 'That call is already %', CASE v.status WHEN 'completed' THEN 'done' ELSE 'cancelled' END; END IF;
-  IF (SELECT count(*) FROM walk_answers a WHERE a.visit_id = p_visit_id AND (a.na OR a.storage_key IS NOT NULL)) < 4 THEN
-    RAISE EXCEPTION 'Answer all 4 questions first: a picture, or N/A, for each one';
+  IF to_regprocedure('public.walk_questions()') IS NOT NULL
+     AND (SELECT count(*) FROM walk_answers a WHERE a.visit_id = p_visit_id AND (a.na OR a.storage_key IS NOT NULL) AND a.q <= jsonb_array_length(public.walk_questions()))
+         < jsonb_array_length(public.walk_questions()) THEN
+    RAISE EXCEPTION 'Answer every question first: a picture, or N/A, for each one';
   END IF;
   IF length(coalesce(v_png, '')) > 400000 THEN RAISE EXCEPTION 'That signature is too big'; END IF;
   IF length(coalesce(v_notes, '')) > 8000 THEN RAISE EXCEPTION 'The notes are too long'; END IF;

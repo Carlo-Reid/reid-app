@@ -1,11 +1,11 @@
 -- The 4 questions a tech answers on a walk (Carlo, Nov 13, 2026): each one gets a picture, saved in the job's photos and files, or N/A.
 -- All 4 have to be answered before the walk's call can be completed (the check is in walk_complete, 277_walk_done.sql; the table walk_answers is made there).
--- Owners can change the words of the questions (To be Booked page).
+-- Owners change, add and remove the questions on Settings -> Job Types -> HWT Walk (1 to 20 questions; Carlo, Nov 13, 4:58 p.m.).
 ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS walk_questions jsonb;
 
 CREATE OR REPLACE FUNCTION public.walk_questions() RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE coalesce(
-    (SELECT walk_questions FROM company_settings WHERE jsonb_typeof(walk_questions) = 'array' AND jsonb_array_length(walk_questions) = 4 LIMIT 1),
+    (SELECT walk_questions FROM company_settings WHERE jsonb_typeof(walk_questions) = 'array' AND jsonb_array_length(walk_questions) BETWEEN 1 AND 20 LIMIT 1),
     jsonb_build_array(
       'Take a picture of the old equipment, with its label.',
       'Take a picture of the venting (the pipe that takes the exhaust outside).',
@@ -16,9 +16,9 @@ CREATE OR REPLACE FUNCTION public.set_walk_questions(p jsonb) RETURNS void LANGU
 BEGIN
   IF public.current_staff_role() IS DISTINCT FROM 'owner' THEN RAISE EXCEPTION 'Only an owner can change the walk questions'; END IF;
   IF p IS NULL THEN UPDATE company_settings SET walk_questions = NULL; RETURN; END IF;
-  IF jsonb_typeof(p) <> 'array' OR jsonb_array_length(p) <> 4
+  IF jsonb_typeof(p) <> 'array' OR jsonb_array_length(p) NOT BETWEEN 1 AND 20
      OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(p) x WHERE nullif(btrim(x), '') IS NULL OR length(x) > 300) THEN
-    RAISE EXCEPTION 'Type all 4 questions (300 letters at most each)';
+    RAISE EXCEPTION 'Type every question (1 to 20 questions, 300 letters at most each)';
   END IF;
   UPDATE company_settings SET walk_questions = (SELECT jsonb_agg(btrim(x)) FROM jsonb_array_elements_text(p) x);
 END $function$;
@@ -40,7 +40,7 @@ BEGIN
     RAISE EXCEPTION 'You can only answer for calls you''re on';
   END IF;
   IF v.status IN ('completed', 'cancelled') THEN RAISE EXCEPTION 'That call is already closed'; END IF;
-  IF p_q IS NULL OR p_q NOT BETWEEN 1 AND 4 THEN RAISE EXCEPTION 'Which question?'; END IF;
+  IF p_q IS NULL OR p_q NOT BETWEEN 1 AND 20 THEN RAISE EXCEPTION 'Which question?'; END IF;
   IF coalesce(p_na, false) THEN v_key := NULL;
   ELSIF v_key IS NULL OR v_key NOT LIKE 'forms/' || v.job_id || '/walk-%' THEN RAISE EXCEPTION 'Take a picture, or press N/A';
   ELSE
