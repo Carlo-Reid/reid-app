@@ -33144,6 +33144,8 @@ function srcParseConf(T, o) {
   o.paid_on = o.paid_on || d(new RegExp("Payment\\s+date\\s*:?\\s*" + DT, "i"));
   o.due = o.due || d(new RegExp("Due\\s+date\\s*:?\\s*" + DT, "i"));
   o.emp_paid_on = o.emp_paid_on || d(new RegExp("to\\s+employees\\s*:?\\s*" + DT, "i"));
+  if (!o.emp_paid_on) { const mo = T.match(/to\s+employees\s*:?\s*(\d{4})\s*[-/.,]?\s*([A-Za-z]{3,9})\.?(?!\s*\d)/i);   // "2024 Dec": a monthly payment names only the month
+    if (mo && srcMon(mo[2])) o.emp_paid_on = srcYmd(mo[1], srcMon(mo[2]), new Date(Date.UTC(Number(mo[1]), srcMon(mo[2]), 0)).getUTCDate()); }
   const a = T.match(/remittance\)?\s*:?\s*\$?\s*([\d,]+\.\d\d)/i) || T.match(/Amount\s+paid[^$\n]*\$\s*([\d,]+\.\d\d)/i); if (a && o.paid_amount == null) o.paid_amount = srcNum(a[1]);
   const g = T.match(/Gross\s+period\s+payroll\s*:?\s*\$?\s*([\d,]+\.\d\d)/i); if (g && o.gross == null) o.gross = srcNum(g[1]);
   const e = T.match(/Number\s+of\s+employees\s*:?\s*(\d+)/i); if (e && o.employees == null) o.employees = Number(e[1]);
@@ -33321,13 +33323,14 @@ function srcEmailBox(r) {
     if (error) { sv.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
     close(); srcBox(`Saved: ${srcPeriod(got)}, ${money(got.total)} due ${longDate(got.due || srcDueOf(got.from))}.`); srcRefreshDue(); });
 }
-const srcDueOf = from => { const d = new Date(from + "T12:00:00Z"); let x = d.getUTCDate() === 1 ? new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 25)) : new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 10));
+const srcDueOf = from => { const d = new Date(from + "T12:00:00Z"); let x = from < SRC_MONTHLY_TO ? new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 15)) : d.getUTCDate() === 1 ? new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 25)) : new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 10));
   const w = x.getUTCDay(); if (w === 6) x = new Date(x.getTime() + 2 * 864e5); if (w === 0) x = new Date(x.getTime() + 864e5); return x.toISOString().slice(0, 10); };
 // the half month a PDF is for: by the date paid to employees (how the CRA counts it), else by its due date (George, Nov 13)
+const SRC_MONTHLY_TO = "2025-02-01";   // before this day HSG remitted monthly (one payment for the whole month); from it, twice a month (George, Nov 13)
 const srcPerOf = d => { if (!d) return null; const [y, m, dd] = d.split("-").map(Number), last = new Date(Date.UTC(y, m, 0)).getUTCDate(), mm = String(m).padStart(2, "0");
-  return dd <= 15 ? { from: `${y}-${mm}-01`, to: `${y}-${mm}-15` } : { from: `${y}-${mm}-16`, to: `${y}-${mm}-${last}` }; };
-const srcPerOfPdf = o => o?.emp_paid_on ? srcPerOf(o.emp_paid_on) : o?.due ? (() => { const [y, m, d] = o.due.split("-").map(Number);
-  return d >= 20 ? srcPerOf(`${y}-${String(m).padStart(2, "0")}-01`) : srcPerOf(new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10)); })() : null;
+  return d < SRC_MONTHLY_TO ? { from: `${y}-${mm}-01`, to: `${y}-${mm}-${last}` } : dd <= 15 ? { from: `${y}-${mm}-01`, to: `${y}-${mm}-15` } : { from: `${y}-${mm}-16`, to: `${y}-${mm}-${last}` }; };
+const srcPerOfPdf = o => o?.emp_paid_on ? srcPerOf(o.emp_paid_on) : o?.due ? (() => { const [y, m, d] = o.due.split("-").map(Number), first = `${y}-${String(m).padStart(2, "0")}-01`;
+  return d >= 20 && first >= SRC_MONTHLY_TO ? srcPerOf(first) : srcPerOf(new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10)); })() : null;
 // ＋ Add older payments: pick one or many confirmation PDFs; each is read and saved on its own period, then a list says what happened
 function srcOlderBox() {
   const me = (() => { try { return smMyFirst?.() || ""; } catch { return ""; } })();
