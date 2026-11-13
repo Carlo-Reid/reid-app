@@ -1825,6 +1825,16 @@
   .src .src-btns button.btn, .src-task button.btn { background: linear-gradient(180deg, #2b4f73, #23415f) !important; color: #fff !important; border: 1px solid #1c3650 !important; }
   .src .src-btns button.btn.quiet-btn { background: #fff !important; color: #23415f !important; border-color: #b9c6d3 !important; }
   .src-pop-h button.btn { background: #fff !important; color: #23415f !important; border: 1px solid #fff !important; font-weight: 700; }
+  .src-pop.src-pop-wide { width: min(1180px, 100%); }
+  .src-fix { color: #1c2b3a; margin: 14px 0; border: 1px solid #d3dbe4; border-left: 6px solid #e8590c; border-radius: 8px; background: #fff; }
+  .src-fix.done { border-left-color: #1f9d4a; } .src-fix.skipped { border-left-color: #9aa5b1; opacity: .75; }
+  .src-fix-h { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 10px 12px; font-size: 15px; } .src-fix-h span { color: #a61e1e; font-weight: 700; } .src-fix.done .src-fix-h span { color: #1b6b36; } .src-fix.skipped .src-fix-h span { color: #5f6b78; }
+  .src-fix-in { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(260px, 1fr); gap: 14px; padding: 0 12px 12px; }
+  .src-fix-pdf { width: 100%; height: 560px; border: 1px solid #d3dbe4; border-radius: 6px; background: #f4f6f8; }
+  .src-fix-f { display: flex; flex-direction: column; gap: 8px; } .src-fix-f label { display: flex; flex-direction: column; gap: 3px; font-weight: 700; font-size: 14px; color: #33404d; } .src-fix-f small { font-weight: 400; color: #5f6b78; }
+  .src-fix-f input { font: inherit; font-size: 16px; padding: 7px 10px; border: 1px solid #b9c6d3; border-radius: 6px; } .src-fix-f input.src-miss-in { border: 2px solid #e03131; background: #fff6f6; }
+  .src-fix-f p.src-fix-per { margin: 2px 0; font-size: 15px; color: #1c2b3a; } .src-sum { font-size: 15.5px; }
+  @media (max-width: 800px) { .src-fix-in { grid-template-columns: 1fr; } .src-fix-pdf { height: 420px; } }
   .pr-norate { color: #c92a2a; font-weight: 700; } .pr-norate-note { margin: 6px 0 12px; padding: 10px 14px; border: 1px solid #f1c0c0; background: #fdf3f3; border-radius: 6px; }
   .pr-rate { margin: 10px 0 14px; padding: 12px 16px; border: 1px solid #d3dbe4; border-left: 6px solid #23415f; border-radius: 6px; background: #fff; }
   .pr-rate h2 { margin: 0 0 6px; font-size: 19px; color: #1c3650; } .pr-rate-now { font-size: 17px; margin: 0 0 10px; }
@@ -33107,20 +33117,49 @@ function srcReadEmail(t) {
   return o;
 }
 // the bank's payment confirmation PDF (Government Payment & Filing Service)
-async function srcReadPdf(f) {
-  const L = await pdfLinesY(f), T = L.map(l => l.t).join("\n"), o = { pdf_name: f.name };
-  const d = re => { const m = T.match(re); return m && srcMon(m[2]) ? srcYmd(m[1], srcMon(m[2]), m[3]) : null; };
-  const c = T.match(/Confirmation\s+number\s*:?\s*([A-Za-z0-9-]{5,})/i); if (c) o.confirmation = c[1];
-  const s = T.match(/^Status\s*:?\s*(.+)$/im); if (s) o.bank_status = s[1].trim();
-  o.paid_on = d(/Payment\s+date\s*:?\s*(\d{4})\s+([A-Za-z]{3,9})\.?\s+(\d{1,2})/i);
-  o.due = d(/Due\s+date\s*:?\s*(\d{4})\s+([A-Za-z]{3,9})\.?\s+(\d{1,2})/i);
-  o.emp_paid_on = d(/made\s+to\s+employees\s*:?\s*(\d{4})\s+([A-Za-z]{3,9})\.?\s+(\d{1,2})/i);
-  const a = T.match(/remittance\)?\s*:?\s*\$\s*([\d,]+\.\d\d)/i) || T.match(/Amount\s+paid[^$\n]*\$\s*([\d,]+\.\d\d)/i); if (a) o.paid_amount = srcNum(a[1]);
-  const g = T.match(/Gross\s+period\s+payroll\s*:?\s*\$\s*([\d,]+\.\d\d)/i); if (g) o.gross = srcNum(g[1]);
-  const e = T.match(/Number\s+of\s+employees\s*:?\s*(\d+)/i); if (e) o.employees = Number(e[1]);
-  const acc = T.match(/Tax\s+account\s+to\s+pay\s+(\d{9}\s*RP\s*\d{4})/i); if (acc) o.account = acc[1].replace(/\s+/g, "");
-  const from = [...T.matchAll(/^Payment\s+from\s+(.+)$/gim)].map(m => m[1].trim()).find(x => /\*{2,}|\d{3,}/.test(x));
-  o.paid_how = "Online banking" + (/Government\s+Payment/i.test(T) ? " (Government Payment & Filing)" : "") + (from ? " from " + from : "");
+// read the confirmation's words: first the PDF's own text; a scanned or printed-to-picture PDF has none, so its pages are then read
+// as pictures (tesseract, like the supplier papers); last, the file name ("24-8-30-Source-… 42699.85 to be paid Sep15.pdf") fills gaps
+function srcParseConf(T, o) {
+  T = String(T || "").replace(/[|]/g, " ");
+  const DT = "(\\d{4})\\s*[-/.,]?\\s*([A-Za-z]{3,9})\\.?\\s*[-/.,]?\\s*(\\d{1,2})";
+  const d = re => { const m = T.match(re); if (m && srcMon(m[2])) return srcYmd(m[1], srcMon(m[2]), m[3]);
+    const n = T.match(new RegExp(re.source.replace(DT, "(\\d{4})[-/.](\\d{1,2})[-/.](\\d{1,2})"), "i")); return n ? srcYmd(n[1], Number(n[2]), n[3]) : null; };   // also 2024-08-30
+  const c = T.match(/Confirmation\s*(?:number|no\.?|#)\s*:?\s*([A-Za-z0-9]{3,8}\s?-\s?\d{5,9})/i) || T.match(/Confirmation\s*(?:number|no\.?|#)\s*:?\s*([A-Za-z0-9-]{6,})/i);
+  if (c && !o.confirmation) o.confirmation = c[1].replace(/\s+/g, "");
+  const st = T.match(/^\s*Status\s*:?\s*(.+)$/im); if (st && !o.bank_status) o.bank_status = st[1].trim();
+  o.paid_on = o.paid_on || d(new RegExp("Payment\\s+date\\s*:?\\s*" + DT, "i"));
+  o.due = o.due || d(new RegExp("Due\\s+date\\s*:?\\s*" + DT, "i"));
+  o.emp_paid_on = o.emp_paid_on || d(new RegExp("to\\s+employees\\s*:?\\s*" + DT, "i"));
+  const a = T.match(/remittance\)?\s*:?\s*\$?\s*([\d,]+\.\d\d)/i) || T.match(/Amount\s+paid[^$\n]*\$\s*([\d,]+\.\d\d)/i); if (a && o.paid_amount == null) o.paid_amount = srcNum(a[1]);
+  const g = T.match(/Gross\s+period\s+payroll\s*:?\s*\$?\s*([\d,]+\.\d\d)/i); if (g && o.gross == null) o.gross = srcNum(g[1]);
+  const e = T.match(/Number\s+of\s+employees\s*:?\s*(\d+)/i); if (e && o.employees == null) o.employees = Number(e[1]);
+  const acc = T.match(/Tax\s+account\s+to\s+pay\s*:?\s*(\d{9}\s*RP\s*\d{4})/i); if (acc && !o.account) o.account = acc[1].replace(/\s+/g, "");
+  if (!o.paid_how) { const from = [...T.matchAll(/^\s*Payment\s+from\s+(.+)$/gim)].map(m => m[1].trim()).find(x => /\*{2,}|\d{3,}/.test(x));
+    if (/Government\s+Payment/i.test(T) || from) o.paid_how = "Online banking" + (/Government\s+Payment/i.test(T) ? " (Government Payment & Filing)" : "") + (from ? " from " + from : ""); }
+  return o;
+}
+function srcFromName(name, o) {   // "24-8-30-Source-… 42699.85 to be paid Sep15.pdf": employees paid Aug 30, 2024; $42,699.85; paid Sep 15
+  const n = String(name || ""), h = n.match(/^\s*(\d{2})-(\d{1,2})-(\d{1,2})\b/), amt = n.match(/(?:^|[\s_])(\d{3,6}\.\d\d)(?=[\s_.]|$)/), pd = n.match(/paid\s*_?\s*([A-Za-z]{3,9})\.?\s*_?(\d{1,2})/i);
+  const out = {}; if (h) out.emp_paid_on = srcYmd(2000 + Number(h[1]), Number(h[2]), Number(h[3]));
+  if (amt) out.paid_amount = Number(amt[1]);
+  if (pd && srcMon(pd[1])) { const y0 = out.emp_paid_on ? Number(out.emp_paid_on.slice(0, 4)) : null, m = srcMon(pd[1]);
+    if (y0) out.paid_on = srcYmd(m < Number(out.emp_paid_on.slice(5, 7)) ? y0 + 1 : y0, m, pd[2]); }
+  for (const k of Object.keys(out)) if (o[k] == null || o[k] === "") { o[k] = out[k]; (o.fromName = o.fromName || []).push(k); }
+  return o;
+}
+const srcComplete = o => !!(o.confirmation && o.paid_on && o.paid_amount != null && srcPerOfPdf(o));
+async function srcReadPdf(f, say) {
+  const o = { pdf_name: f.name };
+  try { srcParseConf((await pdfLinesY(f)).map(l => l.t).join("\n"), o); } catch { }
+  if (!(o.confirmation && o.paid_on && o.paid_amount != null)) {   // no words in the PDF: read its pages as pictures
+    try { say?.("This PDF is a picture. Reading it like a scan (about 15 seconds a page)…");
+      await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"); await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      const pdf = await window.pdfjsLib.getDocument({ data: (await f.arrayBuffer()).slice(0) }).promise, texts = [];
+      for (let n = 1; n <= Math.min(pdf.numPages, 3); n++) { const pg = await pdf.getPage(n), vp = pg.getViewport({ scale: 3 }), c = document.createElement("canvas");
+        c.width = vp.width; c.height = vp.height; await pg.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise; texts.push(await smOcr(c, "6")); }
+      srcParseConf(texts.join("\n"), o); o.scanned = true; } catch (e) { o.scanErr = e.message || String(e); } }
+  srcFromName(f.name, o);
   o.pdf = await new Promise((ok, no) => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(",")[1]); rd.onerror = no; rd.readAsDataURL(f); });
   return o;
 }
@@ -33236,22 +33275,56 @@ const srcPerOfPdf = o => o?.emp_paid_on ? srcPerOf(o.emp_paid_on) : o?.due ? (()
 // ＋ Add older payments: pick one or many confirmation PDFs; each is read and saved on its own period, then a list says what happened
 function srcOlderBox() {
   const me = (() => { try { return smMyFirst?.() || ""; } catch { return ""; } })();
-  const { w } = srcModal("Add older payments", `<p class="src-hint">Pick the payment confirmation PDFs from the bank. You can pick many at once. I read each one and put it on its own period, by the date the employees were paid (or its due date). A period that already has a payment is left alone.</p>
+  const { w } = srcModal("Add older payments", `<p class="src-hint">Pick the payment confirmation PDFs from the bank. You can pick many at once. I read each one and put it on its own period, by the date the employees were paid (or its due date). If I can not read something on a PDF, I show you the PDF beside the boxes so you can check it and fill in what is missing.</p>
     <label class="src-file"><span>📄 Payment confirmation PDFs</span><input type="file" accept="application/pdf,.pdf" multiple></label>
-    <div class="src-read"></div><div class="src-pop-btns"><button type="button" class="btn quiet-btn" data-src-x>Close</button></div>`);
-  const inp = w.querySelector('input[type="file"]'), out = w.querySelector(".src-read");
-  inp.addEventListener("change", async () => { const fs = [...inp.files]; if (!fs.length) return; inp.disabled = true; let ok = 0; out.innerHTML = "";
-    for (const [i, f] of fs.entries()) { const line = document.createElement("p"); line.className = "src-chk"; line.textContent = `Reading ${i + 1} of ${fs.length}: ${f.name}…`; out.append(line);
-      let o; try { o = await srcReadPdf(f); } catch (e) { line.className = "src-chk bad"; line.textContent = `✗ ${f.name}: I could not read it (${e.message || e}).`; continue; }
-      const per = srcPerOfPdf(o);
-      if (!o.confirmation || !o.paid_on || o.paid_amount == null || !per) { line.className = "src-chk bad"; line.textContent = `✗ ${f.name}: not saved. I could not find ${[!o.confirmation && "the confirmation number", !o.paid_on && "the payment date", o.paid_amount == null && "the amount", !per && "the period"].filter(Boolean).join(", ")} on it. Is it a payment confirmation?`; continue; }
-      const { data, error } = await db.rpc("source_add_paid", { p: { ...o, paid_by: me } });
-      if (error) { line.className = "src-chk bad"; line.textContent = `✗ ${f.name}: not saved. ${rpcErr(error)}`; continue; }
-      ok++; const late = data.paid_on > data.due;
-      line.className = `src-chk ${late ? "bad" : "ok"}`; line.textContent = `✓ ${srcPeriod(data)}: ${money(data.paid_amount)} paid ${longDate(data.paid_on)}, confirmation ${data.confirmation}${late ? ` (${srcDays(data.due, data.paid_on)} days after the due date)` : ""}.`; }
+    <div class="src-read"></div><div class="src-fixes"></div><div class="src-pop-btns"><button type="button" class="btn quiet-btn" data-src-x>Close</button></div>`);
+  w.querySelector(".src-pop").classList.add("src-pop-wide");
+  const inp = w.querySelector('input[type="file"]'), out = w.querySelector(".src-read"), fixes = w.querySelector(".src-fixes");
+  const save = async o => { const { data, error } = await db.rpc("source_add_paid", { p: { ...o, paid_by: o.paid_by || me } }); if (error) throw error; return data; };
+  const okWords = data => `✓ ${srcPeriod(data)}: ${money(data.paid_amount)} paid ${longDate(data.paid_on)}, confirmation ${data.confirmation}${data.paid_on > data.due ? ` (${srcDays(data.due, data.paid_on)} days after the due date)` : ""}.`;
+  let saved = 0;
+  const sum = () => { const left = fixes.querySelectorAll(".src-fix:not(.done)").length, tot = w.querySelector(".src-sum");
+    if (tot) tot.innerHTML = left ? `<b>${saved} saved. ${left} need you:</b> each one is below, with its PDF. Check it, fill in what is missing, then press Save this payment.` : `<b>✓ ${saved} saved. Nothing is left to check.</b>`;
+    if (tot) tot.className = `src-chk src-sum ${left ? "bad" : "ok"}`; };
+  const fixCard = (f, o, why) => {
+    const url = URL.createObjectURL(f), per = srcPerOfPdf(o), card = document.createElement("div"); card.className = "src-fix";
+    const v = k => o[k] == null ? "" : String(o[k]);
+    card.innerHTML = `<div class="src-fix-h"><b>📄 ${esc(f.name)}</b><span>${esc(why)}</span></div>
+      <div class="src-fix-in"><iframe class="src-fix-pdf" src="${url}#toolbar=0&view=FitH" title="${esc(f.name)}"></iframe>
+        <div class="src-fix-f"><p class="src-hint">Look at the PDF on the left. The boxes with a red edge are empty or were guessed from the file name: check them.</p>
+          <label>Confirmation number<input name="confirmation" value="${esc(v("confirmation"))}" autocomplete="off"></label>
+          <label>Date paid to employees <small>(sets the period)</small><input name="emp_paid_on" type="date" value="${esc(v("emp_paid_on"))}"></label>
+          <label>Due date<input name="due" type="date" value="${esc(v("due"))}"></label>
+          <label>Payment date<input name="paid_on" type="date" value="${esc(v("paid_on"))}"></label>
+          <label>Amount paid<input name="paid_amount" inputmode="decimal" value="${o.paid_amount != null ? Number(o.paid_amount).toFixed(2) : ""}"></label>
+          <p class="src-fix-per"></p>
+          <div class="src-pop-btns"><button type="button" class="btn" data-fix-save>Save this payment</button><button type="button" class="btn quiet-btn" data-fix-skip>Skip this one</button></div>
+          <p class="src-fix-msg"></p></div></div>`;
+    const F = n => card.querySelector(`[name="${n}"]`), guessed = new Set(o.fromName || []);
+    const check = () => { const p = { ...o, confirmation: F("confirmation").value.trim(), emp_paid_on: F("emp_paid_on").value || null, due: F("due").value || null, paid_on: F("paid_on").value || null, paid_amount: srcNum(F("paid_amount").value) };
+      ["confirmation", "emp_paid_on", "paid_on", "paid_amount"].forEach(k => F(k).classList.toggle("src-miss-in", !F(k).value.trim() || guessed.has(k)));
+      const pr = srcPerOfPdf(p); card.querySelector(".src-fix-per").innerHTML = pr ? `It goes on <b>${esc(srcPeriod(pr))}</b>.` : `<span class="src-bad">Type the date paid to employees or the due date, so I know the period.</span>`;
+      card.querySelector("[data-fix-save]").disabled = !(srcComplete(p)); return p; };
+    card.querySelectorAll("input").forEach(i => i.addEventListener("input", () => { guessed.delete(i.name); check(); }));
+    card.querySelector("[data-fix-skip]").addEventListener("click", () => { card.classList.add("done", "skipped"); card.querySelector(".src-fix-in").remove(); card.querySelector(".src-fix-h span").textContent = "Skipped. Not saved."; URL.revokeObjectURL(url); sum(); });
+    card.querySelector("[data-fix-save]").addEventListener("click", async e => { const b = e.currentTarget; b.disabled = true; const msg = card.querySelector(".src-fix-msg");
+      try { const data = await save(check()); saved++; card.classList.add("done"); card.querySelector(".src-fix-in").remove(); card.querySelector(".src-fix-h span").textContent = okWords(data); URL.revokeObjectURL(url);
+        srcBox(`Added ${saved} older payment${saved === 1 ? "" : "s"}.`); srcRefreshDue(); sum(); }
+      catch (er) { b.disabled = false; msg.className = "src-chk bad"; msg.textContent = "Not saved: " + rpcErr(er); } });
+    fixes.append(card); check(); };
+  inp.addEventListener("change", async () => { const fs = [...inp.files]; if (!fs.length) return; inp.disabled = true; out.innerHTML = "";
+    for (const [i, f] of fs.entries()) { const line = document.createElement("p"); line.className = "src-chk"; out.append(line);
+      const say = t => line.textContent = `${i + 1} of ${fs.length}: ${f.name}. ${t}`; say("Reading it…");
+      let o; try { o = await srcReadPdf(f, say); } catch (e) { line.remove(); fixCard(f, { pdf_name: f.name }, `I could not open it (${e.message || e}).`); continue; }
+      if (!srcComplete(o) || o.fromName?.length) { line.remove();
+        const miss = [!o.confirmation && "the confirmation number", !o.paid_on && "the payment date", o.paid_amount == null && "the amount", !srcPerOfPdf(o) && "the period"].filter(Boolean);
+        fixCard(f, o, miss.length ? `I could not read ${miss.join(", ")} on it.` : `I read some of it from the file name. Check it.`); continue; }
+      try { const data = await save(o); saved++; line.className = `src-chk ${data.paid_on > data.due ? "bad" : "ok"}`; line.textContent = okWords(data); }
+      catch (er) { line.remove(); fixCard(f, o, "Not saved: " + rpcErr(er)); } }
     inp.disabled = false; inp.value = "";
-    out.insertAdjacentHTML("beforeend", `<p class="src-chk${ok ? " ok" : ""}">${ok} of ${fs.length} saved. You can pick more, or Close.</p>`);
-    srcBox(ok ? `Added ${ok} older payment${ok === 1 ? "" : "s"}.` : ""); srcRefreshDue(); });
+    out.insertAdjacentHTML("beforeend", `<p class="src-chk src-sum"></p>`); sum();
+    if (saved) { srcBox(`Added ${saved} older payment${saved === 1 ? "" : "s"}.`); srcRefreshDue(); }
+    fixes.querySelector(".src-fix:not(.done)")?.scrollIntoView({ behavior: "smooth", block: "start" }); });
 }
 function srcPayBox(r) {
   const me = (() => { try { return smMyFirst?.() || ""; } catch { return ""; } })();
@@ -33280,7 +33353,7 @@ function srcPayBox(r) {
     out.innerHTML = bits.join("");
     sv.disabled = !(got.pdf && F("confirmation").value.trim() && day && amt != null); };
   inp.addEventListener("change", async () => { const f = inp.files[0]; if (!f) return; out.innerHTML = `<p class="quiet">Reading ${esc(f.name)}…</p>`;
-    try { got = await srcReadPdf(f); } catch (e) { got = null; out.innerHTML = `<p class="src-chk bad">Couldn't read it (${esc(e.message || e)}). Is it a PDF?</p>`; return; }
+    try { got = await srcReadPdf(f, t => out.innerHTML = `<p class="quiet">${esc(t)}</p>`); } catch (e) { got = null; out.innerHTML = `<p class="src-chk bad">Couldn't read it (${esc(e.message || e)}). Is it a PDF?</p>`; return; }
     form.classList.remove("hidden");
     F("confirmation").value = got.confirmation || ""; F("paid_on").value = got.paid_on || ""; F("paid_amount").value = got.paid_amount != null ? got.paid_amount.toFixed(2) : "";
     F("paid_by").value = me; F("paid_how").value = got.paid_how || "";
