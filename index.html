@@ -7685,6 +7685,16 @@ article.ie .ie-pickrow .ie-bookbtn.ie-off .ie-bookbtn-ic { filter: grayscale(1);
 .vr-bar { position: sticky; bottom: 0; z-index: 2; margin: 18px 0 0; padding: 12px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: #f3f8fc; border: 1px solid #d3dbe4; border-radius: 10px; }
 .vr-bar #vr-save { font-size: 17px; padding: 12px 20px; } .vr-bar .vr-file { margin-left: auto; cursor: pointer; }
 
+/* a Vista invoice's printed page: the two logos, and the tab for its two views (Carlo, Nov 13) */
+.inv-logos { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 16px; }
+.inv-logos img { height: 68px; width: auto; max-width: 44%; object-fit: contain; display: block; }
+.inv-vtabs { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -14px 0 20px; padding-bottom: 14px; border-bottom: 1px solid #d3dbe4; font-size: 15px; color: #23415f; }
+.inv-vtabs > span { font-weight: 800; } .inv-vtabs small { font-size: 13px; color: #4a6480; }
+.inv-vtabs button { font: inherit; font-weight: 700; cursor: pointer; min-height: 46px; padding: 8px 16px; color: #23415f; background: linear-gradient(180deg, #ffffff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 12px; }
+.inv-vtabs button:hover { background: #e3eef9; } .inv-vtabs button[aria-pressed="true"] { background: #dbe9f7; border: 2px solid #23415f; }
+.inv-rentonly { display: none; }
+.inv-paper.inv-rent div.inv-rentonly { display: block; } .inv-paper.inv-rent span.inv-rentonly { display: inline; } .inv-paper.inv-rent .inv-fullonly { display: none; }
+.inv-norent { margin: 16px 0; padding: 12px 14px; font-size: 15px; color: #7a4a00; background: #fff6e6; border: 1.5px solid #f0c987; border-radius: 12px; }
 /* copy buttons an owner put on a page (Carlo, Nov 12) */
 .cpy-pasted { outline: 3px solid #1f9d4a !important; outline-offset: 1px; transition: outline-color .3s; }
 .cpy-btn { display: inline-grid; place-items: center; vertical-align: middle; width: 26px; height: 26px; margin: 0 0 0 6px; padding: 0; border: 1px solid #9fb6cc; border-radius: 5px; background: #fff; color: #23415f; font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 1px 2px rgba(35, 65, 95, .15); font-weight: 700; text-indent: 0; letter-spacing: 0; text-transform: none; }
@@ -36031,12 +36041,16 @@ async function showInvoiceCosting(inv, msg) {
   box.querySelector("[data-invcost-close]").addEventListener("click", () => { INV_COST_OPEN = false; try { sessionStorage.setItem("invCostOpen", "0"); } catch (e) {} showInvoiceCosting(inv); });
 }
 const officeInv = () => can("invoices.adjust") || ["owner", "admin", "accounting"].includes(ME.role);
+const INV_VT = { id: null, rent: false };   // a Vista invoice's view: the full amount, or only the rental amount
+document.addEventListener("click", e => { const b = e.target.closest("[data-inv-vt]"); if (!b) return;
+  INV_VT.rent = b.dataset.invVt === "rent"; const P = document.getElementById("inv-paper"); if (!P) return;
+  P.classList.toggle("inv-rent", INV_VT.rent); P.querySelectorAll("[data-inv-vt]").forEach(x => x.setAttribute("aria-pressed", String((x.dataset.invVt === "rent") === INV_VT.rent))); });
 async function openInvoice(id, keep) {
   $("#inv-newver")?.classList.add("hidden");
   const v = $("#inv-view"); v.classList.remove("hidden"); document.body.classList.add("inv-open");
   if (!keep) $("#inv-paper").innerHTML = `<div class="quiet" style="padding:40px">Opening invoice…</div>`;
   const [inv, co, looksR, billR] = await Promise.all([
-    db.from("invoices").select("*, invoice_lines(id, item_id, sequence, line_type, description, quantity, unit_price, taxable, line_total, tax_amount, no_charge, regular_price, hidden), payment_applications(amount, applied_at, payments(payment_number, method, received_on, reference)), jobs(job_number, summary, job_types(name), partners(name, branding_name, branding_logo_url, customer_pays_partner)), look_partner:partners!invoices_branding_partner_id_fkey(name, branding_name, branding_logo_url, customer_pays_partner), bill_partner:partners!invoices_bill_to_partner_id_fkey(name, street, city, province, postal_code, phone, billing_email, bill_to_ok), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id)), business_units(name)").eq("id", id).single(),
+    db.from("invoices").select("*, invoice_lines(id, item_id, sequence, line_type, description, quantity, unit_price, taxable, line_total, tax_amount, no_charge, regular_price, hidden), payment_applications(amount, applied_at, payments(payment_number, method, received_on, reference)), jobs(job_number, summary, partner_id, job_types(name), partners(name, branding_name, branding_logo_url, customer_pays_partner)), look_partner:partners!invoices_branding_partner_id_fkey(name, branding_name, branding_logo_url, customer_pays_partner), bill_partner:partners!invoices_bill_to_partner_id_fkey(name, street, city, province, postal_code, phone, billing_email, bill_to_ok), locations(street, unit, city, province, postal_code), customers(display_name, customer_contacts(kind, value, is_primary, location_id)), business_units(name)").eq("id", id).single(),
     COMPANY ? Promise.resolve({ data: COMPANY }) : db.from("company_settings").select("*").limit(1).maybeSingle(),
     officeInv() ? db.rpc("invoice_looks") : Promise.resolve({ data: [] }),
     officeInv() ? db.rpc("inv_bill_info", { p_invoice: id }).then(r => (r.data && (r.data.invoice_id = id), r)) : Promise.resolve({ data: null })]);
@@ -36064,13 +36078,29 @@ async function openInvoice(id, keep) {
   const bp = i.bill_partner?.bill_to_ok || (i.store_copy_of && i.bill_partner) ? i.bill_partner : null;   // billed to a partner who pays us (Vista), or the store's copy (-C) of a Costco sale
   const storeName = brand?.branding_name || brand?.name || i.bill_partner?.name || "the store";
   const bpAddr = bp ? [bp.street, [bp.city, bp.province, bp.postal_code].filter(Boolean).join(", ")].filter(Boolean) : [];
+  // A Vista invoice: our logo and Vista's logo on top, and two views with a tab to switch: the full amount, or only the rental amount
+  // (the monthly rate picked for the tank). Carlo, Nov 13.
+  const isV = /vista/i.test([i.bill_partner?.name, i.jobs?.partners?.name].filter(Boolean).join(" "));
+  let vLogo = "", vPicks = new Map();
+  if (isV) { const vp = /vista/i.test(i.bill_partner?.name || "") && i.bill_to_partner_id ? i.bill_to_partner_id : i.jobs?.partner_id;
+    const [lg, pk] = await Promise.all([bkPLogo(vp).catch(() => ""), i.job_id ? db.rpc("vista_picks", { p_kind: "job", p_ref: i.job_id }) : Promise.resolve({ data: [] })]);
+    vLogo = lg || ""; (pk?.data || []).forEach(x => vPicks.set(Number(x.item), x)); }
+  if (INV_VT.id !== id) { INV_VT.id = id; INV_VT.rent = false; }
+  const vName = i.bill_partner?.name && /vista/i.test(i.bill_partner.name) ? i.bill_partner.name : i.jobs?.partners?.name || "Vista";
+  const vLine = x => (x.item_id && vPicks.get(Number(x.item_id))) || null;
+  const vJob = vPicks.get(0) && !lines.some(vLine) ? vPicks.get(0) : null;   // a rate picked at the booking, for no item
+  const vMonth = lines.reduce((a, x) => a + (vLine(x) ? Number(vLine(x).rate) * (Number(x.quantity) || 1) : 0), 0) + (vJob ? Number(vJob.rate) : 0);
+  const vHst = Math.round(vMonth * 13) / 100;
+  $("#inv-paper").classList.toggle("inv-rent", isV && INV_VT.rent);
   $("#inv-paper").classList.toggle("inv-ah", /after\s*hours/i.test((i.jobs?.job_types?.name || "") + " " + (i.jobs?.summary || "")));
   $("#inv-paper").innerHTML = `
+    ${isV ? `<div class="inv-vtabs no-print" role="group" aria-label="Which view"><span>Which view?</span><button type="button" data-inv-vt="full" aria-pressed="${!INV_VT.rent}">💲 Full amount</button><button type="button" data-inv-vt="rent" aria-pressed="${!!INV_VT.rent}">🏷 Rental amount only</button><small>The one you pick is the one that prints.</small></div>
+    <div class="inv-logos"><img src="reid-logo.png" alt="${esc(coName)}">${vLogo ? `<img src="${esc(vLogo)}" alt="${esc(vName)}">` : `<div class="inv-co">${esc(vName)}</div>`}</div>` : ""}
     <div class="inv-top">
-      <div>${brand ? `<div class="inv-brand">${brand.branding_logo_url ? `<img src="${esc(brand.branding_logo_url)}" alt="${esc(brand.branding_name || brand.name)}">` : `<div class="inv-co">${esc(brand.branding_name || brand.name)}</div>`}</div>
+      <div>${brand && !isV ? `<div class="inv-brand">${brand.branding_logo_url ? `<img src="${esc(brand.branding_logo_url)}" alt="${esc(brand.branding_name || brand.name)}">` : `<div class="inv-co">${esc(brand.branding_name || brand.name)}</div>`}</div>
           <div class="inv-installed">Installed by <strong>${esc(coName)}</strong></div>` : `<div class="inv-co">${esc(coName)}</div>`}
         <div class="inv-small">${coAddr.map(esc).join("<br>")}${c.phone ? "<br>" + esc(phoneFmt(c.phone)) : ""}${c.email ? "<br>" + esc(c.email) : ""}${c.website ? "<br>" + esc(c.website.replace(/^https?:\/\//, "")) : ""}</div></div>
-      <div class="inv-title"><div>INVOICE</div>${/after\s*hours/i.test((i.jobs?.job_types?.name || "") + " " + (i.jobs?.summary || "")) ? `<div class="inv-ah-tag">🌙 After-hours service call</div>` : ""}<table class="inv-meta">
+      <div class="inv-title"><div>${isV ? `<span class="inv-fullonly">INVOICE</span><span class="inv-rentonly">RENTAL</span>` : "INVOICE"}</div>${/after\s*hours/i.test((i.jobs?.job_types?.name || "") + " " + (i.jobs?.summary || "")) ? `<div class="inv-ah-tag">🌙 After-hours service call</div>` : ""}<table class="inv-meta">
         <tr><td>Invoice #</td><td>${esc(i.invoice_number)}</td></tr>
         <tr><td>Date</td><td>${fmtDate(i.invoice_date)}</td></tr>
         ${i.due_date ? `<tr><td>Due</td><td>${fmtDate(i.due_date)}</td></tr>` : ""}
@@ -36089,6 +36119,20 @@ async function openInvoice(id, keep) {
       <div><div class="inv-label">Work</div>${esc(i.jobs?.job_types?.name || "")}${i.business_units?.name ? `<br><span class="inv-small">${esc(i.business_units.name)}</span>` : ""}</div>
     </div>
     ${i.status === "void" ? `<div class="inv-void">VOID${i.void_reason ? ": " + esc(i.void_reason) : ""}</div>` : ""}
+    ${isV ? `<div class="inv-rentonly">
+      <table class="inv-lines"><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Rental a month</th></tr></thead><tbody>
+        ${lines.length ? lines.map(x => { const k = vLine(x); return `<tr><td>${pbNmTxt(x.item_id, x.description || "")}</td>
+          <td class="r num">${x.quantity != null ? Number(x.quantity).toLocaleString("en-CA", { maximumFractionDigits: 2 }) : ""}</td>
+          <td class="r num">${k ? money(Number(k.rate) * (Number(x.quantity) || 1)) : vMonth ? "Included" : ""}</td></tr>`; }).join("") : `<tr><td colspan="3" class="quiet">Nothing is on this invoice yet.</td></tr>`}
+      </tbody></table>
+      ${vMonth ? `<div class="inv-bottom"><div class="inv-pays"><div class="inv-small">The rental is paid to ${esc(vName)} each month.</div></div>
+        <table class="inv-totals">
+          <tr><td>Rental a month</td><td class="r num">${money(vMonth)}</td></tr>
+          <tr><td>HST</td><td class="r num">${money(vHst)}</td></tr>
+          <tr class="inv-total"><td>Each month</td><td class="r num">${money(vMonth + vHst)}</td></tr>
+        </table></div>`
+      : `<div class="inv-norent no-print">No rental price is picked yet. Close this page. On the invoice, under the tank’s line, press <b>Pick the monthly rate</b>. Then open this page again.</div>`}
+    </div><div class="inv-fullonly">` : ""}
     <table class="inv-lines"><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th></tr></thead><tbody>
       ${lines.length ? lines.map(x => `<tr><td>${pbNmTxt(x.item_id, x.description || "")}${x.line_type === "discount" ? ' <span class="inv-small">(discount)</span>' : ""}</td>
         <td class="r num">${x.quantity != null ? Number(x.quantity).toLocaleString("en-CA", { maximumFractionDigits: 2 }) : ""}</td>
@@ -36106,7 +36150,7 @@ async function openInvoice(id, keep) {
         ${bp && billR.data?.supplier_pay ? `<tr><td>Tank paid by ${esc(bp.name)} to ${esc(billR.data.supplier_pay.supplier)}</td><td class="r num">−${money(billR.data.supplier_pay.amount)}</td></tr>` : ""}
         <tr class="inv-balance"><td>${bp ? "Balance owing by " + esc(bp.name) : "Balance owing"}</td><td class="r num">${i.paid_at_store ? money(0) : i.not_owed_reason && balance > 0.004 ? `<s>${money(balance)}</s> ${money(0)}` : money(bp && billR.data?.supplier_pay ? Math.max(balance - Number(billR.data.supplier_pay.amount), 0) : balance)}</td></tr>
       </table>
-    </div>
+    </div>${isV ? "</div>" : ""}
     ${balance > 0.004 && i.status !== "void" && !brand?.customer_pays_partner && !bp ? `<div class="inv-owed no-print">${i.not_owed_reason
       ? `<strong>Not owed:</strong> ${esc(i.not_owed_reason)}. It doesn't count toward what the customer owes.${can("invoices.adjust") ? ` <button class="link" type="button" data-owed-undo>Count it as owing again</button>` : ""}`
       : can("invoices.adjust") ? `<span>Shouldn't this be owing?</span> ${["Paid monthly", "Paid elsewhere", "Written off"].map(r => `<button class="chip small" type="button" data-not-owed="${r}">${r}</button>`).join("")}
