@@ -7394,6 +7394,10 @@ article.ie .ie-picked b { font-size: 14px; line-height: 1.25; overflow-wrap: any
 article.ie .ie-picked small { margin-top: auto; font-size: 12.5px; font-weight: 600; color: #1b6b36; }
 article.ie .ie-tpo-lines label:has(.ie-tpo-pic) { display: flex; align-items: center; gap: 12px; }
 article.ie .ie-tpo-pic .ie-picked-pic { width: 110px; height: 84px; font-size: 40px; border: 1px solid #d3dbe4; flex: none; }
+article.ie .ie-post { margin-top: 14px; padding: 14px 16px; background: #fff; border: 1.5px solid #bcd0e3; border-radius: 14px; }
+article.ie .ie-post > h2 { margin: 0 0 6px; font-size: 20px; color: #23415f; display: flex; align-items: center; gap: 8px; }
+article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.5px solid #a9d6b7; border-radius: 12px; background: #e9f6ed; color: #1b6b36; font-size: 16px; }
+@media print { article.ie .ie-post { display: none !important; } }
 /* copy buttons an owner put on a page (Carlo, Nov 12) */
 .cpy-pasted { outline: 3px solid #1f9d4a !important; outline-offset: 1px; transition: outline-color .3s; }
 .cpy-btn { display: inline-grid; place-items: center; vertical-align: middle; width: 26px; height: 26px; margin: 0 0 0 6px; padding: 0; border: 1px solid #9fb6cc; border-radius: 5px; background: #fff; color: #23415f; font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 1px 2px rgba(35, 65, 95, .15); font-weight: 700; text-indent: 0; letter-spacing: 0; text-transform: none; }
@@ -13708,7 +13712,8 @@ async function openBooking(custId, opt = {}) {
   if (!loc && current?.c?.id === c.id && locs.some(l => l.id === current.loc)) loc = current.loc;
   BK = { cust: c, locs, jobs: jobs.error ? [] : jobs.data, mode: opt.jobId ? "visit" : "new", jobId: opt.jobId || null,
          loc: loc || locs[0]?.id, type: "", unit: "", prio: "normal", summary: "", note: "",
-         date: opt.date || ymd(addDays(new Date(), 1)), later: false, win: ["08:00", "11:00"], start: "", end: "", dur: "", techs: opt.tech ? [opt.tech] : [], allTechs: false, load: {}, htin: opt.htin || null };
+         date: opt.date || ymd(addDays(new Date(), 1)), later: false, win: ["08:00", "11:00"], start: "", end: "", dur: "", techs: opt.tech ? [opt.tech] : [], allTechs: false, load: {}, htin: opt.htin || null,
+         fillVisit: opt.fillVisit || null, backInv: opt.backInv || null, kindForce: opt.kindForce || null };   // from the invoice's Book a tech step (Carlo, Nov 13): the job's waiting call gets the day and the tech, then the invoice opens again
   if (opt.walk) {   // after a sale: walk the site, as a visit on the install job; the installers are shown first
     BK.walk = opt.walk; BK.kind = opt.kind || null; BK.summary = "Walk the site before the install"; BK.dur = "60";
     if (!BK.jobs.some(j => j.job_id === opt.jobId)) BK.jobs.unshift({ job_id: opt.jobId, job_number: opt.walk.number, job_type: "Install", summary: "the sale on proposal", last_visit: null });
@@ -13846,6 +13851,7 @@ document.addEventListener("click", e => { const b = e.target.closest("[data-bk-b
 document.addEventListener("click", e => { const b = e.target.closest("[data-bk-oc]"); if (!b || !BK) return; e.preventDefault(); BK.keep?.(); BK.techs = [Number(b.dataset.bkOc)]; renderBooking(); });   // the tech, day and window all come from the Best techs / Calls nearby boxes
 function bkKindOf(F) {
   if (F.walk) return F.kind;
+  if (F.kindForce) return F.kindForce;
   if (F.instEst) return "installs";   // an install from a sold estimate: installers
   if (F.mode === "new" && F.vk) return "installs";   // Vista → Install (tank, tankless, HVAC): installers
   const t = F.mode === "visit" ? (BOOK.job_types || []).find(x => x.name === F.jobs.find(j => j.job_id === F.jobId)?.job_type) : (BOOK.job_types || []).find(x => String(x.id) === String(F.type));
@@ -14198,6 +14204,7 @@ function renderBooking(msg) {
       if (!e3 && est) return openEstEdit(est);
       alertMsg("The job is saved, but the proposal couldn't start: " + rpcErr(e3) + ". Open it from the Sales page.");
     }
+    if (F.backInv && !F.later) return openInvoiceEditor(F.backInv, `✓ The tech is booked: ${dayText(F.date)}, ${winText(start, end)}${F.techs.length ? ", with " + F.techs.map(id => techName(id)).join(" and ") : ""}.`);
     if (await bkTankInvoice(F, data)) return;
     bookedScreen(F, data, start, end);
   });
@@ -14209,6 +14216,12 @@ async function bkDoBook(F, start, end) {
     summary: sumAH, note: (F.note || "").trim(), priority: F.prio, date: F.later ? null : F.date, start, end,
     duration: Number(F.dur) || null, techs: F.later ? [] : F.techs };
   if (F.mode === "visit") p.job_id = F.jobId;
+  if (F.mode === "visit" && F.fillVisit && !F.later) {   // the job already has a call waiting for a day (made with the invoice): give that one the day, the time and the tech, so there are not two calls
+    const r1 = await db.rpc("move_call", { p_visit_id: F.fillVisit, p_date: F.date, p_start: start, p_end: end, p_method: "edit" }); if (r1.error) return { error: r1.error };
+    const r2 = await db.rpc("set_call_techs", { p_visit_id: F.fillVisit, p_techs: F.techs }); if (r2.error) return { error: r2.error };
+    const nt = (F.note || "").trim(); if (nt && !(F.autoPre && nt === F.autoPre.trim())) await db.rpc("add_note", { p_entity_type: "job", p_entity_id: F.jobId, p_body: nt, p_pinned: false });
+    return { data: { job_id: F.jobId, visit_id: F.fillVisit, job_number: F.jobs.find(j => j.job_id === F.jobId)?.job_number || "" } };
+  }
   const { data, error } = await db.rpc("book_call", { p });
   if (error) return { error };
   if (F.htin && data?.job_id) {   // from the partner's booking list: the job is theirs, and the booking is linked to it
@@ -25623,7 +25636,10 @@ async function openInvoiceEditor(id, msg) {
   }
   IE = { ...(IE?.id === id ? IE : {}), ...data, id };
   if (data.job_id) { const tn = await db.from("notes").select("id, body, created_at").eq("entity_type", "job").eq("entity_id", data.job_id).like("body", "For the techs (the customer does not see this)%").order("created_at");
-    IE.techNotes = tn.error ? (IE.techNotes || []) : tn.data || []; } else IE.techNotes = [];
+    IE.techNotes = tn.error ? (IE.techNotes || []) : tn.data || [];
+    // the job's visits, for the Book a tech step (Carlo, Nov 13)
+    const vs = await db.from("visits").select("id, status, scheduled_date, arrival_start, arrival_end, visit_assignments(role, employees(first_name, last_name))").eq("job_id", data.job_id).order("id");
+    IE.visits = vs.error ? null : vs.data || []; } else { IE.techNotes = []; IE.visits = null; }
   if (!IE_RATED.again && await ieAutoRates()) { IE_RATED.again = true; try { return await openInvoiceEditor(id, msg); } finally { IE_RATED.again = false; } }   // the partner's rates were put on new lines: load the invoice again with them
   await pbLoadLooks((data.lines || []).map(l => l.item_id).filter(Boolean)).catch(() => {});
   nameCurrentPage("invoice " + data.number);
@@ -25994,7 +26010,11 @@ function renderInvoiceEditor(msg) {
   // a partner pays this invoice (it is billed to the partner, or it is a store job): no "Take the payment" (Carlo, Nov 12, 10:37 p.m.). Billed to the customer, the payment box shows as always.
   const ppay = I.bill?.partner?.name ? String(I.bill.partner.name).replace(/\s*\(.*\)\s*$/, "") : I.store ? String(I.store) : "";
   // two note boxes open in section 1 once the equipment is on (Carlo, Nov 13: "one for notes for job that the customer will see and one notes for techs that the customer will not see")
-  const notesUp = edit && I.lines.length > 0 && !I.st_edit;
+  // Carlo, Nov 13, 10:41 a.m.: "when step 4 is done step 5 should be add notes and it should pop up both Notes for Techs and Notes for Job at the bottom.
+  // then Step 6 should be Book a Tech". So the note boxes are not in section 1 any more: they are their own step, after Finish, at the bottom.
+  const notesUp = false, post = !draft && I.status !== "void" && I.can_edit && !I.st_edit;
+  const bookedV = (IE.visits || []).filter(v => !["unscheduled", "cancelled"].includes(v.status)).sort((a, b) => String(b.scheduled_date || "").localeCompare(String(a.scheduled_date || "")))[0] || null;
+  const waitV = (IE.visits || []).find(v => v.status === "unscheduled") || null, bookOn = post && I.job_id && ME.role !== "technician";
   // the signature box is only for the tech, on the call (Carlo, Nov 13: "remove the signature part, it should only show up when the call is being done by the tech")
   const signHere = ME.role === "technician";
   const NO = {}; ieTodoRows(I, { draft, ppay, bk, pnm }).forEach((r, n) => { NO[r[4]] = n + 1; }); IE.stepNo = NO;
@@ -26058,7 +26078,7 @@ function renderInvoiceEditor(msg) {
       ${tankH ? card("tank", H("The P.O. for the tank", "Do the numbered steps in this box, in order."), tankH) : ""}
       ${(lookH + billH + ruleH).trim() ? card("partner", H(billH || ruleH ? `What ${pnm} needs` : "How the invoice looks", billH || ruleH ? `Fill in ${pnm}'s numbers when you have them.` : "", NO.partner), lookH + billH + ruleH) : ""}
       <section class="ie-card ie-card-end" data-ie-card="finish">${edit && !I.st_edit ? H("Finish", "Press the green button when everything is on the invoice.", NO.finish) : ""}
-      ${edit ? `${notesUp ? "" : `<label class="ie-notes">Note on the invoice <span class="quiet">(optional, the customer sees it)</span><textarea id="ie-notes" rows="2">${esc(I.notes || "")}</textarea></label>`}
+      ${edit ? `${!I.st_edit ? "" : `<label class="ie-notes">Note on the invoice <span class="quiet">(optional, the customer sees it)</span><textarea id="ie-notes" rows="2">${esc(I.notes || "")}</textarea></label>`}
         ${I.st_edit ? `<div class="ie-actions"><button class="btn quiet-btn" type="button" id="ie-stnote">Save the note</button><span class="quiet">Changes save as you go. It keeps its number, date and payments.</span></div>`
           : `<div class="ie-actions"><button class="ie-sq ie-sq-go" type="button" id="ie-finish" ${I.lines.length ? "" : "disabled"}><span class="ie-sq-ic" aria-hidden="true">✅</span><b>Finish the invoice</b></button><span class="quiet">Changes save as you go.</span></div>`}` : ""}
       ${!draft && I.can_edit && !I.from_st && I.status !== "void" && !(I.payments || []).length ? `<div class="ie-actions"><button class="link" type="button" id="ie-reopen">Change it (open it again)</button></div>` : ""}
@@ -26070,9 +26090,21 @@ function renderInvoiceEditor(msg) {
         : `<button class="link danger" type="button" id="ie-cancel">Cancel this invoice (made by mistake)</button>`}</div>` : ""}
       ${I.status === "void" ? `<div class="approve-banner"><div><strong>This invoice was cancelled (void).</strong> It doesn't count toward anything owing.</div></div>` : ""}
     </section></div>
-    ${!notesUp && I.can_edit && I.job_id && I.status !== "void" && (I.lines.length || (IE.techNotes || []).length) ? `<section class="cl-tools ie-technotes-box"><div class="ie-notes2"><label class="ie-notes ie-note-tech"><span>🔧 Notes for the techs <small>The customer does not see this. It is saved on the job. It is never printed and never sent.</small></span><textarea id="ie-technote" rows="3" maxlength="4000" placeholder="Type a note only our techs will see">${esc(IE.techDraft || "")}</textarea>
-        <span class="ie-note-row"><button class="btn" type="button" id="ie-technote-save">Save the note for the techs</button><span class="ie-note-msg" id="ie-technote-msg" role="status"></span></span>
-        ${(IE.techNotes || []).length ? `<span class="ie-note-saved"><b>Saved for the techs (${IE.techNotes.length}). Never printed. Never sent to the customer.</b>${IE.techNotes.map(n => `<span>🔧 ${esc(String(n.body || "").slice(TECH_NOTE.length))}${n.created_at ? ` <i>${esc(fmtDate(String(n.created_at).slice(0, 10)))}</i>` : ""}</span>`).join("")}</span>` : ""}</label></div></section>` : ""}
+    ${post ? `<section class="cl-tools ie-post" data-ie-card="notes"><h2>${NO.notes ? `<span class="ie-sec-n ie-sec-n-sm">${NO.notes}</span> ` : ""}Add notes</h2>
+      <p class="quiet">Type a note in a box if you have one. If there is nothing to say, go to the next step.</p>
+      <div class="ie-notes2">
+        ${I.job_id ? `<label class="ie-notes ie-note-tech"><span>🔧 Notes for the techs <small>The customer does not see this. Never printed. Never sent.</small></span><textarea id="ie-technote" rows="3" maxlength="4000" placeholder="${(IE.techNotes || []).length ? "Type another note only our techs will see" : "Type a note only our techs will see"}">${esc(IE.techDraft || "")}</textarea>
+          <span class="ie-note-row"><button class="btn" type="button" id="ie-technote-save">Save the note for the techs</button><span class="ie-note-msg" id="ie-technote-msg" role="status"></span></span>
+          ${(IE.techNotes || []).length ? `<span class="ie-note-saved"><b>Saved for the techs (${IE.techNotes.length}).</b>${IE.techNotes.map(n => `<span>🔧 ${esc(String(n.body || "").slice(TECH_NOTE.length))}${n.created_at ? ` <i>${esc(fmtDate(String(n.created_at).slice(0, 10)))}</i>` : ""}</span>`).join("")}</span>` : ""}</label>` : ""}
+        <label class="ie-notes ie-note-cust"><span>📄 Notes for the job <small>The customer sees this. It prints on the invoice.</small></span><textarea id="ie-notes" rows="3" placeholder="Type a note the customer will see">${esc(I.notes || "")}</textarea>
+          <span class="ie-note-row"><button class="btn" type="button" id="ie-notes-save">Save the note for the job</button><span class="ie-note-msg" id="ie-notes-msg" role="status"></span></span></label>
+      </div></section>` : ""}
+    ${bookOn ? `<section class="cl-tools ie-post" data-ie-card="book"><h2>${NO.book ? `<span class="ie-sec-n ie-sec-n-sm">${NO.book}</span> ` : ""}Book a tech</h2>
+      ${bookedV ? `<p class="ie-booked">✔ A tech is booked: <b>${esc(ieVisitWords(bookedV))}</b></p>`
+        : IE.visits == null ? `<p class="quiet">I could not look up this job's calls. Book the tech from the customer's page.</p>`
+        : `<p>Press this box. I will show you the techs who are free, with the best one to send first. Then pick one.</p>
+          <div class="ie-actions"><button class="ie-sq ie-sq-go" type="button" id="ie-booktech" data-wait="${waitV ? waitV.id : ""}"><span class="ie-sq-ic" aria-hidden="true">📅</span><b>Book a tech</b></button></div>`}
+    </section>` : ""}
     ${!draft && I.status !== "void" && signHere ? `<section class="cl-tools ie-sign-box"><h2>${NO.sign ? `<span class="ie-sec-n ie-sec-n-sm">${NO.sign}</span> ` : ""}The customer signs</h2>
       ${I.signature ? `<div class="ie-sig"><img alt="Signature" src="data:image/png;base64,${I.signature}"><div class="quiet">${esc(I.signer_name || "")} · signed ${esc(sfWhen(I.signed_at))}</div>
           ${I.can_edit ? `<button class="link" type="button" id="ie-unsign">Clear and sign again</button>` : ""}</div>`
@@ -26114,10 +26146,20 @@ function ieTodoRows(I, o) {
   if (P && (P.needs_account || P.needs_approval) && !I.prule) rows.push([(!P.needs_account || !!(B.account || "").trim()) && (!P.needs_approval || !!(B.approval || "").trim()),
     `Type ${P.name.replace(/\s*\(.*\)\s*$/, "")}'s ${[P.needs_account ? "account number" : "", P.needs_approval ? "approval number" : ""].filter(Boolean).join(" and ")}`, "partner", "", "partner"]);
   rows.push([!o.draft, "Finish the invoice", "finish", "", "finish"]);
+  // after Finish: the notes, then the tech (Carlo, Nov 13, 10:41 a.m.)
+  if (!I.from_st && !I.st_edit && I.can_edit) {
+    rows.push([!o.draft && (!!(I.notes || "").trim() || (IE.techNotes || []).length > 0), "Add notes", "notes", "", "notes"]);
+    if (I.job_id && ME.role !== "technician") rows.push([(IE.visits || []).some(v => !["unscheduled", "cancelled"].includes(v.status)), "Book a tech", "book", "", "book"]); }
   // Carlo, Nov 13, 10:14 a.m.: "the signature is still there": for everyone but the tech the signature is not on this page at all, not in the list either
   if (ME.role === "technician" || I.signature) rows.push([!!I.signature, "The customer signs", "sign", "", "sign"]);
   rows.push([!o.draft && Number(I.balance) <= 0.004, o.ppay ? `${o.ppay} pays us` : "Take the payment", "pay", o.ppay && !o.draft && Number(I.balance) > 0.004 ? "Waiting" : "", "pay"]);
   return rows;
+}
+function ieVisitWords(v) {
+  const hm = t => { if (!t) return ""; const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(":00", ""); };
+  const who = (v.visit_assignments || []).slice().sort((a, b) => (a.role === "lead" ? 0 : 1) - (b.role === "lead" ? 0 : 1)).map(a => a.employees?.first_name || "").filter(Boolean);
+  const day = v.scheduled_date ? dayText(String(v.scheduled_date).slice(0, 10)) : "no day yet", w = hm(v.arrival_start) && hm(v.arrival_end) ? `, ${hm(v.arrival_start)} to ${hm(v.arrival_end)}` : "";
+  return `${day}${w}${who.length ? ", with " + who.join(" and ") : ". No tech on it yet"}${v.status === "completed" ? " (done)" : ""}`;
 }
 function ieTodoHtml(I, o) {
   const rows = ieTodoRows(I, o), voided = I.status === "void";
@@ -26183,6 +26225,7 @@ const IE_HELP = { root: "article.ie", list: [
   [".ie-totals", "The totals: before tax, the HST, and the total the customer or the partner pays."],
   ['[data-ie-card="tank"]', "The P.O. for the tank. Pick the tank line and the supplier, then press the green button to make the P.O."],
   ['[data-ie-card="partner"]', "The partner's numbers, like the account number and the approval number. Fill them in when you have them."],
+  ['[data-ie-card="book"]', "Book a tech. Press the Book a tech box. I show you the techs who are free, with the best one first. Pick one, then press the book button."],
   ["#ie-notes", "Notes for the job. Type a note here if you want one. The customer sees it on their invoice. You do not have to write one."],
   ["#ie-technote", "Notes for the techs. Type what only our techs should know. The customer does not see it. Then press Save the note for the techs."],
   ["#ie-finish", "When everything is on the invoice, press Finish the invoice. Then the customer can sign.", ".ie-actions"],
@@ -26222,7 +26265,7 @@ function ieTankPoHtml(I) {
   const coSt = o => o.credit_status === "received" ? ["ok", "✔", "The credit came back"] : o.credit_status === "cancelled" ? ["off", "✕", "Cancelled"] : ["wait", "⏳", "Waiting for the credit"];
   const SN = IE.stepNo || {}, q = (n, w) => `<div class="ie-tpo-q">${n ? `<span class="ie-tpo-n">${n}</span>` : ""}<b>${w}</b></div>`;
   const made = O.length ? `${q(SN.tankpo, vista ? "The P.O. and the Credit Order are made. Click the P.O. to open it." : "The P.O. is made. Click it to open it.")}<div class="ie-docs">${O.map(o => `${o.po_id ? `<button class="ie-doc" type="button" data-ie-tpo-open="${o.po_id}" title="Open this P.O."><span class="ie-doc-ic" aria-hidden="true">📦</span><span class="ie-doc-k">P.O.</span><b>${esc(o.po_number || "")}</b><small>Bought from ${esc(o.supplier || "the supplier")}</small><small>${esc(pbName(o.description || "Tank"))}${o.unit_cost != null ? " · " + m(o.unit_cost) : ""}</small><span class="ie-doc-go">Click to open</span></button>` : ""}
-      ${o.credit_number ? `<button class="ie-doc ie-doc-${coSt(o)[0]}" type="button" data-ie-tco-show="${o.id}" title="The Credit Order. It is on the Tasks page until the supplier's credit comes back." style="cursor:default"><span class="ie-doc-ic" aria-hidden="true">🧾</span><span class="ie-doc-k">Credit Order</span><b>${esc(o.credit_number)}</b><small>${coSt(o)[1]} ${coSt(o)[2]}</small><small>From ${esc(o.supplier || "the supplier")}${o.credit_amount != null ? " · " + m(o.credit_amount) : ""}</small><span class="ie-doc-go">Click to open</span></button>` : ""}`).join("")}</div>
+      ${o.credit_number ? `<button class="ie-doc ie-doc-${coSt(o)[0]}" type="button" data-ie-tco-show="${o.id}" title="The Credit Order. It is on the Tasks page until the supplier's credit comes back." style="cursor:default"><span class="ie-doc-ic" aria-hidden="true">🧾</span><span class="ie-doc-k">Credit Order</span><b>${esc(o.credit_number)}</b><small>${coSt(o)[1]} ${coSt(o)[2]}</small><small>From ${esc(o.supplier || "the supplier")}${o.credit_amount != null ? " · " + m(o.credit_amount) : ""}</small></button>` : ""}`).join("")}</div>
     ${vista && SN.credit ? q(SN.credit, "The supplier's credit comes back") : ""}
     ${/* Carlo, Nov 13, 10:19 a.m.: "we do not need this section on the page, the credit comes back in about 30 days": the Credit Order's details and
          its "The credit came back" button are not on the invoice page. They are on the Tasks page (Credit orders waiting on a supplier). */ [].map(o => `<div class="ie-tco-box" data-ie-tco-box="${o.id}"><div class="ie-tco ie-tco-${esc(o.credit_status || "waiting")}">
@@ -26399,8 +26442,15 @@ function wireInvoiceEditor() {
   $("#ie-custom")?.addEventListener("submit", e => { e.preventDefault(); const f = e.target, n = v => Number(String(v).replace(/[$,\s]/g, ""));
     if (!isFinite(n(f.p.value)) || !isFinite(n(f.q.value))) return reload("Not saved: type numbers for the quantity and price.");
     call("inv_add_custom", { p_invoice: I.id, p_description: f.d.value, p_qty: n(f.q.value) || 1, p_price: n(f.p.value), p_taxable: f.t.checked }, "Added."); });
-  $("#ie-notes")?.addEventListener("change", async e => { IE.notes = e.target.value; const m = $("#ie-notes-msg"); if (!m) return;
-    const { error } = await db.rpc("inv_set_notes", { p_invoice: I.id, p_notes: e.target.value || "" }); m.textContent = error ? "It will be saved when you finish the invoice." : "✓ Saved. The customer will see it."; });
+  const ieNoteSave = async () => { const box = $("#ie-notes"), m = $("#ie-notes-msg"); if (!box || !m) return; if (I.st_edit) return;
+    const { error } = await db.rpc("inv_set_notes", { p_invoice: I.id, p_notes: box.value || "" });
+    if (error) { m.textContent = "Not saved: " + rpcErr(error); return; }
+    const was = !!(I.notes || "").trim(); I.notes = box.value; IE.notes = box.value; m.textContent = box.value.trim() ? "✓ Saved. The customer will see it." : "✓ Saved. There is no note for the job.";
+    if (was !== !!box.value.trim()) openInvoiceEditor(I.id, box.value.trim() ? "✓ The note for the job is saved. The customer will see it." : "✓ The note for the job is taken off."); };
+  $("#ie-notes")?.addEventListener("change", ieNoteSave);
+  $("#ie-notes-save")?.addEventListener("click", e => { e.preventDefault(); ieNoteSave(); });
+  $("#ie-booktech")?.addEventListener("click", e => { const w = Number(e.currentTarget.dataset.wait) || null;
+    openBooking(I.customer_id, { jobId: I.job_id, fillVisit: w, backInv: I.id, kindForce: I.prule?.tank ? "installs" : null }); });
   $("#ie-technote")?.addEventListener("input", e => { IE.techDraft = e.target.value; });
   $("#ie-technote-save")?.addEventListener("click", async e => { const t = ($("#ie-technote")?.value || "").trim(), m = $("#ie-technote-msg");
     if (!t) { if (m) m.textContent = "Type the note first."; return; } if (!I.job_id) { if (m) m.textContent = "This invoice has no job, so I can not save a note for the techs."; return; }
