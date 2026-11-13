@@ -135,7 +135,7 @@ END $f$;
 
 -- save the slips an owner checked. p = { file, slips: [{ staff, user, name, block, new, slip fields… }] }
 CREATE OR REPLACE FUNCTION public.payroll_slips_save(p jsonb) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
-DECLARE x jsonb; sid bigint; touched bigint[] := '{}'; n int := 0; who text := public._staff_name(public.current_app_user_id()); nm text;
+DECLARE x jsonb; sid bigint; touched bigint[] := '{}'; n int := 0; pg_n int := 0; who text := public._staff_name(public.current_app_user_id()); nm text;
 BEGIN
   IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can load payroll'; END IF;
   FOR x IN SELECT * FROM jsonb_array_elements(coalesce(p -> 'slips', '[]'::jsonb)) LOOP
@@ -156,6 +156,7 @@ BEGIN
     IF (x ->> 'page_only')::boolean THEN   -- a slip already on file with the same amounts: only add its page and address
       UPDATE payroll_slips SET page_path = coalesce(nullif(x ->> 'page', ''), page_path), address = coalesce(nullif(btrim(x ->> 'addr'), ''), address)
         WHERE staff_id = sid AND cheque_date = (x ->> 'cheque')::date AND slip_no = coalesce((x ->> 'slip_no')::int, 1);
+      IF FOUND AND nullif(x ->> 'page', '') IS NOT NULL THEN pg_n := pg_n + 1; END IF;
       CONTINUE;
     END IF;
     INSERT INTO payroll_slips (staff_id, cheque_date, slip_no, period_from, period_to, slip_name, address, page_path, kind, rate, per_pay, reg_hours, hours, gross, net, commission, vac, vac_pct,
@@ -172,7 +173,7 @@ BEGIN
     n := n + 1; IF NOT sid = ANY (touched) THEN touched := touched || sid; END IF;
   END LOOP;
   FOREACH sid IN ARRAY touched LOOP PERFORM public._payroll_staff_refresh(sid); END LOOP;
-  RETURN jsonb_build_object('saved', n, 'people', cardinality(touched));
+  RETURN jsonb_build_object('saved', n, 'people', cardinality(touched), 'pages', pg_n);
 END $f$;
 
 -- an owner's changes to a person's payroll details (or a new person with no log-in). p = { staff | user, name, block, wsib_rate, left_on, started_on, notes }
