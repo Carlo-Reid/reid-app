@@ -1826,6 +1826,21 @@
   .src .src-btns button.btn.quiet-btn { background: #fff !important; color: #23415f !important; border-color: #b9c6d3 !important; }
   .src-pop-h button.btn { background: #fff !important; color: #23415f !important; border: 1px solid #fff !important; font-weight: 700; }
   .src-pop.src-pop-wide { width: min(1180px, 100%); }
+  .src-years { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+  .src-year { border: 1px solid #d3dbe4; border-radius: 8px; background: #fff; }
+  .src-year > summary { cursor: pointer; padding: 12px 14px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; font-size: 16px; color: #1c3650; background: linear-gradient(180deg, #ffffff, #eef4fa); border-radius: 8px; }
+  .src-year > summary b { font-size: 20px; } .src-year[open] > summary { border-bottom: 1px solid #d3dbe4; border-radius: 8px 8px 0 0; }
+  .src-year > :not(summary) { margin: 10px 14px; }
+  .src-tw { overflow-x: auto; } .src-sumt { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  .src-sumt th, .src-sumt td { text-align: right; padding: 7px 10px; border-bottom: 1px solid #e3e8ee; white-space: nowrap; } .src-sumt th:first-child, .src-sumt td:first-child { text-align: left; }
+  .src-sumt th { background: #f1f5f9; color: #33404d; font-weight: 700; } .src-sumt tr.src-ytd td { background: #eef4fa; font-weight: 700; border-top: 2px solid #23415f; }
+  .src-up { color: #b45309; font-weight: 700; } .src-down { color: #1b6b36; font-weight: 700; } .src-sumnote { font-size: 13px; margin: 6px 0 0; }
+  .src-open-row > td { background: #f7fafd; } .src-open-bar { display: flex; justify-content: flex-end; margin: 6px 16px -4px; }
+  .src-hbtns { white-space: nowrap; }
+  .src-missbox { margin: 12px 16px; padding: 12px 14px; border: 1px solid #f1c0c0; border-left: 6px solid #c92a2a; border-radius: 6px; background: #fdf3f3; color: #1c2b3a; font-size: 15px; }
+  .src-misslist { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px; } .src-misslist span { padding: 4px 10px; border-radius: 6px; background: #fff; border: 1px solid #f1c0c0; color: #a61e1e; font-weight: 700; font-size: 14px; }
+  .src-missbox button.btn { background: linear-gradient(180deg, #ffffff, #eef4fa) !important; color: #23415f !important; border: 1.5px solid #bcd0e3 !important; border-radius: 12px; font-weight: 700; }
+  tr.src-missrow td { background: #fdf3f3; color: #a61e1e; }
   .src-fix { color: #1c2b3a; margin: 14px 0; border: 1px solid #d3dbe4; border-left: 6px solid #e8590c; border-radius: 8px; background: #fff; }
   .src-fix.done { border-left-color: #1f9d4a; } .src-fix.skipped { border-left-color: #9aa5b1; opacity: .75; }
   .src-fix-h { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 10px 12px; font-size: 15px; } .src-fix-h span { color: #a61e1e; font-weight: 700; } .src-fix.done .src-fix-h span { color: #1b6b36; } .src-fix.skipped .src-fix-h span { color: #5f6b78; }
@@ -33222,6 +33237,49 @@ function srcEstHtml(r, e) {
       ${e.people.map(p => `<tr class="${p.no_rate ? "src-norate" : ""}"><td><button type="button" class="link" data-src-person="${p.user}">${esc(p.name)}</button></td><td>${p.rate?.kind === "salary" ? "salary" : Number(p.hours).toFixed(2)}</td><td>${esc(rate(p.rate))}</td><td>${money(p.pay)}</td></tr>`).join("")}
     </tbody></table></details>` : ""}</div>`;
 }
+// Paid, by year (George, Nov 13): a folder for each year, newest first (this year open); in it, each month's source paid, the gross
+// payroll, our sales before HST (the same invoices the Tax payments page counts), payroll and source as a share of sales, and the
+// same month a year before (+ / −); then Year to date and the whole year against the same months of the year before; then that year's payments.
+const SRC_MN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const srcPct = (a, b) => a != null && b ? `${(100 * Number(a) / Number(b)).toFixed(1)}%` : "—";
+const srcDiff = (a, b) => { if (a == null || b == null || !Number(b)) return `<span class="quiet">—</span>`; const d = Number(a) - Number(b), p = 100 * d / Number(b);
+  return `<span class="${d > 0.005 ? "src-up" : d < -0.005 ? "src-down" : ""}">${d > 0.005 ? "+" : d < -0.005 ? "−" : ""}${money(Math.abs(d))} <small>(${d > 0 ? "+" : d < 0 ? "−" : ""}${Math.abs(p).toFixed(1)}%)</small></span>`; };
+// periods with no payment confirmation, from the first one uploaded up to the last period that has ended (George, Nov 13: "what
+// confirmations are missing from the first one uploaded, noted for us to update"). A period that has its own card (not paid yet) is shown there.
+function srcMissing() {
+  const rows = SRC.rows || [], paid = rows.filter(r => r.paid); if (!paid.length) return [];
+  const have = new Set(rows.map(r => r.from)), first = paid.map(r => r.from).sort()[0], today = salesToday(), out = [];
+  for (let p = srcPerOf(first); p && p.to < today; p = srcPerOf(cvAddDays(p.to, 1))) if (!have.has(p.from)) out.push({ ...p, due: srcDueOf(p.from) });
+  return out;
+}
+function srcYearsHtml(done) {
+  const M = new Map((SRC.sum || []).map(x => [x.m, x])), today = salesToday(), cy = Number(today.slice(0, 4)), cm = Number(today.slice(5, 7));
+  const years = [...new Set(done.map(r => Number(r.from.slice(0, 4))))].sort((a, b) => b - a);
+  const g = (y, m, k) => { const x = M.get(`${y}-${String(m).padStart(2, "0")}`); return x && x[k] != null ? Number(x[k]) : null; };
+  const add = (y, m1, m2, k) => { let t = null; for (let m = m1; m <= m2; m++) { const v = g(y, m, k); if (v != null) t = (t || 0) + v; } return t; };
+  const row = (lab, src, gross, sales, prev, cls) => `<tr class="${cls || ""}"><td>${lab}</td><td><b>${src != null ? money(src) : "—"}</b></td><td>${srcDiff(src, prev)}</td><td>${gross != null ? money(gross) : "—"}</td><td>${sales != null ? money(sales) : "—"}</td><td>${srcPct(gross, sales)}</td><td>${srcPct(src, sales)}</td></tr>`;
+  return years.map(y => { const rows = done.filter(r => Number(r.from.slice(0, 4)) === y).sort((a, b) => a.from < b.from ? 1 : -1), last = y === cy ? cm : 12;
+    const months = []; for (let m = 1; m <= last; m++) { const src = g(y, m, "source"), sales = g(y, m, "sales"); if (src == null && sales == null) continue;
+      months.push(row(`${SRC_MN[m - 1]} ${y}`, src, g(y, m, "gross"), sales, g(y - 1, m, "source"))); }
+    const ytd = [add(y, 1, last, "source"), add(y, 1, last, "gross"), add(y, 1, last, "sales"), add(y - 1, 1, last, "source")];
+    const open = SRC.yearOpen?.[y] ?? (y === years[0]);
+    return `<details class="src-year" data-src-year="${y}"${open ? " open" : ""}><summary><b>${y}</b> <span>Source paid ${money(ytd[0] || 0)}${y === cy ? " so far" : ""}</span> <span class="src-yoy">${y === cy ? `Year to date vs Jan–${SRC_MN[last - 1]} ${y - 1}` : `vs ${y - 1}`}: ${srcDiff(ytd[0], ytd[3])}</span> <span class="quiet">${rows.length} payment${rows.length === 1 ? "" : "s"}</span>${(n => n ? ` <span class="src-bad">⚠ ${n} missing</span>` : "")(srcMissing().filter(m => Number(m.from.slice(0, 4)) === y).length)}</summary>
+      ${SRC.sum ? `<div class="src-tw"><table class="src-sumt"><thead><tr><th>Month</th><th>Source paid</th><th>Same month ${y - 1}</th><th>Gross payroll</th><th>Sales before HST</th><th>Payroll % of sales</th><th>Source % of sales</th></tr></thead><tbody>
+        ${months.join("") || `<tr><td colspan="7" class="quiet">Nothing for this year.</td></tr>`}
+        ${row(y === cy ? `Year to date (Jan–${SRC_MN[last - 1]})` : `Year ${y}`, ...ytd, "src-ytd")}
+      </tbody></table></div>
+      <p class="quiet src-sumnote">A payment counts in the month its period starts. Sales are our invoices before HST, by invoice date (the same ones the Tax payments page counts). Gross payroll is what the accountant's email or the PDF says.</p>` : `<p class="quiet">Adding up the months…</p>`}
+      <div class="src-tw"><table class="src-hist"><thead><tr><th>Period</th><th>Due</th><th>Amount due</th><th>Paid</th><th>On</th><th>Who</th><th>Confirmation</th><th></th></tr></thead><tbody>
+      ${[...rows.map(r => ({ k: r.from, r })), ...srcMissing().filter(m => Number(m.from.slice(0, 4)) === y).map(m => ({ k: m.from, m }))].sort((a, b) => a.k < b.k ? 1 : -1).map(({ r, m }) => m
+        ? `<tr class="src-missrow"><td>${esc(srcPeriod(m))}</td><td>${esc(fmtDate(m.due))}</td><td colspan="5"><b>⚠ No payment confirmation on file for this period.</b></td><td class="src-hbtns"><button type="button" class="btn" data-src-older>＋ Add it</button></td></tr>`
+        : (() => { const off = r.total != null && Math.abs(Number(r.paid_amount) - Number(r.total)) >= 0.005, late = r.paid_on > r.due;
+        return `<tr data-src-row="${r.id}"><td>${esc(srcPeriod(r))}</td><td>${esc(fmtDate(r.due))}</td><td>${r.total != null ? money(r.total) : "—"}</td><td class="${off ? "src-bad" : ""}">${money(r.paid_amount)}${off ? " ⚠" : ""}</td>
+          <td class="${late ? "src-bad" : ""}">${esc(fmtDate(r.paid_on))}${late ? " (late)" : r.state === "scheduled" ? " (scheduled)" : ""}</td><td>${esc(r.paid_by || "")}</td><td>${esc(r.confirmation || "")}</td>
+          <td class="src-hbtns"><button type="button" class="btn" data-src-pdf="${r.id}">📄 PDF</button> <button type="button" class="btn" data-src-open="${r.id}">Open</button></td></tr>`; })()).join("")}
+      </tbody></table></div></details>`; }).join("");
+}
+async function srcSumLoad() { try { const { data, error } = await db.rpc("source_summary"); if (!error) SRC.sum = data || []; } catch { }
+  const box = document.querySelector(".src-years"); if (box) box.innerHTML = srcYearsHtml((SRC.rows || []).filter(r => r.paid)); }
 // the box at the top of the Payroll page (PA 1)
 async function srcBox(msg) {
   const host = document.getElementById("src-box"); if (!host) return;
@@ -33234,13 +33292,12 @@ async function srcBox(msg) {
     ${msg ? `<div class="staff-msg ok" role="status">${esc(msg)}</div>` : ""}
     ${open.length ? open.map(srcCard).join("") : `<p class="src-none">✓ Nothing to pay right now.${now.length ? ` Next: ${esc(srcPeriod(now[0]))}, due ${esc(longDate(now[0].due))}.` : ""}</p>`}
     ${now.length ? `<details class="src-more"><summary>This period (${esc(srcPeriod(now[0]))}): not over yet</summary>${now.map(srcCard).join("")}</details>` : ""}
-    ${done.length ? `<details class="src-more"><summary>Paid (${done.length})</summary><table class="src-hist"><thead><tr><th>Period</th><th>Due</th><th>Amount due</th><th>Paid</th><th>On</th><th>Who</th><th>Confirmation</th><th></th></tr></thead><tbody>
-      ${done.map(r => { const off = r.total != null && Math.abs(Number(r.paid_amount) - Number(r.total)) >= 0.005, late = r.paid_on > r.due;
-        return `<tr><td>${esc(srcPeriod(r))}</td><td>${esc(fmtDate(r.due))}</td><td>${r.total != null ? money(r.total) : "—"}</td><td class="${off ? "src-bad" : ""}">${money(r.paid_amount)}${off ? " ⚠" : ""}</td>
-          <td class="${late ? "src-bad" : ""}">${esc(fmtDate(r.paid_on))}${late ? " (late)" : r.state === "scheduled" ? " (scheduled)" : ""}</td><td>${esc(r.paid_by || "")}</td><td>${esc(r.confirmation || "")}</td>
-          <td><button type="button" class="btn" data-src-pdf="${r.id}">📄 PDF</button> <button type="button" class="btn" data-src-open="${r.id}">Open</button></td></tr>`; }).join("")}
-    </tbody></table></details>` : ""}
+    ${(ms => ms.length ? `<div class="src-missbox"><b>⚠ ${ms.length} period${ms.length === 1 ? " has" : "s have"} no payment confirmation on file</b> (from your first one, ${esc(srcPeriod(ms[0]))}, to now):
+      <div class="src-misslist">${ms.map(m => `<span>${esc(srcPeriod(m))}</span>`).join("")}</div>
+      <button type="button" class="btn" data-src-older>＋ Add the missing ones</button> <span class="quiet">If one was never paid, that is a CRA payment still owing.</span></div>` : "")(srcMissing())}
+    ${done.length ? `<details class="src-more src-paidall"${SRC.paidOpen ? " open" : ""}><summary>Paid (${done.length})</summary><div class="src-years">${srcYearsHtml(done)}</div></details>` : ""}
   </section>`;
+  if (done.length) srcSumLoad();
 }
 async function srcOpenPdf(id) {
   const { data, error } = await db.rpc("source_pdf", { p_id: id }); if (error || !data?.pdf) return alertMsg("Couldn't open the PDF" + (error ? ": " + rpcErr(error) : "."));
@@ -33367,8 +33424,11 @@ function srcPayBox(r) {
     close(); srcBox(`Saved on ${srcPeriod(data)}: ${data?.state === "scheduled" ? `scheduled for ${longDate(data.paid_on)}` : "paid"}, confirmation ${data?.confirmation || ""}.`); srcRefreshDue(); });
 }
 // one click handler for the whole box (it is drawn again often)
+document.addEventListener("toggle", e => { const d = e.target; if (!(d instanceof HTMLElement)) return;
+  if (d.matches?.(".src-paidall")) SRC.paidOpen = d.open; if (d.matches?.(".src-year")) (SRC.yearOpen = SRC.yearOpen || {})[d.dataset.srcYear] = d.open; }, true);
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-src-pay],[data-src-email],[data-src-pdf],[data-src-unpay],[data-src-gross],[data-src-open],[data-src-person],[data-src-go],[data-src-older]"); if (!t) return;
+  const t = e.target.closest("[data-src-pay],[data-src-email],[data-src-pdf],[data-src-unpay],[data-src-gross],[data-src-open],[data-src-person],[data-src-go],[data-src-older],[data-src-close]"); if (!t) return;
+  if (t.dataset.srcClose != null) { const row = t.closest(".src-open-row"), b = row?.previousElementSibling?.querySelector("[data-src-open]"); if (b) b.textContent = "Open"; row?.remove(); return; }
   const id = Number(t.dataset.srcPay || t.dataset.srcEmail || t.dataset.srcPdf || t.dataset.srcUnpay || t.dataset.srcGross || t.dataset.srcOpen || 0), r = (SRC.rows || []).find(x => x.id === id);
   if (t.dataset.srcGo != null) { e.preventDefault(); return openPayroll(); }
   if (t.dataset.srcOlder != null) return srcOlderBox();
@@ -33377,7 +33437,9 @@ document.addEventListener("click", async e => {
   if (!r) return;
   if (t.dataset.srcPay) return srcPayBox(r);
   if (t.dataset.srcEmail) return srcEmailBox(r);
-  if (t.dataset.srcOpen) { const box = t.closest("tr"); box.insertAdjacentHTML("afterend", `<tr class="src-open-row"><td colspan="8">${srcCard(r)}</td></tr>`); t.remove(); return; }
+  if (t.dataset.srcOpen) { const tr = t.closest("tr"), nx = tr.nextElementSibling;   // Open shows the payment under its line; the same button (now Close) or ✕ Close puts it away
+    if (nx?.classList.contains("src-open-row")) { nx.remove(); t.textContent = "Open"; return; }
+    tr.insertAdjacentHTML("afterend", `<tr class="src-open-row"><td colspan="8"><div class="src-open-bar"><button type="button" class="btn quiet-btn" data-src-close>✕ Close</button></div>${srcCard(r)}</td></tr>`); t.textContent = "✕ Close"; return; }
   if (t.dataset.srcUnpay) { if (!(await askChoice("Take the payment off?", `${esc(srcPeriod(r))} goes back to not paid, and the PDF is taken off. Use this when the wrong PDF was attached.`, [["yes", "Take it off", true], ["", "Keep it"]]))) return;
     const { error } = await db.rpc("source_unpay", { p_id: id }); if (error) return alertMsg("Not saved: " + rpcErr(error)); srcBox("The payment was taken off."); srcRefreshDue(); return; }
   if (t.dataset.srcGross) { t.disabled = true; t.textContent = "Adding up our timesheets…";
