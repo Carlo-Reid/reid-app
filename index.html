@@ -20002,9 +20002,10 @@ const sinvNumBase = n => String(n || "").trim().toUpperCase().replace(/[.\-]0\d\
 // The supplier's own invoice is not in the file (Carlo, Nov 12): two squares, Load it or Create one from the system. A system copy always says to ask the supplier for the original; it goes away by itself once the real one is loaded.
 function sinvMissHtml(r, d, edit) {
   if ((d.pages || []).length || r.doc_type === "charge") return "";
-  const sys = sinvSys(r), load = edit ? `<button class="sinv-rmsq sinv-missq" type="button" data-sinv-missload="${r.id}"><span aria-hidden="true">⬆</span>Load the supplier invoice</button>` : "";
-  if (sys) return `<div class="sinv-missbox sinv-missys"><div><b>Ask the supplier for a copy of the original. This is system generated.</b><span>When the original arrives, press Load the supplier invoice. It takes the place of the system copy.</span>${edit ? `<button class="link" type="button" data-sinv-sysoff="${r.id}">Take the system copy off</button>` : ""}</div>${load}</div>`;
-  return `<div class="sinv-missbox"><div><b>The supplier's invoice is missing.</b><span>We only have its line on their statement. Pick one:</span></div>${load}${edit ? `<button class="sinv-rmsq sinv-missq" type="button" data-sinv-syscopy="${r.id}"><span aria-hidden="true">🤖</span>Create one from the system</button>` : ""}</div>`;
+  const cr = sinvIsCredit(r), w = cr ? "credit" : "invoice";
+  const sys = sinvSys(r), load = edit ? `<button class="sinv-rmsq sinv-missq" type="button" data-sinv-missload="${r.id}"><span aria-hidden="true">⬆</span>Load the supplier ${w}</button>` : "";
+  if (sys) return `<div class="sinv-missbox sinv-missys"><div><b>Ask the supplier for a copy of the original. This is system generated.</b><span>When the original arrives, press Load the supplier ${w}. It takes the place of the system copy.</span>${edit ? `<button class="link" type="button" data-sinv-sysoff="${r.id}">Take the system copy off</button>` : ""}</div>${load}</div>`;
+  return `<div class="sinv-missbox"><div><b>The supplier's ${w} is missing.</b><span>We only have its line on their statement. Pick one:</span></div>${load}${edit ? `<button class="sinv-rmsq sinv-missq" type="button" data-sinv-syscopy="${r.id}"><span aria-hidden="true">🤖</span>Create one from the system</button>` : ""}</div>`;
 }
 function sinvSysPaper(r, d) {
   if (!sinvSys(r) || (d.pages || []).length) return "";
@@ -20221,7 +20222,7 @@ function drawSupStatement() {
     ${cmp ? stCompareHtml(cmp, R, S) : ""}
     <table class="stv-t"><thead><tr><th>Date</th><th>Reference</th><th>Br.</th><th>CD</th><th class="r">Amount</th><th class="r">Balance due</th>${STV_HEAD}</tr></thead>
       <tbody>${SL.map(l => { const o = ours(l), d = cmp?.byRef.get(l.reference); const mk = !l.invoice_id && !!SINV.data?.can_edit && !!String(l.reference || "").trim() && Number(l.amount) && ["I", "C", "D", "S", ""].includes(l.code || "");   // no record of ours: a click offers to load it or to make one (Carlo, Nov 12)
-        return `<tr class="${d ? "stv-diff" : ""} ${l.invoice_id || mk ? "stv-go" : ""}" ${l.invoice_id ? `tabindex="0" title="Click to open this invoice"` : mk ? `tabindex="0" title="We do not have this invoice. Click to load it, or to make one from the system."` : ""}><td>${esc(stDate(l.date))}</td><td>${l.invoice_id ? `<button class="link" type="button" data-stv-inv="${l.invoice_id}">${esc(l.reference)}</button>` : mk ? `<button class="link" type="button" data-stv-new="${esc(l.reference)}" data-d="${esc(String(l.date || "").slice(0, 10))}" data-a="${Number(l.amount)}">${esc(l.reference)}</button>` : esc(l.reference)}</td>
+        return `<tr class="${d ? "stv-diff" : ""} ${l.invoice_id || mk ? "stv-go" : ""}" ${l.invoice_id ? `tabindex="0" title="Click to open this invoice"` : mk ? `tabindex="0" title="We do not have this invoice. Click to load it, or to make one from the system."` : ""}><td>${esc(stDate(l.date))}</td><td>${l.invoice_id ? `<button class="link" type="button" data-stv-inv="${l.invoice_id}">${esc(l.reference)}</button>` : mk ? `<button class="link" type="button" data-stv-new="${esc(l.reference)}" data-d="${esc(String(l.date || "").slice(0, 10))}" data-a="${l.code === "C" ? -Math.abs(Number(l.amount)) : Number(l.amount)}">${esc(l.reference)}</button>` : esc(l.reference)}</td>
         <td>${esc(l.branch || "")}</td><td>${esc(l.code || "")}</td><td class="r num">${String(l.date || "").slice(0, 7) === mon ? stMoney(l.amount) : ""}</td><td class="r num">${stMoney(l.amount)}</td>
         ${stvCols(o.r, d)}</tr>`; }).join("")}</tbody></table>
     <div class="stv-codes">I = Invoice · C = Credit note · A = Adjustment · S = Finance charge · D = Debit memo · P = Payment · U = Unapplied</div>
@@ -20254,13 +20255,18 @@ function drawSupStatement() {
   stvPaper().querySelectorAll("[data-stv-inv]").forEach(b => b.addEventListener("click", () => stvOpenInv(Number(b.dataset.stvInv), b.textContent.trim())));
   // a line we have no invoice for (Carlo, Nov 12): load the supplier's invoice, or make one from the system; either way our record is made from the statement's line first, so there is a page to open
   stvPaper().querySelectorAll("[data-stv-new]").forEach(b => b.addEventListener("click", async () => { const num = b.dataset.stvNew, amt = Number(b.dataset.a);
-    const k = await askChoice(`We do not have invoice ${esc(num)}`, `<span class="ask-stack"></span>It is on their statement for <b>${money(amt)}</b>, but the supplier's invoice is not in our system. What do you want to do?`,
-      [["load", "⬆ Load the supplier invoice (I have the file)", true], ["sys", "🤖 Create one from the system (I do not have it yet)"], ["", "Cancel"]]);
+    const cr = amt < 0;   // a credit line is tracked as a credit, with its Credit Memo (Carlo, Nov 12: "the line is a credit so it should be tracked as a Credit Memo")
+    const k = await askChoice(cr ? `We do not have credit ${esc(num)}` : `We do not have invoice ${esc(num)}`,
+      cr ? `<span class="ask-stack"></span>It is on their statement as a <b>credit of ${money(Math.abs(amt))}</b>, but the supplier's credit paper is not in our system. Either way I record it as a credit and make its <b>Credit Memo</b>. What do you want to do?`
+         : `<span class="ask-stack"></span>It is on their statement for <b>${money(amt)}</b>, but the supplier's invoice is not in our system. What do you want to do?`,
+      cr ? [["load", "⬆ Load the supplier's credit paper (I have the file)", true], ["sys", "🤖 Create the credit from the system (I do not have it yet)"], ["", "Cancel"]]
+         : [["load", "⬆ Load the supplier invoice (I have the file)", true], ["sys", "🤖 Create one from the system (I do not have it yet)"], ["", "Cancel"]]);
     if (k !== "load" && k !== "sys") return;
     const mk = await db.rpc("supplier_invoice_from_statement", { p_supplier: STV.sup, p_number: num, p_date: b.dataset.d || null, p_amount: amt, p_statement_date: S.date || b.dataset.d || null });
     if (mk.error || !mk.data?.id) return alertMsg("Not done: " + (mk.error ? rpcErr(mk.error) : "I could not make our record of it."));
     const id = Number(mk.data.id);
     if (k === "sys") { const sc = await db.rpc("supplier_invoice_system_copy", { p_id: id, p_on: true }); if (sc.error) alertMsg("Our record was made, but not the system copy: " + rpcErr(sc.error)); }
+    if (cr) { const cm = await db.rpc("credit_memo_make", { p_invoice: id }); if (cm.error) alertMsg("The credit was recorded, but its Credit Memo was not made: " + rpcErr(cm.error) + " Press the blue Create a Credit Memo box on its page."); }
     STV.all = null; STV.allFor = null; STV.src = null; SINV.det.delete(id);
     await stvOpenInv(id, num);
     if (k === "load") setTimeout(() => { const z = document.querySelector(`[data-sinv-drop="${id}"]`); z?.scrollIntoView({ block: "center" }); z?.focus({ preventScroll: true }); }, 500); }));
