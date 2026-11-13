@@ -25587,6 +25587,7 @@ async function openInvoiceEditor(id, msg) {
     if (allowed) data.looks = data.looks.filter(l => allowed.includes(Number(l.id)) || Number(l.id) === Number(data.look_partner_id));
   }
   IE = { ...(IE?.id === id ? IE : {}), ...data, id };
+  if (await ieAutoRates()) return openInvoiceEditor(id, msg);   // the partner's rates were put on new lines: load the invoice again with them
   await pbLoadLooks((data.lines || []).map(l => l.item_id).filter(Boolean)).catch(() => {});
   nameCurrentPage("invoice " + data.number);
   renderInvoiceEditor(msg);
@@ -26219,6 +26220,21 @@ document.addEventListener("click", async e => { const c = e.target.closest("[dat
   if (i) { e.preventDefault(); return openInvoiceEditor(Number(i.dataset.tcoInv)); }
   if (po) { e.preventDefault(); return openPOPage(Number(po.dataset.tcoPo)); }
   if (!dn) return; e.preventDefault(); const r = await tankCreditStep(Number(dn.dataset.tcoDone), "received", dn.dataset.amt); if (r) { alertMsg(r); tankCreditBox(true); } });
+// A partner's job: the partner's labour and service call rates (set on the Partners page) go on by themselves (Carlo, Nov 13: "I want the rates from
+// the Partners page to go on by themselves"; the Use rates button is gone). Once for each line: a labour or service call line that this computer has
+// not seen on this invoice before is set to the partner's rate. After that the line is left alone, so a price typed by hand on it stays.
+const IE_RATED = { key: "reid.ie.rated", get(id) { try { return (JSON.parse(localStorage.getItem(this.key) || "{}")[id]) || []; } catch (e) { return []; } },
+  set(id, ids) { try { const o = JSON.parse(localStorage.getItem(this.key) || "{}"); o[id] = ids; const ks = Object.keys(o); if (ks.length > 300) ks.slice(0, ks.length - 300).forEach(k => delete o[k]); localStorage.setItem(this.key, JSON.stringify(o)); } catch (e) {} } };
+async function ieAutoRates() {
+  const I = IE, R = I?.prule; if (!R || !I.can_edit || I.status !== "draft" || (R.labour == null && R.service_call == null)) return false;
+  const K = R.lines || {}, seen = new Set(IE_RATED.get(I.id).map(Number)), lines = (I.lines || []).filter(l => !l.kit_parent); let n = 0;
+  for (const l of lines) { if (seen.has(Number(l.id))) continue; seen.add(Number(l.id));
+    const kind = K[l.id] || (IE_SVC(l) ? "service_call" : IE_LABOUR(l) ? "labour" : "other"), rate = kind === "service_call" ? R.service_call : kind === "labour" ? R.labour : null;
+    if (rate == null || l.no_charge || Math.abs(Number(l.unit_price) - Number(rate)) <= 0.004) continue;
+    const { error } = await db.rpc("inv_update_line", { p_line: l.id, p: { unit_price: String(rate) } }); if (!error) n++; }
+  IE_RATED.set(I.id, lines.map(l => Number(l.id)));
+  return n > 0;
+}
 async function ieApplyPartnerRates() {
   const I = IE, R = I.prule, lines = I.lines.filter(l => !l.kit_parent), K = R.lines || {};   // each line's kind comes from the price book: tank, labour, service_call
   let n = 0; const fail = [];
