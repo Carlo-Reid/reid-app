@@ -26036,6 +26036,7 @@ async function openInvoiceEditor(id, msg) {
     // the job's other invoices, to flip between them from section 1 (Carlo, Nov 13)
     const iv = await db.from("invoices").select("id, invoice_number, status, total").eq("job_id", data.job_id).neq("status", "void").order("id");
     IE.jobInvs = iv.error ? [] : iv.data || []; } else { IE.techNotes = []; IE.visits = null; IE.jobInvs = []; }
+  await vrIeLoad(data.job_id).catch(() => {});   // the Vista rental prices picked on this job (Carlo, Nov 13)
   if (!IE_RATED.again && await ieAutoRates()) { IE_RATED.again = true; try { return await openInvoiceEditor(id, msg); } finally { IE_RATED.again = false; } }   // the partner's rates were put on new lines: load the invoice again with them
   await pbLoadLooks((data.lines || []).map(l => l.item_id).filter(Boolean)).catch(() => {});
   nameCurrentPage("invoice " + data.number);
@@ -26480,6 +26481,7 @@ function renderInvoiceEditor(msg) {
             ${l.kit_parent ? "" : edit && (l.no_charge || l.hidden) ? `<div class="ie-opts">${/* Carlo, Nov 13: "remove these 2 options for now". A box only shows on a line that already has it ticked, so it can be taken off. To bring both back, draw them whenever edit is true. */ ""}${l.no_charge ? `<label><input type="checkbox" data-ie-opt="no_charge" checked> No charge</label>` : ""}
               ${l.hidden ? `<label><input type="checkbox" data-ie-opt="hidden" checked> Hide on the printed invoice</label>` : ""}</div>`
               : edit ? "" : (l.no_charge || l.hidden) ? `<div class="ie-opts">${l.no_charge ? `<span class="ie-tag">No charge</span>` : ""}${l.hidden ? `<span class="ie-tag">Hidden from the customer</span>` : ""}</div>` : ""}
+            ${vrIeChip(I, l)}
             ${l.hidden && Number(l.line_total) ? `<div class="ie-hid-warn">Hidden but still charged: the customer's total includes ${money(l.line_total)} they can't see.</div>` : ""}</td>
           <td class="r">${edit ? `<input class="ie-num" data-ie-f="quantity" inputmode="decimal" value="${Number(l.quantity)}">` : Number(l.quantity)}</td>
           ${seeCost() ? `<td class="r num ie-costcell">${l.unit_cost != null ? money(l.unit_cost) : "—"}${l.unit_cost != null && Number(l.quantity) !== 1 ? `<div class="quiet">${money(l.unit_cost * l.quantity)}</div>` : ""}</td>` : ""}
@@ -32688,7 +32690,7 @@ function pbxBox() {
 // (sync/extra/285_vista_rental.sql): for each supplier, each tank or system, each monthly rental rate and the allowance (install + equipment)
 // Vista gives at that rate. They show on a price book item that is a rental tank, on a proposal line for such an item, and on a Vista install
 // booking; owners change them on the Vista rental rates page (Price book tools).
-const VR = { data: null, at: 0, err: "", estId: null, est: new Map(), pg: { s: null, c: null, dirty: new Map(), addR: {}, addT: {}, msg: "", bad: false, busy: false } };
+const VR = { data: null, at: 0, err: "", estId: null, est: new Map(), ieJob: null, ie: new Map(), pg: { s: null, c: null, dirty: new Map(), addR: {}, addT: {}, msg: "", bad: false, busy: false } };
 const VR_SUP_ORDER = ["Boone", "TML", "Wolseley"];
 const VR_CATS = { "Standard WH": "Standard water heaters", "Tankless": "Tankless water heaters", "Combi & Boiler": "Combi boilers and boilers", "Condensing & Combi Tanks": "Condensing and combi tanks",
   "Combi & Condensing": "Combi boilers and condensing tanks", "Heat Pump": "Heat pump water heaters", "HVAC": "HVAC systems" };
@@ -32850,6 +32852,41 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
   if (error) return alertMsg("Not saved: " + rpcErr(error));
   if (p === "off") VR.est.delete(item); else VR.est.set(item, p);
   if (EST.x?.id === estId && document.querySelector(".est-sheet")) renderEstEdit(); });
+// The Vista rental price on an invoice line (Carlo, Nov 13: "i added this PV50N 200… to an invoice but it did not show or give me any rental
+// price or options"). Kept on the job, for the line's item (vista_rental_picks kind 'job'). Shown when the item is set up as a rental tank, when a
+// rate was picked, or, on a Vista invoice, when the line's words look like one of Vista's tanks. Staff only: never printed.
+const ieIsVista = I => /vista/i.test([I?.bill?.partner?.name, I?.prule?.name, I?.pbook?.name].filter(Boolean).join(" "));
+function vrIeFor(I, l) {
+  if (!l || !l.item_id || l.kit_parent || !I?.job_id || !VR.data || VR.ieJob !== I.job_id) return null;
+  const item = Number(l.item_id), L = VR.data.links[item], P = VR.ie.get(item);
+  const G = !L && !P && ieIsVista(I) ? vrGuess({ name: l.description, sku: l.sku }) : null;
+  return L || P || G ? { item, L, P, G } : null;
+}
+function vrIeChip(I, l) {
+  const x = vrIeFor(I, l); if (!x) return "";
+  const { L, P, G } = x; let p = P, usual = false;
+  if (!p && L && L.rate != null) { const T = vrTank(L), y = T && T.r.find(z => Number(z[1]) === Number(L.rate)); if (y) { p = { s: L.s, m: L.m, rate: y[1], allowance: y[2] }; usual = true; } }
+  const B = L || G, T = !p && B ? vrTank(B) : null, rs = T ? T.r.map(z => Number(z[1])) : [];
+  return `<div class="vr-chip no-print"><span class="vr-chip-t">🏷 Vista rental</span> ${p ? `<b>${vrRate(p.rate)} a month</b> · allowance <b>${vrAl(p.allowance)}</b> <span class="vr-chip-w">${esc(p.m)}${p.s !== "HVAC" ? ", from " + esc(p.s) : ""}${usual ? " · the usual rate" : ""}</span>`
+      : `<span class="vr-chip-w">${G && !L ? "I think it is Vista's " : ""}${B ? esc(B.m) + (B.s !== "HVAC" ? ", from " + esc(B.s) : "") : ""}${rs.length ? ` · ${rs.length} monthly rates, ${vrRate(Math.min(...rs))} to ${vrRate(Math.max(...rs))}` : ""}</span>`}
+    <button type="button" class="link" data-vr-ie="${x.item}" data-vr-line="${l.id}">${p && !usual ? "Change" : "Pick the monthly rate"}</button></div>`;
+}
+async function vrIeLoad(job) {
+  VR.ieJob = job || null; VR.ie = new Map(); if (!job) return;
+  const [, r] = await Promise.all([vrLoad(), db.rpc("vista_picks", { p_kind: "job", p_ref: job })]);
+  if (VR.ieJob === job) (r.data || []).forEach(p => VR.ie.set(Number(p.item), p));
+}
+document.addEventListener("click", async e => { const b = e.target.closest("[data-vr-ie]"); if (!b || !IE?.job_id) return; e.preventDefault();
+  const l = (IE.lines || []).find(z => String(z.id) === b.dataset.vrLine), x = vrIeFor(IE, l); if (!x) return;
+  const { item, L, P, G } = x, job = IE.job_id, inv = IE.id;
+  const p = await vrPick({ ...(P || L || G || {}), rate: P ? P.rate : L?.rate, hasPick: !!P, only: "tank", title: "Vista rental price for this tank" });
+  if (p === null) return;
+  const { error } = await db.rpc("vista_pick_set", { p_kind: "job", p_ref: job, p_item: item, p_rate_id: p === "off" ? null : p.id });
+  if (error) return alertMsg("Not saved: " + rpcErr(error));
+  if (p === "off") VR.ie.delete(item); else { VR.ie.set(item, p);
+    // the item was not set up as a rental tank yet: remember which Vista tank it is, so it shows by itself next time
+    if (!L && VR.data.can_link) { const k = await db.rpc("vista_link_set", { p_item: item, p: { s: p.s, c: p.c, g: p.g, m: p.m, rate: null } }); if (!k.error) VR.data.links[item] = { s: p.s, c: p.c, g: p.g, m: p.m, rate: null }; } }
+  if (IE?.id === inv && document.querySelector("article.ie")) renderInvoiceEditor(); });
 // Vista's Excel file → rows [supplier, kind of sheet, group, tank, details, monthly rate, allowance]. One sheet for each supplier and kind
 // ("Boone Standard WH"): a "Product" row holds the monthly rates, a row with words only in column A names the group, every other row is a tank.
 // "HVAC Rate Table" is pairs of rate and allowance, three pairs across.
