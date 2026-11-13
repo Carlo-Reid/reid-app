@@ -35,6 +35,9 @@ DO $do$ BEGIN
   DROP POLICY IF EXISTS payroll_slips_add ON storage.objects;
   CREATE POLICY payroll_slips_add ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'payroll-slips' AND name LIKE 'slips/%' AND (SELECT public._src_owner()));
 EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'payroll-slips bucket: %', SQLERRM; END $do$;
+-- the storage rules above call _src_owner() as the signed-in person, so they must be allowed to run it (it only answers "is this an owner?");
+-- without this every slip page upload was refused (George, Nov 13: "I can't pull the PDF to see the paystubs")
+GRANT EXECUTE ON FUNCTION public._src_owner() TO authenticated;
 ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS payroll_wsib jsonb NOT NULL DEFAULT '{}'::jsonb;   -- WSIB $ per $100 of pay, by block
 
 -- the block a person goes in: their own pick, else from the role; Past when they left, are turned off, or had no pay for 3 months
