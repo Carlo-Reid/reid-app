@@ -16202,6 +16202,7 @@ async function loadDispatch() {
   { const b = await db.rpc("staff_blocks_list", { p_from: d, p_to: d }); DSP.blocks = b.error ? [] : b.data || []; if (DSP.date !== d) return; }
   { const b = await db.rpc("install_holds_list", { p_from: d, p_to: d }); DSP.holds = b.error ? [] : b.data || []; if (DSP.date !== d) return; }
   { const b = await db.rpc("on_call_range", { p_from: d, p_to: d }); DSP.oncall = b.error ? null : (b.data || [])[0] || null; if (DSP.date !== d) return; }
+  { const b = await db.rpc("on_way_texts_for", { p_date: d }); DSP.way = new Map((b.error ? [] : b.data || []).map(x => [Number(x.visit_id), x])); if (DSP.date !== d) return; }
   { const b = await db.rpc("dispatch_parts_held", { p_date: d }); DSP.parts = new Map((b.error ? [] : b.data || []).map(x => [x.visit_id + ":" + x.employee_id, x.what])); if (DSP.date !== d) return; }
   DSP.sig = JSON.stringify([DSP.rows, DSP.waiting]);
   renderDispatch();
@@ -16646,12 +16647,15 @@ function closePile() { document.querySelector(".pile-pop")?.remove(); document.r
 document.addEventListener("keydown", e => { if (e.key === "Escape" && document.querySelector(".pile-pop")) { e.stopPropagation(); closePile(); } }, true);
 // a tech checks in ("I'm here" on My calls): the card shows they're working and when they arrived; late = red
 const dspTm = t => new Date(t).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\./g, "").replace(" ", " ");
+// the customer got the "on my way" text: say so on the board, with about when the tech should be there
+const dspWayWords = r => { const w = DSP.way?.get(Number(r.visit_id)); if (!w) return "";
+  return " · customer texted" + (w.minutes ? ", there about " + dspTm(new Date(new Date(w.at).getTime() + w.minutes * 60e3)) : "") + (w.test ? " (test)" : ""); };
 function dspArrive(r) {
   const end = r.arrival_end ? new Date(r.arrival_end) : null, today = r.scheduled_date === ymd(new Date()), past = end && today && Date.now() > end.getTime() + 60e3;
   if (r.status === "on_site" && r.arrived_at) { const late = end && new Date(r.arrived_at) > new Date(end.getTime() + 60e3);
     return { cls: late ? "dc-late" : "dc-working", text: `Working · arrived ${dspTm(r.arrived_at)}${late ? " (late)" : ""}` }; }
   if (r.status === "on_site") return { cls: "dc-working", text: "Working" };
-  if (r.status === "en_route") return { cls: past ? "dc-late" : "", text: `On the way${r.en_route_at ? " since " + dspTm(r.en_route_at) : ""}${past ? " · late" : ""}` };
+  if (r.status === "en_route") return { cls: past ? "dc-late" : "", text: `On the way${r.en_route_at ? " since " + dspTm(r.en_route_at) : ""}${dspWayWords(r)}${past ? " · late" : ""}` };
   if (["scheduled", "dispatched"].includes(r.status) && past && r.techs.length) return { cls: "dc-late", text: `Late: not there yet (window ended ${dspTm(end)})` };
   return null;
 }
@@ -17273,9 +17277,32 @@ async function openOnSite(jobId, jobType, jobClass, c) {
   setWalk(data);
   openInvoiceEditor(data, walk ? walkSay : "You're on site. Here's the invoice for this job.");
 }
+// On my way: text the customer (Carlo, Nov 13, 2026). Where the phone is (for the minutes), then the Edge Function on-way-text. Never stops the status from saving.
+const mcWhere = () => new Promise(res => {
+  let done = false; const fin = v => { if (!done) { done = true; res(v); } };
+  if (!navigator.geolocation) return fin(null);
+  setTimeout(() => fin(null), 7000);
+  try { navigator.geolocation.getCurrentPosition(p => fin({ lat: p.coords.latitude, lng: p.coords.longitude }), () => fin(null), { enableHighAccuracy: false, timeout: 6000, maximumAge: 120000 }); } catch { fin(null); }
+});
+async function mcOnWayText(id) {
+  let d = null;
+  try { const at = await mcWhere(); const r = await db.functions.invoke("on-way-text", { body: { visit_id: id, lat: at?.lat ?? null, lng: at?.lng ?? null } }); d = r.error ? null : r.data; } catch { }
+  if (!d) return "The customer was not texted: I could not reach the texting service. Please call them.";
+  if (d.already) return "";
+  if (d.sent) return `✓ I texted the customer: ${d.tech || "the tech"} is on the way${d.minutes ? ", about " + d.minutes + " minutes" : ""}${d.pic ? ", with the tech's picture" : ""}.`
+    + (d.minutes ? "" : " This phone did not say where it is, so the text has no time in it.")
+    + (d.pic ? "" : d.pic_why ? " The picture did not go, only the words." : " There is no picture of the tech on the Staff page, so only the words went.")
+    + (d.test_to ? " Test mode is on, so it went to the test number, not to the customer." : "");
+  return ({ no_phone: "The customer was not texted: they have no phone number on file that takes texts. Please call them.",
+    no_tech: "The customer was not texted: this call has no tech on it.", not_allowed: "The customer was not texted: this call is not yours.",
+    not_connected: "The customer was not texted: Podium is not connected. Please call them.", test_no_number: "The customer was not texted: test mode is on and there is no test number in Settings.",
+    no_location: "The customer was not texted: Podium has no location to send from. Please call them." })[d.error]
+    || "The customer was not texted" + (d.message ? " (Podium: " + d.message + ")" : "") + ". Please call them.";
+}
 async function mcSet(card, id, status, note) {
   const m = card.querySelector(".mc-msg"); m.className = "mc-msg"; m.textContent = "Saving…";
   card.querySelectorAll("button").forEach(b => b.disabled = true);
+  if (status === "en_route") { m.textContent = "Telling the customer you are on the way…"; MC.said = await mcOnWayText(id); m.textContent = "Saving…"; }
   const { error } = await db.rpc("set_call_status", { p_visit_id: id, p_status: status, p_note: note });
   if (error) { card.querySelectorAll("button").forEach(b => b.disabled = false); m.className = "mc-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
   if (status === "completed" || status === "needs_return") MC.open = null;
