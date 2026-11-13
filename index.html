@@ -16710,7 +16710,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && document.q
 // a tech checks in ("I'm here" on My calls): the card shows they're working and when they arrived; late = red
 const dspTm = t => new Date(t).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\./g, "").replace(" ", " ");
 // the customer got the "on my way" text: say so on the board, with about when the tech should be there
-const dspWayWords = r => { const w = DSP.way?.get(Number(r.visit_id)); if (!w) return "";
+const dspWayWords = r => { const w = DSP.way?.get(Number(r.visit_id)); if (!w || !w.at) return "";
   return " · customer texted" + (w.minutes ? ", there about " + dspTm(new Date(new Date(w.at).getTime() + w.minutes * 60e3)) : "") + (w.test ? " (test)" : ""); };
 function dspArrive(r) {
   const end = r.arrival_end ? new Date(r.arrival_end) : null, today = r.scheduled_date === ymd(new Date()), past = end && today && Date.now() > end.getTime() + 60e3;
@@ -16718,6 +16718,8 @@ function dspArrive(r) {
     return { cls: late ? "dc-late" : "dc-working", text: `Working · arrived ${dspTm(r.arrived_at)}${late ? " (late)" : ""}` }; }
   if (r.status === "on_site") return { cls: "dc-working", text: "Working" };
   if (r.status === "en_route") return { cls: past ? "dc-late" : "", text: `On the way${r.en_route_at ? " since " + dspTm(r.en_route_at) : ""}${dspWayWords(r)}${past ? " · late" : ""}` };
+  { const w = ["scheduled", "dispatched"].includes(r.status) ? DSP.way?.get(Number(r.visit_id)) : null;   // the tech pressed I got delayed: the customer got the sorry text
+    if (w && w.delayed_at) return { cls: "dc-late", text: `Delayed · customer texted at ${dspTm(w.delayed_at)}${w.test ? " (test)" : ""}${past ? " · late" : ""}` }; }
   if (["scheduled", "dispatched"].includes(r.status) && past && r.techs.length) return { cls: "dc-late", text: `Late: not there yet (window ended ${dspTm(end)})` };
   return null;
 }
@@ -17280,6 +17282,7 @@ function renderMyCalls() {
   document.querySelectorAll("[data-mc-costco]").forEach(b => b.addEventListener("click", () => openStoreForm(Number(b.dataset.mcCostco))));
   document.querySelectorAll("[data-mc-invoice]").forEach(b => b.addEventListener("click", () => startInvoice(Number(b.dataset.mcInvoice))));
   document.querySelectorAll("[data-mc-walk]").forEach(b => b.addEventListener("click", () => { const c = (MC.data?.calls || []).find(x => x.visit_id === Number(b.dataset.mcWalk)); if (c) openOnSite(c.job_id, c.job_type, c.job_class, c); }));
+  document.querySelectorAll("[data-mc-delay]").forEach(b => b.addEventListener("click", () => mcDelayed(b.closest(".mc"), Number(b.dataset.mcDelay))));
   document.querySelectorAll("[data-mc-status]").forEach(b => b.addEventListener("click", async () => {
     const card = b.closest(".mc"), id = Number(card.dataset.visit), s = b.dataset.mcStatus;
     if (s === "completed" || s === "needs_return") {
@@ -17382,12 +17385,32 @@ async function mcOnWayText(id) {
   if (d.sent) return `✓ I texted the customer: ${d.tech || "the tech"} is on the way${d.minutes ? ", about " + d.minutes + " minutes" : ""}${d.pic ? ", with the tech's picture" : ""}.`
     + (d.minutes ? "" : " This phone did not say where it is, so the text has no time in it.")
     + (d.pic ? "" : d.pic_why ? " The picture did not go, only the words." : " There is no picture of the tech on the Staff page, so only the words went.")
-    + (d.test_to ? " Test mode is on, so it went to the test number, not to the customer." : "");
+    + (d.test_to ? (d.test_to2 ? " Test mode is on, so it went to both test numbers, not to the customer." : " Test mode is on, so it went to the test number, not to the customer.")
+        + (d.test2_why ? " It did not go to the second test number: " + d.test2_why : "") : "");
   return ({ no_phone: "The customer was not texted: they have no phone number on file that takes texts. Please call them.",
     no_tech: "The customer was not texted: this call has no tech on it.", not_allowed: "The customer was not texted: this call is not yours.",
     not_connected: "The customer was not texted: Podium is not connected. Please call them.", test_no_number: "The customer was not texted: test mode is on and there is no test number in Settings.",
     no_location: "The customer was not texted: Podium has no location to send from. Please call them." })[d.error]
     || "The customer was not texted" + (d.message ? " (Podium: " + d.message + ")" : "") + ". Please call them.";
+}
+// "I got delayed" on a call that is On the way (Carlo, Nov 13, 5:38 p.m.): the customer gets a sorry text, the call goes back to Booked (so the dispatch board
+// no longer says On the way), and On my way is there to press again, which texts the customer again and puts the board back to On the way.
+async function mcDelayed(card, id) {
+  const k = await askChoice("Tell the customer you got delayed?", `<span class="ask-sq"></span>I text the customer: “Sorry, your technician got delayed, but will be there soon.” The call goes back to Booked. When you leave, press On my way again and the customer gets a new text.`,
+    [["yes", "📨|Yes, text them|I got delayed"], ["", "No, go back"]]);
+  if (k !== "yes") return;
+  const m = card.querySelector(".mc-msg"); m.className = "mc-msg"; m.textContent = "Telling the customer you got delayed…"; card.querySelectorAll("button").forEach(b => b.disabled = true);
+  let d = null; try { const r = await db.functions.invoke("on-way-text", { body: { visit_id: id, delayed: true } }); d = r.error ? null : r.data; } catch { }
+  const stop = t => { card.querySelectorAll("button").forEach(b => b.disabled = false); m.className = "mc-msg err"; m.textContent = t; };
+  if (d && (d.error === "not_allowed" || d.error === "no_call" || d.error === "not_on_way")) return stop(d.error === "not_on_way" ? "This call is not On the way any more." : "You can not do this for this call.");
+  const said = !d ? "The customer was not texted: I could not reach the texting service. Please call them."
+    : d.sent ? `✓ I texted the customer: ${d.tech || "the tech"} got delayed and will be there soon.` + (d.test_to ? (d.test_to2 ? " Test mode is on, so it went to both test numbers, not to the customer." : " Test mode is on, so it went to the test number, not to the customer.") + (d.test2_why ? " It did not go to the second test number: " + d.test2_why : "") : "")
+    : ({ no_phone: "The customer was not texted: they have no phone number on file that takes texts. Please call them.", test_no_number: "The customer was not texted: test mode is on and no test number is set in Settings.",
+         not_connected: "The customer was not texted: Podium is not connected. Please call them." })[d.error] || "The customer was not texted" + (d.message ? ": " + d.message : ".") + " Please call them.";
+  const { error } = await db.rpc("set_call_status", { p_visit_id: id, p_status: "scheduled", p_note: "The tech got delayed. The call is back to Booked." });
+  if (error) return stop(said + " The call was not put back to Booked: " + rpcErr(error));
+  MC.said = said + " The call is back to Booked. Press On my way when you leave.";
+  await loadMyCalls();
 }
 async function mcSet(card, id, status, note) {
   const m = card.querySelector(".mc-msg"); m.className = "mc-msg"; m.textContent = "Saving…";
@@ -17504,6 +17527,7 @@ function mcCard(c) {
         ${!invDone ? sq("🧾", "Invoice and payment", `data-mc-invoice="${c.job_id}"`) : ""}
         ${/^costco/i.test(c.job_type || "") ? sq("📝", "Costco form (customer signs)", `data-mc-costco="${c.job_id}"`) : ""}
         ${sq("👤", "Open the full customer file", `data-mc-open-cust="${c.customer_id}"`)}
+        ${c.status === "en_route" ? sq("⏰", "I got delayed", `data-mc-delay="${c.visit_id}"`) : ""}
         ${c.status === "on_site" || c.status === "en_route" ? sq("↩", "Undo", `data-mc-status="scheduled"`, "mc-sq-quiet") : ""}
         ${done && c.status !== "cancelled" ? sq("↩", "Not finished after all", `data-mc-status="on_site"`, "mc-sq-quiet") : ""}</div>
       <form class="mc-finish hidden"><textarea rows="3" maxlength="4000"></textarea><div><button class="btn" type="submit">Save</button> <button class="link" type="button" data-mc-x>Never mind</button></div></form>
@@ -33611,16 +33635,18 @@ async function sendTestBox() {
   if (error) { box.innerHTML = `<h2>Sending to customers: test mode</h2><p class="quiet">${/PGRST202|could not find/i.test(error.message || "") ? "This turns on after tonight's update." : esc(rpcErr(error))}</p>`; return; }
   const T = data || {}, on = !!T.email;
   box.innerHTML = `<h2>Sending to customers: ${on ? `<span class="st-test-on">test mode is on</span>` : `<span class="st-live">✓ live</span>`}</h2>
-    <p class="quiet">${on ? "While testing, every proposal and invoice sent with Email / Text goes to these instead of the customer." : "Proposals and invoices go to the customer. Put an email back in to test again."}</p>
+    <p class="quiet">${on ? "While testing, every proposal and invoice sent with Email / Text goes to these instead of the customer. The On my way text goes to both test text numbers at the same time." : "Proposals and invoices go to the customer. Put an email back in to test again."}</p>
     <form class="st-test-f" autocomplete="off">
       <label>Test email <input type="email" name="email" value="${esc(T.email || "")}" placeholder="empty = live"></label>
       <label>Test text number <input type="tel" name="phone" value="${esc(T.phone ? phoneFmt(T.phone) : "")}" placeholder="e.g. 613-298-2948"></label>
+      <label>Second test text number <input type="tel" name="phone2" value="${esc(T.phone2 ? phoneFmt(T.phone2) : "")}" placeholder="empty = only one"></label>
       <button class="btn" type="submit">Save</button>
       ${on ? `<button class="btn quiet-btn danger-chip" type="button" data-go-live>Go live…</button>` : ""}
     </form><div class="staff-msg" id="st-test-msg" role="status"></div>`;
   const f = box.querySelector("form"), say = (t, err) => { const m = $("#st-test-msg"); m.className = "staff-msg " + (err ? "err" : "ok"); m.textContent = t; };
   const save = async (email, phone) => { const { error: e } = await db.rpc("send_test_set", { p_email: email || null, p_phone: phone || null });
-    if (e) return say("Not saved: " + rpcErr(e), true); { const c = await db.from("company_settings").select("*").limit(1).maybeSingle(); if (c.data) COMPANY = c.data; } await sendTestBox(); say(email ? "Saved. Test sends go to these now." : "Live: proposals and invoices now go to the customer."); };
+    if (e) return say("Not saved: " + rpcErr(e), true);
+    { const e2 = (await db.rpc("send_test_phone2_set", { p_phone: f.phone2.value.trim() || null })).error; if (e2) return say("The second test number was not saved: " + rpcErr(e2), true); } { const c = await db.from("company_settings").select("*").limit(1).maybeSingle(); if (c.data) COMPANY = c.data; } await sendTestBox(); say(email ? "Saved. Test sends go to these now." : "Live: proposals and invoices now go to the customer."); };
   f.addEventListener("submit", async e => { e.preventDefault();
     if (!f.email.value.trim() && on) { const k = await askChoice("Go live?", "With no test email, proposals and invoices go to the real customer.", [["yes", "Yes, go live", true], ["", "Keep testing"]]); if (k !== "yes") return; }
     save(f.email.value.trim(), f.phone.value.trim()); });

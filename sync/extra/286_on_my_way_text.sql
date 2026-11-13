@@ -10,7 +10,7 @@ REVOKE ALL ON public.on_way_texts FROM PUBLIC, anon, authenticated;
 CREATE OR REPLACE FUNCTION public.on_way_text_info(p_visit bigint, p_lat double precision DEFAULT NULL, p_lng double precision DEFAULT NULL) RETURNS jsonb
  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
 DECLARE v_user bigint := public.current_app_user_id(); v_role text := public.current_staff_role(); v_emp bigint; v_tech bigint; v_cust bigint; v_lat double precision; v_lng double precision;
-  v_notified timestamptz; v_status text; v_phone text; v_km numeric; v_min int; v_name text; v_img text; v_mime text; v_test text; v_co text;
+  v_notified timestamptz; v_status text; v_phone text; v_km numeric; v_min int; v_name text; v_img text; v_mime text; v_test text; v_test2 text; v_co text;
 BEGIN
   IF v_user IS NULL OR v_role IS NULL THEN RETURN jsonb_build_object('error', 'not_allowed'); END IF;
   SELECT employee_id INTO v_emp FROM app_users WHERE id = v_user;
@@ -36,8 +36,9 @@ BEGIN
   SELECT nullif(btrim(e.first_name), '') INTO v_name FROM employees e WHERE e.id = v_tech;
   SELECT p.image, p.mime INTO v_img, v_mime FROM staff_photos p JOIN app_users u ON u.id = p.app_user_id WHERE u.employee_id = v_tech LIMIT 1;
   SELECT CASE WHEN nullif(btrim(send_test_to), '') IS NOT NULL THEN coalesce(public._podium_digits(send_test_phone), public._podium_digits(public._app_user_phone(v_user)), 'none') END,
-         nullif(btrim(company_name), '') INTO v_test, v_co FROM company_settings LIMIT 1;
-  RETURN jsonb_build_object('user', v_user, 'customer', v_cust, 'phone', v_phone, 'tech', v_name, 'minutes', v_min, 'km', v_km, 'company', v_co, 'test_to', v_test, 'image', v_img, 'mime', coalesce(v_mime, 'image/jpeg'));
+         nullif(btrim(company_name), ''), public._podium_digits(send_test_phone2) INTO v_test, v_co, v_test2 FROM company_settings LIMIT 1;
+  IF v_test IS NULL OR length(coalesce(v_test2, '')) <> 10 OR v_test2 = v_test THEN v_test2 := NULL; END IF;   -- the second test number: only in test mode
+  RETURN jsonb_build_object('user', v_user, 'customer', v_cust, 'phone', v_phone, 'tech', v_name, 'minutes', v_min, 'km', v_km, 'company', v_co, 'test_to', v_test, 'test_to2', v_test2, 'image', v_img, 'mime', coalesce(v_mime, 'image/jpeg'));
 END $f$;
 
 -- after the text went out: remember it (so it is sent once, and the dispatch board can show it) and write a job note
@@ -58,13 +59,9 @@ BEGIN
   END IF;
 END $f$;
 
--- the dispatch board: the calls of one day whose customer got the text
-CREATE OR REPLACE FUNCTION public.on_way_texts_for(p_date date) RETURNS jsonb
- LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
-  SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE coalesce((SELECT jsonb_agg(jsonb_build_object('visit_id', t.visit_id, 'at', t.at, 'minutes', t.minutes, 'pic', t.with_pic, 'test', t.test_to IS NOT NULL))
-    FROM on_way_texts t JOIN visits v ON v.id = t.visit_id WHERE v.scheduled_date = p_date), '[]'::jsonb) END $f$;
+-- the dispatch board's list (on_way_texts_for) is in 290_on_way_delay.sql, with the delayed texts.
 
-REVOKE EXECUTE ON FUNCTION public.on_way_text_info(bigint, double precision, double precision), public._on_way_text_sent(bigint, bigint, jsonb), public.on_way_texts_for(date) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.on_way_text_info(bigint, double precision, double precision), public.on_way_texts_for(date) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.on_way_text_info(bigint, double precision, double precision), public._on_way_text_sent(bigint, bigint, jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.on_way_text_info(bigint, double precision, double precision) TO authenticated;
 GRANT EXECUTE ON FUNCTION public._on_way_text_sent(bigint, bigint, jsonb) TO service_role;
 NOTIFY pgrst, 'reload schema';

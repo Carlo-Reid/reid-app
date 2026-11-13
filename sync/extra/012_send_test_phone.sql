@@ -8,6 +8,9 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- a second test text number (Carlo, Nov 13, 2026): the On my way text goes to both in test mode. Set in Settings (send_test_phone2_set, file 289).
+ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS send_test_phone2 text;
+
 CREATE OR REPLACE FUNCTION public.doc_send_start(p_kind text, p_ref bigint, p_customer bigint, p_title text, p_channel text, p_to text, p_subject text, p_body text,
                                                  p_with_pdf boolean, p_pdf_b64 text, p_file_name text)
 RETURNS jsonb
@@ -48,7 +51,7 @@ END $$;
 CREATE OR REPLACE FUNCTION public.send_test_get()
 RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $f$
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN NULL ELSE
-    (SELECT jsonb_build_object('email', nullif(btrim(send_test_to), ''), 'phone', nullif(btrim(send_test_phone), '')) FROM company_settings ORDER BY id LIMIT 1) END
+    (SELECT jsonb_build_object('email', nullif(btrim(send_test_to), ''), 'phone', nullif(btrim(send_test_phone), ''), 'phone2', nullif(btrim(send_test_phone2), '')) FROM company_settings ORDER BY id LIMIT 1) END
 $f$;
 CREATE OR REPLACE FUNCTION public.send_test_set(p_email text, p_phone text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $f$

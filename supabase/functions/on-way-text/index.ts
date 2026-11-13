@@ -1,9 +1,11 @@
 // Supabase Edge Function: on-way-text   (keep "Verify JWT" ON: only signed-in staff use it)
 // Tech Calls, "On my way": one text to the customer through Podium with the tech's first name, about how many minutes, and his picture.
 //   { visit_id, lat, lng, card }  → (card: the picture the app drew, a JPEG as base64: the tech's picture with the side bar; without it the plain Staff page picture goes)
-//   { sent, minutes, pic, tech, test_to } | { already } | { error }
+//   { sent, minutes, pic, tech, test_to, test_to2, test2_why } | { already } | { error }
+//   { visit_id, delayed: true }  → "I got delayed": a sorry text (no picture); the first On my way text is forgotten, so the next On my way texts again (290_on_way_delay.sql)
 // Who may, which number, the minutes and the picture come from the database (on_way_text_info, sync/extra/286_on_my_way_text.sql).
-// Once for each call. Test mode (Settings: Sending to customers) sends it to the test number instead of the customer.
+// Once for each call. Test mode (Settings: Sending to customers) sends it to the test number instead of the customer,
+// and to the second test number too when one is set (both get the same text).
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const API = "https://api.podium.com";
@@ -11,7 +13,7 @@ const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" } });
 const timed = async (url: string, ms: number, init: RequestInit = {}) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); try { return await fetch(url, { ...init, signal: c.signal }); } finally { clearTimeout(t); } };
 type Sec = { client_id?: string; client_secret?: string; refresh_token?: string; access_token?: string; expires?: string | null };
-type Way = { error?: string; already?: boolean; user?: number; phone?: string; tech?: string; minutes?: number; km?: number; company?: string; test_to?: string; image?: string; mime?: string };
+type Way = { error?: string; already?: boolean; user?: number; phone?: string; tech?: string; minutes?: number; km?: number; company?: string; test_to?: string; test_to2?: string; image?: string; mime?: string };
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -19,16 +21,18 @@ Deno.serve(async (req) => {
   const url = Deno.env.get("SUPABASE_URL")!, auth = req.headers.get("Authorization") ?? "";
   const asUser = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } }, auth: { persistSession: false } });
   const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
-  let body: { visit_id?: number; lat?: number | null; lng?: number | null; card?: string | null } = {};
+  let body: { visit_id?: number; lat?: number | null; lng?: number | null; card?: string | null; delayed?: boolean } = {};
   try { body = await req.json(); } catch { return json({ error: "bad_request" }, 400);  }
   const visit = Number(body.visit_id) || 0, num = (v: unknown) => v != null && Number.isFinite(Number(v)) ? Number(v) : null;
   if (!visit) return json({ error: "bad_request" }, 400);
-  const way = (await asUser.rpc("on_way_text_info", { p_visit: visit, p_lat: num(body.lat), p_lng: num(body.lng) })).data as Way | null;
+  const delayed = body.delayed === true;
+  const way = (delayed ? await asUser.rpc("on_way_delay_info", { p_visit: visit }) : await asUser.rpc("on_way_text_info", { p_visit: visit, p_lat: num(body.lat), p_lng: num(body.lng) })).data as Way | null;
   if (!way || way.error) return json({ error: way?.error ?? "not_allowed" });
   if (way.already) return json({ already: true });
   const d = String(way.phone ?? "").replace(/\D/g, "").slice(-10); if (d.length !== 10) return json({ error: "no_phone" });
   let to = d, testTo: string | null = null;
   if (way.test_to) { if (way.test_to === "none") return json({ error: "test_no_number" }); testTo = way.test_to; to = testTo; }
+  const to2 = testTo && way.test_to2 && /^\d{10}$/.test(way.test_to2) && way.test_to2 !== testTo ? way.test_to2 : null;
 
   const sec = ((await admin.rpc("_podium_secrets")).data ?? {}) as Sec;
   if (!sec.client_id || !sec.client_secret || !sec.refresh_token) return json({ error: "not_connected" });
@@ -47,11 +51,13 @@ Deno.serve(async (req) => {
   if (!loc) return json({ error: "no_location" });
 
   const mins = Number(way.minutes) > 0 ? Number(way.minutes) : null, pre = testTo ? "[TEST: this would go to " + d.replace(/(\d{3})(\d{3})(\d{4})/, "$1-$2-$3") + "] " : "";
-  const words = "Hi, this is " + (way.company || "the office") + ". " + (way.tech ? "Your technician " + way.tech : "Your technician") + " is on the way" + (mins ? " and should be there in about " + mins + " minutes" : "") + ".";
+  const who = way.tech ? "your technician " + way.tech : "your technician";
+  const words = delayed ? "Hi, this is " + (way.company || "the office") + ". Sorry, " + who + " got delayed, but will be there soon. You will get another text when " + (way.tech || "the technician") + " is on the way."
+    : "Hi, this is " + (way.company || "the office") + ". " + (way.tech ? "Your technician " + way.tech : "Your technician") + " is on the way" + (mins ? " and should be there in about " + mins + " minutes" : "") + ".";
   const card = typeof body.card === "string" && body.card.startsWith("/9j/") && body.card.length < 900000 && /^[A-Za-z0-9+/=]+$/.test(body.card) ? body.card : null;
-  const pict = card ?? way.image ?? null, pictMime = card ? "image/jpeg" : (way.mime || "image/jpeg");
+  const pict = delayed ? null : card ?? way.image ?? null, pictMime = card ? "image/jpeg" : (way.mime || "image/jpeg");
   const picWords = !pict ? "" : " This is " + (way.tech || "your technician") + "'s picture, so you know who is coming.";
-  const msg = (text: string) => ({ channel: { type: "phone", identifier: "+1" + to }, body: text, locationUid: loc, ...(way.tech ? { senderName: way.tech } : {}) });
+  const msg = (text: string, n: string = to) => ({ channel: { type: "phone", identifier: "+1" + n }, body: text, locationUid: loc, ...(way.tech ? { senderName: way.tech } : {}) });
   let ok = false, pic = false, sent = pre + words, why = "", j: Record<string, unknown> = {};
   if (pict) {   // with his picture: Podium's "message with attachment" (a form with the file and the message). Two ways to write the message part, in case Podium wants one of them.
     try {
@@ -74,8 +80,35 @@ Deno.serve(async (req) => {
       if (!r.ok) return json({ error: "podium", message: String(j.message ?? j.error ?? ("Podium said no (" + r.status + ")")).slice(0, 300) });
     } catch { return json({ error: "podium", message: "Podium did not answer." }); }
   }
+  // test mode with a second test number: the same text there too. If it fails, the first one still counts; the answer says why.
+  let sent2 = false, why2 = "";
+  if (to2) {
+    try {
+      if (pic && pict) {
+        const bin = Uint8Array.from(atob(pict), c => c.charCodeAt(0)), ext = pictMime.includes("png") ? "png" : pictMime.includes("webp") ? "webp" : "jpg";
+        for (const asJson of [false, true]) {
+          const f = new FormData(), data = JSON.stringify(msg(sent, to2));
+          f.append("attachment", new Blob([bin], { type: pictMime }), "technician." + ext);
+          if (asJson) f.append("data", new Blob([data], { type: "application/json" })); else f.append("data", data);
+          const r = await timed(API + "/v4/messages/attachment", 25000, { method: "POST", headers: { Authorization: "Bearer " + token, Accept: "application/json" }, body: f });
+          const k = await r.json().catch(() => ({}));
+          if (r.ok) { sent2 = true; break; }
+          why2 = String(k.message ?? k.error ?? ("Podium said no (" + r.status + ")")).slice(0, 200);
+        }
+      }
+      if (!sent2) {
+        const r = await timed(API + "/v4/messages", 20000, { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(msg(sent, to2)) });
+        const k = await r.json().catch(() => ({}));
+        if (r.ok) sent2 = true; else why2 = String(k.message ?? k.error ?? ("Podium said no (" + r.status + ")")).slice(0, 200);
+      }
+    } catch { why2 = why2 || "Podium did not answer."; }
+  }
   const m = (j.data && typeof j.data === "object" ? j.data : j) as Record<string, unknown>;
   await admin.rpc("_podium_msg_in", { p_dir: "out", p_status: "sent", p: { uid: m.uid ?? null, body: sent, phone: d, createdAt: new Date().toISOString() }, p_sent_by: way.user ?? null, p_test_to: testTo });
+  if (delayed) {
+    await admin.rpc("_on_way_delay_sent", { p_visit: visit, p_user: way.user ?? null, p: { phone: d, tech: way.tech ?? null, test_to: testTo } });
+    return json({ sent: true, delayed: true, test_to: testTo, test_to2: sent2 ? to2 : null, test2_why: to2 && !sent2 ? why2 : null, tech: way.tech ?? null });
+  }
   await admin.rpc("_on_way_text_sent", { p_visit: visit, p_user: way.user ?? null, p: { minutes: mins, km: way.km ?? null, phone: d, tech: way.tech ?? null, pic, test_to: testTo } });
-  return json({ sent: true, test_to: testTo, minutes: mins, pic, tech: way.tech ?? null, pic_why: pict && !pic ? why : null });
+  return json({ sent: true, test_to: testTo, test_to2: sent2 ? to2 : null, test2_why: to2 && !sent2 ? why2 : null, minutes: mins, pic, tech: way.tech ?? null, pic_why: pict && !pic ? why : null });
 });
