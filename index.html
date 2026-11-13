@@ -13257,15 +13257,22 @@ async function bkPlanAsk(F, again) {
   const cur = document.getElementById("bk-summary")?.value ?? F.summary; if (!cur || cur === F.autoSum) { F.summary = sum; F.autoSum = sum; } else F.summary = cur;
   F.note = document.getElementById("bk-note")?.value ?? F.note;
   if (document.body.dataset.page === "book") renderBooking();
+  if (k === "inv_walk") {   // invoice first: the job is made now with no day yet, and its invoice opens so the equipment can be added; the walk is booked after (Carlo, Nov 12)
+    if (!F.loc || !F.type || !F.unit) return alertMsg(!F.loc ? "This customer has no address yet. Add one on their page first." : "Pick the department in the grey box first. Then click “What are we doing?” again.");
+    if (F.busy) return; F.busy = true; F.later = true; alertMsg("Making the job and its invoice…");
+    const { data, error } = await bkDoBook(F, null, null); F.busy = false;
+    if (error) { F.later = false; return alertMsg("I could not make the job: " + rpcErr(error)); }
+    if (!(await bkTankInvoice(F, data, `✓ The job is made${data?.job_number ? " (job " + data.job_number + ")" : ""}. Add the equipment from the price book. The walk is not booked yet: it is waiting at the top of the dispatch board, or book it from the customer's page with Book A Call, Another visit.`))) bookedScreen(F, data, null, null);
+  }
 }
 // after a Vista install is booked: start the job's invoice and open it, so the tank is picked from the price book and its P.O. is made there
-async function bkTankInvoice(F, data) {
+async function bkTankInvoice(F, data, msg) {
   if (bkSales() || F.mode !== "new" || !data?.job_id || !bkIsVista(F.forP) || !["reid", "partner"].includes(F.tank)) return false;
   if (F.vplan === "walk") return false;   // only a walk now: the invoice is made later
   const { data: inv, error } = await db.rpc("new_invoice", { p_job: data.job_id });
   if (error || !inv) { alertMsg("The call is booked, but I could not start the invoice: " + (error ? rpcErr(error) : "no invoice came back") + ". Start it from the customer's page."); return false; }
   IE_TANK_GO = Number(inv);
-  await openInvoiceEditor(Number(inv), `✓ The call is booked${data.job_number ? " (job " + data.job_number + ")" : ""}. Now pick the tank from the price book.`);
+  await openInvoiceEditor(Number(inv), msg || `✓ The call is booked${data.job_number ? " (job " + data.job_number + ")" : ""}. Now pick the tank from the price book.`);
   return true;
 }
 let IE_TANK_GO = 0;   // the invoice just opened from a Vista install booking: the cursor goes in the price book search
