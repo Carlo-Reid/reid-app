@@ -15,12 +15,12 @@ CREATE OR REPLACE FUNCTION public.walk_questions() RETURNS jsonb LANGUAGE sql ST
 CREATE OR REPLACE FUNCTION public.set_walk_questions(p jsonb) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
 BEGIN
   IF public.current_staff_role() IS DISTINCT FROM 'owner' THEN RAISE EXCEPTION 'Only an owner can change the walk questions'; END IF;
-  IF p IS NULL THEN UPDATE company_settings SET walk_questions = NULL; RETURN; END IF;
+  IF p IS NULL THEN UPDATE company_settings SET walk_questions = NULL WHERE true; RETURN; END IF;
   IF jsonb_typeof(p) <> 'array' OR jsonb_array_length(p) NOT BETWEEN 1 AND 20
      OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(p) x WHERE nullif(btrim(x), '') IS NULL OR length(x) > 300) THEN
     RAISE EXCEPTION 'Type every question (1 to 20 questions, 300 letters at most each)';
   END IF;
-  UPDATE company_settings SET walk_questions = (SELECT jsonb_agg(btrim(x)) FROM jsonb_array_elements_text(p) x);
+  UPDATE company_settings SET walk_questions = (SELECT jsonb_agg(btrim(x)) FROM jsonb_array_elements_text(p) x) WHERE true;   -- the database refuses an UPDATE with no WHERE for signed-in people
 END $function$;
 
 -- what is answered so far on one walk
