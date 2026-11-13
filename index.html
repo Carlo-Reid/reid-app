@@ -10833,14 +10833,27 @@ const MY_VERSION = document.querySelector('meta[name="app-version"]')?.content |
 let UPD_BASE = null;
 const updHash = t => { let h = 0; for (let k = 0; k < t.length; k++) h = (h * 31 + t.charCodeAt(k)) | 0; return t.length + ":" + h; };
 // The look is a light one: only the page's tag (its ETag) is asked for, not the whole 3.8 MB app. The full page is read only if the host sends no tag, and then at most once a minute.
-let UPD_TAG = null, UPD_FULL_AT = 0;
+let UPD_TAG = null, UPD_FULL_AT = 0, UPD_VER = null, UPD_VER_OK = false;
+// Carlo, Nov 13: "the system is loading slow and running very slow". The host stopped sending a tag, so every open app was reading the whole
+// 4.4 MB page once a minute. Now the look reads a tiny file, version.txt (changed with every push); the whole page is read only when that file
+// is missing, and then at most every 10 minutes.
 async function checkForUpdate() {
   if (location.protocol === "file:") return;
+  try {
+    const vr = await fetch("version.txt?v=" + Date.now(), { cache: "no-store" }), vt = vr.ok ? (await vr.text()).trim() : "";
+    if (vt && vt.length < 80 && !vt.includes("<")) { UPD_VER_OK = true;
+      if (UPD_VER == null) { UPD_VER = vt; UPD_FULL_AT = Date.now(); return; }
+      if (vt === UPD_VER) { if (Date.now() - UPD_FULL_AT < 1800000) return; }   // same file: still read the whole page every 30 minutes, in case a push forgot the file
+      else if (!$("#update-box").classList.contains("ready")) { $("#update-box").classList.add("ready"); $("#update-title").textContent = "There is a new update";
+        $("#update-text").textContent = "Press the button to load it."; $("#update-btn").textContent = "Refresh now"; updWall(); return; }
+      else return; }
+    else if (UPD_VER_OK) return;   // the small file was there before: a miss now is a hiccup, not a reason to read the whole page
+  } catch { if (UPD_VER_OK) return; }
   try {
     const hd = await fetch(location.pathname + "?v=" + Date.now(), { method: "HEAD", cache: "no-store" }), tag = hd.ok ? (hd.headers.get("etag") || hd.headers.get("last-modified")) : null;
     let changed = false;
     if (tag) { if (UPD_TAG == null) { UPD_TAG = tag; return; } if (tag === UPD_TAG) return; changed = true; }   // a different tag: make sure with the page itself
-    else { if (Date.now() - UPD_FULL_AT < 60000) return; }
+    else { if (Date.now() - UPD_FULL_AT < 600000) return; }
     UPD_FULL_AT = Date.now();
     const r = await fetch(location.pathname + "?v=" + Date.now(), { cache: "no-store" });
     if (!r.ok) return;
@@ -25609,7 +25622,7 @@ async function openInvoiceEditor(id, msg) {
   IE = { ...(IE?.id === id ? IE : {}), ...data, id };
   if (data.job_id) { const tn = await db.from("notes").select("id, body, created_at").eq("entity_type", "job").eq("entity_id", data.job_id).like("body", "For the techs (the customer does not see this)%").order("created_at");
     IE.techNotes = tn.error ? (IE.techNotes || []) : tn.data || []; } else IE.techNotes = [];
-  if (await ieAutoRates()) return openInvoiceEditor(id, msg);   // the partner's rates were put on new lines: load the invoice again with them
+  if (!IE_RATED.again && await ieAutoRates()) { IE_RATED.again = true; try { return await openInvoiceEditor(id, msg); } finally { IE_RATED.again = false; } }   // the partner's rates were put on new lines: load the invoice again with them
   await pbLoadLooks((data.lines || []).map(l => l.item_id).filter(Boolean)).catch(() => {});
   nameCurrentPage("invoice " + data.number);
   renderInvoiceEditor(msg);
