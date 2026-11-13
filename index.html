@@ -7690,6 +7690,10 @@ article.ie .ie-pickrow .ie-bookbtn.ie-off .ie-bookbtn-ic { filter: grayscale(1);
 .inv-logos img { height: 68px; width: auto; max-width: 44%; object-fit: contain; display: block; }
 .inv-paper { position: relative; }
 .inv-flip { position: absolute; top: 0; right: 0; font: inherit; font-size: 12.5px; font-weight: 600; letter-spacing: .02em; padding: 6px 12px; cursor: pointer; color: #23415f; background: #f4f7fa; border: 0; border-left: 1px solid #d3dbe4; border-bottom: 1px solid #d3dbe4; border-radius: 0 6px 0 6px; }
+.inv-toolstab { position: absolute; top: 0; left: 0; font: inherit; font-size: 12.5px; font-weight: 600; letter-spacing: .02em; padding: 6px 12px; cursor: pointer; color: #23415f; background: #f4f7fa; border: 0; border-right: 1px solid #d3dbe4; border-bottom: 1px solid #d3dbe4; border-radius: 6px 0 6px 0; }
+.inv-toolstab:hover { background: #e6eef6; } .inv-toolstab:focus-visible { outline: 2px solid #23415f; outline-offset: -2px; }
+.inv-tools { margin: 0 0 18px; padding: 4px 14px 12px; background: #f8fafc; border: 1px solid #d3dbe4; border-radius: 6px; } .inv-tools[hidden] { display: none; }
+.inv-tools .inv-from { margin-top: 10px; }
 .inv-flip:hover { background: #e6eef6; } .inv-flip:focus-visible { outline: 2px solid #23415f; outline-offset: -2px; }
 .inv-rentonly { display: none; }
 .inv-paper.inv-rent div.inv-rentonly { display: block; } .inv-paper.inv-rent span.inv-rentonly { display: inline; } .inv-paper.inv-rent .inv-fullonly { display: none; }
@@ -36055,7 +36059,10 @@ async function showInvoiceCosting(inv, msg) {
   box.querySelector("[data-invcost-close]").addEventListener("click", () => { INV_COST_OPEN = false; try { sessionStorage.setItem("invCostOpen", "0"); } catch (e) {} showInvoiceCosting(inv); });
 }
 const officeInv = () => can("invoices.adjust") || ["owner", "admin", "accounting"].includes(ME.role);
-const INV_VT = { id: null, rent: false };   // a Vista invoice's view: the full amount, or only the rental amount
+const INV_VT = { id: null, rent: false, tools: false };
+document.addEventListener("click", e => { const b = e.target.closest("[data-inv-tools]"); if (!b) return;
+  INV_VT.tools = !INV_VT.tools; const box = document.getElementById("inv-tools"); if (box) box.hidden = !INV_VT.tools;
+  b.setAttribute("aria-expanded", String(INV_VT.tools)); b.textContent = "Tools " + (INV_VT.tools ? "▾" : "›"); });   // a Vista invoice's view: the full amount, or only the rental amount
 document.addEventListener("click", e => { const b = e.target.closest("[data-inv-flip]"); if (!b) return;
   INV_VT.rent = !INV_VT.rent; document.getElementById("inv-paper")?.classList.toggle("inv-rent", INV_VT.rent); b.textContent = (INV_VT.rent ? "Full amount" : "Rental amount") + " ›"; });
 async function openInvoice(id, keep) {
@@ -36099,24 +36106,38 @@ async function openInvoice(id, keep) {
     const [lg, pk] = await Promise.all([bkPLogo(vp).catch(() => ""), i.job_id ? db.rpc("vista_picks", { p_kind: "job", p_ref: i.job_id }) : Promise.resolve({ data: [] })]);
     vLogo = lg || ""; (pk?.data || []).forEach(x => vPicks.set(Number(x.item), x)); }
   const techV = isV && ME?.role === "technician";   // a tech only ever gets the rental side
-  if (INV_VT.id !== id) { INV_VT.id = id; INV_VT.rent = isV; }   // a Vista invoice opens on the rental side: that is the one a customer may see
+  if (INV_VT.id !== id) { INV_VT.id = id; INV_VT.rent = isV; INV_VT.tools = false; }   // a Vista invoice opens on the rental side: that is the one a customer may see
   if (techV) INV_VT.rent = true;
   const vName = i.bill_partner?.name && /vista/i.test(i.bill_partner.name) ? i.bill_partner.name : i.jobs?.partners?.name || "Vista";
   const vLine = x => (x.item_id && vPicks.get(Number(x.item_id))) || null;
   const vJob = vPicks.get(0) && !lines.some(vLine) ? vPicks.get(0) : null;   // a rate picked at the booking, for no item
   const vMonth = lines.reduce((a, x) => a + (vLine(x) ? Number(vLine(x).rate) * (Number(x.quantity) || 1) : 0), 0) + (vJob ? Number(vJob.rate) : 0);
   const vHst = Math.round(vMonth * 13) / 100;
+  // "This invoice is from" and "Bill to" sit behind a small Tools tab in the paper's top left corner (Carlo, Nov 13)
+  const toolsH = techV ? "" : (`
+    ${officeInv() && i.status !== "void" && (looksR.data || []).length ? `<div class="no-print inv-from">
+      <span class="cl-label">This invoice is from</span>
+      <div class="seg" role="group"><button type="button" data-inv-from="" aria-pressed="${!brand}">Reid Heating &amp; Cooling</button>${looksR.data.map(x =>
+        `<button type="button" data-inv-from="${x.id}" aria-pressed="${!!brand && (brand.name === x.name || brand.branding_name === x.name)}">${esc(x.name)}</button>`).join("")}</div>
+      <span class="quiet">Fix it if it was labelled wrong. A store invoice is paid through the store (Partners page) and isn't owed by the customer.</span>
+      <span class="staff-msg" id="from-msg" role="status"></span></div>` : ""}
+    ${officeInv() && i.status !== "void" && billR.data ? `<div class="inv-from no-print">${billToHtml(billR.data, "iv")}<span class="staff-msg" id="bill-msg" role="status"></span></div>` : ""}
+`).trim();
+  // A Vista paper is a Proposal until the tech has it open for the customer to sign, or it is signed; then it is an Invoice (Carlo, Nov 13)
+  const isProp = isV && ME?.role !== "technician" && !i.signature_png && i.status !== "void";
   $("#inv-paper").classList.toggle("inv-rent", isV && INV_VT.rent);
   $("#inv-paper").classList.toggle("inv-ah", /after\s*hours/i.test((i.jobs?.job_types?.name || "") + " " + (i.jobs?.summary || "")));
   $("#inv-paper").innerHTML = `
+    ${toolsH ? `<button type="button" class="inv-toolstab no-print" data-inv-tools aria-expanded="${!!INV_VT.tools}" title="Who this invoice is from, and who pays it. Open it only if one of them has to be changed.">Tools ${INV_VT.tools ? "▾" : "›"}</button>
+    <div class="inv-tools no-print" id="inv-tools" ${INV_VT.tools ? "" : "hidden"}>${toolsH}</div>` : ""}
     ${isV ? `${techV ? "" : `<button type="button" class="inv-flip no-print" data-inv-flip title="Flip the page between the full amount and the rental amount. The side showing is the one that prints.">${INV_VT.rent ? "Full amount" : "Rental amount"} ›</button>`}
     <div class="inv-logos"><img src="reid-logo.png" alt="${esc(coName)}">${vLogo ? `<img src="${esc(vLogo)}" alt="${esc(vName)}">` : `<div class="inv-co">${esc(vName)}</div>`}</div>` : ""}
     <div class="inv-top">
       <div>${brand && !isV ? `<div class="inv-brand">${brand.branding_logo_url ? `<img src="${esc(brand.branding_logo_url)}" alt="${esc(brand.branding_name || brand.name)}">` : `<div class="inv-co">${esc(brand.branding_name || brand.name)}</div>`}</div>
           <div class="inv-installed">Installed by <strong>${esc(coName)}</strong></div>` : `<div class="inv-co">${esc(coName)}</div>`}
         <div class="inv-small">${coAddr.map(esc).join("<br>")}${c.phone ? "<br>" + esc(phoneFmt(c.phone)) : ""}${c.email ? "<br>" + esc(c.email) : ""}${c.website ? "<br>" + esc(c.website.replace(/^https?:\/\//, "")) : ""}</div></div>
-      <div class="inv-title"><div>${isV ? `<span class="inv-fullonly">INVOICE</span><span class="inv-rentonly">RENTAL</span>` : "INVOICE"}</div>${/after\s*hours/i.test((i.jobs?.job_types?.name || "") + " " + (i.jobs?.summary || "")) ? `<div class="inv-ah-tag">🌙 After-hours service call</div>` : ""}<table class="inv-meta">
-        <tr><td>Invoice #</td><td>${esc(i.invoice_number)}</td></tr>
+      <div class="inv-title"><div>${isV ? `<span class="inv-fullonly">${isProp ? "PROPOSAL" : "INVOICE"}</span><span class="inv-rentonly">${isProp ? "RENTAL PROPOSAL" : "RENTAL"}</span>` : "INVOICE"}</div>${/after\s*hours/i.test((i.jobs?.job_types?.name || "") + " " + (i.jobs?.summary || "")) ? `<div class="inv-ah-tag">🌙 After-hours service call</div>` : ""}<table class="inv-meta">
+        <tr><td>${isProp ? "Proposal #" : "Invoice #"}</td><td>${esc(i.invoice_number)}</td></tr>
         <tr><td>Date</td><td>${fmtDate(i.invoice_date)}</td></tr>
         ${i.due_date ? `<tr><td>Due</td><td>${fmtDate(i.due_date)}</td></tr>` : ""}
         ${i.jobs?.job_number ? `<tr><td>Job #</td><td>${esc(i.jobs.job_number)}</td></tr>` : ""}
@@ -36175,13 +36196,6 @@ async function openInvoice(id, keep) {
     ${brand && brand.customer_pays_partner && i.status !== "void" && Number(balance) > 0.004 && !i.paid_at_store && !i.store_copy_of ? `<div class="inv-paystore"><strong>Please pay ${esc(money(total))} at ${esc(brand.branding_name || brand.name)}.</strong> Bring this invoice with you. The installation is booked once ${esc(brand.branding_name || brand.name)} lets us know it's paid.</div>` : ""}
     ${i.notes ? `<div class="inv-note">${esc(i.notes)}</div>` : ""}
     ${i.signature_png ? `<div class="inv-sig"><div class="inv-label">Customer signature</div><img alt="Signature" src="data:image/png;base64,${i.signature_png}"><div class="inv-small">${esc(i.signer_name || "")} · ${fmtDate((i.signed_at || "").slice(0, 10))}</div></div>` : ""}
-    ${officeInv() && i.status !== "void" && (looksR.data || []).length ? `<div class="no-print inv-from">
-      <span class="cl-label">This invoice is from</span>
-      <div class="seg" role="group"><button type="button" data-inv-from="" aria-pressed="${!brand}">Reid Heating &amp; Cooling</button>${looksR.data.map(x =>
-        `<button type="button" data-inv-from="${x.id}" aria-pressed="${!!brand && (brand.name === x.name || brand.branding_name === x.name)}">${esc(x.name)}</button>`).join("")}</div>
-      <span class="quiet">Fix it if it was labelled wrong. A store invoice is paid through the store (Partners page) and isn't owed by the customer.</span>
-      <span class="staff-msg" id="from-msg" role="status"></span></div>` : ""}
-    ${officeInv() && i.status !== "void" && billR.data ? `<div class="inv-from no-print">${billToHtml(billR.data, "iv")}<span class="staff-msg" id="bill-msg" role="status"></span></div>` : ""}
     <div id="inv-sinv" class="no-print inv-sinv" hidden></div>
     <div id="inv-att" class="no-print inv-sinv" hidden><div class="inv-label">Attached to this invoice <span class="quiet">(only you see this, not the customer)</span></div><div class="att-btns" data-att-inv="${i.id}" data-att-nosinv="1"></div></div>
     ${ME.guided || i.status === "void" ? "" : !i.st_id ? `<div class="no-print inv-edit-row"><button class="btn" type="button" data-inv-edit="${i.id}">✎ ${i.status === "draft" ? "Carry on with this invoice" : Number(balance) > 0.004 ? "Edit · signature and payment" : "Edit this invoice"}</button></div>`
