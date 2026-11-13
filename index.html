@@ -1905,7 +1905,8 @@
   .pr-x { border: 1.5px solid #bcd0e3; background: linear-gradient(180deg, #fff, #eef4fa); color: #23415f; border-radius: 10px; padding: 7px 14px; font: 700 15px inherit; cursor: pointer; }
   .pr-x:hover { border-color: #23415f; }
   .pr-totall > summary { font-size: 16px; } .pr-tot-ok { margin: 6px 16px !important; color: #1b6b36; font-weight: 700; }
-  .src-missbox.pr-short { background: #fff6e0; border-color: #f0c38a; color: #7a4a00; }
+  .pr-addr { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; } .pr-addr dt { font-weight: 700; color: #23415f; } .pr-addr dd { margin: 0; overflow-wrap: anywhere; }
+  .pr-gchk { margin-top: 8px; } .src-missbox.pr-short { background: #fff6e0; border-color: #f0c38a; color: #7a4a00; }
   .pr-tsub { margin: 14px 0 6px; font-size: 15px; color: #23415f; } .pr-tsub .quiet { font-weight: 400; font-size: 13px; margin-left: 6px; }
   .pr-tblks { display: flex; flex-direction: column; gap: 6px; }
   .pr-tblk { border: 1px solid #d3dbe4; border-radius: 8px; background: #fff; }
@@ -33303,6 +33304,7 @@ async function prTotBox() {
   try { const [a, b] = await Promise.all([db.rpc("payroll_totals"), SRC.sum ? Promise.resolve({ data: SRC.sum }) : db.rpc("source_summary")]);
     if (a.error) throw a.error; T = a.data || []; if (!b.error && b.data) SRC.sum = b.data; }
   catch (e) { host.innerHTML = `<div class="error">Couldn't load the payroll totals: ${esc(rpcErr(e))}</div>`; return; }
+  if (!SRC.rows) try { await srcLoad(); } catch { }
   if (!document.getElementById("pr-tot-box")) return;
   const M = new Map(T.map(x => [x.m, x])), S = new Map((SRC.sum || []).map(x => [x.m, x])), today = salesToday(), cy = Number(today.slice(0, 4)), cm = Number(today.slice(5, 7));
   const key = (y, m) => `${y}-${String(m).padStart(2, "0")}`;
@@ -33338,8 +33340,7 @@ async function prTotBox() {
     ${miss.miss.length ? `<div class="src-missbox"><b>⚠ ${miss.miss.length} pay day${miss.miss.length === 1 ? " has" : "s have"} no pay slips on file</b> (from your first one, ${esc(fmtDate(miss.first))}, to today; pay day is every second Thursday):
       <div class="src-misslist">${miss.miss.map(d => `<span>${esc(fmtDate(d))}</span>`).join("")}</div>
       <button type="button" class="btn" data-pr-loadmiss>📄 Load the missing ones</button> <span class="quiet">Load the accountant's PDF for each of those pay days.</span></div>` : PR.ov && miss.first ? `<p class="pr-tot-ok">✓ No pay day is missing from ${esc(fmtDate(miss.first))} to today.</p>` : ""}
-    ${miss.short.length ? `<div class="src-missbox pr-short"><b>These pay days have fewer pay slips than usual</b> (usually about ${miss.usual}). Part of the payroll may not be loaded:
-      <div class="src-misslist">${miss.short.map(c => `<span>${esc(fmtDate(c.d))}: ${c.n} slip${c.n === 1 ? "" : "s"}</span>`).join("")}</div></div>` : ""}
+    ${prGrossCheck(PR.ov?.cheques || [], miss.first)}
     <details class="src-more pr-totall"${PR.totAll ? " open" : ""}><summary>Totals by year and by block (${years.length} year${years.length === 1 ? "" : "s"})</summary>
     <div class="src-years">${years.map(y => { const last = y === cy ? cm : 12, ytd = sum(y, 1, last), prev = sum(y - 1, 1, last), open = PR.totOpen?.[y] ?? (y === years[0]);
       const months = []; for (let m = 1; m <= last; m++) { const x = M.get(key(y, m)); if (!x) continue; const k = key(y, m), op = !!PR.mOpen?.[k];
@@ -33371,6 +33372,29 @@ function prMissing(cheques) {
   const ns = cheques.map(c => Number(c.n)).sort((a, b) => a - b), usual = ns[Math.floor(ns.length / 2)] || 0;
   const short = usual >= 4 ? cheques.filter(c => Number(c.n) < usual * 0.6).map(c => ({ d: String(c.d).slice(0, 10), n: Number(c.n) })) : [];
   return { miss, short, usual, first: ds[0] };
+}
+// the gross on the pay slips loaded for each source period against the gross the accountant gave for it (email or payment PDF): they should match,
+// so a difference is pay slips not loaded (George, Nov 13: "verify the gross payroll for the period with the gross payroll in the source").
+// A period paid together with another is checked with it. Only periods from the first pay slip on file that are over and have a gross.
+function prGrossCheck(cheques, first) {
+  if (!first || !SRC.rows) return "";
+  const G = new Map(); SRC.rows.forEach(r => { const k = r.paid_with || r.from; if (!G.has(k)) G.set(k, []); G.get(k).push(r); });
+  const today = salesToday(), out = [], noG = []; let ok = 0;
+  for (const rs of G.values()) { const from = rs.map(r => r.from).sort()[0], to = rs.map(r => r.to).sort().slice(-1)[0];
+    if (to < first || to >= today) continue;
+    const gs = rs.filter(r => r.gross != null); if (!gs.length) { noG.push({ from, to }); continue; }
+    const src = gs.reduce((t, r) => t + Number(r.gross), 0), cs = cheques.filter(c => { const d = String(c.d).slice(0, 10); return d >= from && d <= to; });
+    const slp = Math.round(cs.reduce((t, c) => t + Number(c.gross || 0), 0) * 100) / 100, diff = Math.round((src - slp) * 100) / 100;
+    if (Math.abs(diff) < 1) ok++; else out.push({ from, to, src, slp, diff, n: cs.reduce((t, c) => t + Number(c.n || 0), 0) }); }
+  out.sort((a, b) => a.from < b.from ? 1 : -1);
+  const per = x => esc(srcPeriod(x)), tot = out.filter(x => x.diff > 0).reduce((t, x) => t + x.diff, 0);
+  return `${out.length ? `<div class="src-missbox"><b>⚠ ${out.length} period${out.length === 1 ? "" : "s"} where the pay slips do not add up to the gross the source was paid on</b>${tot ? ` · <b>${money(tot)}</b> of gross pay is missing in all` : ""}:
+      <div class="src-tw"><table class="src-sumt pr-gchk"><thead><tr><th>Period</th><th title="The gross payroll from the accountant's email or the payment PDF">Source gross</th><th>Pay slips loaded</th><th>Difference</th></tr></thead><tbody>
+      ${out.map(x => `<tr><td>${per(x)}</td><td>${money(x.src)}</td><td>${money(x.slp)} <span class="quiet">(${x.n} slip${x.n === 1 ? "" : "s"})</span></td>
+        <td class="${x.diff > 0 ? "src-bad" : ""}"><b>${x.diff > 0 ? money(x.diff) + " missing" : money(-x.diff) + " more on the slips"}</b>${x.slp === 0 ? ` <span class="quiet">no pay slips loaded</span>` : ""}</td></tr>`).join("")}</tbody></table></div>
+      <span class="quiet">Missing: load the accountant's pay slip PDF for that period. More on the slips: a slip may be on the wrong cheque date, or the accountant's gross left something out.</span></div>`
+    : ok ? `<p class="pr-tot-ok">✓ The pay slips match the source gross in all ${ok} period${ok === 1 ? "" : "s"} checked.</p>` : ""}
+    ${out.length && ok ? `<p class="quiet pr-tot-now">✓ ${ok} other period${ok === 1 ? " matches" : "s match"}.</p>` : ""}${noG.length ? `<p class="quiet pr-tot-now">${noG.length} period${noG.length === 1 ? " has" : "s have"} no gross from the accountant yet, so ${noG.length === 1 ? "it was" : "they were"} not checked.</p>` : ""}`;
 }
 // a person's gross pay this year, from the pay slips loaded (the cards on the private list)
 function prVacPct(x) { const rs = (PR.ov?.people || []).filter(o => (x.user ? Number(o.user) === Number(x.user) : Number(o.staff) === Number(x.staff)) && o.vac_pct != null);
@@ -33445,10 +33469,11 @@ async function prPrivSlot(user, staff) {
         <label class="pp-wide">Add a note to their file <input id="pp-log" placeholder="e.g. Raise to $30 an hour from Jan 1, agreed with George"></label>
         <button type="button" class="btn" id="pp-save" disabled>Save payroll details</button> <span class="quiet" id="pp-msg"></span></div>
       ${slips.length ? `<p class="quiet">First pay on file: ${esc(longDate(String(slips[slips.length - 1].cheque).slice(0, 10)))}. This is not always the day they started.</p>` : ""}</section>
+    ${(d?.addresses || []).length ? `<section class="pr-pcard"><h3>🏠 Address on the pay slips</h3><dl class="pr-addr">${d.addresses.map((a, i) => `<dt>${i ? "Before" : "Now"}</dt><dd><b>${esc(a.addr)}</b> <span class="quiet">on the pay slips ${a.first === a.last ? "of " + esc(fmtDate(String(a.first).slice(0, 10))) : "from " + esc(fmtDate(String(a.first).slice(0, 10))) + " to " + esc(fmtDate(String(a.last).slice(0, 10)))}</span></dd>`).join("")}</dl></section>` : ""}
     ${log.length ? `<section class="pr-pcard"><h3>Pay history and notes</h3><ul class="pr-log">${log.map(l => `<li><span>${l.day ? esc(fmtDate(String(l.day).slice(0, 10))) : ""}</span> ${esc(l.note)}${l.by ? ` <span class="quiet">· ${esc(l.by)}</span>` : ""}</li>`).join("")}</ul></section>` : ""}
-    ${slips.length ? `<details class="pr-pcard pr-slipd"><summary><h3>Pay slips (${slips.length})</h3></summary><div class="src-tw"><table class="pr-slipt"><thead><tr><th>Cheque</th><th>Pay period</th><th>Hours</th><th>Rate</th><th title="The vacation pay on this cheque. It is part of the gross.">Vacation pay</th><th>Gross</th><th>Tax, CPP, EI</th><th>Net</th></tr></thead><tbody>
+    ${slips.length ? `<details class="pr-pcard pr-slipd"><summary><h3>Pay slips (${slips.length})</h3></summary><div class="src-tw"><table class="pr-slipt"><thead><tr><th>Cheque</th><th>Pay period</th><th>Hours</th><th>Rate</th><th title="The vacation pay on this cheque. It is part of the gross.">Vacation pay</th><th>Gross</th><th>Tax, CPP, EI</th><th>Net</th><th>Slip</th></tr></thead><tbody>
       ${slips.map(s => `<tr title="${esc((s.earn || []).filter(e => e.cur).map(e => `${e.label}: ${money(e.cur)}`).join(" · "))}"><td>${esc(fmtDate(String(s.cheque).slice(0, 10)))}</td><td>${s.from ? esc(fmtDate(String(s.from).slice(0, 10)) + " – " + fmtDate(String(s.to).slice(0, 10))) : "—"}</td>
-        <td>${v(s.hours)}</td><td>${s.kind === "salary" ? `${money(s.per_pay)} a pay` : s.rate != null ? money(s.rate) : "Commission"}</td><td>${Number(s.vac) ? money(s.vac) + (ps.vac_pct != null ? ` <span class="quiet">(${Number(ps.vac_pct)}%)</span>` : "") : "—"}</td><td>${money(s.gross)}</td><td>${money(Number(s.tax || 0) + Number(s.cpp || 0) + Number(s.ei || 0))}</td><td>${money(s.net)}</td></tr>`).join("")}
+        <td>${v(s.hours)}</td><td>${s.kind === "salary" ? `${money(s.per_pay)} a pay` : s.rate != null ? money(s.rate) : "Commission"}</td><td>${Number(s.vac) ? money(s.vac) + (ps.vac_pct != null ? ` <span class="quiet">(${Number(ps.vac_pct)}%)</span>` : "") : "—"}</td><td>${money(s.gross)}</td><td>${money(Number(s.tax || 0) + Number(s.cpp || 0) + Number(s.ei || 0))}</td><td>${money(s.net)}</td><td>${s.page ? `<button type="button" class="btn" data-pr-slippg="${esc(s.page)}" data-pr-slipd="${esc(String(s.cheque).slice(0, 10))}">📄 Open</button>` : `<span class="quiet" title="Load that payroll PDF again to keep the page">—</span>`}</td></tr>`).join("")}
       </tbody></table></div><p class="quiet">Point at a line to see what made up the pay.</p></details>` : ""}`;
   // every box is closed at first, each opens on its own, and Open all / Close all (George, Nov 13)
   box.querySelectorAll(":scope > section.pr-pcard").forEach((sec, i) => { const h = sec.querySelector(":scope > h3"); if (!h) return;
@@ -33459,6 +33484,10 @@ async function prPrivSlot(user, staff) {
   box.querySelectorAll(".pr-fold").forEach(f => { f.open = opened.has(f.dataset.k); f.addEventListener("toggle", () => { f.open ? opened.add(f.dataset.k) : opened.delete(f.dataset.k); }); });
   box.querySelectorAll("[data-pr-all]").forEach(b => b.addEventListener("click", () => { const on = b.dataset.prAll === "1"; box.querySelectorAll(".pr-fold").forEach(f => { f.open = on; }); }));
   if (user) prRateBox(user);
+  box.querySelectorAll("[data-pr-slippg]").forEach(b => b.addEventListener("click", async () => {
+    const { data: u, error: ue } = await db.storage.from("payroll-slips").createSignedUrl(b.dataset.prSlippg, 600);
+    if (ue || !u?.signedUrl) return alertMsg("Couldn't open the slip: " + rpcErr(ue || {}));
+    srcModal("Pay slip · cheque of " + longDate(b.dataset.prSlipd), `<img src="${esc(u.signedUrl)}" alt="The pay slip" style="width:100%;height:auto;border:1px solid #d3dbe4;border-radius:8px">`); }));
   const sv = box.querySelector("#pp-save"); box.querySelectorAll(".pr-pform :is(input, select)").forEach(i => i.addEventListener(i.tagName === "SELECT" ? "change" : "input", () => { sv.disabled = false; }));
   sv.addEventListener("click", async () => { sv.disabled = true;
     const p = { block: box.querySelector("#pp-block").value, wsib_rate: box.querySelector("#pp-wsib").value.replace(/[^\d.]/g, ""), left_on: box.querySelector("#pp-left").value, log: box.querySelector("#pp-log").value };
@@ -33522,7 +33551,8 @@ function paysParse(lines) {
     if (T[i] !== "Employee") { i++; continue; }
     const name = (T[i + 1] || "").split(",")[0].trim(), per = (T[i + 2] || "").match(/Pay Period:\s*(\S+)\s*-\s*(\S+)\s+Cheque Date:\s*(\S+)/);
     if (!per) { i++; continue; }
-    const s = { name, from: paysYmd(per[1]), to: paysYmd(per[2]), cheque: paysYmd(per[3]), earn: [], dfg: [], tax: [], adj: [], gross: null, hours: null, net: null };
+    const s = { name, from: paysYmd(per[1]), to: paysYmd(per[2]), cheque: paysYmd(per[3]), earn: [], dfg: [], tax: [], adj: [], gross: null, hours: null, net: null,
+      page: lines[i].page, addr: (T[i + 1] || "").split(",").slice(1).join(",").trim() };
     let sec = null, j = i + 3;
     for (; j < T.length; j++) {
       const t = T[j];
@@ -33593,6 +33623,28 @@ function paysMatch(name, people) {
   return same.length === 1 ? same[0] : null;
 }
 const paysKey = p => p ? (p.user ? "u" + p.user : "s" + p.staff) : "";
+// the slip's page as a picture for the person's file, any SIN covered first (George, Nov 13: "blur the SIN… we need them for reference").
+// Covered: a 9-digit number (123 456 789, 123-456-789, 123456789) anywhere on the page, and every number to the right of a SIN label.
+const PAYS_PDF = new WeakMap();
+async function paysPageSave(x) {
+  if (!x._f || !x.page) return null;
+  await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  let pdf = PAYS_PDF.get(x._f); if (!pdf) { pdf = await window.pdfjsLib.getDocument({ data: (await x._f.arrayBuffer()).slice(0) }).promise; PAYS_PDF.set(x._f, pdf); }
+  const pg = await pdf.getPage(x.page), vp = pg.getViewport({ scale: 1.6 }), c = document.createElement("canvas"); c.width = vp.width; c.height = vp.height;
+  const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: g, viewport: vp }).promise;
+  const tc = await pg.getTextContent(), its = tc.items.filter(i => String(i.str).trim()), box = it => { const t = window.pdfjsLib.Util.transform(vp.transform, it.transform), h = Math.hypot(t[2], t[3]) || 12;
+    return [t[4] - 2, t[5] - h - 2, (it.width || 0) * vp.scale + 4, h + 5]; };
+  const cover = it => { const [bx, by, bw, bh] = box(it); g.fillStyle = "#3d4650"; g.fillRect(bx, by, bw, bh); };
+  const SIN9 = /(^|\D)\d{3}[ -]?\d{3}[ -]?\d{3}(\D|$)/, money = /[.,]\d\d\b/;
+  its.forEach(it => { if (SIN9.test(it.str) && !money.test(it.str)) cover(it); });
+  its.filter(it => /\bS\.?\s?I\.?\s?N\b|social\s+ins/i.test(it.str)).forEach(l => { const y = l.transform[5], x0 = l.transform[4];
+    its.forEach(it => { if (Math.abs(it.transform[5] - y) <= 3 && it.transform[4] >= x0 && /\d/.test(it.str)) cover(it); }); });
+  const blob = await new Promise(ok => c.toBlob(ok, "image/jpeg", 0.72));
+  const path = `slips/${x.cheque || "no-date"}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  const up = await db.storage.from("payroll-slips").upload(path, blob, { contentType: "image/jpeg" }); if (up.error) throw up.error;
+  return path;
+}
 const paysPayLab = s => s.kind === "salary" ? `Salary ${money(s.per_pay)} a pay` : s.kind === "commission" ? "Commission only" : `${money(s.rate)} an hour${s.kind === "hourly_commission" ? " + commission" : ""}`;
 async function prSlipsLoad(files) {
   const { w, close } = srcModal("Load a payroll PDF", `<div class="pr-ld"><p class="src-hint">Reading ${files.length === 1 ? esc(files[0].name) : files.length + " files"}…</p></div>`);
@@ -33601,7 +33653,7 @@ async function prSlipsLoad(files) {
   let twice = 0;   // the very same slip (name, cheque date, gross and net) in the files more than once: kept once (George, Nov 13)
   try { for (const f of files) { const L = await pdfLinesY(f); paysParse(L).forEach(s => {
     if (slips.some(o => o.name.toLowerCase() === s.name.toLowerCase() && o.cheque === s.cheque && Math.abs(o.gross - s.gross) < 0.01 && Math.abs(o.net - s.net) < 0.01)) { twice++; return; }
-    slips.push({ ...s, file: f.name }); }); } }
+    slips.push({ ...s, file: f.name, _f: f }); }); } }
   catch (e) { body.innerHTML = `<div class="error">Couldn't read it: ${esc(e.message || e)}</div>`; return; }
   if (!slips.length) { body.innerHTML = `<p class="src-bad"><b>I found no pay slips in it.</b> It needs the accountant's pay slips with "Pay Period … Cheque Date …" on them. If it is a scanned picture, ask the accountant for the PDF they print from.</p>`; return; }
   if (!PR.people) { const r = await db.rpc("payroll_people"); PR.people = r.data || []; }
@@ -33628,7 +33680,11 @@ async function prSlipsLoad(files) {
       <div class="src-tw"><table class="pr-ldt"><thead><tr><th>Use</th><th>Name on the slip</th><th>Who in the app</th><th>Block</th><th>Cheque · pay period</th><th>Pay on the slip</th><th>In the app now</th><th>Gross · net</th></tr></thead><tbody>
       ${R.map(r => { const s = r.s, p = personOf(r.who), o = fileOf(r), diff = o && (Math.abs(o.net - s.net) >= 0.01 || Math.abs(o.gross - s.gross) >= 0.01);
         const now = p?.rate ? (p.rate.kind === "salary" ? `${money(p.rate.amount)} a year` : `${money(p.rate.amount)} an hour`) : p?.pay_kind === "commission" ? "Commission" : "—";
-        const slipRate = s.kind === "salary" ? s.rate : s.rate, changed = p && s.rate != null && (!p.rate || Math.abs(Number(p.rate.amount) - slipRate) >= 0.01);
+        const slipRate = s.rate, differs = p && s.rate != null && (!p.rate || Math.abs(Number(p.rate.amount) - slipRate) >= 0.01);
+        // an older slip never takes the pay back in time: only the newest pay on file can change the rate now (George, Nov 13)
+        const newest = p && s.cheque && !R.some(o => o !== r && o.who === r.who && o.use && o.s.cheque > s.cheque) && (!p.last_pay || s.cheque >= String(p.last_pay).slice(0, 10))
+          && (p.rate?.from === "app" ? (s.from || s.cheque) >= String(p.rate.starts_on || "").slice(0, 10) : srcDays(s.cheque, salesToday()) <= 30);
+        const changed = differs && newest, hist = differs && !newest;
         return `<tr class="${r.who === "skip" || !r.use ? "pr-ld-off" : ""}${diff ? " pr-ld-conf" : ""}" data-r="${r.i}">
           <td>${r.dup ? `<input type="radio" name="dup${groups.size}-${esc(s.name)}-${s.cheque}" data-use ${r.use ? "checked" : ""} aria-label="Use this one">` : "✓"}</td>
           <td><b>${esc(s.name)}</b></td>
@@ -33637,11 +33693,11 @@ async function prSlipsLoad(files) {
           <td>${p && p.user ? esc(prBlockName(p.block)) : `<select data-blk>${PR_BLOCKS.filter(b => b[0] !== "past").map(([k, n]) => `<option value="${k}"${(p ? p.block : r.block) === k ? " selected" : ""}>${n}</option>`).join("")}</select>`}</td>
           <td>${s.cheque ? esc(fmtDate(s.cheque)) : `<input type="date" class="pr-ld-chq" data-chq aria-label="Cheque date">`}<div class="quiet">${s.from ? esc(fmtDate(s.from)) + " – " + esc(fmtDate(s.to)) : "Pay period not read"}</div></td>
           <td>${esc(paysPayLab(s))}${s.commission ? `<div class="quiet">Commission ${money(s.commission)}</div>` : ""}</td>
-          <td class="${changed ? "pr-ld-chg" : ""}">${now}${changed ? `<div class="quiet">${p.rate ? "will change" : "will be set"}</div>` : ""}</td>
+          <td class="${changed ? "pr-ld-chg" : ""}">${now}${changed ? `<div class="quiet">${p.rate ? "will change to the slip's rate" : "will be set"}</div>` : hist ? `<div class="quiet" title="This slip is older than the pay on file. Its rate goes in the person's pay history; the rate now does not change.">stays · this slip goes in the pay history</div>` : ""}</td>
           <td><b>${money(s.gross)}</b><div class="quiet">net ${money(s.net)}</div>${diff ? `<div class="pr-ld-of">On file: gross ${money(o.gross)}, net ${money(o.net)}${o.file ? ` (${esc(o.file)})` : ""}
             <select data-pick><option value="">Pick one…</option><option value="keep"${r.pick === "keep" ? " selected" : ""}>Keep what is on file</option><option value="new"${r.pick === "new" ? " selected" : ""}>Use this one</option></select></div>` : o ? `<div class="pr-ld-dupt">Duplicate: already on file with the same date and amounts</div>` : ""}</td></tr>`; }).join("")}
       </tbody></table></div>
-      <p class="quiet">A new rate counts from that slip's pay period. Raises are written in each person's pay history. Family support (FRO) deductions and addresses are not kept.</p>
+      <p class="quiet">An older slip never changes the rate now: its rate goes in the person's pay history (for example "$27.00 → $32.50"). Each slip's page is kept with it (a SIN, if one is printed, is covered before it is saved), and the address on the slip goes in the person's address history. Family support (FRO) deductions are not kept.</p>
       <div class="src-pop-btns"><button type="button" class="btn" id="pr-ld-save"${need || noDate ? " disabled" : ""}>Save the pay slips</button><button type="button" class="btn quiet-btn" data-src-x>Cancel</button>${need ? ` <span class="src-bad">Pick one on each slip already on file first.</span>` : ""}</div>`;
     body.querySelectorAll("tr[data-r]").forEach(tr => { const r = R[Number(tr.dataset.r)];
       tr.querySelector("[data-who]")?.addEventListener("change", e => { r.who = e.target.value; draw(); });
@@ -33653,7 +33709,13 @@ async function prSlipsLoad(files) {
       const out = R.filter(r => r.use && r.who !== "skip").filter(r => { const o = fileOf(r); if (!o) return true; const diff = Math.abs(o.net - r.s.net) >= 0.01 || Math.abs(o.gross - r.s.gross) >= 0.01; return diff ? r.pick === "new" : false; })
         .map(r => { const p = personOf(r.who), blkSel = !p || !p.user;
           return { ...r.s, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: blkSel ? (r.block || p?.block || "office") : "", block_set: blkSel && (!p || !!r.blockSet) }; });
-      if (!out.length) { close(); return alertMsg("Nothing new to save: every slip is already on file."); }
+      // slips already on file with the same amounts but no page yet: only their page and address are added
+      R.filter(r => r.use && r.who !== "skip").forEach(r => { const o = fileOf(r); if (o && !o.page && !(Math.abs(o.net - r.s.net) >= 0.01 || Math.abs(o.gross - r.s.gross) >= 0.01)) {
+        const p = personOf(r.who); out.push({ ...r.s, user: p?.user || null, staff: p && !p.user ? p.staff : null, page_only: true }); } });
+      if (!out.length) { close(); return alertMsg("Nothing new to save: every slip is already on file, with its page."); }
+      const say = body.querySelector(".src-pop-btns"); let k = 0;
+      for (const x of out) { k++; if (say) say.innerHTML = `<span class="src-hint">Saving the pay slip pages: ${k} of ${out.length}…</span>`;
+        try { x.page = await paysPageSave(x); } catch { x.page = null; } delete x._f; }
       const { data, error } = await db.rpc("payroll_slips_save", { p: { file: files.map(f => f.name).join(", "), slips: out } });
       if (error) { e.target.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
       close(); PR.people = null; alertMsg(`✓ Saved ${data?.saved ?? out.length} pay slip${(data?.saved ?? out.length) === 1 ? "" : "s"} for ${data?.people ?? ""} people.`); openPayroll(); });
