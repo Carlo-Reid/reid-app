@@ -7443,6 +7443,19 @@ article.ie .ie-post > h2 { margin: 0 0 6px; font-size: 20px; color: #23415f; dis
 article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.5px solid #a9d6b7; border-radius: 12px; background: #e9f6ed; color: #1b6b36; font-size: 16px; }
 @media print { article.ie .ie-post { display: none !important; } }
 .book .bk-invfill b { font-size: 18px; color: #23415f; overflow-wrap: anywhere; }
+  /* Tech Calls: the buttons of an open call are square app boxes in the soft look (Carlo, Nov 13) */
+  .mc-sqs { display: flex; flex-wrap: wrap; gap: 12px; }
+  .mc-sq { width: 132px; min-height: 124px; box-sizing: border-box; padding: 12px 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; cursor: pointer;
+    background: linear-gradient(180deg, #ffffff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 12px; color: #23415f; font: inherit; font-weight: 700; font-size: 14px; line-height: 1.25; text-align: center;
+    box-shadow: 0 1px 3px rgba(35, 65, 95, .10); }
+  .mc-sq:hover, .mc-sq:focus-visible { background: linear-gradient(180deg, #f4f9ff, #e2edf8); border-color: #23415f; }
+  .mc-sq-ic { font-size: 30px; line-height: 1; }
+  .mc-sq-tn { text-wrap: balance; overflow-wrap: anywhere; }
+  .mc-sq.mc-sq-go { background: linear-gradient(180deg, #f3fbf5, #e9f6ed); border-color: #a9d6b7; color: #1b6b36; }
+  .mc-sq.mc-sq-go:hover { border-color: #1b6b36; }
+  .mc-sq.mc-sq-quiet { color: #4a6077; }
+  @media (max-width: 520px) { .mc-sq { width: calc(50% - 6px); } }
+  .mc-finish .btn { background: linear-gradient(180deg, #f3fbf5, #e9f6ed); border: 1.5px solid #a9d6b7; color: #1b6b36; border-radius: 12px; font-weight: 700; padding: 12px 18px; }
 /* copy buttons an owner put on a page (Carlo, Nov 12) */
 .cpy-pasted { outline: 3px solid #1f9d4a !important; outline-offset: 1px; transition: outline-color .3s; }
 .cpy-btn { display: inline-grid; place-items: center; vertical-align: middle; width: 26px; height: 26px; margin: 0 0 0 6px; padding: 0; border: 1px solid #9fb6cc; border-radius: 5px; background: #fff; color: #23415f; font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 1px 2px rgba(35, 65, 95, .15); font-weight: 700; text-indent: 0; letter-spacing: 0; text-transform: none; }
@@ -14253,7 +14266,13 @@ function renderBooking(msg) {
       if (!e3 && est) return openEstEdit(est);
       alertMsg("The job is saved, but the proposal couldn't start: " + rpcErr(e3) + ". Open it from the Sales page.");
     }
-    if (F.backInv && !F.later) return openInvoiceEditor(F.backInv, `✓ The tech is booked: ${dayText(F.date)}, ${winText(start, end)}${F.techs.length ? ", with " + F.techs.map(id => techName(id)).join(" and ") : ""}.`);
+    if (F.backInv && !F.later) {   // booked from the invoice's Book a tech: close and go back to the customer's page (Carlo, Nov 13)
+      const said = `✓ The tech is booked: ${dayText(F.date)}, ${winText(start, end)}${F.techs.length ? ", with " + F.techs.map(id => techName(id)).join(" and ") : ""}.`;
+      await openCustomer(F.cust.id);
+      const file = document.querySelector("#main .file") || document.querySelector("#main");
+      if (file) { const d = document.createElement("div"); d.className = "gd-booked-msg"; d.setAttribute("role", "status"); d.textContent = said; file.prepend(d); }
+      return;
+    }
     if (await bkTankInvoice(F, data)) return;
     bookedScreen(F, data, start, end);
   });
@@ -14271,6 +14290,8 @@ async function bkDoBook(F, start, end) {
   if (F.mode === "visit" && F.fillVisit && !F.later) {   // the job already has a call waiting for a day (made with the invoice): give that one the day, the time and the tech, so there are not two calls
     const r1 = await db.rpc("move_call", { p_visit_id: F.fillVisit, p_date: F.date, p_start: start, p_end: end, p_method: "edit" }); if (r1.error) return { error: r1.error };
     const r2 = await db.rpc("set_call_techs", { p_visit_id: F.fillVisit, p_techs: F.techs }); if (r2.error) return { error: r2.error };
+    { const mins = Number(F.dur) || Number(document.querySelector("#bk-dur")?.value) || null;   // the length that was booked, not the job type's
+      if (mins || F.invFill) await db.rpc("set_call_length", { p_visit_id: F.fillVisit, p_minutes: mins, p_purpose: F.invFill ? F.invFill.job : null }); }
     const nt = (F.note || "").trim(); if (F.invFill) await invNote(); else if (nt && !(F.autoPre && nt === F.autoPre.trim())) await db.rpc("add_note", { p_entity_type: "job", p_entity_id: F.jobId, p_body: nt, p_pinned: false });
     return { data: { job_id: F.jobId, visit_id: F.fillVisit, job_number: F.jobs.find(j => j.job_id === F.jobId)?.job_number || "" } };
   }
@@ -16877,6 +16898,8 @@ async function loadMyCalls(quiet) {
   const sig = JSON.stringify(data);
   if (quiet && sig === MC.sig) return;
   MC.sig = sig; MC.data = data;
+  MC.invDone = new Set(); try { const ids = [...new Set((data?.calls || []).map(c => c.job_id).filter(Boolean))];
+    if (ids.length) { const r = await db.rpc("jobs_inv_done", { p_ids: ids }); if (!r.error) MC.invDone = new Set(r.data || []); } } catch {}
   // the events on their schedule that day (not calls): shown above the calls
   MC.ev = []; if (!MC.all && data?.employee_id && data.employee_id !== "all") { try { const e = await db.rpc("my_day_events", { p_date: d, p_employee_id: data.employee_id }); MC.ev = e.error ? [] : e.data || []; } catch { } }
   if (MC.date !== d) return;
@@ -17053,6 +17076,11 @@ function mcCard(c) {
                  en_route: [["on_site", "I'm here"]], on_site: [["completed", "Done"], ["needs_return", "Needs another visit"]],
                  completed: [], needs_return: [], cancelled: [] }[c.status] || [];
   const phones = (c.phones || []).filter(p => p.kind !== "email" && p.kind !== "fax"), emails = (c.phones || []).filter(p => p.kind === "email");
+  // Nov 13 (Carlo): the tech does not see the office's notes about a supplier's credit, or what the customer owes; a button for something already done is not drawn
+  const tech = ME.role === "technician", notes = (c.notes || []).filter(n => !(tech && /^\s*Credit Order CO-/i.test(String(n.body || ""))));
+  const hasPo = (c.pos || []).length > 0, invDone = !!MC.invDone?.has(c.job_id);
+  const sq = (ic, words, attrs, cls) => `<button class="mc-sq ${cls || ""}" type="button" ${attrs}><span class="mc-sq-ic" aria-hidden="true">${ic}</span><span class="mc-sq-tn">${words}</span></button>`;
+  const stIc = { en_route: "🚚", on_site: "📍", completed: "✅", needs_return: "🔁" };
   return `<section class="mc st-${c.status} ${open ? "open" : ""} ${done ? "done" : ""}" data-visit="${c.visit_id}">
     <header class="mc-head" data-mc-toggle="${c.visit_id}" tabindex="0" aria-expanded="${open}">
       <div class="mc-time">${esc(winText(c.arrival_start, c.arrival_end))}</div>
@@ -17069,22 +17097,23 @@ function mcCard(c) {
         ${c.summary && c.summary !== c.job_type ? `<div class="mc-sum">${esc(c.summary)}</div>` : ""}
         ${c.visit_purpose ? `<div><b>This visit:</b> ${esc(c.visit_purpose)}</div>` : ""}
         ${(c.techs || []).length > 1 ? `<div class="quiet">With ${esc(c.techs.filter(n => n !== MC.data.name).join(", "))}</div>` : ""}</div>
-      ${Number(c.balance) > 0.004 ? `<div class="mc-warn">They owe ${money(c.balance)} on past invoices. Ask about it before you start.</div>` : ""}
+      ${!tech && Number(c.balance) > 0.004 ? `<div class="mc-warn">They owe ${money(c.balance)} on past invoices. Ask about it before you start.</div>` : ""}
       ${(c.equipment || []).length ? `<div class="mc-eq"><b>Please get these details while you're there:</b> <span class="quiet">Tap one to fill it in.</span>
         <ul>${c.equipment.map(e => mcEqItem(c, e)).join("")}</ul></div>` : ""}
-      ${(c.notes || []).length ? `<div class="mc-notes">${c.notes.map(n => `<div class="mc-note ${n.pinned ? "pin" : ""}"><span class="quiet">${n.pinned ? "Pinned · " : ""}${n.where === "job" ? "Job" : n.where === "location" ? "Address" : "Customer"} note · ${esc(new Date(n.at).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }))}</span>${esc(n.body)}</div>`).join("")}</div>` : ""}
+      ${notes.length ? `<div class="mc-notes">${notes.map(n => `<div class="mc-note ${n.pinned ? "pin" : ""}"><span class="quiet">${n.pinned ? "Pinned · " : ""}${n.where === "job" ? "Job" : n.where === "location" ? "Address" : "Customer"} note · ${esc(new Date(n.at).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }))}</span>${esc(n.body)}</div>`).join("")}</div>` : ""}
       ${(c.last_visits || []).length ? `<details class="mc-past"><summary>Last visits here</summary>${c.last_visits.map(v => `<div><b>${esc(v.date ? longDate(v.date) : "")}</b> ${esc(v.type)}${v.summary ? ": " + esc(v.summary) : ""}${v.outcome ? `<div class="quiet">${esc(v.outcome)}</div>` : ""}</div>`).join("")}</details>` : ""}
       <div class="mc-po">${(c.pos || []).length ? `<div class="mc-po-list">${c.pos.map(p => `<div class="mc-po-item"><span class="po-num">PO ${esc(p.po_number)}</span>
           <span>${esc(p.supplier)}${p.what ? ` · ${esc(p.what)}` : ""}</span>${p.mine || can("po.create") ? ` <button class="link" type="button" data-po-cancel="${p.id}">Cancel</button>` : ""}</div>`).join("")}</div>` : ""}
-        ${MC.poOpen === c.visit_id ? poForm(c.job_id) : `<button class="btn quiet-btn" type="button" data-po-open="${c.visit_id}">Get a PO number</button>`}</div>
-      <div class="mc-inv"><button class="btn quiet-btn" type="button" data-mc-invoice="${c.job_id}">Invoice and payment</button>
-        ${/^costco/i.test(c.job_type || "") ? `<button class="btn quiet-btn" type="button" data-mc-costco="${c.job_id}">Costco form (customer signs)</button>` : ""}</div>
-      <div class="mc-actions">${next.map(([s, t], i) => `<button class="btn ${i ? "quiet-btn" : ""}" type="button" data-mc-status="${s}">${t}</button>`).join("")}
-        ${c.status === "on_site" || c.status === "en_route" ? `<button class="link" type="button" data-mc-status="scheduled">Undo</button>` : ""}
-        ${done && c.status !== "cancelled" ? `<button class="link" type="button" data-mc-status="on_site">Not finished after all</button>` : ""}</div>
+        ${MC.poOpen === c.visit_id ? poForm(c.job_id) : ""}</div>
+      <div class="mc-sqs">${next.map(([st, t], k) => sq(stIc[st] || "▶", t, `data-mc-status="${st}"`, k ? "" : "mc-sq-go")).join("")}
+        ${!hasPo && MC.poOpen !== c.visit_id ? sq("📦", "Get a PO number", `data-po-open="${c.visit_id}"`) : ""}
+        ${!invDone ? sq("🧾", "Invoice and payment", `data-mc-invoice="${c.job_id}"`) : ""}
+        ${/^costco/i.test(c.job_type || "") ? sq("📝", "Costco form (customer signs)", `data-mc-costco="${c.job_id}"`) : ""}
+        ${sq("👤", "Open the full customer file", `data-mc-open-cust="${c.customer_id}"`)}
+        ${c.status === "on_site" || c.status === "en_route" ? sq("↩", "Undo", `data-mc-status="scheduled"`, "mc-sq-quiet") : ""}
+        ${done && c.status !== "cancelled" ? sq("↩", "Not finished after all", `data-mc-status="on_site"`, "mc-sq-quiet") : ""}</div>
       <form class="mc-finish hidden"><textarea rows="3" maxlength="4000"></textarea><div><button class="btn" type="submit">Save</button> <button class="link" type="button" data-mc-x>Never mind</button></div></form>
       <div class="mc-msg" role="status"></div>
-      <button class="link mc-file" type="button" data-mc-open-cust="${c.customer_id}">Open the full customer file</button>
     </div>` : ""}
   </section>`;
 }
