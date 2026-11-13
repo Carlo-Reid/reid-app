@@ -7615,6 +7615,7 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
   .ie-walk-q { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; background: #fff; border: 1.5px solid #bcd0e3; border-radius: 12px; padding: 10px 12px; }
   .ie-walk-q.done { background: #e9f6ed; border-color: #a9d6b7; }
   .ie-walk-qt { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: 16px; color: var(--ink); overflow-wrap: anywhere; }
+  .ie-walk-qerr { color: #b3261e; }
   .ie-walk-qa { font-size: 14.5px; color: #b45309; font-weight: 700; } .ie-walk-q.done .ie-walk-qa { color: #1b6b36; }
   .ie-walk-th { width: 96px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid #bcd0e3; }
   .ie-walk-qb { display: flex; gap: 8px; align-items: stretch; } .ie-walk-qb .mc-sq { width: 112px; height: 104px; min-height: 0; margin: 0; cursor: pointer; }
@@ -26974,7 +26975,7 @@ function walkQsHtml(W) {
       return `<div class="ie-walk-q${a ? " done" : ""}" data-walk-q="${q}">
         <span class="ie-sec-n" aria-hidden="true">${q}</span>
         <div class="ie-walk-qt"><b>${esc(t)}</b>
-          <span class="ie-walk-qa">${busy ? "Saving the picture…" : !a ? "Not answered yet." : a.na ? "✔ N/A: no picture." : "✔ The picture is saved in the job's photos."}</span></div>
+          <span class="ie-walk-qa">${busy ? "Saving the picture…" : !a ? (W.qErr && W.qErr.q === q ? `<span class="ie-walk-qerr">${esc(W.qErr.t)}</span>` : "Not answered yet.") : a.na ? "✔ N/A: no picture." : "✔ The picture is saved in the job's photos."}</span></div>
         ${a && a.url ? `<img class="ie-walk-th" alt="The picture for question ${q}" src="${a.url}">` : ""}
         <div class="ie-walk-qb">
           <input type="file" accept="image/*" capture="environment" hidden data-walk-pic="${q}">
@@ -27037,14 +27038,16 @@ async function walkAnswer(q, file) {
   if (!file) {   // N/A
     const { error } = await db.rpc("walk_answer_set", { p_visit_id: W.visit, p_q: q, p_question: t, p_na: true, p_key: null, p_size: null });
     if (error) return say("Not saved: " + rpcErr(error));
-    W.ans[q] = { na: true }; renderInvoiceEditor(); return; }
+    W.ans[q] = { na: true }; W.qErr = null; renderInvoiceEditor(); return; }
   W.busy = q; renderInvoiceEditor();
   try {
     const blob = await walkShrink(file), key = `forms/${W.job}/walk-${W.visit}-q${q}-${Date.now()}.jpg`;
     const up = await db.storage.from("job-files").upload(key, blob, { contentType: "image/jpeg" }); if (up.error) throw new Error(up.error.message);
-    const { error } = await db.rpc("walk_answer_set", { p_visit_id: W.visit, p_q: q, p_question: t, p_na: false, p_key: key, p_size: blob.size }); if (error) throw new Error(rpcErr(error));
-    W.ans[q] = { na: false, key, url: URL.createObjectURL(blob) }; W.busy = null; renderInvoiceEditor();
-  } catch (e) { W.busy = null; renderInvoiceEditor(); say("The picture for question " + q + " was not saved: " + (e.message || "try again") + ". Take it again, or press N/A."); }
+    // the save is tried up to 4 times, a few seconds apart: right after an update of the app the database can be busy for a few minutes (Carlo, Nov 13: "it does not load")
+    let error = null; for (let n = 0; n < 4; n++) { ({ error } = await db.rpc("walk_answer_set", { p_visit_id: W.visit, p_q: q, p_question: t, p_na: false, p_key: key, p_size: blob.size })); if (!error) break; await new Promise(r => setTimeout(r, 3000)); }
+    if (error) throw new Error(rpcErr(error));
+    W.ans[q] = { na: false, key, url: URL.createObjectURL(blob) }; W.busy = null; W.qErr = null; renderInvoiceEditor();
+  } catch (e) { W.busy = null; W.qErr = { q, t: "The picture was not saved: " + (e.message || "try again") + ". Take it again, or press N/A." }; renderInvoiceEditor(); say("The picture for question " + q + " was not saved: " + (e.message || "try again") + ". Take it again, or press N/A."); }
 }
 function ieWalkWire() {
   const W = WALK, box = $("#ie-walk"); if (!W || !box) return;
