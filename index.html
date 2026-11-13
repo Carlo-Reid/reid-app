@@ -26018,7 +26018,7 @@ function ieInvsHtml(I) {
   L.sort((a, b) => a.id - b.id); if (L.length < 2) return "";
   return `<span class="ie-invs" role="group" aria-label="The invoices of this job"><small class="ie-invs-t">This job has ${L.length} invoices. Click one to open it.</small><span class="ie-invs-row">${L.map((x, i) => { const here = x.id === I.id, dr = x.status === "draft";
     return `<button type="button" class="ie-invp${here ? " on" : ""}${dr ? "" : " fin"}" data-ie-inv="${x.id}" ${here ? 'aria-current="true"' : ""} title="${here ? "This is the invoice on the screen" : "Open invoice " + esc(x.invoice_number || "")}">
-      <span class="ie-invp-k">Invoice ${i + 1}</span><b class="ie-invp-n">${esc(x.invoice_number || "")}</b><span class="ie-invp-ln" aria-hidden="true"></span><span class="ie-invp-a">${money(x.total || 0)}</span>
+      <span class="ie-invp-k">Invoice ${i + 1}</span><b class="ie-invp-n">${esc(x.invoice_number || "")}</b><span class="ie-invp-ln" aria-hidden="true"></span><span class="ie-invp-a">${ieRentOnly(I) ? "" : money(x.total || 0)}</span>
       <span class="ie-invp-s">${dr ? "Not finished" : "✔ Finished"}</span><span class="ie-invp-h">${here ? "You are here" : "Open it"}</span></button>`; }).join("")}</span></span>`;
 }
 async function openInvoiceEditor(id, msg) {
@@ -26391,6 +26391,9 @@ function ieStHtml(I) {
 function renderInvoiceEditor(msg) {
   const kids = l => IE.lines.filter(x => x.kit_parent === l.id);
   const I = IE, draft = I.status === "draft", edit = I.can_edit && (draft || I.st_edit), top = $("#main").scrollTop;
+  const rentOnly = ieRentOnly(I);   // a tech on a Vista invoice: the rental a month, never the prices or the totals
+  const rentOf = l => { const k = l.item_id && !l.kit_parent && VR.ieJob === I.job_id ? VR.ie.get(Number(l.item_id)) : null; return k ? Number(k.rate) * (Number(l.quantity) || 1) : null; };
+  const rentSum = rentOnly ? I.lines.reduce((a, l) => a + (rentOf(l) || 0), 0) : 0;
   const st = { draft: ["Not finished", "ie-draft"], posted: ["Finished, not paid", "ie-open"], partially_paid: ["Part paid", "ie-part"], paid: ["Paid", "ie-paid"], void: ["Void", "ie-void"] }[I.status] || [I.status, ""];
   const ah = /after\s*hours/i.test([I.job_type, I.summary, I.job_summary].filter(Boolean).join(" "));
   // the page in numbered steps, one under the other, the thing to do first on top (Carlo, Nov 12: "page is hard to follow")
@@ -26405,7 +26408,7 @@ function renderInvoiceEditor(msg) {
   const bookH = bk ? `<button class="ie-bookbtn ${fin ? "ie-off" : ""}" type="button" id="ie-bookopen" ${fin ? 'aria-disabled="true"' : ""}><span class="ie-bookbtn-ic">${I.lines.length ? "➕" : "📖"}</span><b>${I.lines.length ? "Add another item" : `Open the ${bkNm} price book`}</b></button>` : "";
   // what was picked shows in section 1 with its picture (Carlo, Nov 13: "when equipment is picked in option one have its picture show as well")
   const pickedL = edit || fin ? I.lines.filter(l => l.item_id && !l.kit_parent) : [];
-  const pickedH = pickedL.map(l => { const u = PB.thumbs?.get(Number(l.item_id)); return `<div class="ie-picked" data-ie-pic="${Number(l.item_id)}"><span class="ie-picked-pic">${u ? `<img alt="" src="${u}">` : "📦"}</span><b>${esc(pbName(String(l.description || "").split("\n")[0]))}</b><small>${Number(l.quantity) !== 1 ? Number(l.quantity) + " × " : ""}${money(l.unit_price)} · ✔ On the invoice</small></div>`; }).join("");
+  const pickedH = pickedL.map(l => { const u = PB.thumbs?.get(Number(l.item_id)); return `<div class="ie-picked" data-ie-pic="${Number(l.item_id)}"><span class="ie-picked-pic">${u ? `<img alt="" src="${u}">` : "📦"}</span><b>${esc(pbName(String(l.description || "").split("\n")[0]))}</b><small>${Number(l.quantity) !== 1 ? Number(l.quantity) + " × " : ""}${rentOnly ? "" : money(l.unit_price) + " · "}✔ On the invoice</small></div>`; }).join("");
   const lookH = `${I.looks?.length && I.can_look && !I.prule ? `<div class="ie-look"><span class="cl-label">Invoice look</span>
         <div class="seg" role="group"><button type="button" data-ie-look="" aria-pressed="${!I.look_partner_id}">Reid Heating &amp; Cooling</button>${I.looks.map(l =>
           `<button type="button" data-ie-look="${l.id}" aria-pressed="${I.look_partner_id === l.id}">${esc(l.name)} <span class="ie-look-sub">installed by Reid</span></button>`).join("")}</div></div>` : ""}`;
@@ -26483,7 +26486,7 @@ function renderInvoiceEditor(msg) {
         </div>` : ""}
       </div></section>` : ""}
       <section class="ie-card" data-ie-card="lines">${H("What is on this invoice", edit ? "Change a number in its box. × takes a line off." : "")}
-      <table class="ie-table"><thead><tr><th>Description</th><th class="r">Qty</th>${seeCost() ? `<th class="r">Cost</th>` : ""}<th class="r">Price</th><th class="r">HST</th><th class="r">Amount</th>${edit ? "<th></th>" : ""}</tr></thead><tbody>
+      <table class="ie-table"><thead><tr><th>Description</th><th class="r">Qty</th>${rentOnly ? `<th class="r">Rental a month</th>` : `${seeCost() ? `<th class="r">Cost</th>` : ""}<th class="r">Price</th><th class="r">HST</th><th class="r">Amount</th>`}${edit ? "<th></th>" : ""}</tr></thead><tbody>
         ${I.lines.length ? I.lines.map((l, n) => `<tr data-ie-line="${l.id}" class="${l.hidden ? "ie-hid" : ""} ${l.kit_parent ? "ie-kitline" : ""}" ${l.kit_parent && !IE.kitOpen?.has(l.kit_parent) && I.lines.some(x => x.id === l.kit_parent) ? "hidden" : ""}>
           <td>${l.kit_parent ? `<div class="ie-kitof">Add-on kit</div><div>${pbNmTxt(l.item_id, pbName(l.description))}</div>` : edit ? `<textarea class="ie-desc" data-ie-f="description" style="${esc(pbNmCss(l.item_id))}" rows="${Math.min(6, Math.max(1, Math.ceil((l.description || "").length / 70), (l.description || "").split("\n").length))}">${esc(l.description)}</textarea>`
                      : `<div class="ie-desc-ro">${pbNmTxt(l.item_id, l.description)}</div>`}${l.sku ? `<div class="quiet">${esc(l.sku)}</div>` : ""}
@@ -26494,20 +26497,20 @@ function renderInvoiceEditor(msg) {
             ${vrIeChip(I, l)}
             ${l.hidden && Number(l.line_total) ? `<div class="ie-hid-warn">Hidden but still charged: the customer's total includes ${money(l.line_total)} they can't see.</div>` : ""}</td>
           <td class="r">${edit ? `<input class="ie-num" data-ie-f="quantity" inputmode="decimal" value="${Number(l.quantity)}">` : Number(l.quantity)}</td>
-          ${seeCost() ? `<td class="r num ie-costcell">${l.unit_cost != null ? money(l.unit_cost) : "—"}${l.unit_cost != null && Number(l.quantity) !== 1 ? `<div class="quiet">${money(l.unit_cost * l.quantity)}</div>` : ""}</td>` : ""}
+          ${rentOnly ? `<td class="r num"><strong>${rentOf(l) != null ? money(rentOf(l)) : rentSum ? "Included" : "—"}</strong></td>` : `${seeCost() ? `<td class="r num ie-costcell">${l.unit_cost != null ? money(l.unit_cost) : "—"}${l.unit_cost != null && Number(l.quantity) !== 1 ? `<div class="quiet">${money(l.unit_cost * l.quantity)}</div>` : ""}</td>` : ""}
           <td class="r">${l.no_charge ? `<span class="ie-free">${l.regular_price != null ? `<s>${money(l.regular_price)}</s><br>` : ""}No charge</span>`
             : edit ? `<input class="ie-num ie-price" data-ie-f="unit_price" inputmode="decimal" value="${Number(l.unit_price).toFixed(2)}">` : money(l.unit_price)}</td>
           <td class="r">${edit ? `<input type="checkbox" data-ie-f="taxable" ${l.taxable ? "checked" : ""} aria-label="Charge HST">` : l.taxable ? "Yes" : "No"}</td>
-          <td class="r num"><strong>${money(l.line_total)}</strong></td>
+          <td class="r num"><strong>${money(l.line_total)}</strong></td>`}
           ${edit ? `<td class="ie-row-act"><button class="link" type="button" data-ie-up ${n ? "" : "disabled"} aria-label="Move up">↑</button><button class="link" type="button" data-ie-down ${n < I.lines.length - 1 ? "" : "disabled"} aria-label="Move down">↓</button><button class="link danger" type="button" data-ie-del aria-label="Remove">×</button></td>` : ""}</tr>`).join("")
           : `<tr><td colspan="7" class="ie-empty">Nothing on the invoice yet.${edit ? " Add it in step 1 above. 👆" : ""}</td></tr>`}
       </tbody></table>
-      <div class="ie-totals"><table>
+      ${rentOnly ? `<div class="ie-totals"><table>${rentSum ? `<tr><td>Rental a month</td><td class="r num">${money(rentSum)}</td></tr><tr><td>HST (13%)</td><td class="r num">${money(Math.round(rentSum * 13) / 100)}</td></tr><tr class="ie-tot"><td>Each month</td><td class="r num">${money(rentSum + Math.round(rentSum * 13) / 100)}</td></tr>` : `<tr><td>The rental price is not picked yet. The office picks it.</td></tr>`}</table></div>` : `<div class="ie-totals"><table>
         <tr><td>Subtotal</td><td class="r num">${money(I.subtotal)}</td></tr><tr><td>HST (${Number(I.hst)}%)</td><td class="r num">${money(I.tax)}</td></tr>
         <tr class="ie-tot"><td>Total</td><td class="r num">${money(I.total)}</td></tr>
         ${(I.payments || []).map(p => `<tr><td>Paid ${esc(fmtDate(p.on))} · ${esc((PAY_METHODS.find(m => m[0] === p.method) || [0, PAY_NAMES?.[p.method] || p.method])[1])}${p.reference ? " · " + esc(p.reference) : ""}</td><td class="r num">−${money(p.amount)}${can("invoices.adjust") || ["owner", "admin", "accounting"].includes(ME.role) ? ` <button class="link danger" type="button" data-ie-unpay="${p.id}" title="Take this payment off">×</button>` : ""}</td></tr>`).join("")}
         ${!draft ? `<tr class="ie-bal ${Number(I.balance) > 0.004 ? "" : "zero"}"><td>Still owing</td><td class="r num">${money(I.balance)}</td></tr>` : ""}
-      </table></div></section>
+      </table></div>`}</section>
       ${notesOn && !inRow ? `<section class="ie-card ie-post-in" data-ie-card="notes">${H("Add notes", "Type a note in a box if you have one. If there is nothing to say, go to the next step.", NO.notes)}<div class="ie-notes2">${notesIn}</div></section>` : ""}
       ${tankH ? card("tank", "", tankH) : ""}
       ${(lookH + billH + ruleH).trim() ? card("partner", H(billH || ruleH ? `What ${pnm} needs` : "How the invoice looks", billH || ruleH ? `Fill in ${pnm}'s numbers when you have them.` : "", NO.partner), lookH + billH + ruleH) : ""}
@@ -32866,6 +32869,8 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
 // price or options"). Kept on the job, for the line's item (vista_rental_picks kind 'job'). Shown when the item is set up as a rental tank, when a
 // rate was picked, or, on a Vista invoice, when the line's words look like one of Vista's tanks. Staff only: never printed.
 const ieIsVista = I => /vista/i.test([I?.bill?.partner?.name, I?.prule?.name, I?.pbook?.name].filter(Boolean).join(" "));
+// A tech never sees the full amount of a Vista invoice, only the rental one (Carlo, Nov 13)
+const ieRentOnly = I => typeof ME !== "undefined" && ME?.role === "technician" && ieIsVista(I);
 function vrIeFor(I, l) {
   if (!l || !l.item_id || l.kit_parent || !I?.job_id || !VR.data || VR.ieJob !== I.job_id) return null;
   const item = Number(l.item_id), L = VR.data.links[item], P = VR.ie.get(item);
@@ -32876,6 +32881,7 @@ function vrIeChip(I, l) {
   const x = vrIeFor(I, l); if (!x) return "";
   const { L, P, G } = x; let p = P, usual = false;
   if (!p && L && L.rate != null) { const T = vrTank(L), y = T && T.r.find(z => Number(z[1]) === Number(L.rate)); if (y) { p = { s: L.s, m: L.m, rate: y[1], allowance: y[2] }; usual = true; } }
+  if (ieRentOnly(I)) return p ? `<div class="vr-chip no-print"><span class="vr-chip-t">🏷 Vista rental</span> <b>${vrRate(p.rate)} a month</b></div>` : "";
   const B = L || G, T = !p && B ? vrTank(B) : null, rs = T ? T.r.map(z => Number(z[1])) : [];
   return `<div class="vr-chip no-print"><span class="vr-chip-t">🏷 Vista rental</span> ${p ? `<b>${vrRate(p.rate)} a month</b> · allowance <b>${vrAl(p.allowance)}</b> <span class="vr-chip-w">${esc(p.m)}${p.s !== "HVAC" ? ", from " + esc(p.s) : ""}${usual ? " · the usual rate" : ""}</span>`
       : `<span class="vr-chip-w">${G && !L ? "I think it is Vista's " : ""}${B ? esc(B.m) + (B.s !== "HVAC" ? ", from " + esc(B.s) : "") : ""}${rs.length ? ` · ${rs.length} monthly rates, ${vrRate(Math.min(...rs))} to ${vrRate(Math.max(...rs))}` : ""}</span>`}
@@ -35597,6 +35603,14 @@ async function invoicePdfB64() {
   return doc.output("datauristring").split(",")[1];
 }
 function invoiceEmailText(D) {
+  if (D.vista) {   // a Vista invoice: the customer never gets the full amount, only the rental a month (Carlo, Nov 13)
+    const first = (D.custName || "").split(/[\s,&/]+/)[0], hst = Math.round((D.rentMonth || 0) * 13) / 100;
+    return [`Hello${first ? " " + first : ""},`, "", `Here are the details of your rental from ${D.coName}.`, "",
+      `Number:    ${D.number}`, `Date:      ${fmtDate(D.date)}`, D.jobNumber ? `Job #:     ${D.jobNumber}` : null, `Customer:  ${D.custName}`, D.address ? `Address:   ${D.address}` : null, "",
+      ...D.lines.map(x => "- " + String(x.description || "").split("\n")[0] + (x.quantity != null && Number(x.quantity) !== 1 ? " × " + Number(x.quantity) : "")), "",
+      D.rentMonth ? `Rental a month: ${money(D.rentMonth)} plus HST (${money(D.rentMonth + hst)} each month), paid to ${D.partner || "Vista"}.` : null, D.rentMonth ? "" : null,
+      `Thank you for choosing ${D.coName}.`, [D.coPhone, D.coEmail, D.coWeb].filter(Boolean).join(" · ")].filter(x => x != null).join("\n");
+  }
   const pad = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s).padEnd(n), lpad = (s, n) => s.padStart(n);
   const first = (D.custName || "").split(/[\s,&/]+/)[0];
   const rows = D.lines.map(x => pad(String(x.description || "").split("\n")[0], 44) + lpad(x.quantity != null ? String(Number(x.quantity)) : "", 5) + lpad(x.no_charge ? "No charge" : money(x.line_total), 14));
@@ -35818,7 +35832,7 @@ async function invEmailSetup(D) {
     const first = (D.custName || "").split(/[\s,&/]+/)[0], old = await db.rpc("invoice_email_info", { p_invoice: D.id });
     docSendSetup({ kind: "invoice", refId: D.id, title: `Invoice ${D.number}`, label: "invoice", fileName: `Reid invoice ${D.number}.pdf`, partnerFirst: !!D.partner,
       subject: `Invoice ${D.number} from ${D.coName}`, body: invoiceEmailText(D), openNow: INV_EMAIL_OPEN,
-      sms: `Hi${first && !D.partner ? " " + first : ""}, here is your invoice ${D.number} from ${D.coName}${D.balance > 0.004 ? ` (balance ${money(D.balance)})` : ""}.`,
+      sms: `Hi${first && !D.partner ? " " + first : ""}, here is your invoice ${D.number} from ${D.coName}${D.balance > 0.004 && !D.vista ? ` (balance ${money(D.balance)})` : ""}.`,
       legacy: old.data?.sends?.length ? `<div class="ds-legacy"><div class="ds-sends-h">Earlier invoice emails</div>${invEmailStatus(old.data.sends)}</div>` : "" });
     return;
   }
@@ -36084,7 +36098,9 @@ async function openInvoice(id, keep) {
   if (isV) { const vp = /vista/i.test(i.bill_partner?.name || "") && i.bill_to_partner_id ? i.bill_to_partner_id : i.jobs?.partner_id;
     const [lg, pk] = await Promise.all([bkPLogo(vp).catch(() => ""), i.job_id ? db.rpc("vista_picks", { p_kind: "job", p_ref: i.job_id }) : Promise.resolve({ data: [] })]);
     vLogo = lg || ""; (pk?.data || []).forEach(x => vPicks.set(Number(x.item), x)); }
-  if (INV_VT.id !== id) { INV_VT.id = id; INV_VT.rent = false; }
+  const techV = isV && ME?.role === "technician";   // a tech only ever gets the rental side
+  if (INV_VT.id !== id) { INV_VT.id = id; INV_VT.rent = isV; }   // a Vista invoice opens on the rental side: that is the one a customer may see
+  if (techV) INV_VT.rent = true;
   const vName = i.bill_partner?.name && /vista/i.test(i.bill_partner.name) ? i.bill_partner.name : i.jobs?.partners?.name || "Vista";
   const vLine = x => (x.item_id && vPicks.get(Number(x.item_id))) || null;
   const vJob = vPicks.get(0) && !lines.some(vLine) ? vPicks.get(0) : null;   // a rate picked at the booking, for no item
@@ -36093,7 +36109,7 @@ async function openInvoice(id, keep) {
   $("#inv-paper").classList.toggle("inv-rent", isV && INV_VT.rent);
   $("#inv-paper").classList.toggle("inv-ah", /after\s*hours/i.test((i.jobs?.job_types?.name || "") + " " + (i.jobs?.summary || "")));
   $("#inv-paper").innerHTML = `
-    ${isV ? `<button type="button" class="inv-flip no-print" data-inv-flip title="Flip the page between the full amount and the rental amount. The side showing is the one that prints.">${INV_VT.rent ? "Full amount" : "Rental amount"} ›</button>
+    ${isV ? `${techV ? "" : `<button type="button" class="inv-flip no-print" data-inv-flip title="Flip the page between the full amount and the rental amount. The side showing is the one that prints.">${INV_VT.rent ? "Full amount" : "Rental amount"} ›</button>`}
     <div class="inv-logos"><img src="reid-logo.png" alt="${esc(coName)}">${vLogo ? `<img src="${esc(vLogo)}" alt="${esc(vName)}">` : `<div class="inv-co">${esc(vName)}</div>`}</div>` : ""}
     <div class="inv-top">
       <div>${brand && !isV ? `<div class="inv-brand">${brand.branding_logo_url ? `<img src="${esc(brand.branding_logo_url)}" alt="${esc(brand.branding_name || brand.name)}">` : `<div class="inv-co">${esc(brand.branding_name || brand.name)}</div>`}</div>
@@ -36266,7 +36282,8 @@ async function openInvoice(id, keep) {
         if (o && el) { el.innerHTML = `<button class="link" type="button">Open ${i.store_copy_of ? "the customer's copy" : "the store's copy"} (${esc(o.invoice_number)}) ›</button>`; el.firstChild.addEventListener("click", () => openInvoice(o.id)); } });
   }
   { const b = $("#inv-aplbtn"); if (b) { b.classList.toggle("hidden", !officeInv()); b.onclick = () => addToPartnerList({ customer: i.customer_id, custName: cust.display_name || "", job: i.job_id, jobNumber: i.jobs?.job_number || "", invoice: i.id, invNumber: i.invoice_number, partner: i.bill_to_partner_id || null }); } }
-  invEmailSetup({ id: i.id, void: i.status === "void", number: i.invoice_number, date: i.invoice_date, jobNumber: i.jobs?.job_number, custName: cust.display_name || "",
+  if (techV) document.querySelectorAll("#inv-paper .inv-fullonly, #inv-paper .inv-from").forEach(x => x.remove());   // the full amount is not even on the tech's page
+  invEmailSetup({ id: i.id, vista: isV, rentMonth: vMonth, void: i.status === "void", number: i.invoice_number, date: i.invoice_date, jobNumber: i.jobs?.job_number, custName: cust.display_name || "",
     partner: bp ? bp.name : null, address: addr.join(", "), account: i.partner_account, approval: i.authorization_number,
     lines, subtotal: Number(subtotal), tax: Number(tax), total: Number(total), paid: Number(paid), balance: Number(balance),
     coName, coPhone: c.phone ? phoneFmt(c.phone) : "", coEmail: c.email || "", coWeb: (c.website || "").replace(/^https?:\/\//, "") });
