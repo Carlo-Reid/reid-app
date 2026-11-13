@@ -1892,6 +1892,8 @@
   .pr-ptools > * { margin: 0 !important; vertical-align: middle; }
   .pr-ptools > .btn, .pr-ptools > .pr-wsib > summary { min-height: 42px; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; }
   .pr-ldpdf { cursor: pointer; } .pr-ldhint { font-weight: 500; opacity: .8; font-size: .9em; }
+  .pr-ld-dupok { background: #fff6e0; border: 1px solid #f0c38a; border-radius: 10px; padding: 8px 12px; color: #7a4a00; }
+  .pr-ld-dupt { color: #9a4d00; font-weight: 700; font-size: 12.5px; }
   .pr-privzone.pr-drop-on { outline: 3px dashed #1f9d4a; outline-offset: -3px; background: #eef9f1; }
   .pr-privzone.pr-drop-on::before { content: "Drop the payroll PDF here"; display: block; text-align: center; font-weight: 700; color: #1b6b36; font-size: 18px; padding: 6px 0 10px; }
   .pr-wsib { border: 1px solid #d3dbe4; border-radius: 10px; background: #fff; padding: 0 12px; } .pr-wsib summary { cursor: pointer; font-weight: 700; color: #23415f; } .pr-wsib[open] { padding-bottom: 8px; }
@@ -33465,7 +33467,10 @@ async function prSlipsLoad(files) {
   const { w, close } = srcModal("Load a payroll PDF", `<div class="pr-ld"><p class="src-hint">Reading ${files.length === 1 ? esc(files[0].name) : files.length + " files"}…</p></div>`);
   w.querySelector(".src-pop")?.classList.add("src-pop-wide");
   const body = w.querySelector(".pr-ld"); let slips = [];
-  try { for (const f of files) { const L = await pdfLinesY(f); paysParse(L).forEach(s => slips.push({ ...s, file: f.name })); } }
+  let twice = 0;   // the very same slip (name, cheque date, gross and net) in the files more than once: kept once (George, Nov 13)
+  try { for (const f of files) { const L = await pdfLinesY(f); paysParse(L).forEach(s => {
+    if (slips.some(o => o.name.toLowerCase() === s.name.toLowerCase() && o.cheque === s.cheque && Math.abs(o.gross - s.gross) < 0.01 && Math.abs(o.net - s.net) < 0.01)) { twice++; return; }
+    slips.push({ ...s, file: f.name }); }); } }
   catch (e) { body.innerHTML = `<div class="error">Couldn't read it: ${esc(e.message || e)}</div>`; return; }
   if (!slips.length) { body.innerHTML = `<p class="src-bad"><b>I found no pay slips in it.</b> It needs the accountant's pay slips with "Pay Period … Cheque Date …" on them. If it is a scanned picture, ask the accountant for the PDF they print from.</p>`; return; }
   if (!PR.people) { const r = await db.rpc("payroll_people"); PR.people = r.data || []; }
@@ -33481,10 +33486,13 @@ async function prSlipsLoad(files) {
   const draw = () => {
     const dups = R.filter(r => r.dup), conflicts = R.filter(r => r.use && r.who !== "skip" && (o => o && (Math.abs(o.net - r.s.net) >= 0.01 || Math.abs(o.gross - r.s.gross) >= 0.01))(fileOf(r)));
     const need = conflicts.filter(r => !r.pick).length;
+    const same = R.filter(r => r.use && r.who !== "skip" && (o => o && !(Math.abs(o.net - r.s.net) >= 0.01 || Math.abs(o.gross - r.s.gross) >= 0.01))(fileOf(r)));
     const tot = R.filter(r => r.use && r.who !== "skip").reduce((t, r) => t + r.s.gross, 0);
     body.innerHTML = `<p class="src-hint">I read <b>${slips.length} pay slips</b>${cheques.length === 1 ? ` for the cheque of <b>${esc(longDate(cheques[0]))}</b>` : ` for ${cheques.length} cheque dates`}. Check who each one is, then save. Gross pay in all: <b>${money(tot)}</b>.</p>
-      ${dups.length ? `<p class="src-bad"><b>The same person is in here twice for one cheque, with other amounts.</b> Pick the right one in the Use column.</p>` : ""}
-      ${need ? `<p class="src-bad"><b>${need} slip${need === 1 ? " is" : "s are"} already on file with other amounts.</b> Pick which to keep on each one.</p>` : ""}
+      ${twice ? `<p class="pr-ld-dupok"><b>⚠ ${twice} slip${twice === 1 ? " was" : "s were"} in ${files.length > 1 ? "these files" : "this file"} twice: the same person, the same cheque date and the same amounts.</b> I kept one of each.</p>` : ""}
+      ${same.length ? `<p class="pr-ld-dupok"><b>⚠ ${same.length} slip${same.length === 1 ? " is" : "s are"} already on file: the same cheque date and the same amounts</b> (${esc(same.slice(0, 4).map(r => r.s.name + ", " + fmtDate(r.s.cheque)).join(" · "))}${same.length > 4 ? " …" : ""}). They are marked <b>Duplicate</b> below and will not be saved again.</p>` : ""}
+      ${dups.length ? `<p class="src-bad"><b>⚠ The same person is in here twice for the same cheque date, with other amounts</b> (${esc([...new Set(dups.map(r => r.s.name + ", " + fmtDate(r.s.cheque)))].slice(0, 4).join(" · "))}). Pick the right one in the Use column.</p>` : ""}
+      ${need ? `<p class="src-bad"><b>⚠ ${need} slip${need === 1 ? " is" : "s are"} already on file for the same cheque date, with other amounts.</b> Pick which to keep on each one (it is in red below).</p>` : ""}
       <div class="src-tw"><table class="pr-ldt"><thead><tr><th>Use</th><th>Name on the slip</th><th>Who in the app</th><th>Block</th><th>Cheque · pay period</th><th>Pay on the slip</th><th>In the app now</th><th>Gross · net</th></tr></thead><tbody>
       ${R.map(r => { const s = r.s, p = personOf(r.who), o = fileOf(r), diff = o && (Math.abs(o.net - s.net) >= 0.01 || Math.abs(o.gross - s.gross) >= 0.01);
         const now = p?.rate ? (p.rate.kind === "salary" ? `${money(p.rate.amount)} a year` : `${money(p.rate.amount)} an hour`) : p?.pay_kind === "commission" ? "Commission" : "—";
@@ -33499,7 +33507,7 @@ async function prSlipsLoad(files) {
           <td>${esc(paysPayLab(s))}${s.commission ? `<div class="quiet">Commission ${money(s.commission)}</div>` : ""}</td>
           <td class="${changed ? "pr-ld-chg" : ""}">${now}${changed ? `<div class="quiet">${p.rate ? "will change" : "will be set"}</div>` : ""}</td>
           <td><b>${money(s.gross)}</b><div class="quiet">net ${money(s.net)}</div>${diff ? `<div class="pr-ld-of">On file: gross ${money(o.gross)}, net ${money(o.net)}${o.file ? ` (${esc(o.file)})` : ""}
-            <select data-pick><option value="">Pick one…</option><option value="keep"${r.pick === "keep" ? " selected" : ""}>Keep what is on file</option><option value="new"${r.pick === "new" ? " selected" : ""}>Use this one</option></select></div>` : o ? `<div class="quiet">Already on file</div>` : ""}</td></tr>`; }).join("")}
+            <select data-pick><option value="">Pick one…</option><option value="keep"${r.pick === "keep" ? " selected" : ""}>Keep what is on file</option><option value="new"${r.pick === "new" ? " selected" : ""}>Use this one</option></select></div>` : o ? `<div class="pr-ld-dupt">Duplicate: already on file with the same date and amounts</div>` : ""}</td></tr>`; }).join("")}
       </tbody></table></div>
       <p class="quiet">A new rate counts from that slip's pay period. Raises are written in each person's pay history. Family support (FRO) deductions and addresses are not kept.</p>
       <div class="src-pop-btns"><button type="button" class="btn" id="pr-ld-save"${need ? " disabled" : ""}>Save the pay slips</button><button type="button" class="btn quiet-btn" data-src-x>Cancel</button>${need ? ` <span class="src-bad">Pick one on each slip already on file first.</span>` : ""}</div>`;
@@ -33509,9 +33517,10 @@ async function prSlipsLoad(files) {
       tr.querySelector("[data-use]")?.addEventListener("change", () => { r.dup.forEach(o => { o.use = o === r; }); draw(); });
       tr.querySelector("[data-pick]")?.addEventListener("change", e => { r.pick = e.target.value || null; draw(); }); });
     body.querySelector("#pr-ld-save")?.addEventListener("click", async e => { e.target.disabled = true;
-      const out = R.filter(r => r.use && r.who !== "skip").filter(r => { const o = fileOf(r); if (!o) return true; const diff = Math.abs(o.net - r.s.net) >= 0.01 || Math.abs(o.gross - r.s.gross) >= 0.01; return diff ? r.pick === "new" : true; })
+      const out = R.filter(r => r.use && r.who !== "skip").filter(r => { const o = fileOf(r); if (!o) return true; const diff = Math.abs(o.net - r.s.net) >= 0.01 || Math.abs(o.gross - r.s.gross) >= 0.01; return diff ? r.pick === "new" : false; })
         .map(r => { const p = personOf(r.who), blkSel = !p || !p.user;
           return { ...r.s, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: blkSel ? (r.block || p?.block || "office") : "", block_set: blkSel && (!p || !!r.blockSet) }; });
+      if (!out.length) { close(); return alertMsg("Nothing new to save: every slip is already on file."); }
       const { data, error } = await db.rpc("payroll_slips_save", { p: { file: files.map(f => f.name).join(", "), slips: out } });
       if (error) { e.target.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
       close(); PR.people = null; alertMsg(`✓ Saved ${data?.saved ?? out.length} pay slip${(data?.saved ?? out.length) === 1 ? "" : "s"} for ${data?.people ?? ""} people.`); openPayroll(); });
