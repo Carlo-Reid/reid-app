@@ -28225,13 +28225,29 @@ function cpyKeep(L) { if (!Array.isArray(L)) return false; CPY.list = L; try { l
 function cpyTextOf(el) { if (!el) return ""; if (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return el.tagName === "SELECT" ? (el.selectedOptions[0]?.textContent || "").trim() : el.value;
   const c = el.cloneNode(true); c.querySelectorAll(".cpy-btn, .eco-spot, script, style").forEach(x => x.remove()); c.style.cssText = "position:fixed;left:-99999px;top:0;white-space:pre-wrap"; document.body.appendChild(c);
   const t = (c.innerText || c.textContent || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim(); c.remove(); return t; }
+// the same piece on every line: in a table, the same box of every row; in a list of cards or lines that look alike, the same piece of each one
+function cpyHosts(h) {
+  const path = (from, el) => { const p = []; let n = el; while (n && n !== from) { const par = n.parentElement; if (!par) return null; p.unshift([n.tagName, [...par.children].filter(c => c.tagName === n.tagName).indexOf(n)]); n = par; } return n === from ? p : null; };
+  const walk = (from, p) => { let n = from; for (const [tag, i] of p) { n = [...n.children].filter(c => c.tagName === tag)[i]; if (!n) return null; } return n; };
+  const cls1 = el => (typeof el.className === "string" ? el.className : "").trim().split(/\s+/)[0] || "";
+  let rep = null, sibs = [];
+  const tr = h.closest("tr"), tbl = tr && tr.closest("table");
+  if (tr && tbl) { if (tr.parentElement.tagName === "THEAD") return [h]; rep = tr; sibs = [...tbl.querySelectorAll("tr")].filter(r => r.closest("table") === tbl && r.parentElement.tagName !== "THEAD" && r.children.length === tr.children.length); }
+  else { let n = h; for (let k = 0; k < 7 && n && n.parentElement && n.id !== "main" && n.id !== "search-page"; k++, n = n.parentElement) {
+      if (/^(SPAN|B|STRONG|I|EM|SMALL|A|LABEL|MARK|U|Q)$/.test(n.tagName) || !cls1(n)) continue;
+      const S = [...n.parentElement.children].filter(c => c.tagName === n.tagName && cls1(c) === cls1(n)); if (S.length >= 3) { rep = n; sibs = S; break; } } }
+  if (!rep) return [h];
+  const p = path(rep, h); if (!p) return [h];
+  const out = []; sibs.forEach(r => { const x = r === rep ? h : walk(r, p); if (x && x.tagName === h.tagName && (/^(INPUT|TEXTAREA|SELECT)$/.test(x.tagName) || (x.textContent || "").replace(/📋/g, "").trim())) out.push(x); });
+  return out.length ? out : [h]; }
 function cpyApply() {
   if (typeof ME !== "undefined" && ME.role && Date.now() - CPY.at > 600000) { CPY.at = Date.now(); db.rpc("copy_spots").then(({ data, error }) => { if (!error && Array.isArray(data) && JSON.stringify(data) !== JSON.stringify(CPY.list)) cpyKeep(data); }).catch(() => {}); }
-  const pg = ecoPageKey(), want = new Map();
-  CPY.list.forEach(sp => { if (sp.page !== pg) return; const h = ecoSpotHost(sp); if (h && h.getClientRects().length) want.set(String(sp.id), h); });
-  document.querySelectorAll(".cpy-btn").forEach(b => { const h = want.get(b.dataset.cpy), at = h && (/^(INPUT|TEXTAREA|SELECT)$/.test(h.tagName) ? b.previousElementSibling === h : b.parentElement === h); if (at) want.delete(b.dataset.cpy); else b.remove(); });
-  want.forEach((h, id) => { const b = document.createElement("button"); b.type = "button"; b.className = "cpy-btn no-print"; b.dataset.cpy = id; b.title = "Copy this"; b.setAttribute("aria-label", "Copy this"); b.textContent = "📋";
-    if (/^(INPUT|TEXTAREA|SELECT)$/.test(h.tagName)) h.insertAdjacentElement("afterend", b); else h.appendChild(b); });
+  // one spot = the picked piece AND the same piece on every other line of its list or table (Carlo, Nov 12: one put on the In amount of a bank line is on the In amount of every line)
+  const pg = ecoPageKey(), want = new Map(), isBox = h => /^(INPUT|TEXTAREA|SELECT)$/.test(h.tagName);
+  CPY.list.forEach(sp => { if (sp.page !== pg) return; const h = ecoSpotHost(sp); if (!h || !h.getClientRects().length) return; const S = new Set(cpyHosts(h).filter(x => x.getClientRects().length)); if (S.size) want.set(String(sp.id), S); });
+  document.querySelectorAll(".cpy-btn").forEach(b => { const S = want.get(b.dataset.cpy), prev = b.previousElementSibling, h = prev && isBox(prev) ? prev : b.parentElement; if (S && S.has(h)) S.delete(h); else b.remove(); });
+  want.forEach((S, id) => S.forEach(h => { const b = document.createElement("button"); b.type = "button"; b.className = "cpy-btn no-print"; b.dataset.cpy = id; b.title = "Copy this"; b.setAttribute("aria-label", "Copy this"); b.textContent = "📋";
+    if (isBox(h)) h.insertAdjacentElement("afterend", b); else h.appendChild(b); }));
   document.body.classList.toggle("cpy-on", CPY.on); }
 (function cpyWatch() { let t = 0; const later = () => { clearTimeout(t); t = setTimeout(cpyApply, 350); };
   try { const mo = new MutationObserver(L => { if (L.every(m => [...m.addedNodes, ...m.removedNodes].every(n => n.nodeType === 1 && (n.classList.contains("cpy-btn") || n.classList.contains("eco-spot"))))) return; later(); });
@@ -28244,7 +28260,7 @@ function cpyBar() { let bar = document.getElementById("cpy-bar"); if (!CPY.on) {
     <button type="button" class="cpy-bar-add" data-cpy-add ${pk ? "" : "disabled"}>＋ Add</button><button type="button" class="cpy-bar-x" data-cpy-close>✕ Close</button>`; }
 function cpySet(on) { CPY.on = !!on; CPY.pick = null; CPY.msg = ""; document.querySelectorAll(".cpy-picked").forEach(x => x.classList.remove("cpy-picked")); document.getElementById("cpy-edit-btn")?.setAttribute("aria-pressed", String(CPY.on)); document.body.classList.toggle("cpy-on", CPY.on); if (CPY.on && typeof ecoFindSet === "function" && ECO_FIND.on) ecoFindSet(false); cpyBar(); }
 document.getElementById("cpy-edit-btn")?.addEventListener("click", () => cpySet(!CPY.on));
-async function cpyCopy(b) { const sp = CPY.list.find(x => String(x.id) === b.dataset.cpy), h = (sp && ecoSpotHost(sp)) || b.parentElement, t = cpyTextOf(h);
+async function cpyCopy(b) { const prev = b.previousElementSibling, h = prev && /^(INPUT|TEXTAREA|SELECT)$/.test(prev.tagName) ? prev : b.parentElement, t = cpyTextOf(h);
   let ok = false; try { await navigator.clipboard.writeText(t); ok = true; } catch { try { const a = document.createElement("textarea"); a.value = t; a.style.cssText = "position:fixed;left:-9999px"; document.body.append(a); a.select(); ok = document.execCommand("copy"); a.remove(); } catch {} }
   b.textContent = ok ? "✓" : "✕"; b.classList.toggle("cpy-ok", ok); b.title = ok ? "Copied" : "I could not copy it"; setTimeout(() => { if (b.isConnected) { b.textContent = "📋"; b.classList.remove("cpy-ok"); b.title = "Copy this"; } }, 1400); }
 // window, capture: before every other click handler, so while an owner is picking, a click on a button or a line of the page does not press it
@@ -28256,7 +28272,7 @@ window.addEventListener("click", async e => { const t = e.target; if (!t.closest
   if (t.closest("[data-cpy-close]")) { e.preventDefault(); e.stopPropagation(); cpySet(false); return; }
   if (t.closest("[data-cpy-add]")) { e.preventDefault(); e.stopPropagation(); const pk = CPY.pick; if (!pk) return;
     const r = await db.rpc("copy_spot_add", { p: { page: ecoPageKey(), sel: pk.sel } }); pk.el.classList.remove("cpy-picked"); CPY.pick = null;
-    CPY.msg = !r.error && cpyKeep(r.data) ? "✓ A copy button is there now, for everyone. Pick another, or press Close." : "I could not add it. " + ((r.error && r.error.message) || "Try again."); cpyBar(); return; }
+    CPY.msg = !r.error && cpyKeep(r.data) ? "✓ A copy button is there now, for everyone. In a list or a table it is on every line. Pick another, or press Close." : "I could not add it. " + ((r.error && r.error.message) || "Try again."); cpyBar(); return; }
   if (t.closest("#cpy-bar")) return;
   e.preventDefault(); e.stopPropagation();
   if (cb) { if (!cb.dataset.sure) { cb.dataset.sure = "1"; cb.textContent = "🗑 Sure?"; cb.classList.add("cpy-sure"); setTimeout(() => { if (cb.isConnected) { delete cb.dataset.sure; cb.textContent = "📋"; cb.classList.remove("cpy-sure"); } }, 5000); return; }
