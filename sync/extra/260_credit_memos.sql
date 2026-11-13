@@ -159,13 +159,21 @@ BEGIN
   IF NOT (public._sinv_can_edit() OR public._can_see_costs() OR public._tank_office()) THEN RETURN jsonb_build_object('rows', '[]'::jsonb, 'count', 0, 'total', 0); END IF;
   WITH base AS (
     SELECT m.id, m.memo_number, m.amount, m.how, m.created_at, m.supplier_id, btrim(s.name) AS supplier, i.id AS inv, i.supplier_invoice_number AS credit, i.invoice_date,
-           po.id AS po_id, po.po_number, rp.po_number AS replaced_po, t.credit_number AS credit_order, t.invoice_id AS tank_invoice
+           po.id AS po_id, po.po_number, rp.po_number AS replaced_po, t.credit_number AS credit_order, t.invoice_id AS tank_invoice,
+           cu.cust_id, cu.customer, cu.our_inv, cu.our_inv_no, coalesce(cu.vista, false) AS vista
     FROM supplier_credit_memos m JOIN supplier_invoices i ON i.id = m.supplier_invoice_id LEFT JOIN suppliers s ON s.id = m.supplier_id
       LEFT JOIN purchase_orders po ON po.id = m.purchase_order_id LEFT JOIN purchase_orders rp ON rp.id = m.replaced_po_id LEFT JOIN tank_orders t ON t.id = m.tank_order_id
+      -- the customer this credit belongs to (Carlo, Nov 12, 2026): through our invoice attached to the credit paper; a Vista one first
+      LEFT JOIN LATERAL (SELECT ci.customer_id AS cust_id, c.display_name AS customer, ci.id AS our_inv, ci.invoice_number AS our_inv_no,
+                                (ci.bill_to_partner_id = vp.id OR j.partner_id = vp.id) AS vista
+                         FROM supplier_invoice_customer_links k JOIN invoices ci ON ci.id = k.invoice_id LEFT JOIN jobs j ON j.id = ci.job_id LEFT JOIN customers c ON c.id = ci.customer_id
+                           LEFT JOIN LATERAL (SELECT p.id FROM partners p WHERE p.name ILIKE '%vista%' ORDER BY p.id LIMIT 1) vp ON true
+                         WHERE k.supplier_invoice_id = i.id ORDER BY (ci.bill_to_partner_id = vp.id OR j.partner_id = vp.id) DESC NULLS LAST, ci.id LIMIT 1) cu ON true
     WHERE (p_supplier IS NULL OR m.supplier_id = p_supplier)
-      AND (coalesce(p_kind, 'all') = 'all' OR (p_kind = 'order' AND m.tank_order_id IS NOT NULL) OR (p_kind = 'fixed' AND m.replaced_po_id IS NOT NULL) OR (p_kind = 'new' AND m.how IN ('hand', 'auto')))
+      AND (coalesce(p_kind, 'all') = 'all' OR (p_kind = 'order' AND m.tank_order_id IS NOT NULL) OR (p_kind = 'fixed' AND m.replaced_po_id IS NOT NULL) OR (p_kind = 'new' AND m.how IN ('hand', 'auto'))
+           OR (p_kind = 'vista' AND cu.vista) OR (p_kind = 'cust' AND cu.cust_id IS NOT NULL AND NOT coalesce(cu.vista, false)) OR (p_kind = 'nocust' AND cu.our_inv IS NULL))
       AND (q IS NULL OR lower(m.memo_number) LIKE '%' || q || '%' OR lower(coalesce(i.supplier_invoice_number, '')) LIKE '%' || q || '%' OR lower(coalesce(s.name, '')) LIKE '%' || q || '%'
-           OR lower(coalesce(po.po_number, '')) LIKE '%' || q || '%' OR lower(coalesce(t.credit_number, '')) LIKE '%' || q || '%' OR lower(coalesce(i.po_text, '')) LIKE '%' || q || '%'))
+           OR lower(coalesce(po.po_number, '')) LIKE '%' || q || '%' OR lower(coalesce(t.credit_number, '')) LIKE '%' || q || '%' OR lower(coalesce(i.po_text, '')) LIKE '%' || q || '%' OR lower(coalesce(cu.customer, '')) LIKE '%' || q || '%'))
   SELECT (SELECT count(*) FROM base), (SELECT coalesce(sum(amount), 0) FROM base),
          coalesce((SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT * FROM base ORDER BY invoice_date DESC NULLS LAST, id DESC LIMIT greatest(1, least(coalesce(p_limit, 300), 2000))) x), '[]'::jsonb)
   INTO n, tot, v;
