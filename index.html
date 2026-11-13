@@ -7195,6 +7195,12 @@ article.bank .ow-af-res tr:not(.ow-pair-head) td.bank-amt-attcell { display: blo
 :is(article.owing, article.bank) .ow-tools-perm .ow-af-l { font-size: 14px; } :is(article.owing, article.bank) .ow-tools-perm .ow-af-l :is(input, select) { font-size: 14.5px; padding: 6px 8px; }
 :is(article.owing, article.bank) .ow-tools-perm .ow-af-then { font-size: 14px; } :is(article.owing, article.bank) .ow-tools-perm .ow-af-res .ow-amt-msg, :is(article.owing, article.bank) .ow-tools-perm .ow-af-res td { font-size: 14px; }
 .ow-tools-perm .bank-amt-for { font-size: 14px; padding: 8px 10px; } .ow-tools-perm .bank-amt-for strong { font-size: 17px; } .ow-tools-perm .bank-amt-msg { font-size: 14px; } .ow-tools-perm .bank-amt-att { font-size: 14px; padding: 7px 8px; }
+/* hold a box and drag it onto another box of its section to swap them (Carlo, Nov 12) */
+body.bx-dragging, body.bx-dragging * { cursor: grabbing !important; user-select: none !important; -webkit-user-select: none !important; }
+.bx-hold { outline: 3px solid #f2b705 !important; outline-offset: 2px; box-shadow: 0 8px 22px rgba(35, 65, 95, .30) !important; transform: scale(1.04); position: relative; z-index: 5; }
+.bx-slot { outline: 2px dashed #7fa3c4 !important; outline-offset: 2px; } .bx-over { outline: 3px solid #1f9d4a !important; outline-offset: 2px; background-image: linear-gradient(rgba(31, 157, 74, .14), rgba(31, 157, 74, .14)) !important; }
+#bx-say { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(20px); z-index: 4000; background: #e9f6ed; border: 1.5px solid #a9d6b7; color: #1b6b36; font-size: 16px; font-weight: 700; padding: 11px 18px; border-radius: 12px; box-shadow: 0 6px 20px rgba(35, 65, 95, .22); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: min(620px, 92vw); text-align: center; }
+#bx-say.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 /* copy buttons an owner put on a page (Carlo, Nov 12) */
 .cpy-pasted { outline: 3px solid #1f9d4a !important; outline-offset: 1px; transition: outline-color .3s; }
 .cpy-btn { display: inline-grid; place-items: center; vertical-align: middle; width: 26px; height: 26px; margin: 0 0 0 6px; padding: 0; border: 1px solid #9fb6cc; border-radius: 5px; background: #fff; color: #23415f; font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 1px 2px rgba(35, 65, 95, .15); font-weight: 700; text-indent: 0; letter-spacing: 0; text-transform: none; }
@@ -28250,6 +28256,61 @@ function cpyApply() {
   want.forEach((S, id) => S.forEach(h => { const b = document.createElement("button"); b.type = "button"; b.className = "cpy-btn no-print"; b.dataset.cpy = id; b.title = "Copy this"; b.setAttribute("aria-label", "Copy this"); b.textContent = "📋";
     if (isBox(h)) h.insertAdjacentElement("afterend", b); else h.appendChild(b); }));
   document.body.classList.toggle("cpy-on", CPY.on); }
+// ----- Every page: hold a box, then drag it onto another box of the same section, and the two swap places (Carlo, Nov 12). Owners move them; the order is saved for everyone.
+// A "section" is the row or grid the box sits in; a box never leaves it. The order is drawn with CSS `order`, so nothing in the page is taken apart.
+const BX = { map: (() => { try { const a = JSON.parse(localStorage.getItem("reid.box.order") || "{}"); return a && typeof a === "object" && !Array.isArray(a) ? a : {}; } catch { return {}; } })(), at: 0, drag: null, clickOff: 0 };
+const BX_SKIP = ".dsp, .sdsp, table, [role=dialog], [aria-modal], .att-pop, .file-viewer, #cpy-bar, .pb-help-bar, .eco-pop, .eco-think, .bk-reasons, .sci-apps, [draggable=true], .ask-box, .ow-tools, form.po-filters, .cpy-btn, .eco-spot";
+function bxKeyOf(el) { if (el.id) return "#" + el.id;
+  for (const a of el.attributes) { if (/^data-/.test(a.name) && !/^data-(atag|cpy|sure|q$|bx|eco)/.test(a.name)) return a.name.slice(5) + "=" + String(a.value).slice(0, 60); }
+  return "t:" + (el.textContent || "").replace(/[\d$.,()%]+/g, "").replace(/\s+/g, " ").trim().slice(0, 48); }
+function bxKeys(members) { const seen = new Map(); return members.map(m => { const k = bxKeyOf(m), n = (seen.get(k) || 0) + 1; seen.set(k, n); return n > 1 ? k + "~" + n : k; }); }
+function bxMembers(P, tag) { return [...P.children].filter(c => c.tagName === tag && !c.classList.contains("cpy-btn") && !c.classList.contains("eco-spot") && !c.hidden); }
+// the box under the mouse and the section it may move in, or null
+function bxFind(t) { if (!t || !t.closest) return null; const root = t.closest("#main") || t.closest("#search-page"); if (!root || document.body.dataset.page === "security") return null;
+  const gridLike = P => /flex|grid/.test(getComputedStyle(P).display), big = el => { const r = el.getBoundingClientRect(); return r.width >= 44 && r.height >= 30; };
+  const ok = (el, min) => { const P = el.parentElement; if (!P || P === root || !root.contains(P) || el.closest(BX_SKIP) || !gridLike(P) || !big(el)) return null; const M = bxMembers(P, el.tagName); return M.length >= min ? { el, P, M } : null; };
+  const ctl = t.closest("button, a, summary, [role=button]");
+  if (ctl && root.contains(ctl)) { if (ctl.closest("label") || /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return null; return ok(ctl, 2) || (ctl.parentElement && ctl.parentElement.children.length <= 3 ? ok(ctl.parentElement, 2) : null); }
+  let n = t; for (let k = 0; k < 5 && n && n !== root; k++, n = n.parentElement) { if (/^(INPUT|SELECT|TEXTAREA|LABEL)$/.test(n.tagName)) return null;
+    const cs = getComputedStyle(n), r = n.getBoundingClientRect(), boxy = parseFloat(cs.borderTopWidth) > 0 || !/rgba\(0, 0, 0, 0\)|transparent/.test(cs.backgroundColor);
+    if (!boxy || r.width < 70 || r.height < 40 || n.querySelector("input, select, textarea")) continue;
+    const c1 = n.classList[0]; if (!c1) continue; const g = ok(n, 3); if (g && g.M.filter(m => m.classList[0] === c1).length >= 3) return g; }
+  return null; }
+function bxSelOf(P) { const rk = P.closest("#main") ? "M" : "S", q = ecoSelOf(P, ecoSpotRoot(rk)); return q ? ecoPageKey() + "|" + rk + " " + q : null; }
+function bxApply() {
+  if (typeof ME !== "undefined" && ME.role && Date.now() - BX.at > 600000) { BX.at = Date.now(); db.rpc("box_order").then(({ data, error }) => { if (!error && data && typeof data === "object" && JSON.stringify(data) !== JSON.stringify(BX.map)) { BX.map = data; try { localStorage.setItem("reid.box.order", JSON.stringify(data)); } catch {} bxApply(); } }).catch(() => {}); }
+  if (BX.drag) return; const pg = ecoPageKey() + "|";
+  for (const key in BX.map) { if (!key.startsWith(pg)) continue; const v = BX.map[key], P = ecoSpotHost({ sel: key.slice(pg.length) }); if (!P || !v || !Array.isArray(v.o)) continue;
+    const kids = [...P.children], M = bxMembers(P, v.t || "BUTTON"); if (M.length < 2) continue;
+    const K = bxKeys(M), rank = k => { const i = v.o.indexOf(k); return i < 0 ? 1e6 : i; }, sorted = M.map((m, i) => [m, rank(K[i]), i]).sort((a, b) => a[1] - b[1] || a[2] - b[2]).map(x => x[0]);
+    let j = 0; kids.forEach((c, i) => { const m = M.includes(c) ? sorted[j++] : c; const o = String(i + 1); if (m.style.order !== o) m.style.order = o; }); } }
+(function bxWatch() { let t = 0; const later = () => { clearTimeout(t); t = setTimeout(bxApply, 300); };
+  try { const mo = new MutationObserver(L => { if (L.every(m => [...m.addedNodes, ...m.removedNodes].every(n => n.nodeType === 1 && (n.classList.contains("cpy-btn") || n.classList.contains("eco-spot"))))) return; later(); });
+    ["main", "search-page"].forEach(id => { const el = document.getElementById(id); if (el) mo.observe(el, { childList: true, subtree: true }); });
+    new MutationObserver(later).observe(document.body, { attributes: true, attributeFilter: ["data-page"] }); } catch { } later(); })();
+function bxSay(words) { let b = document.getElementById("bx-say"); if (!b) { b = document.createElement("div"); b.id = "bx-say"; b.className = "no-print"; b.setAttribute("role", "status"); document.body.appendChild(b); } b.textContent = words; b.classList.add("on"); clearTimeout(bxSay.t); bxSay.t = setTimeout(() => b.classList.remove("on"), 3200); }
+function bxEnd() { const d = BX.drag; BX.drag = null; if (!d) return; clearTimeout(d.timer); document.body.classList.remove("bx-dragging"); d.M.forEach(m => m.classList.remove("bx-hold", "bx-slot", "bx-over")); }
+window.addEventListener("pointerdown", e => { if (e.button !== 0 || typeof ME === "undefined" || ME.role !== "owner" || BX.drag || (typeof CPY !== "undefined" && CPY.on) || (typeof ECO_FIND !== "undefined" && ECO_FIND.on)) return;
+  const g = bxFind(e.target); if (!g) return;
+  const d = BX.drag = { ...g, x: e.clientX, y: e.clientY, armed: false, over: null, id: e.pointerId };
+  d.timer = setTimeout(() => { if (BX.drag !== d) return; d.armed = true; document.body.classList.add("bx-dragging"); d.M.forEach(m => m.classList.add(m === d.el ? "bx-hold" : "bx-slot")); try { getSelection().removeAllRanges(); } catch {} }, 380); }, true);
+window.addEventListener("pointermove", e => { const d = BX.drag; if (!d || e.pointerId !== d.id) return;
+  if (!d.armed) { if (Math.abs(e.clientX - d.x) > 7 || Math.abs(e.clientY - d.y) > 7) bxEnd(); return; }
+  if (Math.abs(e.clientX - d.x) > 7 || Math.abs(e.clientY - d.y) > 7) d.moved = true;
+  e.preventDefault(); const u = document.elementFromPoint(e.clientX, e.clientY), over = u && d.M.find(m => m !== d.el && m.contains(u)) || null;
+  if (over !== d.over) { d.over?.classList.remove("bx-over"); over?.classList.add("bx-over"); d.over = over; } }, true);
+window.addEventListener("pointerup", async e => { const d = BX.drag; if (!d || e.pointerId !== d.id) return; const armed = d.armed, over = d.over, moved = d.moved; bxEnd(); if (!armed || !moved) return;   // held but not dragged: it is a slow click, let it press
+  BX.clickOff = Date.now();   // the click that ends a drag does not press the box
+  if (!over) return;
+  const key = bxSelOf(d.P); if (!key) { bxSay("I can not keep the order of this section. It was not moved."); return; }
+  const vis = d.M.slice().sort((a, b) => (Number(a.style.order) || 0) - (Number(b.style.order) || 0) || d.M.indexOf(a) - d.M.indexOf(b)), K = bxKeys(d.M), keyOf = m => K[d.M.indexOf(m)];
+  const i = vis.indexOf(d.el), j = vis.indexOf(over); [vis[i], vis[j]] = [vis[j], vis[i]];
+  const val = { t: d.el.tagName, o: vis.map(keyOf) }; BX.map = { ...BX.map, [key]: val }; try { localStorage.setItem("reid.box.order", JSON.stringify(BX.map)); } catch {} bxApply();
+  const { data, error } = await db.rpc("set_box_order", { p_key: key, p: val });
+  if (error) bxSay("The new order was not saved: " + (error.message || "try again")); else { if (data && typeof data === "object") { BX.map = data; try { localStorage.setItem("reid.box.order", JSON.stringify(data)); } catch {} } bxSay("✓ The two boxes swapped places. The new order is saved for everyone."); } }, true);
+window.addEventListener("pointercancel", () => bxEnd(), true);
+window.addEventListener("click", e => { if (Date.now() - BX.clickOff < 450) { BX.clickOff = 0; e.preventDefault(); e.stopPropagation(); } }, true);
+window.addEventListener("dragstart", e => { if (BX.drag && BX.drag.armed) e.preventDefault(); }, true);
 (function cpyWatch() { let t = 0; const later = () => { clearTimeout(t); t = setTimeout(cpyApply, 350); };
   try { const mo = new MutationObserver(L => { if (L.every(m => [...m.addedNodes, ...m.removedNodes].every(n => n.nodeType === 1 && (n.classList.contains("cpy-btn") || n.classList.contains("eco-spot"))))) return; later(); });
     ["main", "search-page"].forEach(id => { const el = document.getElementById(id); if (el) mo.observe(el, { childList: true, subtree: true }); });
