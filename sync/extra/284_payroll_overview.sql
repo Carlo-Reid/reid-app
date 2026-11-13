@@ -6,7 +6,7 @@ CREATE OR REPLACE FUNCTION public.payroll_overview() RETURNS jsonb LANGUAGE sql 
   SELECT CASE WHEN public._src_owner() THEN jsonb_build_object(
     'people', coalesce((SELECT jsonb_agg(jsonb_build_object('staff', ps.id, 'user', ps.app_user_id, 'y', t.y, 'slips', t.slips,
         'gross', t.gross, 'vac', t.vac, 'tax', t.tax, 'cpp', t.cpp, 'ei', t.ei, 'net', t.net, 'co', t.cpp + round(t.ei * 1.4, 2),
-        'cost', t.gross + t.cpp + round(t.ei * 1.4, 2), 'last', t.last))
+        'cost', t.gross + t.cpp + round(t.ei * 1.4, 2), 'last', t.last, 'vac_pct', ps.vac_pct))
       FROM (SELECT s.staff_id, extract(year FROM s.cheque_date)::int AS y, count(*) AS slips, coalesce(sum(s.gross), 0) AS gross,
                    coalesce(sum(s.vac), 0) AS vac, coalesce(sum(s.tax), 0) AS tax, coalesce(sum(s.cpp), 0) AS cpp, coalesce(sum(s.ei), 0) AS ei,
                    coalesce(sum(s.net), 0) AS net, max(s.cheque_date) AS last
