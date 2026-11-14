@@ -1961,6 +1961,13 @@
   .pr-slipt th, .pr-ldt th { background: #f1f5f9; }
   .pr-ldt select { max-width: 220px; } .pr-ld-off td { opacity: .45; } .pr-ld-conf { background: #fff8ee; } .pr-ld-chg { color: #9a4d00; font-weight: 700; } .pr-ld-of { color: #b42318; font-size: 13px; margin-top: 4px; }
   .pr-rtbox { background: #eef5fc; border-color: #9fc0e0; } .pr-rt-other { display: flex; gap: 8px; width: 100%; margin-top: 6px; } .pr-rt-other input { flex: 1; }
+  .pr-t4box { margin-top: 14px; } .pr-t4head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; } .pr-t4head h2 { margin: 0; }
+  .pr-t4-good { color: #1b6b36; font-weight: 700; } .pr-t4-bad { color: #9a4d00; font-weight: 700; } .pr-t4-ok { color: #1b6b36; font-weight: 700; }
+  .pr-t4row-bad td, tr.pr-t4-row-bad td { background: #fff3e4; } .pr-t4in { width: 110px; } .pr-t4y { width: 70px; } .pr-t4in.pr-t4off { border: 2px solid #e8890c; background: #fff7ec; }
+  .pr-t4note { width: 100%; min-width: 160px; } .pr-t4yr { margin: 10px 0 4px; }
+  .t4-view { position: fixed; inset: 0; background: rgba(16,35,61,.55); z-index: 10050; display: flex; align-items: flex-start; justify-content: center; overflow: auto; padding: 24px; }
+  .t4-view-b { background: #fff; border-radius: 12px; padding: 12px; max-width: 1000px; width: 100%; } .t4-view-h { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .t4-view img { width: 100%; height: auto; border: 1px solid #d3dbe4; border-radius: 8px; }
   .pr-ld-flags { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 10px; }
   .pr-ld-fl { border: 1.5px solid #bcd0e3; background: #fff; color: #23415f; border-radius: 10px; padding: 6px 12px; font-weight: 700; cursor: pointer; }
   .pr-ld-fl.on { background: #e8f0f8; border-color: #23415f; }
@@ -33994,7 +34001,8 @@ async function openPayroll() {
       <p class="quiet">Load the accountant's pay slips (a PDF) to set each person's pay, raises and gross pay from them. Nothing is saved until you check it.</p>
       ${noRate.length ? `<p class="pr-norate-note">⚠ <b>${noRate.length} ${noRate.length === 1 ? "person has" : "people have"} no pay rate:</b> ${noRate.map(x => `<button type="button" class="link" ${x.user ? `data-pr-user="${x.user}"` : `data-pr-staff="${x.staff}"`}>${esc(x.name)}</button>`).join(", ")}. Load a payroll PDF, or click a name to set it.</p>` : ""}
       <div id="pr-tot-box"><div class="loading">Loading the payroll totals…</div></div>
-      <div id="src-box"><div class="loading">Loading the source payments…</div></div></div>` : ""}
+      <div id="src-box"><div class="loading">Loading the source payments…</div></div>
+      <div id="pr-t4-box"><div class="loading">Loading the T4s…</div></div></div>` : ""}
     <p class="lead">Click a person to open their page. Hours worked this period: <b>${fmtDate(p.from)} – ${fmtDate(p.to)}</b>, paid on <b>${fmtDate(p.pay)}</b>.</p>
     ${priv ? (xs => `<details class="block pr-ownb"><summary><h2>Owners <span class="pr-n">${xs.length}</span></h2></summary><div class="pr-people">${xs.map(row).join("") || `<p class="muted">Nobody.</p>`}</div></details>`)(by("owner")) : ""}${blk("tech", "Techs")}${blk("sales", "Sales")}${blk("office", "Office")}${blk("greeter", "Store Greeters")}
     ${past.length ? `<details class="block pr-pastb"${PR.pastOpen ? " open" : ""}><summary><h2>Past employees <span class="pr-n">${past.length}</span></h2></summary><div class="pr-people">${past.map(row).join("")}</div></details>` : ""}
@@ -34008,7 +34016,7 @@ async function openPayroll() {
     e.preventDefault(); const k = await askChoice("You sure?", "This opens the owners' payroll.", [["yes", "Yes", true], ["no", "No"]]); if (k === "yes") d.open = true; });
   prPrivWire(() => openPayroll());
   if (priv) {
-    prTotBox(); srcBox();
+    prTotBox(); srcBox(); prT4Box();
     $("#pr-slips-in")?.addEventListener("change", e => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) prSlipsLoad(fs); });
     // a payroll PDF can be dropped anywhere on the private part (George, Nov 13)
     const zone = $(".pr-privzone"), isPdf = f => /pdf/i.test(f.type) || /\.pdf$/i.test(f.name);
@@ -34208,6 +34216,160 @@ async function prSlipPage(path, d) {
   if (ue || !u?.signedUrl) return alertMsg("Couldn't open the slip: " + rpcErr(ue || {}));
   srcModal("Pay slip · cheque of " + longDate(d), `<img src="${esc(u.signedUrl)}" alt="The pay slip" style="width:100%;height:auto;border:1px solid #d3dbe4;border-radius:8px">`);
 }
+// ===== T4s (George, Nov 14: "upload the T4 also so we can have a record of their total for the year and it should match the pay and everything
+// should balance and if not we need to check why"). Read in the browser from the accountant's T4 PDF; the SIN is covered on the page picture
+// and never kept. Each T4 is checked against the pay slips with a cheque date in that year: box 14 = gross, 16 = CPP, 18 = EI, 22 = tax.
+const T4_BOXES = [["b14", "14", "Employment income"], ["b16", "16", "CPP"], ["b18", "18", "EI"], ["b22", "22", "Income tax"], ["b24", "24", "EI insurable earnings"],
+  ["b26", "26", "CPP pensionable earnings"], ["b20", "20", "RPP"], ["b44", "44", "Union dues"], ["b46", "46", "Charity"], ["b52", "52", "Pension adjustment"]];
+const T4_CHECK = [["b14", "gross", "Pay (gross)"], ["b16", "cpp", "CPP"], ["b18", "ei", "EI"], ["b22", "tax", "Income tax"]];
+const T4_HELP = { b14: "Box 14: all the pay for the year. It should equal the gross on the pay slips with a cheque date in that year. Taxable benefits (a company car, gifts) are in box 14 but not on the pay slips, so they make it higher.",
+  b16: "Box 16: the CPP taken off their pay in the year. It should equal the CPP on the pay slips.", b18: "Box 18: the EI taken off their pay. It should equal the EI on the pay slips.",
+  b22: "Box 22: the income tax taken off their pay. It should equal the tax on the pay slips." };
+const t4Num = v => { if (v == null || v === "") return null; const n = Number(String(v).replace(/[\s$]/g, "").replace(/,(\d\d)$/, ".$1").replace(/,/g, "")); return isFinite(n) ? n : null; };
+// the T4s on the pages: the amount after each box number, in reading order; one T4 for each box 14 found on a page (copies are taken out after)
+function t4Parse(L) {
+  const out = [], pages = [...new Set(L.map(l => l.page))];
+  for (const pg of pages) { const ls = L.filter(l => l.page === pg).map(l => l.t), text = ls.join("\n");
+    if (!/\bT4\b|remuneration|r[ée]mun[ée]ration|employment income|revenus d'emploi/i.test(text)) continue;
+    const ym = text.match(/(?:Year|Ann[ée]e)\D{0,20}(20\d\d)/i) || text.match(/\b(20\d\d)\b(?![-/]\d)/); const year = ym ? Number(ym[1]) : null;
+    const hits = {}; T4_BOXES.forEach(([k, n]) => { hits[k] = []; const re = new RegExp(`(?:^|\\s|box\\s*)${n}\\s+(?:[A-Za-zÀ-ÿ'’ ,()/.-]{0,60}?\\s)?\\$?\\s*(\\d{1,3}(?:[ ,]\\d{3})*[.,]\\d\\d)(?!\\d)`, "gi");
+      ls.forEach(l => { let m; while ((m = re.exec(l))) hits[k].push(t4Num(m[1])); }); });
+    const names = []; ls.forEach((l, i) => { if (/employee'?s name|nom de l'employ|last name|nom de famille|^name\b/i.test(l)) {
+      const own = l.replace(/.*?(employee'?s name and address|employee'?s name|nom de l'employ[ée]+|last name|^name)\s*[:\-]?\s*/i, "").replace(/first name.*|pr[ée]nom.*|initial.*/i, "").trim();
+      const nx = (ls[i + 1] || "").replace(/first name.*|pr[ée]nom.*|initial.*/i, "").trim();
+      const v = /[a-z]{2}/i.test(own) && !/\d{3}/.test(own) ? own : /[a-z]{2}/i.test(nx) && !/\d{3}|box|case/i.test(nx) ? nx : ""; if (v) names.push(v.replace(/\s+/g, " ")); } });
+    const n = Math.max(hits.b14.length, 1);
+    for (let k = 0; k < n; k++) { const o = { page: pg, year, name: names[k] || names[0] || "" }; T4_BOXES.forEach(([b]) => { o[b] = hits[b][k] ?? null; }); out.push(o); } }
+  // copies (the same person, year and amounts twice on a page or in the file) are kept once
+  return out.filter((o, i) => !out.slice(0, i).some(p => p.name.toLowerCase() === o.name.toLowerCase() && p.year === o.year && p.b14 === o.b14 && p.b22 === o.b22));
+}
+// a T4 page big over the screen (the SIN covered here too)
+async function t4PageView(f, page) {
+  const x = { _f: f, page, cheque: "view" }; let url = null;
+  try { await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");
+    const pdf = PAYS_PDF.get(f) || await window.pdfjsLib.getDocument({ data: (await f.arrayBuffer()).slice(0) }).promise; PAYS_PDF.set(f, pdf);
+    const pg = await pdf.getPage(page), vp = pg.getViewport({ scale: 1.5 }), c = document.createElement("canvas"); c.width = vp.width; c.height = vp.height;
+    const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: g, viewport: vp }).promise; url = c.toDataURL("image/jpeg", 0.8); } catch { }
+  const o = document.createElement("div"); o.className = "t4-view"; o.setAttribute("role", "dialog");
+  o.innerHTML = `<div class="t4-view-b"><div class="t4-view-h"><b>${esc(f.name)} · page ${page}</b><button type="button" class="btn" data-x>✕ Close</button></div>${url ? `<img src="${url}" alt="The T4 page">` : `<p class="src-bad">I could not draw this page.</p>`}</div>`;
+  const close = () => o.remove(); o.addEventListener("click", e => { if (e.target === o || e.target.closest("[data-x]")) close(); }); document.body.append(o);
+}
+// does a T4 balance with the pay slips? → { ok, off: [[label, t4, slips]], none }
+function t4Bal(t, s) {
+  if (!s || !Number(s.n)) return { none: true, ok: false, off: [] };
+  const off = T4_CHECK.filter(([b, k]) => t[b] != null && Math.abs(Number(t[b]) - Number(s[k] || 0)) >= 1).map(([b, k, lab]) => [lab, Number(t[b]), Number(s[k] || 0)]);
+  return { ok: !off.length, off };
+}
+const t4OffWords = b => b.none ? "No pay slips loaded for that year" : b.ok ? "✓ Balances with the pay slips"
+  : "⚠ Check why: " + b.off.map(([lab, a, s]) => `${lab} ${a > s ? "is " + money(a - s) + " more" : "is " + money(s - a) + " less"} on the T4`).join(" · ");
+async function prT4Load(files) {
+  const { w, close } = srcModal("Load T4s", `<div class="pr-ld"><p class="src-hint">Reading ${files.length === 1 ? esc(files[0].name) : files.length + " files"}…</p></div>`);
+  w.querySelector(".src-pop")?.classList.add("src-pop-wide"); const body = w.querySelector(".pr-ld"); let T = [];
+  try { for (const f of files) { const L = await pdfLinesY(f); t4Parse(L).forEach(t => T.push({ ...t, _f: f, file: f.name })); } }
+  catch (e) { body.innerHTML = `<div class="error">Couldn't read it: ${esc(e.message || e)}</div>`; return; }
+  if (!T.length) { body.innerHTML = `<p class="src-bad"><b>I found no T4 in it.</b> It needs the T4 slips (Statement of Remuneration Paid). If it is a scanned picture, ask the accountant for the PDF they print from.</p>`; return; }
+  if (!PR.people) { const r = await db.rpc("payroll_people"); PR.people = r.data || []; }
+  const people = PR.people.slice().sort((a, b) => a.name.localeCompare(b.name)), personOf = k => people.find(p => paysKey(p) === k);
+  const sums = new Map(), loadYear = async y => { if (!y || sums.has(y)) return; const r = await db.rpc("payroll_t4_slipsums", { p_year: y }); sums.set(y, new Map((r.data || []).map(s => [paysKey(s), s]))); };
+  const R = T.map((t, i) => { let m = paysMatch(t.name, people); if (!m && t.name) { const tk = t.name.split(/\s+/); if (tk.length > 1) m = paysMatch([...tk.slice(1), tk[0]].join(" "), people); }
+    return { i, t, who: m ? paysKey(m) : t.name ? "new" : "skip", use: true }; });
+  for (const y of new Set(R.map(r => r.t.year))) await loadYear(y);
+  const sumOf = r => r.who === "new" || r.who === "skip" ? null : sums.get(r.t.year)?.get(r.who) || null;
+  const draw = () => {
+    const live = R.filter(r => r.use && r.who !== "skip"), bad = live.filter(r => !t4Bal(r.t, sumOf(r)).ok).length, noYear = live.filter(r => !r.t.year).length;
+    body.innerHTML = `<p class="src-hint">I read <b>${T.length} T4${T.length === 1 ? "" : "s"}</b>. Check who each one is and the amounts. The amounts can be changed in the boxes. Each one is checked against the pay slips of that year.</p>
+      ${bad ? `<p class="pr-ld-dupok"><b>⚠ ${bad} T4${bad === 1 ? " does" : "s do"} not balance with the pay slips</b> (orange below). It can still be saved; the Payroll page keeps showing it until you write why.</p>` : `<p class="pr-t4-ok">✓ Every T4 balances with the pay slips.</p>`}
+      ${noYear ? `<p class="src-bad"><b>${noYear} T4${noYear === 1 ? " has" : "s have"} no year.</b> Type it in the red box.</p>` : ""}
+      <div class="src-tw"><table class="pr-ldt pr-t4t"><thead><tr><th>Use</th><th>Name on the T4</th><th>Who in the app</th><th>Year</th>${T4_CHECK.map(([b, , lab]) => `<th title="${esc(T4_HELP[b])}">Box ${b.slice(1)} ${esc(lab)} ⓘ</th>`).join("")}<th>Balances?</th></tr></thead><tbody>
+      ${R.map(r => { const t = r.t, s = sumOf(r), bal = t4Bal(t, s);
+        return `<tr data-r="${r.i}" class="${!r.use || r.who === "skip" ? "pr-ld-off" : ""}${r.who === "new" ? " pr-ld-f-new" : !bal.ok && !bal.none ? " pr-ld-f-file" : ""}">
+          <td><input type="checkbox" data-use ${r.use ? "checked" : ""} aria-label="Save this T4"></td>
+          <td><b>${esc(t.name || "Name not read")}</b><div><button type="button" class="link" data-see>👁 See the page</button></div>${r.who === "new" ? `<div class="pr-ld-tag pr-ld-tag-new">🆕 New person</div>` : ""}</td>
+          <td><select data-who><option value="new"${r.who === "new" ? " selected" : ""}>＋ New person</option><option value="skip"${r.who === "skip" ? " selected" : ""}>✕ Leave it out</option>
+            ${people.map(q => `<option value="${paysKey(q)}"${paysKey(q) === r.who ? " selected" : ""}>${esc(q.name)}${q.user ? "" : " (payroll only)"}</option>`).join("")}</select></td>
+          <td><input data-year inputmode="numeric" class="pr-t4y${t.year ? "" : " pr-ld-chq"}" value="${t.year || ""}" aria-label="Year"></td>
+          ${T4_CHECK.map(([b, k]) => { const off = s && t[b] != null && Math.abs(Number(t[b]) - Number(s[k] || 0)) >= 1;
+            return `<td><input data-box="${b}" inputmode="decimal" class="pr-t4in${off ? " pr-t4off" : ""}" value="${t[b] != null ? Number(t[b]).toFixed(2) : ""}" aria-label="Box ${b.slice(1)}">
+              <div class="quiet">${s ? `Slips: ${money(s[k] || 0)}` : "Slips: none"}</div></td>`; }).join("")}
+          <td class="${bal.ok ? "pr-t4-good" : bal.none ? "quiet" : "pr-t4-bad"}">${esc(t4OffWords(bal))}${s ? `<div class="quiet">${s.n} pay slip${s.n == 1 ? "" : "s"} in ${t.year}</div>` : ""}</td></tr>`; }).join("")}
+      </tbody></table></div>
+      <p class="quiet">The SIN is covered on the page before it is saved, and it is never kept. A T4 already on file for the same person and year is replaced.</p>
+      <div class="src-pop-btns"><button type="button" class="btn" id="pr-t4-save"${noYear ? " disabled" : ""}>Save the T4s</button><button type="button" class="btn quiet-btn" data-src-x>Cancel</button></div>`;
+    body.querySelectorAll("tr[data-r]").forEach(tr => { const r = R[Number(tr.dataset.r)];
+      tr.querySelector("[data-see]").addEventListener("click", () => t4PageView(r.t._f, r.t.page));
+      tr.querySelector("[data-use]").addEventListener("change", e => { r.use = e.target.checked; draw(); });
+      tr.querySelector("[data-who]").addEventListener("change", e => { r.who = e.target.value; draw(); });
+      tr.querySelector("[data-year]").addEventListener("change", async e => { const y = Number(e.target.value) || null; r.t.year = y >= 2000 && y <= 2100 ? y : null; await loadYear(r.t.year); draw(); });
+      tr.querySelectorAll("[data-box]").forEach(i => i.addEventListener("change", () => { r.t[i.dataset.box] = t4Num(i.value); draw(); })); });
+    body.querySelector("#pr-t4-save")?.addEventListener("click", async e => { e.target.disabled = true;
+      const out = []; let k = 0, pgErr = 0; const say = body.querySelector(".src-pop-btns");
+      for (const r of R.filter(r => r.use && r.who !== "skip")) { k++; if (say) say.innerHTML = `<span class="src-hint">Saving the T4 pages: ${k}…</span>`;
+        const p = personOf(r.who), x = { name: r.t.name, year: r.t.year, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: "office" };
+        T4_BOXES.forEach(([b]) => { x[b] = r.t[b]; });
+        try { x.page = await paysPageSave({ _f: r.t._f, page: r.t.page, cheque: "t4-" + r.t.year }); } catch { pgErr++; }
+        out.push(x); }
+      const { data, error } = await db.rpc("payroll_t4_save", { p: { file: files.map(f => f.name).join(", "), t4s: out } });
+      if (error) { e.target.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
+      close(); PR.people = null; alertMsg(`✓ Saved ${data?.saved ?? out.length} T4${out.length === 1 ? "" : "s"}.` + (pgErr ? ` ${pgErr} page${pgErr === 1 ? "" : "s"} could not be kept.` : ""));
+      if (document.getElementById("pr-t4-box")) prT4Box(); });
+  };
+  draw();
+}
+// the T4 table: one line per person and year, the boxes against the pay slips; "Why" can be written on one that does not balance
+function prT4Rows(rows, one) {
+  return `<div class="src-tw"><table class="pr-slipt pr-t4list"><thead><tr>${one ? "" : "<th>Who</th>"}${T4_CHECK.map(([b, , lab]) => `<th title="${esc(T4_HELP[b])}">${esc(lab)} ⓘ<div class="quiet">T4 · pay slips</div></th>`).join("")}<th>Balances?</th><th>T4</th><th>Why it is off</th></tr></thead><tbody>
+    ${rows.map(x => { const has = x.id != null, bal = has ? t4Bal(x, x) : null, cur = Number(x.year) >= Number(salesToday().slice(0, 4));
+      const st = !has ? (cur ? `<span class="quiet">The T4 comes after the year ends</span>` : `<span class="pr-t4-bad">No T4 loaded</span>`) : bal.none ? `<span class="quiet">No pay slips loaded for ${x.year}</span>`
+        : bal.ok ? `<span class="pr-t4-good">✓ Balances</span>` : `<span class="pr-t4-bad">${esc(t4OffWords(bal))}</span>`;
+      return `<tr class="${has && !bal.ok && !bal.none && !x.note ? "pr-t4-row-bad" : ""}">${one ? "" : `<td>${x.user ? `<button type="button" class="link" data-pr-user="${x.user}">` : `<button type="button" class="link" data-pr-staff="${x.staff}">`}${esc(x.name)}</button></td>`}
+        ${T4_CHECK.map(([b, k]) => { const off = has && x.n && Math.abs(Number(x[b] || 0) - Number(x[k] || 0)) >= 1;
+          return `<td class="${off ? "pr-t4-bad" : ""}">${has && x[b] != null ? money(x[b]) : "—"}<div class="quiet">${x.n ? money(x[k] || 0) : "—"}</div></td>`; }).join("")}
+        <td>${st}</td><td>${x.page ? `<button type="button" class="btn" data-pr-slippg="${esc(x.page)}" data-pr-slipd="T4 ${x.year}">📄 Open</button>` : "—"}${has ? ` <button type="button" class="link" data-t4-del="${x.id}" title="Take this T4 off">✕</button>` : ""}</td>
+        <td>${has && !bal.ok && !bal.none ? `<input class="pr-t4note" data-t4-note="${x.id}" value="${esc(x.note || "")}" placeholder="Type why, e.g. taxable benefit">` : esc(x.note || "")}</td></tr>`; }).join("")}
+  </tbody></table></div>`;
+}
+function prT4Wire(host, again) {
+  host.querySelectorAll("[data-pr-user]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollPerson(Number(b.dataset.prUser)); }));
+  host.querySelectorAll("[data-pr-staff]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollStaff(Number(b.dataset.prStaff)); }));
+  host.querySelectorAll("[data-pr-slippg]").forEach(b => b.addEventListener("click", async () => {
+    const { data: u, error } = await db.storage.from("payroll-slips").createSignedUrl(b.dataset.prSlippg, 600);
+    if (error || !u?.signedUrl) return alertMsg("Couldn't open it: " + rpcErr(error || {}));
+    srcModal(b.dataset.prSlipd, `<img src="${esc(u.signedUrl)}" alt="The T4" style="width:100%;height:auto;border:1px solid #d3dbe4;border-radius:8px">`); }));
+  host.querySelectorAll("[data-t4-note]").forEach(i => i.addEventListener("change", async () => {
+    const r = await db.rpc("payroll_t4_note", { p_id: Number(i.dataset.t4Note), p_note: i.value }); if (r.error) return alertMsg("Not saved: " + rpcErr(r.error));
+    alertMsg("✓ Saved why."); again(); }));
+  host.querySelectorAll("[data-t4-del]").forEach(b => b.addEventListener("click", async () => {
+    const k = await askChoice("Take this T4 off?", "Only the T4 is taken off. The pay slips stay.", [["yes", "Yes, take it off", true], ["", "No, keep it"]]); if (k !== "yes") return;
+    const r = await db.rpc("payroll_t4_del", { p_id: Number(b.dataset.t4Del) }); if (r.error) return alertMsg("Not done: " + rpcErr(r.error)); again(); }));
+}
+async function prT4Box() {
+  const host = document.getElementById("pr-t4-box"); if (!host) return;
+  const { data, error } = await db.rpc("payroll_t4_list", { p_staff: null }); if (!document.getElementById("pr-t4-box")) return;
+  if (error) { host.innerHTML = `<div class="error">Couldn't load the T4s: ${esc(rpcErr(error))}</div>`; return; }
+  const rows = data || [], years = [...new Set(rows.map(x => Number(x.year)))].sort((a, b) => b - a), cur = Number(salesToday().slice(0, 4));
+  const yr = y => { const xs = rows.filter(x => Number(x.year) === y), t4 = xs.filter(x => x.id != null);
+    const bad = t4.filter(x => { const b = t4Bal(x, x); return !b.ok && !b.none && !x.note; }).length, miss = y < cur ? xs.filter(x => x.id == null).length : 0;
+    const tot = k => xs.reduce((t, x) => t + Number(x[k] || 0), 0);
+    return `<details class="src-year pr-t4y-f"${PR.t4Open?.has(y) ? " open" : ""} data-y="${y}"><summary><b>${y}</b> · ${t4.length} T4${t4.length === 1 ? "" : "s"}
+      ${t4.length ? ` · box 14 ${money(tot("b14"))} · pay slips ${money(tot("gross"))}` : ""}
+      ${bad ? ` · <span class="pr-t4-bad">⚠ ${bad} to check</span>` : t4.length ? ` · <span class="pr-t4-good">✓ the T4s balance</span>` : ""}${miss ? ` · <span class="pr-t4-bad">${miss} with no T4</span>` : ""}</summary>
+      ${prT4Rows(xs)}</details>`; };
+  host.innerHTML = `<section class="pr-t4box"><div class="pr-t4head"><h2>🧾 T4s</h2><label class="btn pr-ldpdf">📄 Load T4s<input type="file" accept=".pdf,application/pdf" id="pr-t4-in" multiple hidden></label></div>
+    <p class="quiet">Each T4 is checked against the pay slips with a cheque date in that year: box 14 against the gross, 16 the CPP, 18 the EI, 22 the tax. When one does not balance, type why on its line.</p>
+    ${years.length ? years.map(yr).join("") : `<p class="quiet">No pay slips or T4s yet.</p>`}</section>`;
+  PR.t4Open = PR.t4Open || new Set();
+  host.querySelectorAll(".pr-t4y-f").forEach(d => d.addEventListener("toggle", () => { const y = Number(d.dataset.y); d.open ? PR.t4Open.add(y) : PR.t4Open.delete(y); }));
+  host.querySelector("#pr-t4-in")?.addEventListener("change", e => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) prT4Load(fs); });
+  prT4Wire(host, prT4Box);
+}
+async function prT4Person(staffId) {
+  const host = document.getElementById("pr-t4-person"); if (!host) return;
+  const { data, error } = await db.rpc("payroll_t4_list", { p_staff: staffId }); if (!document.getElementById("pr-t4-person")) return;
+  if (error) { host.innerHTML = `<div class="error">Couldn't load the T4s: ${esc(rpcErr(error))}</div>`; return; }
+  const rows = data || [];
+  host.innerHTML = rows.length ? rows.map(x => `<h4 class="pr-t4yr">${x.year}</h4>${prT4Rows([x], true)}`).join("") : `<p class="quiet">No T4s or pay slips yet. Load T4s on the Payroll page (CG on).</p>`;
+  prT4Wire(host, () => prT4Person(staffId));
+}
 // a person's gross pay this year, from the pay slips loaded (the cards on the private list)
 function prVacPct(x) { const rs = (PR.ov?.people || []).filter(o => (x.user ? Number(o.user) === Number(x.user) : Number(o.staff) === Number(x.staff)) && o.vac_pct != null);
   return rs.length ? Number(rs[0].vac_pct) : null; }
@@ -34283,6 +34445,7 @@ async function prPrivSlot(user, staff) {
       ${slips.length ? `<p class="quiet">First pay on file: ${esc(longDate(String(slips[slips.length - 1].cheque).slice(0, 10)))}. This is not always the day they started.</p>` : ""}</section>
     ${(d?.addresses || []).length ? `<section class="pr-pcard"><h3>🏠 Address on the pay slips</h3><dl class="pr-addr">${d.addresses.map((a, i) => `<dt>${i ? "Before" : "Now"}</dt><dd><b>${esc(a.addr)}</b> <span class="quiet">on the pay slips ${a.first === a.last ? "of " + esc(fmtDate(String(a.first).slice(0, 10))) : "from " + esc(fmtDate(String(a.first).slice(0, 10))) + " to " + esc(fmtDate(String(a.last).slice(0, 10)))}</span></dd>`).join("")}</dl></section>` : ""}
     ${log.length ? `<section class="pr-pcard"><h3>Pay history and notes</h3><ul class="pr-log">${log.map(l => `<li><span>${l.day ? esc(fmtDate(String(l.day).slice(0, 10))) : ""}</span> ${esc(l.note)}${l.by ? ` <span class="quiet">· ${esc(l.by)}</span>` : ""}</li>`).join("")}</ul></section>` : ""}
+    ${ps.id ? `<details class="pr-pcard pr-fold" data-k="t4"><summary><h3>🧾 T4s</h3></summary><div id="pr-t4-person"><div class="loading">Loading…</div></div></details>` : ""}
     ${slips.length ? `<details class="pr-pcard pr-slipd"><summary><h3>Pay slips (${slips.length})</h3></summary><div class="src-tw"><table class="pr-slipt"><thead><tr><th>Cheque</th><th>Pay period</th><th>Hours</th><th>Rate</th><th title="The vacation pay on this cheque. It is part of the gross.">Vacation pay</th><th>Gross</th><th>Tax, CPP, EI</th><th>Net</th><th>Slip</th></tr></thead><tbody>
       ${slips.map(s => `<tr title="${esc((s.earn || []).filter(e => e.cur).map(e => `${e.label}: ${money(e.cur)}`).join(" · "))}"><td>${esc(fmtDate(String(s.cheque).slice(0, 10)))}</td><td>${s.from ? esc(fmtDate(String(s.from).slice(0, 10)) + " – " + fmtDate(String(s.to).slice(0, 10))) : "—"}</td>
         <td>${v(s.hours)}</td><td>${s.kind === "salary" ? `${money(s.per_pay)} a pay` : s.rate != null ? money(s.rate) : "Commission"}</td><td>${Number(s.vac) ? money(s.vac) + (ps.vac_pct != null ? ` <span class="quiet">(${Number(ps.vac_pct)}%)</span>` : "") : "—"}</td><td>${money(s.gross)}</td><td>${money(Number(s.tax || 0) + Number(s.cpp || 0) + Number(s.ei || 0))}</td><td>${money(s.net)}</td><td>${s.page ? `<button type="button" class="btn" data-pr-slippg="${esc(s.page)}" data-pr-slipd="${esc(String(s.cheque).slice(0, 10))}">📄 Open</button>` : `<span class="quiet" title="This slip was saved before slip pages were kept. Load its payroll PDF again (📄 Load a payroll PDF) and the page is added.">Not attached yet</span>`}</td></tr>`).join("")}
@@ -34296,6 +34459,7 @@ async function prPrivSlot(user, staff) {
   box.querySelectorAll(".pr-fold").forEach(f => { f.open = opened.has(f.dataset.k); f.addEventListener("toggle", () => { f.open ? opened.add(f.dataset.k) : opened.delete(f.dataset.k); }); });
   box.querySelectorAll("[data-pr-all]").forEach(b => b.addEventListener("click", () => { const on = b.dataset.prAll === "1"; box.querySelectorAll(".pr-fold").forEach(f => { f.open = on; }); }));
   if (user) prRateBox(user);
+  if (ps.id) prT4Person(ps.id);
   box.querySelectorAll("[data-pr-slippg]").forEach(b => b.addEventListener("click", async () => {
     const { data: u, error: ue } = await db.storage.from("payroll-slips").createSignedUrl(b.dataset.prSlippg, 600);
     if (ue || !u?.signedUrl) return alertMsg("Couldn't open the slip: " + rpcErr(ue || {}));
@@ -34463,10 +34627,12 @@ async function prSlipsLoad(files) {
   w.querySelector(".src-pop")?.classList.add("src-pop-wide");
   const body = w.querySelector(".pr-ld"); let slips = [];
   let twice = 0;   // the very same slip (name, cheque date, gross and net) in the files more than once: kept once (George, Nov 13)
-  try { for (const f of files) { const L = await pdfLinesY(f); paysParse(L).forEach(s => {
+  let allT = "";
+  try { for (const f of files) { const L = await pdfLinesY(f); allT += L.map(l => l.t).join("\n"); paysParse(L).forEach(s => {
     if (slips.some(o => o.name.toLowerCase() === s.name.toLowerCase() && o.cheque === s.cheque && Math.abs(o.gross - s.gross) < 0.01 && Math.abs(o.net - s.net) < 0.01)) { twice++; return; }
     slips.push({ ...s, file: f.name, _f: f }); }); } }
   catch (e) { body.innerHTML = `<div class="error">Couldn't read it: ${esc(e.message || e)}</div>`; return; }
+  if (!slips.length && /\bT4\b|statement of remuneration|employment income/i.test(allT)) { close(); return prT4Load(files); }   // a T4 PDF dropped or picked here goes to the T4s
   if (!slips.length) { body.innerHTML = `<p class="src-bad"><b>I found no pay slips in it.</b> It needs the accountant's pay slips with "Pay Period … Cheque Date …" on them. If it is a scanned picture, ask the accountant for the PDF they print from.</p>`; return; }
   if (!PR.people) { const r = await db.rpc("payroll_people"); PR.people = r.data || []; }
   const people = PR.people.slice().sort((a, b) => a.name.localeCompare(b.name));
@@ -34478,16 +34644,18 @@ async function prSlipsLoad(files) {
   // the same person twice on one cheque date with other amounts: two cheques (pay and a separate salary or vacation cheque); both are kept unless one is unticked (George, Nov 13)
   for (const g of groups.values()) if (g.length > 1) g.forEach(r => { r.dup = g; r.use = true; });
   const personOf = k => people.find(p => paysKey(p) === k);
+  // one person: their app key, or for a new person the name on the slip (two new people are two people: George, Nov 14)
+  const pk = r => r.who === "new" ? "new:" + paysTok(r.s.name).join(" ") : r.who;
   const sameAmt = (o, s) => Math.abs(o.net - s.net) < 0.01 && Math.abs(o.gross - s.gross) < 0.01;
   const listOf = r => { const p = personOf(r.who); return p ? onFile.filter(o => String(o.cheque).slice(0, 10) === r.s.cheque && (p.user ? Number(o.user) === Number(p.user) : Number(o.staff) === Number(p.staff))) : []; };
   const exactOf = r => listOf(r).find(o => sameAmt(o, r.s)) || null;
   // the slip on file this one would replace: on file for that date, not the same as any slip in this batch (only when there is exactly one)
-  const freeOf = r => { const sib = R.filter(o => o.who === r.who && o.s.cheque === r.s.cheque && o.use);
+  const freeOf = r => { const sib = R.filter(o => pk(o) === pk(r) && o.s.cheque === r.s.cheque && o.use);
     const f = listOf(r).filter(o => !sib.some(x => sameAmt(o, x.s))); return f; };
   const fileOf = r => exactOf(r) || (freeOf(r).length ? freeOf(r)[0] : null);
   // the block of a slip: the last block picked by hand on this person's slips at or before its cheque date (it carries forward until changed again), else their block now (George, Nov 13)
   const ord = (a, b) => (a.s.cheque || "") < (b.s.cheque || "") ? -1 : (a.s.cheque || "") > (b.s.cheque || "") ? 1 : a.i - b.i;
-  const mine = r => R.filter(o => o.who === r.who && o.who !== "skip").sort(ord);
+  const mine = r => R.filter(o => pk(o) === pk(r) && o.who !== "skip").sort(ord);
   const blkFrom = r => { const L = mine(r); let src = null; for (const o of L) { if (o.blockSet) src = o; if (o === r) break; } return src; };
   const blkOf = r => { const src = blkFrom(r); if (src) return src.block; const p = personOf(r.who); return p && p.block && p.block !== "past" ? p.block : r.block; };
   const blkPrev = r => { const L = mine(r).filter(o => o.use); const k = L.indexOf(r); if (k > 0) return blkOf(L[k - 1]); const p = personOf(r.who); return p && p.block && p.block !== "past" ? p.block : null; };
@@ -34515,7 +34683,7 @@ async function prSlipsLoad(files) {
         const now = p?.rate ? (p.rate.kind === "salary" ? `${money(p.rate.amount)} a year` : `${money(p.rate.amount)} an hour`) : p?.pay_kind === "commission" ? "Commission" : "—";
         const slipRate = s.rate, differs = p && s.rate != null && (!p.rate || Math.abs(Number(p.rate.amount) - slipRate) >= 0.01);
         // an older slip never takes the pay back in time: only the newest pay on file can change the rate now (George, Nov 13)
-        const newest = p && s.cheque && !R.some(o => o !== r && o.who === r.who && o.use && (o.s.cheque > s.cheque || o.s.cheque === s.cheque && o.s.gross > s.gross)) && (!p.last_pay || s.cheque >= String(p.last_pay).slice(0, 10))
+        const newest = p && s.cheque && !R.some(o => o !== r && pk(o) === pk(r) && o.use && (o.s.cheque > s.cheque || o.s.cheque === s.cheque && o.s.gross > s.gross)) && (!p.last_pay || s.cheque >= String(p.last_pay).slice(0, 10))
           && (p.rate?.from === "app" ? (s.from || s.cheque) >= String(p.rate.starts_on || "").slice(0, 10) : srcDays(s.cheque, salesToday()) <= 30);
         const changed = differs && newest, hist = differs && !newest;
         const fl = flagOf(r); if (only && fl !== only) return "";
@@ -34545,7 +34713,7 @@ async function prSlipsLoad(files) {
     body.querySelectorAll("[data-only]").forEach(x => x.addEventListener("click", () => { only = x.dataset.only || null; draw(); }));
     body.querySelector("#pr-ld-save")?.addEventListener("click", async e => { e.target.disabled = true;
       // each slip's number for its person and cheque date: the one it replaces, else the next free one (two cheques on one date are two slips)
-      const taken = new Map(), keyOf = r => r.who + "|" + r.s.cheque, nextNo = r => { const k = keyOf(r);
+      const taken = new Map(), keyOf = r => pk(r) + "|" + r.s.cheque, nextNo = r => { const k = keyOf(r);
         if (!taken.has(k)) taken.set(k, new Set(listOf(r).map(o => Number(o.slip_no || 1)))); const t = taken.get(k); let n = 1; while (t.has(n)) n++; t.add(n); return n; };
       const out = R.filter(r => r.use && r.who !== "skip" && !exactOf(r)).filter(r => !freeOf(r).length || r.pick === "new" || r.pick === "add")
         .map(r => { const p = personOf(r.who), fr = freeOf(r), src = mine(r).some(o => o.blockSet && o.use);

@@ -133,6 +133,24 @@ BEGIN
                 WHEN s.reason = 'other' THEN coalesce(s.note, 'another reason') || '.' ELSE 'not answered yet (rehired, a long holiday or another reason?).' END, true);
     END LOOP;
   END IF;
+  -- a pay run with no cheque for them, while they were with us (George, Nov 14: "show in pay history if they missed a pay period cheque… when the pay period was")
+  IF to_regclass('public.payroll_no_slip') IS NOT NULL THEN
+    FOR s IN SELECT r.d, (SELECT mode() WITHIN GROUP (ORDER BY z.period_from) FROM payroll_slips z WHERE z.cheque_date = r.d) AS pf,
+        (SELECT mode() WITHIN GROUP (ORDER BY z.period_to) FROM payroll_slips z WHERE z.cheque_date = r.d) AS pt,
+        EXISTS (SELECT 1 FROM payroll_no_slip n WHERE n.staff_id = p_staff AND n.run_date = r.d) AS ok
+      FROM (SELECT cheque_date AS d FROM payroll_slips GROUP BY 1 HAVING count(*) >= 3) r
+      WHERE r.d > (SELECT min(cheque_date) FROM payroll_slips WHERE staff_id = p_staff) + 4
+        AND r.d <= least((SELECT max(cheque_date) FROM payroll_slips WHERE staff_id = p_staff) + 92, public._src_today())
+        AND (ps.left_on IS NULL OR r.d <= ps.left_on)
+        AND NOT EXISTS (SELECT 1 FROM payroll_slips z WHERE z.staff_id = p_staff AND z.cheque_date BETWEEN r.d - 4 AND r.d + 4)
+        AND coalesce((SELECT min(z.cheque_date) FROM payroll_slips z WHERE z.staff_id = p_staff AND z.cheque_date > r.d)
+              - (SELECT max(z.cheque_date) FROM payroll_slips z WHERE z.staff_id = p_staff AND z.cheque_date < r.d), 0) <= 92
+      ORDER BY r.d LOOP
+      INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, s.d, 'No cheque for this person on the pay run of ' || to_char(s.d, 'Mon DD, YYYY')
+        || CASE WHEN s.pf IS NOT NULL THEN ' (pay period ' || to_char(s.pf, 'Mon DD') || ' to ' || to_char(s.pt, 'Mon DD, YYYY') || ')' ELSE '' END
+        || CASE WHEN s.ok THEN '. Checked: that is right.' ELSE '.' END, true);
+    END LOOP;
+  END IF;
   SELECT max(cheque_date) INTO last_d FROM payroll_slips WHERE staff_id = p_staff;
   IF last_d IS NOT NULL AND last_d < public._src_today() - 92 AND ps.left_on IS NULL THEN
     INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, last_d + 92, 'No longer with us: no cheque for 3 months after the cheque of ' || to_char(last_d, 'Mon DD, YYYY') || '.', true);

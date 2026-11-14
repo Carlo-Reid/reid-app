@@ -67,8 +67,8 @@ CREATE OR REPLACE FUNCTION public.payroll_no_slip_set(p_staff bigint, p_d date, 
 BEGIN
   IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can change payroll'; END IF;
   IF p_on THEN INSERT INTO payroll_no_slip (staff_id, run_date, by_name) VALUES (p_staff, p_d, public._staff_name(public.current_app_user_id())) ON CONFLICT DO NOTHING;
-    INSERT INTO payroll_staff_log (staff_id, day, note, by_name) VALUES (p_staff, p_d, 'No cheque on the pay run of ' || to_char(p_d, 'Mon DD, YYYY') || ' (checked: that is right).', public._staff_name(public.current_app_user_id()));
   ELSE DELETE FROM payroll_no_slip WHERE staff_id = p_staff AND run_date = p_d; END IF;
+  PERFORM public._payroll_staff_refresh(p_staff);   -- the pay history line ("No cheque for this person… Checked: that is right.") is written by the refresh
 END $f$;
 REVOKE EXECUTE ON FUNCTION public.payroll_missing_slips(), public.payroll_no_slip_set(bigint, date, boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.payroll_missing_slips(), public.payroll_no_slip_set(bigint, date, boolean) TO authenticated;
@@ -99,6 +99,7 @@ END $f$;
 REVOKE EXECUTE ON FUNCTION public._payroll_gaps(bigint) FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.payroll_returns(), public.payroll_return_set(bigint, date, text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.payroll_returns(), public.payroll_return_set(bigint, date, text, text) TO authenticated;
+DELETE FROM public.payroll_staff_log WHERE NOT auto AND note LIKE 'No cheque on the pay run of % (checked: that is right).';   -- now written by the refresh, with the pay period
 -- the pay history gets the breaks: written again for everyone on each update
 DO $do$ DECLARE r record; BEGIN FOR r IN SELECT DISTINCT staff_id FROM public.payroll_slips LOOP PERFORM public._payroll_staff_refresh(r.staff_id); END LOOP; END $do$;
 NOTIFY pgrst, 'reload schema';
