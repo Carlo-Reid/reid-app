@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS public.walk_answers (
   question text, na boolean NOT NULL DEFAULT false, storage_key text, attachment_id bigint,
   at timestamptz NOT NULL DEFAULT now(), by_user bigint, PRIMARY KEY (visit_id, q));
 -- the number of questions is set on Settings -> Job Types (1 to 20), so the old 1-to-4 check is replaced
+-- a note on each picture (Carlo, Nov 14, 3:39 p.m.: "in the questions have a way to add notes to each picture they take")
+ALTER TABLE public.walk_answers ADD COLUMN IF NOT EXISTS note text;
 ALTER TABLE public.walk_answers DROP CONSTRAINT IF EXISTS walk_answers_q_check;
 ALTER TABLE public.walk_answers ADD CONSTRAINT walk_answers_q_check CHECK (q BETWEEN 1 AND 20);
 ALTER TABLE public.walk_answers ENABLE ROW LEVEL SECURITY;
@@ -67,6 +69,7 @@ BEGIN
       'customer_id', c.id, 'customer', c.display_name, 'address', concat_ws(', ', l.street, 'Unit ' || nullif(btrim(l.unit), ''), l.city),
       'done_at', w.done_at,
       'tech', (SELECT string_agg(public._emp_name(va.employee_id), ' and ' ORDER BY (va.role <> 'lead'), va.id) FROM visit_assignments va WHERE va.visit_id = v.id),
+      'pic_notes', (SELECT coalesce(jsonb_object_agg(a.storage_key, a.note), '{}'::jsonb) FROM walk_answers a WHERE a.visit_id = w.visit_id AND a.storage_key IS NOT NULL AND nullif(btrim(a.note), '') IS NOT NULL),
       'answers', (SELECT coalesce(jsonb_agg(jsonb_build_object('q', a.q, 'question', a.question, 'na', a.na, 'key', a.storage_key) ORDER BY a.q), '[]'::jsonb) FROM walk_answers a WHERE a.visit_id = w.visit_id),
       'notes', w.notes, 'signed', w.signature_png IS NOT NULL, 'signer', w.signer_name, 'sig', w.signature_png,
       'invoice', (SELECT i.id FROM invoices i WHERE i.job_id = j.id AND i.status NOT IN ('void', 'draft') AND i.store_copy_of IS NULL ORDER BY i.id LIMIT 1)) AS x

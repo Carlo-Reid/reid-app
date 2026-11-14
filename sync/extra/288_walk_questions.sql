@@ -31,7 +31,7 @@ CREATE INDEX IF NOT EXISTS walk_answers_visit_q ON public.walk_answers (visit_id
 
 CREATE OR REPLACE FUNCTION public.walk_answers_for(p_visit_id bigint) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE
-    coalesce((SELECT jsonb_agg(jsonb_build_object('q', a.q, 'na', a.na, 'key', a.storage_key) ORDER BY a.q, a.at) FROM walk_answers a WHERE a.visit_id = p_visit_id), '[]'::jsonb) END $f$;
+    coalesce((SELECT jsonb_agg(jsonb_build_object('q', a.q, 'na', a.na, 'key', a.storage_key, 'note', a.note) ORDER BY a.q, a.at) FROM walk_answers a WHERE a.visit_id = p_visit_id), '[]'::jsonb) END $f$;
 
 -- one answer: N/A (it takes the question's pictures off), or one more picture the app already put in the job-files bucket under
 -- forms/<job>/walk-... A second picture for the same question is ADDED, it does not replace the first.
@@ -90,6 +90,30 @@ BEGIN
   INSERT INTO notes (entity_type, entity_id, body, author_user_id, source)
   VALUES ('job', v.job_id, 'Walk picture deleted' || CASE WHEN r.q < 1000 THEN ' (question ' || r.q || ')' ELSE '' END || '.', public.current_app_user_id(), 'call');
 END $function$;
+-- a note on one walk picture (Carlo, Nov 14, 3:39 p.m.): kept on the walk, and on the photo's caption in the customer's file.
+-- The tech on the call (until it is closed), or dispatch at any time.
+CREATE OR REPLACE FUNCTION public.walk_pic_note_set(p_visit_id bigint, p_key text, p_note text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE v visits; r walk_answers; v_note text := nullif(left(btrim(coalesce(p_note, '')), 500), '');
+BEGIN
+  SELECT * INTO v FROM visits WHERE id = p_visit_id;
+  IF v.id IS NULL THEN RAISE EXCEPTION 'That call no longer exists'; END IF;
+  IF NOT public.has_permission('calls.dispatch') THEN
+    IF NOT EXISTS (SELECT 1 FROM visit_assignments WHERE visit_id = p_visit_id AND employee_id = public.my_employee_id()) THEN
+      RAISE EXCEPTION 'You can only change calls you''re on'; END IF;
+    IF v.status IN ('completed', 'cancelled') THEN RAISE EXCEPTION 'That call is already closed'; END IF;
+  END IF;
+  SELECT * INTO r FROM walk_answers WHERE visit_id = p_visit_id AND storage_key = nullif(btrim(p_key), '') LIMIT 1;
+  IF r.visit_id IS NULL THEN RAISE EXCEPTION 'That picture is not on this walk any more'; END IF;
+  UPDATE walk_answers SET note = v_note WHERE visit_id = p_visit_id AND storage_key = r.storage_key;
+  IF r.attachment_id IS NOT NULL THEN
+    UPDATE attachments SET caption = left(regexp_replace(coalesce(caption, ''), '\s*· Note: .*$', '') || coalesce(' · Note: ' || v_note, ''), 900)
+     WHERE id = r.attachment_id;
+  END IF;
+END $function$;
+REVOKE EXECUTE ON FUNCTION public.walk_pic_note_set(bigint, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.walk_pic_note_set(bigint, text, text) TO authenticated;
+
 REVOKE EXECUTE ON FUNCTION public.walk_answer_del(bigint, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.walk_answer_del(bigint, text) TO authenticated;
 

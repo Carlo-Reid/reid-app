@@ -31,7 +31,7 @@ GRANT EXECUTE ON FUNCTION public.walk_extra_photo_add(bigint, text, bigint) TO a
 -- the extra pictures already saved on a walk (so they still show when the invoice page is opened again)
 CREATE OR REPLACE FUNCTION public.walk_extra_photos_for(p_visit_id bigint) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE
-    coalesce((SELECT jsonb_agg(jsonb_build_object('q', a.q, 'key', a.storage_key) ORDER BY a.q) FROM walk_answers a WHERE a.visit_id = p_visit_id AND a.q >= 1000), '[]'::jsonb) END $f$;
+    coalesce((SELECT jsonb_agg(jsonb_build_object('q', a.q, 'key', a.storage_key, 'note', a.note) ORDER BY a.q) FROM walk_answers a WHERE a.visit_id = p_visit_id AND a.q >= 1000), '[]'::jsonb) END $f$;
 REVOKE EXECUTE ON FUNCTION public.walk_extra_photos_for(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.walk_extra_photos_for(bigint) TO authenticated;
 
@@ -45,6 +45,7 @@ BEGIN
       'customer_id', c.id, 'customer', c.display_name, 'address', concat_ws(', ', l.street, 'Unit ' || nullif(btrim(l.unit), ''), l.city),
       'done_at', w.done_at,
       'tech', (SELECT string_agg(public._emp_name(va.employee_id), ' and ' ORDER BY (va.role <> 'lead'), va.id) FROM visit_assignments va WHERE va.visit_id = v.id),
+      'pic_notes', (SELECT coalesce(jsonb_object_agg(a.storage_key, a.note), '{}'::jsonb) FROM walk_answers a WHERE a.visit_id = w.visit_id AND a.storage_key IS NOT NULL AND nullif(btrim(a.note), '') IS NOT NULL),
       'answers', (SELECT coalesce(jsonb_agg(jsonb_build_object('q', a.q, 'question', a.question, 'na', a.na, 'key', a.storage_key) ORDER BY a.q), '[]'::jsonb) FROM walk_answers a WHERE a.visit_id = w.visit_id AND a.q < 1000),
       'extra', (SELECT coalesce(jsonb_agg(a.storage_key ORDER BY a.q), '[]'::jsonb) FROM walk_answers a WHERE a.visit_id = w.visit_id AND a.q >= 1000),
       'notes', w.notes, 'signed', w.signature_png IS NOT NULL, 'signer', w.signer_name, 'sig', w.signature_png,

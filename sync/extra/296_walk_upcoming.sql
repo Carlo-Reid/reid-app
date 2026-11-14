@@ -15,6 +15,7 @@ BEGIN
       'status', v.status, 'scheduled_date', v.scheduled_date, 'arrival_start', v.arrival_start, 'arrival_end', v.arrival_end, 'arrived_at', v.arrived_at,
       'tech', (SELECT string_agg(public._emp_name(va.employee_id), ' and ' ORDER BY (va.role <> 'lead'), va.id) FROM visit_assignments va WHERE va.visit_id = v.id),
       'total_q', (SELECT CASE WHEN to_regprocedure('public.walk_questions()') IS NOT NULL THEN jsonb_array_length(public.walk_questions()) ELSE 0 END),
+      'pic_notes', (SELECT coalesce(jsonb_object_agg(a.storage_key, a.note), '{}'::jsonb) FROM walk_answers a WHERE a.visit_id = v.id AND a.storage_key IS NOT NULL AND nullif(btrim(a.note), '') IS NOT NULL),
       'answers', (SELECT coalesce(jsonb_agg(jsonb_build_object('q', a.q, 'question', a.question, 'na', a.na, 'key', a.storage_key) ORDER BY a.q), '[]'::jsonb) FROM walk_answers a WHERE a.visit_id = v.id AND a.q < 1000),
       'extra', (SELECT coalesce(jsonb_agg(a.storage_key ORDER BY a.q), '[]'::jsonb) FROM walk_answers a WHERE a.visit_id = v.id AND a.q >= 1000),
       'invoice', (SELECT i.id FROM invoices i WHERE i.job_id = j.id AND i.status NOT IN ('void', 'draft') AND i.store_copy_of IS NULL ORDER BY i.id LIMIT 1)) AS x
