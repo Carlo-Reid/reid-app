@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS public.payroll_run_lines (
   name text, block text, l jsonb NOT NULL DEFAULT '{}'::jsonb, cheque_no int, printed_at timestamptz,
   UNIQUE (run_id, staff_id));
 ALTER TABLE public.payroll_slips ADD COLUMN IF NOT EXISTS run_id bigint;
+-- Fix one person on a final pay run (George, Nov 14: "make a fix one person"): their cheque is voided and kept on record here, their line is changed, and they get a new cheque
+ALTER TABLE public.payroll_run_lines ADD COLUMN IF NOT EXISTS fixing boolean NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS voided jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE public.payroll_person_tax ENABLE ROW LEVEL SECURITY; ALTER TABLE public.payroll_runs ENABLE ROW LEVEL SECURITY; ALTER TABLE public.payroll_run_lines ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.payroll_person_tax, public.payroll_runs, public.payroll_run_lines FROM PUBLIC, anon, authenticated;
 ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS payroll_employer jsonb NOT NULL DEFAULT '{}'::jsonb;
@@ -60,7 +62,7 @@ GRANT EXECUTE ON FUNCTION public.payroll_run_info(date) TO authenticated;
 -- one pay run and its lines
 CREATE OR REPLACE FUNCTION public.payroll_run_get(p_id bigint) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT CASE WHEN NOT public._src_owner() THEN NULL ELSE (SELECT to_jsonb(r) || jsonb_build_object('lines', coalesce((SELECT jsonb_agg(jsonb_build_object(
-      'staff', x.staff_id, 'name', x.name, 'block', x.block, 'l', x.l, 'cheque_no', x.cheque_no, 'printed_at', x.printed_at) ORDER BY x.id)
+      'staff', x.staff_id, 'name', x.name, 'block', x.block, 'l', x.l, 'cheque_no', x.cheque_no, 'printed_at', x.printed_at, 'fixing', x.fixing, 'voided', x.voided) ORDER BY x.id)
       FROM payroll_run_lines x WHERE x.run_id = r.id), '[]'::jsonb)) FROM payroll_runs r WHERE r.id = p_id) END $f$;
 REVOKE EXECUTE ON FUNCTION public.payroll_run_get(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.payroll_run_get(bigint) TO authenticated;
@@ -129,7 +131,7 @@ DECLARE s bigint;
 BEGIN
   IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can run payroll'; END IF;
   DELETE FROM payroll_slips WHERE run_id = p_id;
-  UPDATE payroll_run_lines SET cheque_no = NULL, printed_at = NULL WHERE run_id = p_id;
+  UPDATE payroll_run_lines SET cheque_no = NULL, printed_at = NULL, fixing = false WHERE run_id = p_id;
   UPDATE payroll_runs SET status = 'draft', final_by = NULL, final_at = NULL WHERE id = p_id;
   FOR s IN SELECT DISTINCT staff_id FROM payroll_run_lines WHERE run_id = p_id LOOP PERFORM public._payroll_staff_refresh(s); END LOOP;
 END $f$;
@@ -214,3 +216,68 @@ CREATE OR REPLACE FUNCTION public.payroll_roe_file_data(p_staff bigint, p_user b
     FROM payroll_staff ps WHERE ps.id = coalesce(p_staff, (SELECT id FROM payroll_staff WHERE app_user_id = p_user))) END $f$;
 REVOKE EXECUTE ON FUNCTION public.payroll_roe_file_data(bigint, bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.payroll_roe_file_data(bigint, bigint) TO authenticated;
+
+-- ===== Fix one person on a final pay run =====
+-- the pay slip a line makes (the same as payroll_run_final does for each line)
+CREATE OR REPLACE FUNCTION public._payroll_line_slip(p_run bigint, p_staff bigint) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE r payroll_runs; x payroll_run_lines; sno int; who text := public._staff_name(public.current_app_user_id());
+BEGIN
+  SELECT * INTO r FROM payroll_runs WHERE id = p_run; SELECT * INTO x FROM payroll_run_lines WHERE run_id = p_run AND staff_id = p_staff;
+  SELECT coalesce(max(slip_no), 0) + 1 INTO sno FROM payroll_slips WHERE staff_id = x.staff_id AND cheque_date = r.pay_date;
+  INSERT INTO payroll_slips (staff_id, cheque_date, period_from, period_to, slip_name, kind, rate, reg_hours, hours, gross, net, commission, vac, vac_pct,
+      on_call, ot_pay, cpp, ei, tax, earn, dfg, adj, file_name, loaded_by, slip_no, block, run_id)
+    VALUES (x.staff_id, r.pay_date, r.period_from, r.period_to, x.name, nullif(x.l ->> 'kind', ''), nullif(x.l ->> 'rate', '')::numeric,
+      nullif(x.l ->> 'hours', '')::numeric, nullif(x.l ->> 'hours', '')::numeric, (x.l ->> 'gross')::numeric, (x.l ->> 'net')::numeric,
+      nullif(x.l ->> 'com', '')::numeric, nullif(x.l ->> 'vac', '')::numeric, nullif(x.l ->> 'vac_pct', '')::numeric,
+      nullif(x.l ->> 'oncall', '')::numeric, nullif(x.l ->> 'ot', '')::numeric,
+      coalesce((x.l ->> 'cpp')::numeric, 0) + coalesce((x.l ->> 'cpp2')::numeric, 0), (x.l ->> 'ei')::numeric, (x.l ->> 'tax')::numeric,
+      x.l -> 'earn', x.l -> 'dfg', x.l -> 'adj', 'App pay run #' || p_run, who, sno, x.block, p_run);
+END $f$;
+REVOKE EXECUTE ON FUNCTION public._payroll_line_slip(bigint, bigint) FROM PUBLIC, anon, authenticated;
+
+-- start: their cheque is voided (kept in voided with what it paid and why), their pay slip from this run is taken off, and the line can be changed
+CREATE OR REPLACE FUNCTION public.payroll_line_fix_start(p_run bigint, p_staff bigint, p_why text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE r payroll_runs; x payroll_run_lines;
+BEGIN
+  IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can run payroll'; END IF;
+  SELECT * INTO r FROM payroll_runs WHERE id = p_run; IF r.status IS DISTINCT FROM 'final' THEN RAISE EXCEPTION 'Only a final pay run has a cheque to fix'; END IF;
+  SELECT * INTO x FROM payroll_run_lines WHERE run_id = p_run AND staff_id = p_staff FOR UPDATE;
+  IF x.id IS NULL THEN RAISE EXCEPTION 'That person is not on this pay run'; END IF;
+  IF x.fixing THEN RETURN; END IF;
+  UPDATE payroll_run_lines SET fixing = true, cheque_no = NULL, printed_at = NULL,
+      voided = voided || jsonb_build_array(jsonb_build_object('cheque_no', x.cheque_no, 'printed_at', x.printed_at, 'net', x.l -> 'net', 'gross', x.l -> 'gross', 'l', x.l,
+        'why', nullif(trim(p_why), ''), 'by', public._staff_name(public.current_app_user_id()), 'at', now()))
+    WHERE id = x.id;
+  DELETE FROM payroll_slips WHERE run_id = p_run AND staff_id = p_staff;
+  PERFORM public._payroll_staff_refresh(p_staff);
+END $f$;
+REVOKE EXECUTE ON FUNCTION public.payroll_line_fix_start(bigint, bigint, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.payroll_line_fix_start(bigint, bigint, text) TO authenticated;
+
+-- finish: the changed line and its new cheque number (null = no cheque number), or p_keep = put the voided cheque back as it was
+CREATE OR REPLACE FUNCTION public.payroll_line_fix_save(p_run bigint, p_staff bigint, p_l jsonb, p_cheque int, p_keep boolean DEFAULT false) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE x payroll_run_lines; v jsonb; nxt int;
+BEGIN
+  IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can run payroll'; END IF;
+  SELECT * INTO x FROM payroll_run_lines WHERE run_id = p_run AND staff_id = p_staff FOR UPDATE;
+  IF x.id IS NULL OR NOT x.fixing THEN RAISE EXCEPTION 'This line is not being fixed'; END IF;
+  IF p_keep THEN
+    v := x.voided -> (jsonb_array_length(x.voided) - 1);
+    UPDATE payroll_run_lines SET l = v -> 'l', cheque_no = (v ->> 'cheque_no')::int, printed_at = (v ->> 'printed_at')::timestamptz, fixing = false,
+        voided = x.voided - (jsonb_array_length(x.voided) - 1) WHERE id = x.id;
+  ELSE
+    IF p_l IS NULL OR p_l ->> 'net' IS NULL THEN RAISE EXCEPTION 'The changed line is missing'; END IF;
+    IF p_cheque IS NOT NULL AND EXISTS (SELECT 1 FROM payroll_run_lines y WHERE y.cheque_no = p_cheque AND y.id <> x.id) THEN RAISE EXCEPTION 'Cheque number % is already used', p_cheque; END IF;
+    UPDATE payroll_run_lines SET l = p_l, cheque_no = p_cheque, printed_at = NULL, fixing = false WHERE id = x.id;
+    SELECT (payroll_employer ->> 'next_cheque')::int INTO nxt FROM company_settings LIMIT 1;
+    IF p_cheque IS NOT NULL AND (nxt IS NULL OR p_cheque >= nxt) THEN
+      UPDATE company_settings SET payroll_employer = payroll_employer || jsonb_build_object('next_cheque', p_cheque + 1) WHERE true;
+    END IF;
+  END IF;
+  PERFORM public._payroll_line_slip(p_run, p_staff);
+  PERFORM public._payroll_staff_refresh(p_staff);
+  SELECT (payroll_employer ->> 'next_cheque')::int INTO nxt FROM company_settings LIMIT 1;
+  RETURN jsonb_build_object('next_cheque', nxt);
+END $f$;
+REVOKE EXECUTE ON FUNCTION public.payroll_line_fix_save(bigint, bigint, jsonb, int, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.payroll_line_fix_save(bigint, bigint, jsonb, int, boolean) TO authenticated;

@@ -2081,6 +2081,7 @@
   .pr-t4sl { margin: 6px 0 16px; border: 1px solid #d3dbe4; border-radius: 10px; background: #fff; padding: 6px 10px; } .pr-t4sl > summary { cursor: pointer; font-weight: 700; color: #23415f; padding: 4px 0; }
   .pr-t4slt tr.pr-t4-miss td { background: #fdecea; color: #b42318; } .pr-t4slt tr.pr-t4-out td { color: #8a94a3; } .pr-t4slt tr.pr-t4-extra td { background: #fff7e6; }
   .pr-t4slt tr.pr-t4-cmp td { font-weight: 700; background: #eef4fa; } .pr-t4-hint { background: #fff7e6; border-left: 4px solid #e8a33d; padding: 8px 12px; border-radius: 6px; margin: 6px 0; }
+.pr-run-t tr.pr-run-fixing td { background: #fff8e8; } .pr-run-fixrow td, .pr-run-void td { background: #fff8e8; font-size: 13.5px; text-align: left !important; } .pr-run-void td { color: #8a4b00; } .pr-fix-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; } .pr-fixbtn { white-space: nowrap; font-size: 12.5px; padding: 4px 8px; }
 .src-gfix { margin: 6px 0 0; } .src-gform { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 8px 0; padding: 10px; border: 1.5px solid #bcd0e3; border-radius: 10px; background: #f4f8fc; }
 .src-gform label { display: grid; gap: 3px; font-size: 13px; } .src-gform input { width: 160px; } .src-gmsg { color: #b42318; font-size: 13px; }
   .pr-privzone { border: 1.5px dashed #f0c38a; border-radius: 12px; background: #fffaf3; padding: 12px 14px; margin: 8px 0 16px; }
@@ -36125,24 +36126,28 @@ async function prRunLoad(id) {
   PRUN.run = { id: data.id, pay: String(data.pay_date).slice(0, 10), from: String(data.period_from || "").slice(0, 10), to: String(data.period_to || "").slice(0, 10), status: data.status };
   PRUN.lines = (data.lines || []).map(x => { const pp = (PR.people || []).find(q => Number(q.staff) === Number(x.staff)) || {};
     const inf = (PRUN.info?.staff || []).find(s => Number(s.staff) === Number(x.staff));
-    const L = { ...x.l, otPay: x.l.ot, staff: x.staff, user: pp.user || inf?.user || null, name: x.name, block: x.block, inf, cheque_no: x.cheque_no, inc: true };
-    return data.status === "draft" ? prRunCalc(L) : L; });
+    const L = { ...x.l, otPay: x.l.ot, staff: x.staff, user: pp.user || inf?.user || null, name: x.name, block: x.block, inf, cheque_no: x.cheque_no, inc: true, fixing: !!x.fixing, voided: x.voided || [] };
+    return data.status === "draft" || L.fixing ? prRunCalc(L) : L; });
   prRunDraw();
 }
 function prRunDraw() {
   const ov = document.getElementById("pr-run"), body = ov.querySelector(".pr-run-b"), R = PRUN.run, fin = R.status === "final", inc = PRUN.lines.filter(L => L.inc);
   const sum = k => Math.round(inc.reduce((t, L) => t + Number(L[k] || 0), 0) * 100) / 100;
   const src = Math.round((sum("tax") + 2 * (sum("cpp") + sum("cpp2")) + 2.4 * sum("ei")) * 100) / 100;
-  const inp = (L, k, w) => fin ? money(L[k] || 0).replace("$", "") : `<input class="pr-ri" data-rk="${k}" value="${L[k] ?? ""}" style="width:${w || 70}px" inputmode="decimal">`;
-  const row = (L, i) => `<tr class="${L.inc ? "" : "pr-run-off"}${L.err ? " pr-run-bad" : ""}" data-ri="${i}">
-      <td>${fin ? (L.cheque_no ? "#" + L.cheque_no : "") : `<input type="checkbox" data-rinc${L.inc ? " checked" : ""}>`}</td>
+  const inp = (L, k, w) => fin && !L.fixing ? money(L[k] || 0).replace("$", "") : `<input class="pr-ri" data-rk="${k}" value="${L[k] ?? ""}" style="width:${w || 70}px" inputmode="decimal">`;
+  const E0 = PRUN.info?.employer || {};
+  const row = (L, i) => `<tr class="${L.inc ? "" : "pr-run-off"}${L.err ? " pr-run-bad" : ""}${L.fixing ? " pr-run-fixing" : ""}" data-ri="${i}">
+      <td>${fin ? (L.fixing ? `<span class="pr-cm-warn">Fixing</span>` : L.cheque_no ? "#" + L.cheque_no : "") : `<input type="checkbox" data-rinc${L.inc ? " checked" : ""}>`}</td>
       <td><b>${esc(L.name || "")}</b><div class="quiet${/nowhere/.test(L.src || "") && !L.hours ? " pr-cm-bad" : ""}">${esc(prBlockName(L.block))} · ${L.kind === "salary" ? "Salary" : "Hours from " + esc(L.src || "")}</div>${L.err ? `<div class="pr-cm-bad">${esc(L.err)}</div>` : ""}${Number(L.tb) ? `<div class="quiet">+ taxable benefit ${money(L.tb)} (code ${esc(L.tb_kind || "40")}): taxed and on the T4, not paid in cash</div>` : ""}${L.onfile ? `<div class="pr-cm-warn">Already paid: a pay slip of ${esc(fmtDate(String(L.onfile.cheque).slice(0, 10)))} (${money(L.onfile.net)} net) is on file. Left out so it is not paid twice.</div>` : ""}</td>
       <td>${L.kind === "salary" ? `${inp(L, "per_pay", 80)}<div class="quiet">a pay</div>` : `${inp(L, "hours", 56)} h${L.ot_h ? `<div class="quiet">+ ${L.ot_h} h overtime</div>` : ""}`}</td>
       <td>${L.kind === "salary" ? "" : inp(L, "rate", 60)}</td><td>${money(L.hourly + (L.otPay || 0))}</td>
       <td>${inp(L, "com", 72)}${L.jobs?.length ? `<div class="quiet" title="${esc(L.jobs.map(j => `${j.n} ${j.c}, ${j.a}: ${money(j.amt)}`).join("\n"))}">${L.jobs.length} job${L.jobs.length === 1 ? "" : "s"}</div>` : ""}</td>
       <td>${money(L.vac || 0)}<div class="quiet">${L.vac_pct}%</div></td><td>${inp(L, "other", 66)}</td><td><b>${money(L.gross || 0)}</b></td>
       <td>${money((L.cpp || 0) + (L.cpp2 || 0))}</td><td>${money(L.ei || 0)}</td><td>${money(L.tax || 0)}</td><td>${inp(L, "ben", 60)}</td><td><b>${money(L.net || 0)}</b></td>
-      <td>${fin ? "" : `<button type="button" class="link" data-rtd1>TD1</button>`}</td></tr>
+      <td>${fin && !L.fixing ? `<button type="button" class="btn quiet-btn pr-fixbtn" data-rfix>✎ Fix this person</button>` : `<button type="button" class="link" data-rtd1>TD1</button>`}</td></tr>
+      ${(L.voided || []).length ? `<tr class="pr-run-void" data-ri="${i}"><td></td><td colspan="14">${L.voided.map(v => `Voided: cheque ${v.cheque_no ? "#" + esc(String(v.cheque_no)) : "(no number)"} for ${money(v.net || 0)}${v.why ? `, ${esc(v.why)}` : ""}${v.by ? ` (${esc(v.by)}, ${esc(fmtDate(String(v.at || "").slice(0, 10)))})` : ""}. Mark the paper cheque VOID and keep it.`).join("<br>")}</td></tr>` : ""}
+      ${L.fixing ? `<tr class="pr-run-fixrow" data-ri="${i}"><td></td><td colspan="14"><b>Fixing ${esc(L.name || "")}'s pay.</b> Change the white boxes on the line above (or their TD1). The tax, CPP and EI are worked out again. Net now: <b>${money(L.net || 0)}</b>.
+        <div class="pr-fix-acts"><button type="button" class="btn save-go" data-rfix-save>Save and give a new cheque${E0.next_cheque ? ` #${esc(String(E0.next_cheque))}` : ""}</button><button type="button" class="btn" data-rfix-keep>↩ Keep the old cheque</button></div></td></tr>` : ""}
       ${PRUN.open === i ? `<tr class="pr-run-td1" data-ri="${i}"><td></td><td colspan="14">${prRunTd1Html(L)}</td></tr>` : ""}`;
   body.innerHTML = `<div class="pr-run-h"><h2>Pay of ${esc(fmtDate(R.pay))} <small>worked ${esc(fmtDate(R.from))} to ${esc(fmtDate(R.to))}</small></h2>
       ${fin ? `<span class="pr-cm-ok">✓ Final</span>` : `<span class="pr-cm-warn">Draft: nothing is paid until it is made final</span>`}</div>
@@ -36158,7 +36163,10 @@ function prRunDraw() {
   body.querySelectorAll("tr[data-ri]").forEach(tr => { const L = PRUN.lines[Number(tr.dataset.ri)];
     tr.querySelectorAll(".pr-ri").forEach(inp2 => inp2.addEventListener("change", () => { L[inp2.dataset.rk] = Number(inp2.value.replace(/[^\d.-]/g, "")) || 0; prRunCalc(L); prRunDraw(); }));
     tr.querySelector("[data-rinc]")?.addEventListener("change", e => { L.inc = e.target.checked; prRunDraw(); });
-    tr.querySelector("[data-rtd1]")?.addEventListener("click", () => { PRUN.open = PRUN.open === Number(tr.dataset.ri) ? null : Number(tr.dataset.ri); prRunDraw(); }); });
+    tr.querySelector("[data-rtd1]")?.addEventListener("click", () => { PRUN.open = PRUN.open === Number(tr.dataset.ri) ? null : Number(tr.dataset.ri); prRunDraw(); });
+    tr.querySelector("[data-rfix]")?.addEventListener("click", () => prRunFixStart(L));
+    tr.querySelector("[data-rfix-save]")?.addEventListener("click", () => prRunFixSave(L, false));
+    tr.querySelector("[data-rfix-keep]")?.addEventListener("click", () => prRunFixSave(L, true)); });
   body.querySelector("[data-td1-save]")?.addEventListener("click", () => prRunTd1Save(body));
   body.querySelector("[data-run-back]").addEventListener("click", () => prRunOpen());
   body.querySelector("[data-run-save]")?.addEventListener("click", () => prRunSave());
@@ -36204,6 +36212,28 @@ async function prRunFinal() {
   if (error) return alertMsg("Not made final: " + rpcErr(error));
   alertMsg(`✓ Final. ${data.slips} pay slips are on file.`); await prRunLoad(id);
 }
+// Fix one person on a final pay run (George, Nov 14): their cheque is voided (kept on record), their line opens to be changed, and they get a new cheque and stub.
+// Everyone else's cheques are not touched. "Keep the old cheque" puts it back as it was.
+async function prRunFixStart(L) {
+  const R = PRUN.run;
+  const why = await askChoice(`Fix ${L.name || ""}'s pay?`, `<span class="ask-sq"></span>Their cheque${L.cheque_no ? ` #${esc(String(L.cheque_no))}` : ""} for ${money(L.net || 0)} is voided (kept on record), and their line opens so you can change it. Then they get a new cheque. Nobody else's cheque changes. What is wrong?`,
+    [["Wrong hours", "⏱|Wrong hours|or overtime"], ["Wrong rate or salary", "💲|Wrong rate|or salary"], ["Wrong commission or other pay", "🧾|Commission|or other pay"], ["Something else", "✎|Something else|tax, benefits…"], ["", "Cancel"]]);
+  if (!why) return;
+  const { error } = await db.rpc("payroll_line_fix_start", { p_run: R.id, p_staff: L.staff, p_why: why }); if (error) return alertMsg("Not done: " + rpcErr(error));
+  await prRunLoad(R.id);
+}
+async function prRunFixSave(L, keep) {
+  const R = PRUN.run, E = PRUN.info?.employer || {};
+  if (!keep && L.err) return alertMsg("Fix the line in red first.");
+  if (keep && await askChoice("Keep the old cheque?", `The change is dropped and ${esc(L.name || "")}'s old cheque is put back as it was.`, [["y", "Keep the old cheque"], ["", "Go back"]]) !== "y") return;
+  const chq = E.next_cheque ? Number(E.next_cheque) : null;
+  const { data, error } = await db.rpc("payroll_line_fix_save", { p_run: R.id, p_staff: L.staff, p_l: keep ? null : prRunL(L), p_cheque: keep ? null : chq, p_keep: !!keep });
+  if (error) return alertMsg("Not saved: " + rpcErr(error));
+  if (PRUN.info?.employer && data?.next_cheque) PRUN.info.employer.next_cheque = data.next_cheque;
+  await prRunLoad(R.id); if (keep) return alertMsg("✓ The old cheque is back.");
+  const L2 = PRUN.lines.find(x => Number(x.staff) === Number(L.staff));
+  if (await askChoice("✓ Saved. Print the new cheque?", `${esc(L.name || "")}: new cheque${chq ? ` #${chq}` : ""} for ${money(L2?.net || 0)}. Mark the old paper cheque VOID.`, [["y", "🖨 Print it"], ["", "Not now"]]) === "y" && L2) prRunPrint("chq", [L2]);
+}
 // the cheque and its two stubs, laid out like the accountant's cheques (QuickBooks "voucher" cheque, cheque on top, 8.5 by 11):
 // the date in boxes top right, the amount in words, the amount, the payee's name and address, the memo with the pay period; then the same stub twice
 const prMDY = d => d ? String(d).slice(5, 7) + "/" + String(d).slice(8, 10) + "/" + String(d).slice(0, 4) : "";
@@ -36230,8 +36260,8 @@ function prRunStub(L, R, E) {
     ${L.jobs?.length ? `<div class="prq-jobs">Commission on: ${L.jobs.map(j => `${esc(j.n || "")} ${esc(j.c || "")} (${money(j.amt)})`).join(" · ")}</div>` : ""}
     <div class="prq-co">${esc(E.legal_name || "")}</div></div>`;
 }
-function prRunPrint(kind) {
-  const R = PRUN.run, E = PRUN.info?.employer || {}, L = PRUN.lines.filter(x => x.inc);
+function prRunPrint(kind, only) {
+  const R = PRUN.run, E = PRUN.info?.employer || {}, L = only || PRUN.lines.filter(x => x.inc && !x.fixing);
   const x = Number(E.chq_x || 0), y = Number(E.chq_y || 0), mmdd = d => d.slice(5, 7) + d.slice(8, 10) + d.slice(0, 4);
   const page = l => { const ad = prSplitAddr(l.inf?.address || ""); return kind === "chq" ? `<section class="prc-page prq-page"><div class="prq-chq" style="transform:translate(${x}mm,${y}mm)">
         <div class="prq-date"><b>${mmdd(R.pay).split("").join(" ")}</b><i>M M D D Y Y Y Y</i></div>
