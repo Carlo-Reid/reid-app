@@ -7783,6 +7783,13 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
   .tob-sig { display: flex; align-items: center; gap: 10px; }
   .tob-sig img { max-height: 54px; background: #fff; border: 1px solid #d3dbe4; border-radius: 6px; padding: 3px; }
   .tob-acts { display: flex; gap: 12px; flex-wrap: wrap; }
+  /* Carlo, Nov 14: future walks shown as waiting, and a walk a tech is on right now shown live on the To be Booked page */
+  .tob-cat-live { border-color: #1f9d4a; }
+  .tob-cat-live > h2 { color: #1b6b36; }
+  .tob-live { border-color: #8fd6a8; background: linear-gradient(180deg, #ffffff, #e9f6ed); }
+  .tob-live-dot { color: #1f9d4a; animation: tobLivePulse 1.6s ease-in-out infinite; }
+  @keyframes tobLivePulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { .tob-live-dot { animation: none; } }
 /* invoice: "Add a line that isn't in the price book" is a second box beside the price book button (Carlo, Nov 13) */
 .ie details.ie-custom-sq > summary { display: none; }
 .ie details.ie-custom-sq[open] { margin-top: 12px; padding: 10px 12px; border: 1.5px solid #bcd0e3; border-radius: 12px; background: #f7fafd; }
@@ -21926,22 +21933,63 @@ function wireSupInv() {
   if (SINV.open && !SINV.det.has(SINV.open)) sinvLoadDet(SINV.open);
 }
 // To be Booked page (Carlo, Nov 13: "it sends the call back to the system under a new tab called To be Booked… listed under category walk done, Install date needs to be booked")
-const TOB = { data: null, seq: 0, msg: "" };
+const TOB = { data: null, up: null, seq: 0, msg: "" };
 async function openToBook(msg) {
   setPage("tobook", "tobook", "To be Booked"); TOB.msg = msg || "";
   if (!TOB.data) $("#main").innerHTML = `<div class="loading">Loading…</div>`;
-  const my = ++TOB.seq, { data, error } = await db.rpc("walk_to_book");
+  const my = ++TOB.seq, [done, up] = await Promise.all([db.rpc("walk_to_book"), db.rpc("walk_upcoming")]);
   if (my !== TOB.seq || document.body.dataset.page !== "tobook") return;
-  if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the list</h2>${esc(rpcErr(error))}</div></div>`; return; }
-  TOB.data = data || []; renderToBook();
+  if (done.error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the list</h2>${esc(rpcErr(done.error))}</div></div>`; return; }
+  TOB.data = done.data || []; TOB.up = up.error ? (TOB.up || []) : (up.data || []); renderToBook();
 }
+// Carlo, Nov 14: "have future walks listed on the page as waiting and if a tech arrives and starts to work have anything he does show up
+// on it live so if he takes pictures have them show up there." tobPoll keeps the page fresh every 20 seconds while it's open, with no
+// loading flash and no reset of the page's own message, so a tech's pictures show up here within moments of him taking them.
+async function tobPoll() {
+  if (document.body.dataset.page !== "tobook" || !TOB.data) return;
+  const my = ++TOB.seq, [done, up] = await Promise.all([db.rpc("walk_to_book"), db.rpc("walk_upcoming")]);
+  if (my !== TOB.seq || document.body.dataset.page !== "tobook") return;
+  if (!done.error) TOB.data = done.data || []; if (!up.error) TOB.up = up.data || []; renderToBook();
+}
+setInterval(() => { if (!document.hidden) tobPoll(); }, 20000);
 function renderToBook() {
-  const R = TOB.data || [], n = R.length, day = d => new Date(d).toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  const R = TOB.data || [], n = R.length, UP = TOB.up || [];
+  const live = UP.filter(r => r.status === "en_route" || r.status === "on_site"), wait = UP.filter(r => r.status !== "en_route" && r.status !== "on_site");
+  const day = d => new Date(d).toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  const time = d => d ? new Date(d).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }) : "";
+  const win = r => r.arrival_start ? `${day(r.arrival_start)}, ${time(r.arrival_start)}${r.arrival_end ? " – " + time(r.arrival_end) : ""}` : (r.scheduled_date ? day(r.scheduled_date) : "Not booked yet");
+  const picsOf = r => `${(r.answers || []).filter(a => a.key).map(a => `<button class="btn" type="button" data-tob-pic="${esc(a.key)}" data-tob-picname="Question ${a.q}: ${esc(a.question || "")}">📷 Q${a.q}</button>`).join("")}${(r.extra || []).map((k, j) => `<button class="btn" type="button" data-tob-pic="${esc(k)}" data-tob-picname="Extra picture ${j + 1}">📷 Extra ${j + 1}</button>`).join("")}`;
+  const picCount = r => (r.answers || []).filter(a => a.key).length + (r.extra || []).length;
+  const liveCard = r => `<div class="tob-card tob-live">
+    <div class="tob-main">
+      <button class="link tob-cust" type="button" data-tob-cust="${r.customer_id}">${esc(r.customer || "Customer")}</button>
+      <div>${esc(r.address || "")}</div>
+      <div class="quiet">Job ${esc(r.job_number || "")} · ${esc(r.job_type || "")}${r.what ? " · " + esc(r.what) : ""}</div>
+      <div><span class="tob-live-dot" aria-hidden="true">●</span> <b>${r.status === "on_site" ? "On site" : "On the way"}</b>${r.tech ? ", " + esc(r.tech) : ""}${r.status === "on_site" && r.arrived_at ? " since " + time(r.arrived_at) : ""}</div>
+      ${picCount(r) ? `<div class="tob-qs"><b>Pictures so far${r.total_q ? ` (${(r.answers || []).filter(a => a.key || a.na).length} of ${r.total_q} questions)` : ""}:</b><div class="tob-q">${picsOf(r)}</div></div>` : `<div class="quiet">No pictures yet.</div>`}
+    </div>
+    <div class="tob-acts"><button class="mc-sq" type="button" data-tob-cust="${r.customer_id}"><span class="mc-sq-ic" aria-hidden="true">👤</span><span class="mc-sq-tn">Open the customer</span></button></div>
+  </div>`;
+  const waitCard = r => `<div class="tob-card">
+    <div class="tob-main">
+      <button class="link tob-cust" type="button" data-tob-cust="${r.customer_id}">${esc(r.customer || "Customer")}</button>
+      <div>${esc(r.address || "")}</div>
+      <div class="quiet">Job ${esc(r.job_number || "")} · ${esc(r.job_type || "")}${r.what ? " · " + esc(r.what) : ""}</div>
+      <div><b>${win(r)}</b>${r.tech ? " · " + esc(r.tech) : " · No tech yet"}</div>
+    </div>
+    <div class="tob-acts"><button class="mc-sq" type="button" data-tob-cust="${r.customer_id}"><span class="mc-sq-ic" aria-hidden="true">👤</span><span class="mc-sq-tn">Open the customer</span></button></div>
+  </div>`;
   $("#main").innerHTML = `<article class="staff pg-clean tob-page">
     <h1>To be Booked</h1>
     <p class="lead">These calls came back from the techs. Each one needs its next day booked.</p>
     ${TOB.msg ? `<p class="staff-msg" role="status">${esc(TOB.msg)}</p>` : ""}
     ${ME.role === "owner" ? `<p><button class="btn" type="button" id="tob-q-open">✎ Change the walk questions (Settings, Job Types)</button></p>` : ""}
+    ${live.length ? `<section class="tob-cat tob-cat-live"><h2><span class="tob-live-dot" aria-hidden="true">●</span> Walk in progress right now <span class="tob-n">${live.length}</span></h2>
+      ${live.map(liveCard).join("")}
+    </section>` : ""}
+    <section class="tob-cat"><h2><span aria-hidden="true">📅</span> Upcoming walks: waiting for the day <span class="tob-n">${wait.length}</span></h2>
+      ${wait.length ? wait.map(waitCard).join("") : `<p class="staff-msg">No walks waiting for their day.</p>`}
+    </section>
     ${pgNow(["Walk done: Install date needs to be booked", `${n} call${n === 1 ? "" : "s"}`])}
     <section class="tob-cat"><h2><span aria-hidden="true">🚶</span> Walk done: Install date needs to be booked <span class="tob-n">${n}</span></h2>
       ${n ? R.map((r, i) => `<div class="tob-card">
