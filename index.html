@@ -7929,6 +7929,7 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
   .tob-tile-ic { font-size: 26px; line-height: 1; } .tob-tile-n { font-size: 15px; line-height: 1.2; } .tob-tile-a { font-size: 12.5px; line-height: 1.25; color: #46586b; }
   .tob-tile-s { font-size: 12.5px; font-weight: 700; margin-top: auto; } .tob-tile-t { font-size: 12px; color: #46586b; }
   .tob-tile-live { background: #e9f6ed; border-color: #a9d6b7; color: #1b6b36; } .tob-tile-live .tob-tile-ic { color: #1f9d4a; }
+  .ie-install { border: 2px solid #1f9d4a; background: #e9f6ed; border-radius: 12px; }
   .tob-closerow { align-items: center; margin-bottom: 12px; } .tob-closerow .lead { margin: 0; flex: 1 1 240px; }
   .tob-card { display: flex; flex-wrap: wrap; gap: 12px 20px; justify-content: space-between; align-items: flex-start; border: 1.5px solid #bcd0e3; border-radius: 12px; background: linear-gradient(180deg, #ffffff, #eef4fa); padding: 12px 14px; margin-bottom: 10px; }
   .tob-main { display: flex; flex-direction: column; gap: 4px; font-size: 16px; flex: 1 1 320px; min-width: 0; overflow-wrap: anywhere; }
@@ -22263,6 +22264,21 @@ function wireSupInv() {
   if (SINV.open && !SINV.det.has(SINV.open)) sinvLoadDet(SINV.open);
 }
 // To be Booked page (Carlo, Nov 13: "it sends the call back to the system under a new tab called To be Booked… listed under category walk done, Install date needs to be booked")
+var INSTALL_BOOK = null;   // { inv, r }: the invoice was opened from To be Booked's Book the install
+function tobBookInstall(r, extra) {
+  const model = String(r.what || "").replace(/^\s*walk site for\s*/i, "").trim();
+  INSTALL_BOOK = null;
+  openBooking(r.customer_id, { jobId: r.job_id, kindForce: "installs", backTo: "tobook",
+    invFill: { call: "Book the Install", job: model ? `Install ${model}` : "Install", who: [r.customer, r.address].filter(Boolean).join(", "), note: [r.notes || "", extra || ""].filter(Boolean).join("\n") } });
+}
+function ieInstallHtml(I) {
+  const fin = I.status !== "draft", re = fin && I.can_edit && !I.from_st && I.status !== "void" && !(I.payments || []).length;
+  return `<section class="cl-tools ie-install"><h2>📅 Walk done: Install to be booked</h2>
+    <p>${fin ? "Look at the invoice below. To add an item or change a line, press <b>Change the invoice</b> first. You can add notes with the two note boxes." : "The invoice is open again. Add items, change lines or add notes below. Press <b>Finish the invoice</b> when it is right."} When it is ready, press <b>Book the install</b>.</p>
+    <div class="ie-actions">${re ? `<button class="ie-sq" type="button" id="ie-inst-change"><span class="ie-sq-ic" aria-hidden="true">✎</span><b>Change the invoice</b></button>` : ""}
+      <button class="ie-sq ie-sq-go" type="button" id="ie-inst-book"><span class="ie-sq-ic" aria-hidden="true">📅</span><b>Book the install</b></button>
+      <button class="ie-sq" type="button" id="ie-inst-back"><span class="ie-sq-ic" aria-hidden="true">✕</span><b>Back to To be Booked</b></button></div></section>`;
+}
 const TOB = { data: null, up: null, seq: 0, msg: "" };
 // Carlo, Nov 14: "i want it to open the same view the tech would get if its clicked from here so i can see what he types and edit it myself" --
 // a walk in progress is opened the same way the tech's own "I'm here" opens it (setWalk, in openOnSite): set WALK on that visit before the
@@ -22322,7 +22338,7 @@ function renderToBook() {
   // shows what is attached to its job: its invoices and proposals, supplier invoices, POs, the job's files, photos, remittances (job_attachments).
   const attRow = r => r.job_id ? `<div class="tob-qs tob-att"><b>Attached to this job:</b><div class="tob-q cust-att" data-att-jobs="${r.job_id}" data-att-est="1" data-att-none="1"></div></div>` : "";
   const picCount = r => (r.answers || []).filter(a => a.key).length + (r.extra || []).length;
-  const liveCard = r => `<div class="tob-card tob-live${r.invoice ? " tob-live-go" : ""}" ${r.invoice ? `data-tob-liveinv="${r.invoice}" tabindex="0" role="button" title="Click to remote in to the invoice"` : ""}>
+  const liveCard = r => `<div class="tob-card tob-live">
     <div class="tob-main">
       <button class="link tob-cust" type="button" data-tob-cust="${r.customer_id}">${esc(r.customer || "Customer")}</button>
       <div>${esc(r.address || "")}</div>
@@ -22330,7 +22346,7 @@ function renderToBook() {
       <div><span class="tob-live-dot" aria-hidden="true">●</span> <b>${r.status === "on_site" ? "On site" : "On the way"}</b>${r.tech ? ", " + esc(r.tech) : ""}${r.status === "on_site" && r.arrived_at ? " since " + time(r.arrived_at) : ""}</div>
       ${picCount(r) ? `<div class="tob-qs"><b>Pictures so far${r.total_q ? ` (${new Set((r.answers || []).filter(a => a.key || a.na).map(a => a.q)).size} of ${r.total_q} questions)` : ""}:</b><div class="tob-q">${picsOf(r)}</div></div>` : `<div class="quiet">No pictures yet.</div>`}
       ${attRow(r)}
-      ${r.invoice ? `<div class="quiet tob-live-hint">👆 Click to remote in to the invoice the tech is working on.</div>` : `<div class="quiet">The job has no invoice yet.</div>`}
+      ${r.invoice ? `<div class="quiet tob-live-hint">Press <b>Remote in</b> to open the invoice the tech is working on.</div>` : `<div class="quiet">The job has no invoice yet.</div>`}
     </div>
     <div class="tob-acts">${r.invoice ? `<button class="mc-sq tob-remote" type="button" data-tob-liveinv-btn="${r.invoice}"><span class="mc-sq-ic" aria-hidden="true">📡</span><span class="mc-sq-tn">Remote in</span></button>` : ""}
       <button class="mc-sq" type="button" data-tob-cust="${r.customer_id}"><span class="mc-sq-ic" aria-hidden="true">👤</span><span class="mc-sq-tn">Open the customer</span></button></div>
@@ -22350,7 +22366,7 @@ function renderToBook() {
           <button class="link tob-cust" type="button" data-tob-cust="${r.customer_id}">${esc(r.customer || "Customer")}</button>
           <div>${esc(r.address || "")}</div>
           <div class="quiet">Job ${esc(r.job_number || "")} · ${esc(r.job_type || "")}${r.what ? " · " + esc(r.what) : ""}</div>
-          <div><b>Walk done</b> ${r.done_at ? esc(day(r.done_at)) : ""}${r.tech ? " by " + esc(r.tech) : ""}</div>
+          <div><b>Walk done: Install to be booked</b> · ${r.done_at ? esc(day(r.done_at)) : ""}${r.tech ? " by " + esc(r.tech) : ""}</div>
           ${(r.answers || []).length ? `<div class="tob-qs"><b>The questions:</b>${byQ(r).map(a => `<div class="tob-q"><span>${a.q}. ${esc(a.question || "")}</span>
             ${a.keys.length ? a.keys.map((k, j) => picSq(k, `Question ${a.q}: ${esc(a.question || "")}`, a.keys.length > 1 ? `Picture ${j + 1}` : "See the picture")).join("") : `<span class="quiet">N/A: no picture</span>`}</div>`).join("")}</div>` : ""}
           ${(r.extra || []).length ? `<div class="tob-qs"><b>More pictures:</b><div class="tob-q">${r.extra.map((k, j) => picSq(k, `Extra picture ${j + 1}`, `Picture ${j + 1}`)).join("")}</div></div>` : ""}
@@ -22368,8 +22384,9 @@ function renderToBook() {
   let openH = "";
   if (TOB.open) { const k = TOB.open[0], id = Number(TOB.open.slice(1)), r = (k === "d" ? R : UP).find(x => x.visit_id === id);   // a waiting walk that the tech starts stays open, as the live card
     if (r) openH = k === "d" ? doneCard(r, R.indexOf(r)) : live.includes(r) ? liveCard(r) : waitCard(r); else TOB.open = null; }
+  const oneName = !TOB.open ? "" : TOB.open[0] === "d" ? "Walk done: Install to be booked" : openH.includes("tob-live") ? "Walk in progress right now" : "Upcoming walk: waiting for the day";
   if (openH) $("#main").innerHTML = `<article class="staff pg-clean tob-page tob-one">
-    <h1>To be Booked</h1>
+    <h1>${oneName}</h1>
     <div class="mc-sqs tob-closerow"><button class="mc-sq" type="button" id="tob-close"><span class="mc-sq-ic" aria-hidden="true">✕</span><span class="mc-sq-tn">Close</span></button><p class="lead">When you are done with this call, press Close to go back to the list and open the next one.</p></div>
     ${TOB.msg ? `<p class="staff-msg" role="status">${esc(TOB.msg)}</p>` : ""}
     ${openH}
@@ -22387,7 +22404,7 @@ function renderToBook() {
     </section>
     ${pgNow(["Walk done: Install date needs to be booked", `${n} call${n === 1 ? "" : "s"}`])}
     <section class="tob-cat"><h2><span aria-hidden="true">🚶</span> Walk done: Install date needs to be booked <span class="tob-n">${n}</span></h2>
-      ${n ? grid(R.map((r, i) => tile(r, "d", "🚶", `Walk done${r.done_at ? " " + esc(day(r.done_at)) : ""}${r.tech ? " by " + esc(r.tech) : ""}`, "Book the install")).join("")) : `<p class="staff-msg">Nothing to book right now.</p>`}
+      ${n ? grid(R.map((r, i) => tile(r, "d", "🚶", "Walk done: Install to be booked", `${r.done_at ? esc(day(r.done_at)) : ""}${r.tech ? " by " + esc(r.tech) : ""}`)).join("")) : `<p class="staff-msg">Nothing to book right now.</p>`}
     </section>
   </article>`;
   document.querySelectorAll("[data-tob-open]").forEach(b => b.addEventListener("click", () => { TOB.open = b.dataset.tobOpen; TOB.msg = ""; renderToBook(); $("#main").scrollTop = 0; }));
@@ -22409,12 +22426,13 @@ function renderToBook() {
   // job's invoice with the walk box on it (tobOpenLiveWalk), the exact page the tech has open, with whatever the tech has answered so far on it
   // (walkLoadQs reads it fresh from the database the moment the box is drawn), and Carlo can type in it or take pictures himself from there.
   // A click on a button or link inside it (the customer, the explicit Open the invoice square) is left alone.
-  document.querySelectorAll("[data-tob-liveinv]").forEach(c => c.addEventListener("click", e => { if (e.target.closest("button,a")) return; tobOpenLiveWalk((TOB.up || []).find(x => x.invoice === Number(c.dataset.tobLiveinv))); }));
-  document.querySelectorAll("[data-tob-liveinv]").forEach(c => c.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tobOpenLiveWalk((TOB.up || []).find(x => x.invoice === Number(c.dataset.tobLiveinv))); } }));
+  // Carlo, Nov 14, 3:21 p.m.: "when i click anywhere on a call right now it remotes me in it should only do that when i click the remote in
+  // button" -- the card itself is not a click any more.
+  // Carlo, Nov 14, 3:21 p.m.: "a button to book the call that loads the invoice and now lets you add items or notes or change it then book it
+  // for the install" -- Book the install opens the job's invoice with a box on top (INSTALL_BOOK, ieInstallHtml): change it, then book.
   document.querySelectorAll("[data-tob-book]").forEach(b => b.addEventListener("click", () => { const r = R[Number(b.dataset.tobBook)]; if (!r) return;
-    const model = String(r.what || "").replace(/^\s*walk site for\s*/i, "").trim();
-    openBooking(r.customer_id, { jobId: r.job_id, kindForce: "installs", backTo: "tobook",
-      invFill: { call: "Book the Install", job: model ? `Install ${model}` : "Install", who: [r.customer, r.address].filter(Boolean).join(", "), note: r.notes || "" } }); }));
+    if (r.invoice) { INSTALL_BOOK = { inv: r.invoice, r }; REMOTE_INV = null; return openInvoiceEditor(r.invoice); }
+    tobBookInstall(r, ""); }));
 }
 // Credit Memos page (Carlo, Nov 11: "there should be a tab for Credit Memos like there is for Purchase Orders"): every supplier credit's memo, to find and open
 const CMP = { q: "", sup: "", kind: "all", data: null, seq: 0 };
@@ -27348,6 +27366,7 @@ function renderInvoiceEditor(msg) {
     ${msg ? `<div class="staff-msg ${/^Not|Couldn/.test(msg) ? "err" : "ok"} ie-msg" role="status">${esc(msg)}</div>` : `<div class="staff-msg ie-msg" role="status"></div>`}
     ${I.st_edit ? ieStHtml(I) : I.from_st ? `<div class="approve-banner"><div>This invoice came from ServiceTitan.${I.can_st_take ? " Edit it here: ServiceTitan's own version is kept beside your changes, and you're told if ServiceTitan changes it later." : " Change it there."}</div>
       ${I.can_st_take ? `<button class="btn" type="button" id="ie-sttake">✎ Edit this invoice</button>` : ""}</div>` : ""}
+    ${INSTALL_BOOK && INSTALL_BOOK.inv === I.id && ME.role !== "technician" ? ieInstallHtml(I) : ""}
     ${walkOn ? ieWalkHtml(I) : ""}
     <div class="ie-grid has-cost"><div class="ie-main">
     <div class="ie-lines-box ie-cards">
@@ -27996,6 +28015,11 @@ function wireInvoiceEditor() {
     if (was !== !!box.value.trim()) openInvoiceEditor(I.id, box.value.trim() ? "✓ The note for the job is saved. The customer will see it." : "✓ The note for the job is taken off."); };
   $("#ie-notes")?.addEventListener("change", ieNoteSave);
   $("#ie-notes-save")?.addEventListener("click", e => { e.preventDefault(); ieNoteSave(); });
+  $("#ie-inst-change")?.addEventListener("click", () => $("#ie-reopen")?.click());
+  $("#ie-inst-back")?.addEventListener("click", () => { INSTALL_BOOK = null; openToBook(); });
+  $("#ie-inst-book")?.addEventListener("click", async () => { if (!INSTALL_BOOK) return;
+    if (I.status === "draft" && !(await askChoice("The invoice is not finished yet", "Do you want to book the install anyway?", [["y", "Yes, book it"], ["", "No, I will finish the invoice first"]]))) return;
+    tobBookInstall(INSTALL_BOOK.r, (IE.techNotes || []).map(n => String(n.body || "").slice(TECH_NOTE.length).trim()).filter(Boolean).join("\n")); });
   $("#ie-booktech")?.addEventListener("click", e => { const w = Number(e.currentTarget.dataset.wait) || null;
     const eq = (I.lines || []).find(l => l.item_id && !l.kit_parent), model = eq ? (eq.sku || pbName(String(eq.description || ""))) : (I.job_type || "the job");
     openBooking(I.customer_id, { jobId: I.job_id, fillVisit: w, backInv: I.id, kindForce: I.prule?.tank ? "installs" : null,
