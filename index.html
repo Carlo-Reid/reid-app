@@ -2081,6 +2081,8 @@
   .pr-t4sl { margin: 6px 0 16px; border: 1px solid #d3dbe4; border-radius: 10px; background: #fff; padding: 6px 10px; } .pr-t4sl > summary { cursor: pointer; font-weight: 700; color: #23415f; padding: 4px 0; }
   .pr-t4slt tr.pr-t4-miss td { background: #fdecea; color: #b42318; } .pr-t4slt tr.pr-t4-out td { color: #8a94a3; } .pr-t4slt tr.pr-t4-extra td { background: #fff7e6; }
   .pr-t4slt tr.pr-t4-cmp td { font-weight: 700; background: #eef4fa; } .pr-t4-hint { background: #fff7e6; border-left: 4px solid #e8a33d; padding: 8px 12px; border-radius: 6px; margin: 6px 0; }
+.src-gfix { margin: 6px 0 0; } .src-gform { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 8px 0; padding: 10px; border: 1.5px solid #bcd0e3; border-radius: 10px; background: #f4f8fc; }
+.src-gform label { display: grid; gap: 3px; font-size: 13px; } .src-gform input { width: 160px; } .src-gmsg { color: #b42318; font-size: 13px; }
   .pr-privzone { border: 1.5px dashed #f0c38a; border-radius: 12px; background: #fffaf3; padding: 12px 14px; margin: 8px 0 16px; }
   .pr-privh { font-size: 15px; color: #9a4d00; margin: 0 0 10px; }
   .pr-ptools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
@@ -36999,6 +37001,7 @@ function srcCard(r) {
       <div><span>Gross payroll</span><b>${r.gross != null ? money(r.gross) : "—"}</b></div>
       <div><span>Employees</span><b>${r.employees ?? "—"}</b></div>
     </div>
+    ${ME.role === "owner" ? `<p class="src-gfix"><button type="button" class="btn quiet-btn" data-src-setgross="${r.id}">✎ ${r.gross != null ? "Change" : "Add"} the gross payroll and employees</button></p>` : ""}
     ${r.total == null && srcSlipEst(r) ? (e => `<p class="src-estnote">About ${money(e.src)} so far, not verified: from ${e.n} pay slip${e.n === 1 ? "" : "s"} loaded (cheque${e.ds.length === 1 ? "" : "s"} of ${esc(e.ds.map(d => fmtDate(d)).join(", "))}; gross ${money(e.gross)}). ${ended ? "" : "A pay day still to come in this period adds to it. "}The accountant's email gives the real amount.</p>`)(srcSlipEst(r)) : ""}
     ${r.total == null ? `<p class="src-wait">${ended ? "Waiting for the accountant's email with the amount." : "This period is not over yet. The accountant's email comes after it ends."}</p>`
       : `<p class="src-from">From the accountant${r.entered_by ? `, put in by ${esc(r.entered_by)}` : ""}${r.entered_at ? ` on ${esc(fmtDate(r.entered_at))}` : ""}.</p>`}
@@ -37176,12 +37179,14 @@ function srcOlderBox() {
           <label>Due date<input name="due" type="date" value="${esc(v("due"))}"></label>
           <label>Payment date<input name="paid_on" type="date" value="${esc(v("paid_on"))}"></label>
           <label>Amount paid<input name="paid_amount" inputmode="decimal" value="${o.paid_amount != null ? Number(o.paid_amount).toFixed(2) : ""}"></label>
+          <label>Gross period payroll <small>(on the PDF: "Gross period payroll")</small><input name="gross" inputmode="decimal" value="${o.gross != null ? Number(o.gross).toFixed(2) : ""}"></label>
+          <label>Number of employees <small>(on the PDF: "Number of employees in last period")</small><input name="employees" inputmode="numeric" value="${esc(v("employees"))}"></label>
           <p class="src-fix-per"></p>
           <div class="src-pop-btns"><button type="button" class="btn" data-fix-save>Save this payment</button><button type="button" class="btn quiet-btn" data-fix-skip>Skip this one</button></div>
           <p class="src-fix-msg"></p></div></div>`;
     const F = n => card.querySelector(`[name="${n}"]`), guessed = new Set(o.fromName || []);
-    const check = () => { const p = { ...o, confirmation: F("confirmation").value.trim(), emp_paid_on: F("emp_paid_on").value || null, due: F("due").value || null, paid_on: F("paid_on").value || null, paid_amount: srcNum(F("paid_amount").value) };
-      ["confirmation", "emp_paid_on", "paid_on", "paid_amount"].forEach(k => F(k).classList.toggle("src-miss-in", !F(k).value.trim() || guessed.has(k)));
+    const check = () => { const p = { ...o, confirmation: F("confirmation").value.trim(), emp_paid_on: F("emp_paid_on").value || null, due: F("due").value || null, paid_on: F("paid_on").value || null, paid_amount: srcNum(F("paid_amount").value), gross: srcNum(F("gross").value), employees: F("employees").value.trim() ? Number(F("employees").value.replace(/\D/g, "")) || null : null };
+      ["confirmation", "emp_paid_on", "paid_on", "paid_amount", "gross", "employees"].forEach(k => F(k).classList.toggle("src-miss-in", !F(k).value.trim() || guessed.has(k)));
       const pr = srcPerOfPdf(p); card.querySelector(".src-fix-per").innerHTML = pr ? `It goes on <b>${esc(srcPeriod(pr))}</b>.` : `<span class="src-bad">Type the date paid to employees or the due date, so I know the period.</span>`;
       card.querySelector("[data-fix-save]").disabled = !(srcComplete(p)); return p; };
     card.querySelectorAll("input").forEach(i => i.addEventListener("input", () => { guessed.delete(i.name); check(); }));
@@ -37259,6 +37264,18 @@ document.addEventListener("click", async e => {
     else if (!(await askChoice("Take the mark off?", "This period will show as missing again until its payment confirmation is added.", [["yes", "Take it off", true], ["", "Keep it"]]))) return;
     const { error } = await db.rpc("source_paid_with", { p_from: f, p_to: to, p_with: paidWith }); if (error) return alertMsg("Not saved: " + rpcErr(error));
     srcBox(paidWith ? "✓ Saved. It counts as paid together with that payment." : "✓ The mark is off."); return; } }
+  const g = e.target.closest("[data-src-setgross],[data-src-gsave],[data-src-gcancel]");
+  if (g) { const card = g.closest(".src-card"), gid = Number(card?.dataset.srcId), gr = (SRC.rows || []).find(x => x.id === gid); if (!card || !gr) return;
+    if (g.dataset.srcGcancel != null) { card.querySelector(".src-gform")?.remove(); return; }
+    if (g.dataset.srcSetgross) { if (card.querySelector(".src-gform")) return;
+      g.closest(".src-gfix").insertAdjacentHTML("afterend", `<div class="src-gform"><label>Gross period payroll<input name="g" inputmode="decimal" value="${gr.gross != null ? Number(gr.gross).toFixed(2) : ""}"></label>
+        <label>Number of employees<input name="n" inputmode="numeric" value="${gr.employees ?? ""}"></label>
+        <button type="button" class="btn" data-src-gsave>Save the gross</button><button type="button" class="btn quiet-btn" data-src-gcancel>Cancel</button><span class="src-gmsg"></span></div>`);
+      card.querySelector(".src-gform input")?.focus(); return; }
+    const f = card.querySelector(".src-gform"), gv = srcNum(f.querySelector("[name=g]").value), nv = f.querySelector("[name=n]").value.replace(/\D/g, "");
+    g.disabled = true; const { error } = await db.rpc("source_gross_set", { p_id: gid, p_gross: gv, p_employees: nv ? Number(nv) : null });
+    if (error) { g.disabled = false; f.querySelector(".src-gmsg").textContent = "Not saved: " + rpcErr(error); return; }
+    srcBox(`✓ Saved the gross payroll for ${srcPeriod(gr)}.`); return; }
   const t = e.target.closest("[data-src-pay],[data-src-email],[data-src-pdf],[data-src-unpay],[data-src-gross],[data-src-open],[data-src-person],[data-src-go],[data-src-older],[data-src-close]"); if (!t) return;
   if (t.dataset.srcClose != null) { const row = t.closest(".src-open-row"), b = row?.previousElementSibling?.querySelector("[data-src-open]"); if (b) b.textContent = "Open"; row?.remove(); return; }
   const id = Number(t.dataset.srcPay || t.dataset.srcEmail || t.dataset.srcPdf || t.dataset.srcUnpay || t.dataset.srcGross || t.dataset.srcOpen || 0), r = (SRC.rows || []).find(x => x.id === id);
