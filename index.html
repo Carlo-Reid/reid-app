@@ -10347,6 +10347,7 @@ function setPage(hash, kind, label) {
   document.querySelectorAll(".side-nav-list button").forEach(b => b.classList.toggle("cur", b.dataset.page === (grp ? viewGroupMainBtn(grp)?.dataset.page : curView)));
   setTimeout(showLastCust, 0);
   if (location.hash !== h) { if (h) location.hash = hash; else history.pushState(null, "", location.pathname); }
+  if (!h) try { remotePageChanged(); } catch {}   // going to Customers fires no hashchange: tell the other screen of a remote session here
   const top = NAV.stack[NAV.stack.length - 1];
   if (top && top.hash === h) { if (label) top.label = label; }
   else { NAV.stack.push({ hash: h, label: label || PAGE_NAMES[kind] || kind }); if (NAV.stack.length > 60) NAV.stack.shift(); }
@@ -25614,7 +25615,14 @@ async function remoteGot(m) {
   else if (m.t === "nav") remoteApply(m.h);
   else if (m.t === "end") remoteEnd();
 }
-function remoteApply(h) { if (!h || h === location.hash) return; REMOTE.applied = h; location.hash = h; }
+function remoteApply(h) {   // the Customers page has no address of its own (""), so it is opened by hand (Carlo, Nov 14: "customer does not work when either side tries")
+  h = h || ""; if (h === (location.hash || "")) return;
+  REMOTE.applied = h; if (h) location.hash = h; else routeTo(""); }
+function remotePageChanged() {
+  if (!REMOTE.k || !REMOTE.ch) return;
+  if ((location.hash || "") === REMOTE.applied) { REMOTE.applied = null; return; }   // this change came from the other screen: do not send it back
+  REMOTE.applied = null; remoteSend("nav");
+}
 function remoteBar() {
   if (REMOTE.owner) { const sp = document.querySelector("#viewas-bar > span"); if (sp && !sp.querySelector(".rm-both")) sp.insertAdjacentHTML("beforeend", ` <b class="rm-both">📡 Your page and theirs move together.</b>`); return; }
   let b = document.getElementById("remote-bar");
@@ -25622,11 +25630,7 @@ function remoteBar() {
   b.textContent = `📡 ${(REMOTE.by || "An owner").split(" ")[0]} is remoted in with you. When one of you changes page, the other screen follows.`;
 }
 function remoteEnd() { REMOTE.k = ""; REMOTE.applied = null; document.getElementById("remote-bar")?.remove(); }
-window.addEventListener("hashchange", () => {
-  if (!REMOTE.k || !REMOTE.ch) return;
-  if (location.hash === REMOTE.applied) { REMOTE.applied = null; return; }   // this change came from the other screen: do not send it back
-  REMOTE.applied = null; remoteSend("nav");
-});
+window.addEventListener("hashchange", remotePageChanged);
 function secondLocDraw() {
   const box = $("#second-loc"); if (!box) return;
   const ago = t => { const m = Math.round((Date.now() - new Date(t)) / 60000); return m < 1 ? "just now" : m + " min ago"; };
