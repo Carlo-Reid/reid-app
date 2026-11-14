@@ -46,11 +46,13 @@ ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS payroll_wsib jsonb 
 CREATE OR REPLACE FUNCTION public._payroll_block(p_role text, p_title text, p_tech boolean, p_active boolean, ps public.payroll_staff, p_last date)
 RETURNS text LANGUAGE sql STABLE AS $f$
   -- a last day set by hand counts until a cheque after it (they came back: George, Nov 13)
+  -- no cheque for 3 months, or turned off, wins over a block picked on the slips (George, Nov 14: "why are names not moved to past
+  -- if they don't fit the criteria of a working employee now"); owners stay owners
   SELECT CASE WHEN ps.left_on IS NOT NULL AND (p_last IS NULL OR p_last <= ps.left_on) OR ps.block = 'past' THEN 'past'
-              WHEN ps.block IS NOT NULL THEN ps.block
-              WHEN p_role = 'owner' THEN 'owner'
+              WHEN p_role = 'owner' OR ps.block = 'owner' THEN 'owner'
               WHEN p_active IS FALSE THEN 'past'
               WHEN p_last IS NOT NULL AND p_last < public._src_today() - 92 THEN 'past'
+              WHEN ps.block IS NOT NULL THEN ps.block
               WHEN p_role ILIKE 'sales%' OR p_title ILIKE '%sales%' THEN 'sales'
               WHEN p_tech THEN 'tech'
               ELSE 'office' END $f$;
