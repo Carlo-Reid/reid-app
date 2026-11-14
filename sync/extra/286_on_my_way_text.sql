@@ -38,7 +38,8 @@ BEGIN
   SELECT CASE WHEN nullif(btrim(send_test_to), '') IS NOT NULL THEN coalesce(public._podium_digits(send_test_phone), public._podium_digits(public._app_user_phone(v_user)), 'none') END,
          nullif(btrim(company_name), ''), public._podium_digits(send_test_phone2) INTO v_test, v_co, v_test2 FROM company_settings LIMIT 1;
   IF v_test IS NULL OR length(coalesce(v_test2, '')) <> 10 OR v_test2 = v_test THEN v_test2 := NULL; END IF;   -- the second test number: only in test mode
-  RETURN jsonb_build_object('user', v_user, 'customer', v_cust, 'phone', v_phone, 'tech', v_name, 'minutes', v_min, 'km', v_km, 'company', v_co, 'test_to', v_test, 'test_to2', v_test2, 'image', v_img, 'mime', coalesce(v_mime, 'image/jpeg'));
+  RETURN jsonb_build_object('user', v_user, 'customer', v_cust, 'phone', v_phone, 'tech', v_name, 'minutes', v_min, 'km', v_km, 'company', v_co, 'test_to', v_test, 'test_to2', v_test2, 'image', v_img, 'mime', coalesce(v_mime, 'image/jpeg'),
+    'again', EXISTS (SELECT 1 FROM on_way_delays d WHERE d.visit_id = p_visit));   -- again: a delayed text went before, so this one says "back on my way" (Carlo, Nov 14)
 END $f$;
 
 -- after the text went out: remember it (so it is sent once, and the dispatch board can show it) and write a job note

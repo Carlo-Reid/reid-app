@@ -41,7 +41,7 @@ BEGIN
   UPDATE visits SET customer_notified_at = NULL WHERE id = p_visit RETURNING job_id INTO v_job;
   IF v_job IS NOT NULL THEN
     INSERT INTO notes (entity_type, entity_id, body, author_user_id)
-      VALUES ('job', v_job, 'Delayed text sent to the customer: ' || coalesce(p ->> 'tech', 'the tech') || ' got delayed and will be there soon'
+      VALUES ('job', v_job, 'Delayed text sent to the customer: ' || coalesce(p ->> 'tech', 'the tech') || ' got delayed and will say when he is back on the way'
         || CASE WHEN nullif(p ->> 'test_to', '') IS NOT NULL THEN ' (test mode: it went to the test number, not the customer)' ELSE '' END || '.', p_user);
   END IF;
 END $f$;

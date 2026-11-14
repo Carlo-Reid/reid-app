@@ -2,7 +2,7 @@
 // Tech Calls, "On my way": one text to the customer through Podium with the tech's first name, about how many minutes, and his picture.
 //   { visit_id, lat, lng, card }  → (card: the picture the app drew, a JPEG as base64: the tech's picture with the side bar; without it the plain Staff page picture goes)
 //   { sent, minutes, pic, tech, test_to, test_to2, test2_why } | { already } | { error }
-//   { visit_id, delayed: true }  → "I got delayed": a sorry text (no picture); the first On my way text is forgotten, so the next On my way texts again (290_on_way_delay.sql)
+//   { visit_id, delayed: true }  → Undo on a call that is On the way: a sorry text (no picture); the first On my way text is forgotten, so the next On my way texts again (290_on_way_delay.sql)
 // Who may, which number, the minutes and the picture come from the database (on_way_text_info, sync/extra/286_on_my_way_text.sql).
 // Once for each call. Test mode (Settings: Sending to customers) sends it to the test number instead of the customer,
 // and to the second test number too when one is set (both get the same text).
@@ -13,7 +13,7 @@ const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" } });
 const timed = async (url: string, ms: number, init: RequestInit = {}) => { const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); try { return await fetch(url, { ...init, signal: c.signal }); } finally { clearTimeout(t); } };
 type Sec = { client_id?: string; client_secret?: string; refresh_token?: string; access_token?: string; expires?: string | null };
-type Way = { error?: string; already?: boolean; user?: number; phone?: string; tech?: string; minutes?: number; km?: number; company?: string; test_to?: string; test_to2?: string; image?: string; mime?: string };
+type Way = { error?: string; already?: boolean; user?: number; phone?: string; tech?: string; minutes?: number; km?: number; company?: string; test_to?: string; test_to2?: string; image?: string; mime?: string; again?: boolean };
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -51,11 +51,13 @@ Deno.serve(async (req) => {
   if (!loc) return json({ error: "no_location" });
 
   const mins = Number(way.minutes) > 0 ? Number(way.minutes) : null, pre = testTo ? "[TEST: this would go to " + d.replace(/(\d{3})(\d{3})(\d{4})/, "$1-$2-$3") + "] " : "";
-  const who = way.tech ? "your technician " + way.tech : "your technician";
-  const words = delayed ? "Hi, this is " + (way.company || "the office") + ". Sorry, " + who + " got delayed, but will be there soon. You will get another text when " + (way.tech || "the technician") + " is on the way."
+  // Carlo, Nov 14: the tech talks ("I"). Undo on a call that is On the way = the sorry text; On my way after that = the "back on my way" text (way.again).
+  const hi = "Hi, this is " + (way.tech ? way.tech + " from " : "") + (way.company || "the office") + ". ", again = !delayed && way.again === true;
+  const words = delayed ? hi + "I am sorry, I have gotten delayed, but I will let you know when I am back on my way."
+    : again ? hi + "OK, I am back on my way to you now" + (mins ? " and should be there in about " + mins + " minutes" : "") + ". Sorry for the delay."
     : "Hi, this is " + (way.company || "the office") + ". " + (way.tech ? "Your technician " + way.tech : "Your technician") + " is on the way" + (mins ? " and should be there in about " + mins + " minutes" : "") + ".";
   const card = typeof body.card === "string" && body.card.startsWith("/9j/") && body.card.length < 900000 && /^[A-Za-z0-9+/=]+$/.test(body.card) ? body.card : null;
-  const pict = delayed ? null : card ?? way.image ?? null, pictMime = card ? "image/jpeg" : (way.mime || "image/jpeg");
+  const pict = delayed || again ? null : card ?? way.image ?? null, pictMime = card ? "image/jpeg" : (way.mime || "image/jpeg");
   const picWords = !pict ? "" : " This is " + (way.tech || "your technician") + "'s picture, so you know who is coming.";
   const msg = (text: string, n: string = to) => ({ channel: { type: "phone", identifier: "+1" + n }, body: text, locationUid: loc, ...(way.tech ? { senderName: way.tech } : {}) });
   let ok = false, pic = false, sent = pre + words, why = "", j: Record<string, unknown> = {};
@@ -110,5 +112,5 @@ Deno.serve(async (req) => {
     return json({ sent: true, delayed: true, test_to: testTo, test_to2: sent2 ? to2 : null, test2_why: to2 && !sent2 ? why2 : null, tech: way.tech ?? null });
   }
   await admin.rpc("_on_way_text_sent", { p_visit: visit, p_user: way.user ?? null, p: { minutes: mins, km: way.km ?? null, phone: d, tech: way.tech ?? null, pic, test_to: testTo } });
-  return json({ sent: true, test_to: testTo, test_to2: sent2 ? to2 : null, test2_why: to2 && !sent2 ? why2 : null, minutes: mins, pic, tech: way.tech ?? null, pic_why: pict && !pic ? why : null });
+  return json({ sent: true, test_to: testTo, test_to2: sent2 ? to2 : null, test2_why: to2 && !sent2 ? why2 : null, minutes: mins, pic, again, tech: way.tech ?? null, pic_why: pict && !pic ? why : null });
 });

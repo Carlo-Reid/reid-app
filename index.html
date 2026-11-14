@@ -17361,7 +17361,6 @@ function renderMyCalls() {
   document.querySelectorAll("[data-mc-costco]").forEach(b => b.addEventListener("click", () => openStoreForm(Number(b.dataset.mcCostco))));
   document.querySelectorAll("[data-mc-invoice]").forEach(b => b.addEventListener("click", () => startInvoice(Number(b.dataset.mcInvoice))));
   document.querySelectorAll("[data-mc-walk]").forEach(b => b.addEventListener("click", () => { const c = (MC.data?.calls || []).find(x => x.visit_id === Number(b.dataset.mcWalk)); if (c) openOnSite(c.job_id, c.job_type, c.job_class, c); }));
-  document.querySelectorAll("[data-mc-delay]").forEach(b => b.addEventListener("click", () => mcDelayed(b.closest(".mc"), Number(b.dataset.mcDelay))));
   document.querySelectorAll("[data-mc-status]").forEach(b => b.addEventListener("click", async () => {
     const card = b.closest(".mc"), id = Number(card.dataset.visit), s = b.dataset.mcStatus;
     if (s === "completed" || s === "needs_return") {
@@ -17371,6 +17370,7 @@ function renderMyCalls() {
       f.querySelector("button[type=submit]").textContent = s === "completed" ? "Mark done" : "Save: needs another visit";
       f.querySelector("textarea").focus(); return;
     }
+    if (s === "scheduled" && (MC.data?.calls || []).find(x => x.visit_id === id)?.status === "en_route") return mcDelayed(card, id);   // Undo on a call that is On the way: the customer gets the sorry text
     await mcSet(card, id, s, null);
   }));
   document.querySelectorAll("[data-mc-eq]").forEach(b => b.addEventListener("click", () => {
@@ -17461,6 +17461,8 @@ async function mcOnWayText(id) {
   try { const [at, card] = await Promise.all([mcWhere(), mcWayCard(id)]); const r = await db.functions.invoke("on-way-text", { body: { visit_id: id, lat: at?.lat ?? null, lng: at?.lng ?? null, card } }); d = r.error ? null : r.data; } catch { }
   if (!d) return "The customer was not texted: I could not reach the texting service. Please call them.";
   if (d.already) return "";
+  if (d.sent && d.again) return `✓ I texted the customer: “OK, I am back on my way to you now${d.minutes ? " and should be there in about " + d.minutes + " minutes" : ""}. Sorry for the delay.”`
+    + (d.test_to ? (d.test_to2 ? " Test mode is on, so it went to both test numbers, not to the customer." : " Test mode is on, so it went to the test number, not to the customer.") + (d.test2_why ? " It did not go to the second test number: " + d.test2_why : "") : "");
   if (d.sent) return `✓ I texted the customer: ${d.tech || "the tech"} is on the way${d.minutes ? ", about " + d.minutes + " minutes" : ""}${d.pic ? ", with the tech's picture" : ""}.`
     + (d.minutes ? "" : " This phone did not say where it is, so the text has no time in it.")
     + (d.pic ? "" : d.pic_why ? " The picture did not go, only the words." : " There is no picture of the tech on the Staff page, so only the words went.")
@@ -17472,18 +17474,15 @@ async function mcOnWayText(id) {
     no_location: "The customer was not texted: Podium has no location to send from. Please call them." })[d.error]
     || "The customer was not texted" + (d.message ? " (Podium: " + d.message + ")" : "") + ". Please call them.";
 }
-// "I got delayed" on a call that is On the way (Carlo, Nov 13, 5:38 p.m.): the customer gets a sorry text, the call goes back to Booked (so the dispatch board
-// no longer says On the way), and On my way is there to press again, which texts the customer again and puts the board back to On the way.
+// Undo on a call that is On the way (Carlo, Nov 14, 10:16 a.m.; it was a separate "I got delayed" square, Nov 13): the customer gets a sorry text, the call
+// goes back to Booked (so the dispatch board no longer says On the way), and On my way is there to press again, which texts "I am back on my way to you now".
 async function mcDelayed(card, id) {
-  const k = await askChoice("Tell the customer you got delayed?", `<span class="ask-sq"></span>I text the customer: “Sorry, your technician got delayed, but will be there soon.” The call goes back to Booked. When you leave, press On my way again and the customer gets a new text.`,
-    [["yes", "📨|Yes, text them|I got delayed"], ["", "No, go back"]]);
-  if (k !== "yes") return;
   const m = card.querySelector(".mc-msg"); m.className = "mc-msg"; m.textContent = "Telling the customer you got delayed…"; card.querySelectorAll("button").forEach(b => b.disabled = true);
   let d = null; try { const r = await db.functions.invoke("on-way-text", { body: { visit_id: id, delayed: true } }); d = r.error ? null : r.data; } catch { }
   const stop = t => { card.querySelectorAll("button").forEach(b => b.disabled = false); m.className = "mc-msg err"; m.textContent = t; };
   if (d && (d.error === "not_allowed" || d.error === "no_call" || d.error === "not_on_way")) return stop(d.error === "not_on_way" ? "This call is not On the way any more." : "You can not do this for this call.");
   const said = !d ? "The customer was not texted: I could not reach the texting service. Please call them."
-    : d.sent ? `✓ I texted the customer: ${d.tech || "the tech"} got delayed and will be there soon.` + (d.test_to ? (d.test_to2 ? " Test mode is on, so it went to both test numbers, not to the customer." : " Test mode is on, so it went to the test number, not to the customer.") + (d.test2_why ? " It did not go to the second test number: " + d.test2_why : "") : "")
+    : d.sent ? `✓ I texted the customer: “I am sorry, I have gotten delayed, but I will let you know when I am back on my way.”` + (d.test_to ? (d.test_to2 ? " Test mode is on, so it went to both test numbers, not to the customer." : " Test mode is on, so it went to the test number, not to the customer.") + (d.test2_why ? " It did not go to the second test number: " + d.test2_why : "") : "")
     : ({ no_phone: "The customer was not texted: they have no phone number on file that takes texts. Please call them.", test_no_number: "The customer was not texted: test mode is on and no test number is set in Settings.",
          not_connected: "The customer was not texted: Podium is not connected. Please call them." })[d.error] || "The customer was not texted" + (d.message ? ": " + d.message : ".") + " Please call them.";
   const { error } = await db.rpc("set_call_status", { p_visit_id: id, p_status: "scheduled", p_note: "The tech got delayed. The call is back to Booked." });
@@ -17606,7 +17605,6 @@ function mcCard(c) {
         ${!invDone ? sq("🧾", "Invoice and payment", `data-mc-invoice="${c.job_id}"`) : ""}
         ${/^costco/i.test(c.job_type || "") ? sq("📝", "Costco form (customer signs)", `data-mc-costco="${c.job_id}"`) : ""}
         ${sq("👤", "Open the full customer file", `data-mc-open-cust="${c.customer_id}"`)}
-        ${c.status === "en_route" ? sq("⏰", "I got delayed", `data-mc-delay="${c.visit_id}"`) : ""}
         ${c.status === "on_site" || c.status === "en_route" ? sq("↩", "Undo", `data-mc-status="scheduled"`, "mc-sq-quiet") : ""}
         ${done && c.status !== "cancelled" ? sq("↩", "Not finished after all", `data-mc-status="on_site"`, "mc-sq-quiet") : ""}</div>
       <form class="mc-finish hidden"><textarea rows="3" maxlength="4000"></textarea><div><button class="btn" type="submit">Save</button> <button class="link" type="button" data-mc-x>Never mind</button></div></form>
