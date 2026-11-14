@@ -1960,6 +1960,16 @@
   .pr-slipt, .pr-ldt { width: 100%; border-collapse: collapse; font-size: 14px; } .pr-slipt th, .pr-slipt td, .pr-ldt th, .pr-ldt td { padding: 6px 8px; border-bottom: 1px solid #e3e8ee; text-align: left; vertical-align: top; }
   .pr-slipt th, .pr-ldt th { background: #f1f5f9; }
   .pr-ldt select { max-width: 220px; } .pr-ld-off td { opacity: .45; } .pr-ld-conf { background: #fff8ee; } .pr-ld-chg { color: #9a4d00; font-weight: 700; } .pr-ld-of { color: #b42318; font-size: 13px; margin-top: 4px; }
+  .pr-ld-flags { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 10px; }
+  .pr-ld-fl { border: 1.5px solid #bcd0e3; background: #fff; color: #23415f; border-radius: 10px; padding: 6px 12px; font-weight: 700; cursor: pointer; }
+  .pr-ld-fl.on { background: #e8f0f8; border-color: #23415f; }
+  .pr-ld-fl-new { background: #fff7cc; border-color: #e3c64a; } .pr-ld-fl-file, .pr-ld-fl-two { background: #ffefdc; border-color: #f0b06a; } .pr-ld-fl-conf, .pr-ld-fl-date { background: #fde6e4; border-color: #e8958c; }
+  .pr-ldt tr.pr-ld-f-new td { background: #fff9d9; } .pr-ldt tr.pr-ld-f-new td:first-child { box-shadow: inset 5px 0 #e3b400; }
+  .pr-ldt tr.pr-ld-f-file td, .pr-ldt tr.pr-ld-f-two td { background: #fff3e4; } .pr-ldt tr.pr-ld-f-file td:first-child, .pr-ldt tr.pr-ld-f-two td:first-child { box-shadow: inset 5px 0 #e8890c; }
+  .pr-ldt tr.pr-ld-f-conf td, .pr-ldt tr.pr-ld-f-date td { background: #fdecea; } .pr-ldt tr.pr-ld-f-conf td:first-child, .pr-ldt tr.pr-ld-f-date td:first-child { box-shadow: inset 5px 0 #c8372d; }
+  .pr-ld-tag { display: inline-block; margin-top: 3px; font-size: 12px; font-weight: 700; border-radius: 6px; padding: 1px 7px; }
+  .pr-ld-tag-new { background: #ffe680; color: #5c4600; } .pr-ld-tag-file, .pr-ld-tag-two { background: #ffd9a8; color: #7a3d00; } .pr-ld-tag-conf, .pr-ld-tag-date { background: #f8c6c0; color: #8a1c13; }
+  .pr-ld-blkset { border: 2px solid #23415f; font-weight: 700; } .pr-ld-moved { font-size: 12px; font-weight: 700; color: #1b6b36; margin-top: 3px; }
   @media print { #src-box, #pr-rate-box, #pr-priv-slot, .pr-privzone, .pr-privbtn { display: none !important; } }
   .pr-pname { font-weight: 600; } .pr-pmeta { grid-column: 1; font-size: 12.5px; color: var(--muted, #667); } .pr-pwage { grid-column: 2; grid-row: 1 / 3; align-self: center; font-size: 13px; }
   .pr-n { font-size: 13px; font-weight: 500; color: var(--muted, #667); }
@@ -34448,6 +34458,17 @@ async function prSlipsLoad(files) {
   const freeOf = r => { const sib = R.filter(o => o.who === r.who && o.s.cheque === r.s.cheque && o.use);
     const f = listOf(r).filter(o => !sib.some(x => sameAmt(o, x.s))); return f; };
   const fileOf = r => exactOf(r) || (freeOf(r).length ? freeOf(r)[0] : null);
+  // the block of a slip: the last block picked by hand on this person's slips at or before its cheque date (it carries forward until changed again), else their block now (George, Nov 13)
+  const ord = (a, b) => (a.s.cheque || "") < (b.s.cheque || "") ? -1 : (a.s.cheque || "") > (b.s.cheque || "") ? 1 : a.i - b.i;
+  const mine = r => R.filter(o => o.who === r.who && o.who !== "skip").sort(ord);
+  const blkFrom = r => { const L = mine(r); let src = null; for (const o of L) { if (o.blockSet) src = o; if (o === r) break; } return src; };
+  const blkOf = r => { const src = blkFrom(r); if (src) return src.block; const p = personOf(r.who); return p && p.block && p.block !== "past" ? p.block : r.block; };
+  const blkPrev = r => { const L = mine(r).filter(o => o.use); const k = L.indexOf(r); if (k > 0) return blkOf(L[k - 1]); const p = personOf(r.who); return p && p.block && p.block !== "past" ? p.block : null; };
+  // what each line needs a look for: a new person, a slip already on file, two cheques on one date, or one that needs a pick
+  const flagOf = r => { if (!r.use || r.who === "skip") return null;
+    if (!r.s.cheque) return "date"; if (r.who === "new") return "new"; if (!exactOf(r) && freeOf(r).length) return "conf"; if (exactOf(r)) return "file"; if (r.dup) return "two"; return null; };
+  const FLAG = { date: ["❗", "No cheque date"], new: ["🆕", "New person"], conf: ["❗", "Pick one"], file: ["⚠", "Duplicate: on file"], two: ["⚠", "Two cheques"] };
+  let only = null;   // show only the lines of one kind
   const draw = () => {
     const dups = R.filter(r => r.dup), conflicts = R.filter(r => r.use && r.who !== "skip" && !exactOf(r) && freeOf(r).length);
     const need = conflicts.filter(r => !r.pick).length, noDate = R.filter(r => r.use && r.who !== "skip" && !r.s.cheque).length;
@@ -34459,6 +34480,9 @@ async function prSlipsLoad(files) {
       ${same.length ? `<p class="pr-ld-dupok"><b>⚠ ${same.length} slip${same.length === 1 ? " is" : "s are"} already on file: the same cheque date and the same amounts</b> (${esc(same.slice(0, 4).map(r => r.s.name + ", " + fmtDate(r.s.cheque)).join(" · "))}${same.length > 4 ? " …" : ""}). They are marked <b>Duplicate</b> below and will not be saved again.</p>` : ""}
       ${dups.length ? `<p class="pr-ld-dupok"><b>The same person has two slips for the same cheque date, with other amounts</b> (${esc([...new Set(dups.map(r => r.s.name + ", " + fmtDate(r.s.cheque)))].slice(0, 4).join(" · "))}). These are two cheques, so both are saved. Untick one in the Use column only if it is a mistake.</p>` : ""}
       ${need ? `<p class="src-bad"><b>⚠ ${need} slip${need === 1 ? " has" : "s have"} another slip already on file for the same person and cheque date, with other amounts.</b> On each one (in red below), pick: keep what is on file, use this one instead, or add it too as a second cheque.</p>` : ""}
+      ${(() => { const c = {}; R.forEach(r => { const f = flagOf(r); if (f) c[f] = (c[f] || 0) + 1; }); const ks = Object.keys(FLAG).filter(k => c[k]);
+        return ks.length ? `<div class="pr-ld-flags"><b>Look at these:</b> ${ks.map(k => `<button type="button" class="pr-ld-fl pr-ld-fl-${k}${only === k ? " on" : ""}" data-only="${k}">${FLAG[k][0]} ${c[k]} ${esc(FLAG[k][1].toLowerCase())}</button>`).join("")}${only ? `<button type="button" class="pr-ld-fl" data-only="">Show them all</button>` : ""}<span class="quiet"> They are coloured in the list. Click one to see only those.</span></div>`
+          : `<p class="quiet">✓ Nothing to look at: every slip is someone we know, with nothing on file for that cheque.</p>`; })()}
       <div class="src-tw"><table class="pr-ldt"><thead><tr><th>Use</th><th>Name on the slip</th><th>Who in the app</th><th>Block</th><th>Cheque · pay period</th><th>Pay on the slip</th><th>In the app now</th><th>Gross · net</th></tr></thead><tbody>
       ${R.map(r => { const s = r.s, p = personOf(r.who), o = fileOf(r), diff = o && !sameAmt(o, s), fr = freeOf(r);
         const now = p?.rate ? (p.rate.kind === "salary" ? `${money(p.rate.amount)} a year` : `${money(p.rate.amount)} an hour`) : p?.pay_kind === "commission" ? "Commission" : "—";
@@ -34467,12 +34491,15 @@ async function prSlipsLoad(files) {
         const newest = p && s.cheque && !R.some(o => o !== r && o.who === r.who && o.use && (o.s.cheque > s.cheque || o.s.cheque === s.cheque && o.s.gross > s.gross)) && (!p.last_pay || s.cheque >= String(p.last_pay).slice(0, 10))
           && (p.rate?.from === "app" ? (s.from || s.cheque) >= String(p.rate.starts_on || "").slice(0, 10) : srcDays(s.cheque, salesToday()) <= 30);
         const changed = differs && newest, hist = differs && !newest;
-        return `<tr class="${r.who === "skip" || !r.use ? "pr-ld-off" : ""}${diff ? " pr-ld-conf" : ""}" data-r="${r.i}">
+        const fl = flagOf(r); if (only && fl !== only) return "";
+        const bk = blkOf(r), bp = blkPrev(r), src = blkFrom(r), moved = r.use && r.who !== "skip" && bp && bk !== bp;
+        return `<tr class="${r.who === "skip" || !r.use ? "pr-ld-off" : ""}${diff ? " pr-ld-conf" : ""}${fl ? " pr-ld-f-" + fl : ""}" data-r="${r.i}">
           <td>${r.dup ? `<input type="checkbox" data-use ${r.use ? "checked" : ""} aria-label="Save this slip">` : "✓"}</td>
-          <td><b>${esc(s.name)}</b></td>
+          <td><b>${esc(s.name)}</b>${fl ? `<div class="pr-ld-tag pr-ld-tag-${fl}">${FLAG[fl][0]} ${esc(FLAG[fl][1])}</div>` : ""}</td>
           <td><select data-who><option value="new"${r.who === "new" ? " selected" : ""}>＋ New person</option><option value="skip"${r.who === "skip" ? " selected" : ""}>✕ Leave this slip out</option>
             ${people.map(q => `<option value="${paysKey(q)}"${paysKey(q) === r.who ? " selected" : ""}>${esc(q.name)}${q.user ? "" : " (payroll only)"}</option>`).join("")}</select></td>
-          <td>${p && p.user ? esc(prBlockName(p.block)) : `<select data-blk>${PR_BLOCKS.filter(b => b[0] !== "past").map(([k, n]) => `<option value="${k}"${(p ? p.block : r.block) === k ? " selected" : ""}>${n}</option>`).join("")}</select>`}</td>
+          <td><select data-blk class="${r.blockSet ? "pr-ld-blkset" : ""}">${PR_BLOCKS.filter(b => b[0] !== "past").map(([k, n]) => `<option value="${k}"${bk === k ? " selected" : ""}>${n}</option>`).join("")}</select>
+            ${moved ? `<div class="pr-ld-moved">Moved from ${esc(prBlockName(bp))}</div>` : src && src !== r ? `<div class="quiet">Same as ${esc(fmtDate(src.s.cheque))}</div>` : ""}</td>
           <td>${s.cheque ? esc(fmtDate(s.cheque)) : `<input type="date" class="pr-ld-chq" data-chq aria-label="Cheque date">`}<div class="quiet">${s.from ? esc(fmtDate(s.from)) + " – " + esc(fmtDate(s.to)) : "Pay period not read"}</div></td>
           <td>${esc(paysPayLab(s))}${s.commission ? `<div class="quiet">Commission ${money(s.commission)}</div>` : ""}</td>
           <td class="${changed ? "pr-ld-chg" : ""}">${now}${changed ? `<div class="quiet">${p.rate ? "will change to the slip's rate" : "will be set"}</div>` : hist ? `<div class="quiet" title="This slip is older than the pay on file. Its rate goes in the person's pay history; the rate now does not change.">stays · this slip goes in the pay history</div>` : ""}</td>
@@ -34483,18 +34510,21 @@ async function prSlipsLoad(files) {
       <div class="src-pop-btns"><button type="button" class="btn" id="pr-ld-save"${need || noDate ? " disabled" : ""}>Save the pay slips</button><button type="button" class="btn quiet-btn" data-src-x>Cancel</button>${need ? ` <span class="src-bad">Pick one on each slip already on file first.</span>` : ""}</div>`;
     body.querySelectorAll("tr[data-r]").forEach(tr => { const r = R[Number(tr.dataset.r)];
       tr.querySelector("[data-who]")?.addEventListener("change", e => { r.who = e.target.value; draw(); });
-      tr.querySelector("[data-blk]")?.addEventListener("change", e => { r.block = e.target.value; r.blockSet = true; });
+      // a block picked here carries to this person's later slips, until one of them is changed again (George, Nov 13)
+      tr.querySelector("[data-blk]")?.addEventListener("change", e => { r.block = e.target.value; r.blockSet = true; draw(); });
       tr.querySelector("[data-use]")?.addEventListener("change", e => { r.use = e.target.checked; draw(); });
       tr.querySelector("[data-pick]")?.addEventListener("change", e => { r.pick = e.target.value || null; draw(); });
       tr.querySelector("[data-chq]")?.addEventListener("change", e => { if (e.target.value) { r.s.cheque = e.target.value; draw(); } }); });
+    body.querySelectorAll("[data-only]").forEach(x => x.addEventListener("click", () => { only = x.dataset.only || null; draw(); }));
     body.querySelector("#pr-ld-save")?.addEventListener("click", async e => { e.target.disabled = true;
       // each slip's number for its person and cheque date: the one it replaces, else the next free one (two cheques on one date are two slips)
       const taken = new Map(), keyOf = r => r.who + "|" + r.s.cheque, nextNo = r => { const k = keyOf(r);
         if (!taken.has(k)) taken.set(k, new Set(listOf(r).map(o => Number(o.slip_no || 1)))); const t = taken.get(k); let n = 1; while (t.has(n)) n++; t.add(n); return n; };
       const out = R.filter(r => r.use && r.who !== "skip" && !exactOf(r)).filter(r => !freeOf(r).length || r.pick === "new" || r.pick === "add")
-        .map(r => { const p = personOf(r.who), blkSel = !p || !p.user, fr = freeOf(r);
+        .map(r => { const p = personOf(r.who), fr = freeOf(r), src = mine(r).some(o => o.blockSet && o.use);
           const slip_no = r.pick === "new" && fr.length === 1 ? Number(fr[0].slip_no || 1) : nextNo(r);
-          return { ...r.s, slip_no, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: blkSel ? (r.block || p?.block || "office") : "", block_set: blkSel && (!p || !!r.blockSet) }; });
+          // the slip's own block: a new person always; else every slip of a person whose block was changed in this load (so the move is written in their pay history)
+          return { ...r.s, slip_no, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: !p || src ? blkOf(r) : "", block_set: !p || !!src }; });
       // slips already on file with the same amounts but no page yet: only their page and address are added
       R.filter(r => r.use && r.who !== "skip").forEach(r => { const o = exactOf(r); if (o && !o.page) {
         const p = personOf(r.who); out.push({ ...r.s, slip_no: Number(o.slip_no || 1), user: p?.user || null, staff: p && !p.user ? p.staff : null, page_only: true }); } });

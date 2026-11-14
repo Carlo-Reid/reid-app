@@ -28,6 +28,8 @@ ALTER TABLE public.payroll_slips ADD COLUMN IF NOT EXISTS page_path text;
 ALTER TABLE public.payroll_slips ADD COLUMN IF NOT EXISTS slip_no int NOT NULL DEFAULT 1;
 ALTER TABLE public.payroll_slips DROP CONSTRAINT IF EXISTS payroll_slips_staff_id_cheque_date_key;
 CREATE UNIQUE INDEX IF NOT EXISTS payroll_slips_one ON public.payroll_slips (staff_id, cheque_date, slip_no);
+-- the block (Techs, Sales…) picked for the person on this slip; it carries to their later slips until changed, and a change is written in their pay history (George, Nov 13)
+ALTER TABLE public.payroll_slips ADD COLUMN IF NOT EXISTS block text;
 DO $do$ BEGIN
   INSERT INTO storage.buckets (id, name, public, file_size_limit) VALUES ('payroll-slips', 'payroll-slips', false, 5242880) ON CONFLICT (id) DO NOTHING;
   DROP POLICY IF EXISTS payroll_slips_read ON storage.objects;
@@ -86,9 +88,12 @@ CREATE OR REPLACE FUNCTION public.payroll_slips_on_file(p_cheques date[]) RETURN
   SELECT CASE WHEN public._src_owner() THEN coalesce((SELECT jsonb_agg(jsonb_build_object('staff', s.staff_id, 'user', ps.app_user_id, 'cheque', s.cheque_date, 'gross', s.gross, 'net', s.net, 'file', s.file_name, 'page', s.page_path IS NOT NULL, 'slip_no', s.slip_no))
     FROM payroll_slips s JOIN payroll_staff ps ON ps.id = s.staff_id WHERE s.cheque_date = ANY (p_cheques)), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
 
+CREATE OR REPLACE FUNCTION public._payroll_block_name(b text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
+  SELECT CASE b WHEN 'owner' THEN 'Owners' WHEN 'tech' THEN 'Techs' WHEN 'sales' THEN 'Sales' WHEN 'office' THEN 'Office' WHEN 'greeter' THEN 'Store Greeters' WHEN 'past' THEN 'Past employees' ELSE coalesce(b, '') END $f$;
+
 -- after slips change: the person's details from their newest slip, the pay history notes, and (app users) their pay rates from the slips
 CREATE OR REPLACE FUNCTION public._payroll_staff_refresh(p_staff bigint) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
-DECLARE ps payroll_staff; s record; p_kind text; p_rate numeric; p_per numeric; first boolean := true; amt numeric; k text; st_wage numeric; nw record;
+DECLARE ps payroll_staff; s record; p_kind text; p_rate numeric; p_per numeric; p_blk text; first boolean := true; amt numeric; k text; st_wage numeric; nw record;
 BEGIN
   SELECT * INTO ps FROM payroll_staff WHERE id = p_staff; IF NOT FOUND THEN RETURN; END IF;
   SELECT * INTO s FROM payroll_slips WHERE staff_id = p_staff ORDER BY cheque_date DESC, gross DESC NULLS LAST LIMIT 1;
@@ -118,6 +123,14 @@ BEGIN
     END IF;
     first := false; p_kind := s.kind; p_rate := s.rate; p_per := s.per_pay;
   END LOOP;
+  -- block moves, from the blocks on the slips (George, Nov 13: "it should be recorded that they changed from the tech to whatever")
+  FOR s IN SELECT cheque_date, block FROM payroll_slips WHERE staff_id = p_staff AND block IS NOT NULL ORDER BY cheque_date, slip_no LOOP
+    IF p_blk IS NOT NULL AND s.block IS DISTINCT FROM p_blk THEN
+      INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, s.cheque_date, 'Moved from ' || public._payroll_block_name(p_blk) || ' to '
+        || public._payroll_block_name(s.block) || ' (cheque of ' || to_char(s.cheque_date, 'Mon DD, YYYY') || ').', true);
+    END IF;
+    p_blk := s.block;
+  END LOOP;
   -- old pay slips never take the pay back in time (George, Nov 13): when the newest slip on file is more than 30 days old and the person had
   -- a rate in the app with no rate set by hand (ServiceTitan's wage), that rate stays the rate now, from the day after that slip's pay period
   IF ps.app_user_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM staff_pay_rates WHERE app_user_id = ps.app_user_id AND set_by NOT IN ('Payroll PDF', 'Kept from before')) THEN
@@ -135,7 +148,7 @@ END $f$;
 
 -- save the slips an owner checked. p = { file, slips: [{ staff, user, name, block, new, slip fields… }] }
 CREATE OR REPLACE FUNCTION public.payroll_slips_save(p jsonb) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
-DECLARE x jsonb; sid bigint; touched bigint[] := '{}'; n int := 0; pg_n int := 0; who text := public._staff_name(public.current_app_user_id()); nm text;
+DECLARE x jsonb; sid bigint; touched bigint[] := '{}'; blk_ids bigint[] := '{}'; n int := 0; pg_n int := 0; who text := public._staff_name(public.current_app_user_id()); nm text;
 BEGIN
   IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can load payroll'; END IF;
   FOR x IN SELECT * FROM jsonb_array_elements(coalesce(p -> 'slips', '[]'::jsonb)) LOOP
@@ -150,27 +163,34 @@ BEGIN
       SELECT id INTO sid FROM payroll_staff WHERE app_user_id IS NULL AND (lower(name) = lower(nm) OR lower(nm) = ANY (SELECT lower(a) FROM unnest(aliases) a)) LIMIT 1;
       IF sid IS NULL THEN INSERT INTO payroll_staff (name, block) VALUES (nm, nullif(x ->> 'block', '')) RETURNING id INTO sid; END IF;
     END IF;
-    UPDATE payroll_staff SET aliases = CASE WHEN lower(nm) = ANY (SELECT lower(a) FROM unnest(aliases) a) OR lower(name) = lower(nm) THEN aliases ELSE aliases || nm END,
-      block = CASE WHEN nullif(x ->> 'block', '') IS NOT NULL AND (x ->> 'block_set')::boolean THEN x ->> 'block' ELSE block END
+    UPDATE payroll_staff SET aliases = CASE WHEN lower(nm) = ANY (SELECT lower(a) FROM unnest(aliases) a) OR lower(name) = lower(nm) THEN aliases ELSE aliases || nm END
       WHERE id = sid;
+    IF nullif(x ->> 'block', '') IS NOT NULL AND coalesce((x ->> 'block_set')::boolean, false) AND NOT sid = ANY (blk_ids) THEN blk_ids := blk_ids || sid; END IF;
     IF (x ->> 'page_only')::boolean THEN   -- a slip already on file with the same amounts: only add its page and address
-      UPDATE payroll_slips SET page_path = coalesce(nullif(x ->> 'page', ''), page_path), address = coalesce(nullif(btrim(x ->> 'addr'), ''), address)
+      UPDATE payroll_slips SET page_path = coalesce(nullif(x ->> 'page', ''), page_path), address = coalesce(nullif(btrim(x ->> 'addr'), ''), address),
+        block = CASE WHEN coalesce((x ->> 'block_set')::boolean, false) THEN coalesce(nullif(x ->> 'block', ''), block) ELSE block END
         WHERE staff_id = sid AND cheque_date = (x ->> 'cheque')::date AND slip_no = coalesce((x ->> 'slip_no')::int, 1);
       IF FOUND AND nullif(x ->> 'page', '') IS NOT NULL THEN pg_n := pg_n + 1; END IF;
       CONTINUE;
     END IF;
-    INSERT INTO payroll_slips (staff_id, cheque_date, slip_no, period_from, period_to, slip_name, address, page_path, kind, rate, per_pay, reg_hours, hours, gross, net, commission, vac, vac_pct,
+    INSERT INTO payroll_slips (staff_id, cheque_date, slip_no, block, period_from, period_to, slip_name, address, page_path, kind, rate, per_pay, reg_hours, hours, gross, net, commission, vac, vac_pct,
         on_call, ot_rate, ot_pay, cpp, ei, tax, benefits, vehicle, earn, dfg, adj, file_name, loaded_by)
-      VALUES (sid, (x ->> 'cheque')::date, coalesce((x ->> 'slip_no')::int, 1), (x ->> 'from')::date, (x ->> 'to')::date, nm, nullif(btrim(x ->> 'addr'), ''), nullif(x ->> 'page', ''), x ->> 'kind', (x ->> 'rate')::numeric, (x ->> 'per_pay')::numeric,
+      VALUES (sid, (x ->> 'cheque')::date, coalesce((x ->> 'slip_no')::int, 1), CASE WHEN coalesce((x ->> 'block_set')::boolean, false) THEN nullif(x ->> 'block', '') END, (x ->> 'from')::date, (x ->> 'to')::date, nm, nullif(btrim(x ->> 'addr'), ''), nullif(x ->> 'page', ''), x ->> 'kind', (x ->> 'rate')::numeric, (x ->> 'per_pay')::numeric,
         (x ->> 'reg_hours')::numeric, (x ->> 'hours')::numeric, (x ->> 'gross')::numeric, (x ->> 'net')::numeric, (x ->> 'commission')::numeric, (x ->> 'vac')::numeric,
         (x ->> 'vac_pct')::numeric, (x ->> 'on_call')::numeric, (x ->> 'ot_rate')::numeric, (x ->> 'ot_pay')::numeric, (x ->> 'cpp')::numeric, (x ->> 'ei')::numeric,
         (x ->> 'tax_inc')::numeric, (x ->> 'benefits')::boolean, (x ->> 'vehicle')::boolean, x -> 'earn', x -> 'dfg', x -> 'adj', p ->> 'file', who)
-      ON CONFLICT (staff_id, cheque_date, slip_no) DO UPDATE SET address = coalesce(EXCLUDED.address, payroll_slips.address), page_path = coalesce(EXCLUDED.page_path, payroll_slips.page_path), period_from = EXCLUDED.period_from, period_to = EXCLUDED.period_to, slip_name = EXCLUDED.slip_name,
+      ON CONFLICT (staff_id, cheque_date, slip_no) DO UPDATE SET block = coalesce(EXCLUDED.block, payroll_slips.block), address = coalesce(EXCLUDED.address, payroll_slips.address), page_path = coalesce(EXCLUDED.page_path, payroll_slips.page_path), period_from = EXCLUDED.period_from, period_to = EXCLUDED.period_to, slip_name = EXCLUDED.slip_name,
         kind = EXCLUDED.kind, rate = EXCLUDED.rate, per_pay = EXCLUDED.per_pay, reg_hours = EXCLUDED.reg_hours, hours = EXCLUDED.hours, gross = EXCLUDED.gross,
         net = EXCLUDED.net, commission = EXCLUDED.commission, vac = EXCLUDED.vac, vac_pct = EXCLUDED.vac_pct, on_call = EXCLUDED.on_call, ot_rate = EXCLUDED.ot_rate,
         ot_pay = EXCLUDED.ot_pay, cpp = EXCLUDED.cpp, ei = EXCLUDED.ei, tax = EXCLUDED.tax, benefits = EXCLUDED.benefits, vehicle = EXCLUDED.vehicle,
         earn = EXCLUDED.earn, dfg = EXCLUDED.dfg, adj = EXCLUDED.adj, file_name = EXCLUDED.file_name, loaded_by = EXCLUDED.loaded_by, loaded_at = now();
     n := n + 1; IF NOT sid = ANY (touched) THEN touched := touched || sid; END IF;
+  END LOOP;
+  -- a block picked in this load: the person's block from now on is the one on their newest slip that has a block
+  FOREACH sid IN ARRAY blk_ids LOOP
+    UPDATE payroll_staff SET block = (SELECT s.block FROM payroll_slips s WHERE s.staff_id = sid AND s.block IS NOT NULL ORDER BY s.cheque_date DESC, s.slip_no DESC LIMIT 1), updated_at = now()
+      WHERE id = sid AND left_on IS NULL;
+    IF NOT sid = ANY (touched) THEN touched := touched || sid; END IF;
   END LOOP;
   FOREACH sid IN ARRAY touched LOOP PERFORM public._payroll_staff_refresh(sid); END LOOP;
   RETURN jsonb_build_object('saved', n, 'people', cardinality(touched), 'pages', pg_n);
