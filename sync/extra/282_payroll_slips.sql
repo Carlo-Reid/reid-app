@@ -40,6 +40,29 @@ EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'payroll-slips bucket: %', SQLERRM; END 
 -- the storage rules above call _src_owner() as the signed-in person, so they must be allowed to run it (it only answers "is this an owner?");
 -- without this every slip page upload was refused (George, Nov 13: "I can't pull the PDF to see the paystubs")
 GRANT EXECUTE ON FUNCTION public._src_owner() TO authenticated;
+-- what made up a pay slip (George, Nov 14: "break down what is commission and what is actual hourly pay and how much they have paid into benefits"):
+-- hourly (hourly pay, regular, salary, and an hourly draw printed as commission: hours × a rate), overtime, commission, vacation pay,
+-- on call, stat holiday, other earnings; benefits = what was taken off for Manulife / benefits / insurance; other deductions.
+CREATE OR REPLACE FUNCTION public._slip_parts(p_earn jsonb, p_adj jsonb, p_dfg jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $f$
+  WITH e AS (SELECT coalesce(x ->> 'label', '') AS l, nullif(x ->> 'qty', '')::numeric AS q, nullif(x ->> 'rate', '')::numeric AS r,
+                    coalesce(nullif(x ->> 'cur', '')::numeric, 0) AS c
+             FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_earn) = 'array' THEN p_earn ELSE '[]'::jsonb END) x),
+  k AS (SELECT CASE WHEN l ~* '^overtime' THEN 'ot'
+                    WHEN l ~* 'commis' AND NOT (r IS NOT NULL AND r <> 1 AND q IS NOT NULL) THEN 'com'
+                    WHEN l ~* '^vacpay|vacation' THEN 'vac' WHEN l ~* '^on call$' THEN 'oncall' WHEN l ~* 'stat|holiday' THEN 'stat'
+                    WHEN l ~* '^hourly|^regular|^salary|commis' THEN 'hourly' ELSE 'other' END AS k, q, c FROM e),
+  d AS (SELECT coalesce(x ->> 'label', '') AS l, coalesce(nullif(x ->> 'cur', '')::numeric, 0) AS c
+        FROM jsonb_array_elements((CASE WHEN jsonb_typeof(p_adj) = 'array' THEN p_adj ELSE '[]'::jsonb END) || (CASE WHEN jsonb_typeof(p_dfg) = 'array' THEN p_dfg ELSE '[]'::jsonb END)) x)
+  SELECT jsonb_build_object(
+    'hourly', (SELECT coalesce(sum(c), 0) FROM k WHERE k = 'hourly'), 'hours', (SELECT sum(q) FROM k WHERE k = 'hourly'),
+    'ot', (SELECT coalesce(sum(c), 0) FROM k WHERE k = 'ot'), 'com', (SELECT coalesce(sum(c), 0) FROM k WHERE k = 'com'),
+    'vac', (SELECT coalesce(sum(c), 0) FROM k WHERE k = 'vac'), 'oncall', (SELECT coalesce(sum(c), 0) FROM k WHERE k = 'oncall'),
+    'stat', (SELECT coalesce(sum(c), 0) FROM k WHERE k = 'stat'), 'other', (SELECT coalesce(sum(c), 0) FROM k WHERE k = 'other'),
+    'ben', (SELECT coalesce(-sum(c), 0) FROM d WHERE l ~* 'manulife|benefit|insur|health|dental'),
+    'oded', (SELECT coalesce(-sum(c), 0) FROM d WHERE l !~* 'manulife|benefit|insur|health|dental'))
+$f$;
+GRANT EXECUTE ON FUNCTION public._slip_parts(jsonb, jsonb, jsonb) TO authenticated;
+
 ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS payroll_wsib jsonb NOT NULL DEFAULT '{}'::jsonb;   -- WSIB $ per $100 of pay, by block
 
 -- the block a person goes in: their own pick, else from the role; Past when they left, are turned off, or had no pay for 3 months
@@ -63,7 +86,7 @@ BEGIN
   IF public.current_staff_role() IS DISTINCT FROM 'owner' THEN RETURN '[]'::jsonb; END IF;
   RETURN coalesce((SELECT jsonb_agg(x ORDER BY x ->> 'sortname') FROM (
     SELECT jsonb_build_object(
-      'user', a.id, 'staff', ps.id, 'employee', a.employee_id, 'email', a.login_email, 'role', a.role, 'active', a.active,
+      'user', a.id, 'staff', ps.id, 'employee', a.employee_id, 'emp_ids', CASE WHEN a.employee_id IS NOT NULL THEN to_jsonb(public._payroll_emp_ids(a.employee_id)) END, 'email', a.login_email, 'role', a.role, 'active', a.active,
       'name', coalesce(nullif(concat_ws(' ', e.first_name, e.last_name), ''), a.login_email),
       'sortname', lower(coalesce(nullif(concat_ws(' ', e.first_name, e.last_name), ''), a.login_email)),
       'aliases', to_jsonb(coalesce(ps.aliases, '{}')),
@@ -313,7 +336,7 @@ BEGIN
     'periods', per,
     'slips', coalesce((SELECT jsonb_agg(jsonb_build_object('cheque', s.cheque_date, 'from', s.period_from, 'to', s.period_to, 'kind', s.kind, 'rate', s.rate, 'per_pay', s.per_pay,
         'hours', s.reg_hours, 'gross', s.gross, 'net', s.net, 'commission', s.commission, 'vac', s.vac, 'on_call', s.on_call, 'ot_pay', s.ot_pay, 'cpp', s.cpp, 'ei', s.ei, 'tax', s.tax,
-        'earn', s.earn, 'dfg', s.dfg, 'adj', s.adj, 'page', s.page_path, 'addr', s.address) ORDER BY s.cheque_date DESC) FROM payroll_slips s WHERE s.staff_id = ps.id), '[]'::jsonb),
+        'earn', s.earn, 'dfg', s.dfg, 'adj', s.adj, 'page', s.page_path, 'addr', s.address, 'parts', public._slip_parts(s.earn, s.adj, s.dfg)) ORDER BY s.cheque_date DESC) FROM payroll_slips s WHERE s.staff_id = ps.id), '[]'::jsonb),
     'addresses', coalesce((SELECT jsonb_agg(jsonb_build_object('addr', q.addr, 'first', q.f, 'last', q.l) ORDER BY q.l DESC)
         FROM (SELECT (array_agg(s.address ORDER BY s.cheque_date DESC))[1] AS addr, min(s.cheque_date) AS f, max(s.cheque_date) AS l FROM payroll_slips s
               WHERE s.staff_id = ps.id AND nullif(btrim(s.address), '') IS NOT NULL GROUP BY lower(regexp_replace(s.address, '[\s.,]+', ' ', 'g'))) q), '[]'::jsonb),

@@ -6,18 +6,22 @@ CREATE OR REPLACE FUNCTION public.payroll_overview() RETURNS jsonb LANGUAGE sql 
   SELECT CASE WHEN public._src_owner() THEN jsonb_build_object(
     'people', coalesce((SELECT jsonb_agg(jsonb_build_object('staff', ps.id, 'user', ps.app_user_id, 'y', t.y, 'slips', t.slips,
         'gross', t.gross, 'vac', t.vac, 'tax', t.tax, 'cpp', t.cpp, 'ei', t.ei, 'net', t.net, 'co', t.cpp + round(t.ei * 1.4, 2),
-        'cost', t.gross + t.cpp + round(t.ei * 1.4, 2), 'last', t.last, 'vac_pct', ps.vac_pct,
+        'cost', t.gross + t.cpp + round(t.ei * 1.4, 2), 'last', t.last, 'vac_pct', ps.vac_pct, 'hourly', t.hourly, 'ot', t.ot, 'com', t.com, 'oncall', t.oncall, 'stat', t.stat, 'other', t.other, 'ben', t.ben,
         'full', (SELECT nullif(btrim(z.slip_name), '') FROM payroll_slips z WHERE z.staff_id = ps.id ORDER BY z.cheque_date DESC LIMIT 1)))
       FROM (SELECT s.staff_id, extract(year FROM s.cheque_date)::int AS y, count(*) AS slips, coalesce(sum(s.gross), 0) AS gross,
                    coalesce(sum(s.vac), 0) AS vac, coalesce(sum(s.tax), 0) AS tax, coalesce(sum(s.cpp), 0) AS cpp, coalesce(sum(s.ei), 0) AS ei,
-                   coalesce(sum(s.net), 0) AS net, max(s.cheque_date) AS last
-            FROM payroll_slips s GROUP BY 1, 2) t JOIN payroll_staff ps ON ps.id = t.staff_id), '[]'::jsonb),
+                   coalesce(sum(s.net), 0) AS net, max(s.cheque_date) AS last, coalesce(sum((pp ->> 'hourly')::numeric), 0) AS hourly, coalesce(sum((pp ->> 'ot')::numeric), 0) AS ot, coalesce(sum((pp ->> 'com')::numeric), 0) AS com,
+                   coalesce(sum((pp ->> 'oncall')::numeric), 0) AS oncall, coalesce(sum((pp ->> 'stat')::numeric), 0) AS stat, coalesce(sum((pp ->> 'other')::numeric), 0) AS other,
+                   coalesce(sum((pp ->> 'ben')::numeric), 0) AS ben
+            FROM payroll_slips s CROSS JOIN LATERAL public._slip_parts(s.earn, s.adj, s.dfg) pp GROUP BY 1, 2) t JOIN payroll_staff ps ON ps.id = t.staff_id), '[]'::jsonb),
     'months', coalesce((SELECT jsonb_agg(jsonb_build_object('staff', ps.id, 'user', ps.app_user_id, 'm', t.m, 'slips', t.slips,
-        'gross', t.gross, 'vac', t.vac, 'tax', t.tax, 'cpp', t.cpp, 'ei', t.ei, 'net', t.net, 'cost', t.gross + t.cpp + round(t.ei * 1.4, 2)))
+        'gross', t.gross, 'vac', t.vac, 'tax', t.tax, 'cpp', t.cpp, 'ei', t.ei, 'net', t.net, 'cost', t.gross + t.cpp + round(t.ei * 1.4, 2), 'hourly', t.hourly, 'ot', t.ot, 'com', t.com, 'oncall', t.oncall, 'stat', t.stat, 'other', t.other, 'ben', t.ben))
       FROM (SELECT s.staff_id, to_char(s.cheque_date, 'YYYY-MM') AS m, count(*) AS slips, coalesce(sum(s.gross), 0) AS gross,
                    coalesce(sum(s.vac), 0) AS vac, coalesce(sum(s.tax), 0) AS tax, coalesce(sum(s.cpp), 0) AS cpp, coalesce(sum(s.ei), 0) AS ei,
-                   coalesce(sum(s.net), 0) AS net
-            FROM payroll_slips s GROUP BY 1, 2) t JOIN payroll_staff ps ON ps.id = t.staff_id), '[]'::jsonb),
+                   coalesce(sum(s.net), 0) AS net, coalesce(sum((pp ->> 'hourly')::numeric), 0) AS hourly, coalesce(sum((pp ->> 'ot')::numeric), 0) AS ot, coalesce(sum((pp ->> 'com')::numeric), 0) AS com,
+                   coalesce(sum((pp ->> 'oncall')::numeric), 0) AS oncall, coalesce(sum((pp ->> 'stat')::numeric), 0) AS stat, coalesce(sum((pp ->> 'other')::numeric), 0) AS other,
+                   coalesce(sum((pp ->> 'ben')::numeric), 0) AS ben
+            FROM payroll_slips s CROSS JOIN LATERAL public._slip_parts(s.earn, s.adj, s.dfg) pp GROUP BY 1, 2) t JOIN payroll_staff ps ON ps.id = t.staff_id), '[]'::jsonb),
     'cheques', coalesce((SELECT jsonb_agg(jsonb_build_object('d', d, 'n', n, 'gross', g, 'src', src) ORDER BY d)
       FROM (SELECT s.cheque_date AS d, count(*) AS n, coalesce(sum(s.gross), 0) AS g,
                    coalesce(sum(coalesce(s.tax, 0) + 2 * coalesce(s.cpp, 0) + round(2.4 * coalesce(s.ei, 0), 2)), 0) AS src
@@ -30,7 +34,8 @@ GRANT EXECUTE ON FUNCTION public.payroll_overview() TO authenticated;
 CREATE OR REPLACE FUNCTION public.payroll_month_slips(p_m text) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT CASE WHEN public._src_owner() THEN coalesce((SELECT jsonb_agg(jsonb_build_object('staff', ps.id, 'user', ps.app_user_id, 'cheque', s.cheque_date, 'slip_no', s.slip_no,
       'name', coalesce(nullif(btrim(s.slip_name), ''), ps.name), 'gross', s.gross, 'vac', s.vac, 'vac_pct', s.vac_pct, 'tax', s.tax, 'cpp', s.cpp, 'ei', s.ei, 'net', s.net,
-      'cost', coalesce(s.gross, 0) + coalesce(s.cpp, 0) + round(coalesce(s.ei, 0) * 1.4, 2), 'page', s.page_path) ORDER BY s.cheque_date, s.slip_no)
+      'cost', coalesce(s.gross, 0) + coalesce(s.cpp, 0) + round(coalesce(s.ei, 0) * 1.4, 2), 'page', s.page_path,
+      'hours', s.reg_hours, 'parts', public._slip_parts(s.earn, s.adj, s.dfg)) ORDER BY s.cheque_date, s.slip_no)
     FROM payroll_slips s JOIN payroll_staff ps ON ps.id = s.staff_id WHERE to_char(s.cheque_date, 'YYYY-MM') = p_m), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
 REVOKE EXECUTE ON FUNCTION public.payroll_month_slips(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.payroll_month_slips(text) TO authenticated;
