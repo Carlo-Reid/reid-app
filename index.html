@@ -7950,6 +7950,9 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
   #online-list .on-chat { position: relative; flex: 0 0 34px; border: 1.5px solid #bcd0e3; border-radius: 8px; background: linear-gradient(180deg, #fff, #eef4fa); cursor: pointer; font-size: 15px; padding: 0; }
   #online-list .on-chat:hover { border-color: #23415f; }
   #online-list .on-chat .badge-n { position: absolute; top: -6px; right: -6px; margin: 0; }
+  #remote-bar { position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 3500; max-width: 92vw; padding: 7px 16px; border-radius: 0 0 10px 10px;
+    background: linear-gradient(180deg, #1c1c1e, #3a3a3d); color: #fff; font-size: 13.5px; font-weight: 700; text-align: center; box-shadow: 0 3px 10px rgba(0,0,0,.3); }
+  @media print { #remote-bar { display: none; } }
   #second-loc:empty { display: none; }
   #second-loc { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; }
   .sl2-u { display: flex; flex-direction: column; gap: 5px; padding: 8px; border: 1.5px solid #e0a23a; border-radius: 10px; background: #fff7e8; color: #5a3b00; }
@@ -8409,6 +8412,7 @@ async function loginAsStart(uid, name, o) {   // o.direct = no question first (a
 async function loginAsBack() {
   let real = null; try { real = JSON.parse(localStorage.getItem("reid.realSession") || "null"); } catch {}
   try { localStorage.removeItem("reid.realSession"); } catch {}
+  try { if (typeof REMOTE !== "undefined" && REMOTE.owner && REMOTE.k) { remoteSend("end"); await db.rpc("remote_stop", { p_k: REMOTE.k }); } sessionStorage.removeItem("reid.remoteK"); } catch {}
   const r = real ? await db.auth.setSession({ access_token: real.access_token, refresh_token: real.refresh_token }) : { error: true };
   if (r.error) { await db.auth.signOut({ scope: "local" }).catch(() => {}); }
   location.hash = "#staff"; location.reload();
@@ -8672,6 +8676,7 @@ async function checkIn() {
   const me = data.find(u => u.is_me); if (me) ME.id = me.app_user_id;
   renderOnline();
   secondLocLoad();
+  remoteSyncStart();
   if (!chatStarted) startChat();
   if (!CREQ.started) startCallReq();
 }
@@ -25569,12 +25574,59 @@ async function secondLocLoad() {
 // Carlo, Nov 14, 2:39 p.m.: "click on a name on my left side bar and remote in… go right into the page he is on and be able to do anything he can do".
 // Owners: a click on a name in Online now signs in as that person (the login-as function, written in the history) and opens the page they have open.
 const onlinePlaceWords = id => { const pl = PLACES[id]; return pl ? (PAGE_NAMES[pl.page] || pl.page || "The app") : "Remote in"; };
-function onlineRemote(uid, name) {
+async function onlineRemote(uid, name) {
   if (ME.role !== "owner" || ME.viewAs) return;
   const pl = PLACES[uid] || {};
+  const rs = await db.rpc("remote_start", { p_user: uid });   // the key the two screens use to move together (none while the database part is not in: then no following)
+  try { rs.error || !rs.data ? sessionStorage.removeItem("reid.remoteK") : sessionStorage.setItem("reid.remoteK", rs.data); } catch {}
   try { sessionStorage.setItem("reid.remoteGo", JSON.stringify({ hash: pl.hash || "", name, page: PAGE_NAMES[pl.page] || pl.page || "", device: pl.device || "" })); } catch {}
   loginAsStart(uid, name, { direct: true, go: pl.hash || "" });
 }
+// Carlo, Nov 14, 2:43 p.m.: "if he changes pages i want my view to change and if i change pages i want his to change as well".
+// Both screens are the same login, so both listen on that login's live channel ("remote-u<id>"). A page change is sent with the
+// session's token; a screen only obeys a token the database says is a live remote session for its login (remote_mine).
+let REMOTE = { k: "", owner: false, ch: null, applied: null, seen: 0, by: "" };
+function remoteSyncStart() {
+  if (REMOTE.ch || !ME.id) return;
+  let real = null, k = ""; try { real = localStorage.getItem("reid.realSession"); k = sessionStorage.getItem("reid.remoteK") || ""; } catch {}
+  if (real && k) { REMOTE.k = k; REMOTE.owner = true; }
+  try {
+    REMOTE.ch = db.channel("remote-u" + ME.id, { config: { broadcast: { self: false } } })
+      .on("broadcast", { event: "r" }, m => remoteGot((m && m.payload) || {}))
+      .subscribe(st => { if (st === "SUBSCRIBED" && REMOTE.owner) remoteSend("hello"); });
+  } catch (e) { REMOTE.ch = null; return; }
+  if (REMOTE.owner) { setInterval(() => remoteSend("hello"), 20000); setInterval(() => db.rpc("remote_ping", { p_k: REMOTE.k }), 60000); remoteBar(); }
+  else setInterval(() => { if (REMOTE.k && Date.now() - REMOTE.seen > 70000) remoteEnd(); }, 15000);   // the owner left without saying so
+}
+function remoteSend(t) { try { if (REMOTE.ch && REMOTE.k) REMOTE.ch.send({ type: "broadcast", event: "r", payload: { t, k: REMOTE.k, h: location.hash || "", c: clientId() } }); } catch (e) {} }
+async function remoteGot(m) {
+  if (!m.k) return;
+  if (REMOTE.owner) { if (m.k === REMOTE.k && m.t === "nav") remoteApply(m.h); return; }
+  let fresh = false;
+  if (m.k !== REMOTE.k) {
+    if (m.t === "end" || REMOTE.asking) return;
+    REMOTE.asking = true; const r = await db.rpc("remote_mine"); REMOTE.asking = false;
+    if (r.error || !r.data || r.data.k !== m.k) return;   // not a live remote session of this login: ignore it
+    REMOTE.k = m.k; REMOTE.by = r.data.by || "An owner"; fresh = true; remoteBar();
+  }
+  REMOTE.seen = Date.now();
+  if (m.t === "hello") { if (fresh) remoteSend("nav"); }   // tell them the page I am on right now
+  else if (m.t === "nav") remoteApply(m.h);
+  else if (m.t === "end") remoteEnd();
+}
+function remoteApply(h) { if (!h || h === location.hash) return; REMOTE.applied = h; location.hash = h; }
+function remoteBar() {
+  if (REMOTE.owner) { const sp = document.querySelector("#viewas-bar > span"); if (sp && !sp.querySelector(".rm-both")) sp.insertAdjacentHTML("beforeend", ` <b class="rm-both">📡 Your page and theirs move together.</b>`); return; }
+  let b = document.getElementById("remote-bar");
+  if (!b) { b = document.createElement("div"); b.id = "remote-bar"; b.setAttribute("role", "status"); document.body.appendChild(b); }
+  b.textContent = `📡 ${(REMOTE.by || "An owner").split(" ")[0]} is remoted in with you. When one of you changes page, the other screen follows.`;
+}
+function remoteEnd() { REMOTE.k = ""; REMOTE.applied = null; document.getElementById("remote-bar")?.remove(); }
+window.addEventListener("hashchange", () => {
+  if (!REMOTE.k || !REMOTE.ch) return;
+  if (location.hash === REMOTE.applied) { REMOTE.applied = null; return; }   // this change came from the other screen: do not send it back
+  REMOTE.applied = null; remoteSend("nav");
+});
 function secondLocDraw() {
   const box = $("#second-loc"); if (!box) return;
   const ago = t => { const m = Math.round((Date.now() - new Date(t)) / 60000); return m < 1 ? "just now" : m + " min ago"; };
