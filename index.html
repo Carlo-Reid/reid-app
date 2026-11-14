@@ -3461,6 +3461,13 @@ button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 
   .bkw-btn.ah { border-color: #d9480f; background: #fff4e6; } .bkw-btn.ah b { color: #a12c00; }
   .ie.ie-ah .cl-hero { background: linear-gradient(120deg, #7a1e00, #d9480f) !important; color: #fff !important; } .ie.ie-ah .cl-hero * { color: #fff !important; }
   .ie.ie-ah .ie-lines-box { border: 2px solid #d9480f !important; }
+  /* Carlo, Nov 14: remoted into a tech's walk from To be Booked -- a calm violet (the Eco Man "nothing to do here" violet), a banner,
+     and a thin frame around the page so it's plain this is the tech's live page, without a loud colour change everywhere. */
+  .remote-banner { display: flex; align-items: center; gap: 14px; margin: 10px 0 14px; padding: 14px 18px; border-radius: 12px; background: linear-gradient(90deg, #5f3dc4, #7048e8); color: #fff; box-shadow: 0 6px 18px rgba(95,61,196,.35); }
+  .remote-banner > span { font-size: 28px; } .remote-banner b { display: block; font-size: 17px; letter-spacing: .04em; } .remote-banner small { opacity: .92; font-size: 13px; }
+  .ie.ie-remote { border: 2px solid #7048e8; border-radius: 14px; box-shadow: 0 0 0 4px rgba(112,72,232,.12); background: #faf8ff; }
+  .ie.ie-remote .cl-hero { background: linear-gradient(120deg, #5f3dc4, #7048e8) !important; color: #fff !important; } .ie.ie-remote .cl-hero * { color: #fff !important; }
+  .ie.ie-remote #ie-walk { border: 2px solid #7048e8; box-shadow: 0 0 0 3px rgba(112,72,232,.12); }
   #inv-paper.inv-ah { border-top: 10px solid #d9480f; } #inv-paper.inv-ah .inv-title > div:first-child { color: #d9480f; }
   .inv-ah-tag { display: inline-block; margin: 4px 0 6px; padding: 4px 10px; border-radius: 6px; background: #d9480f; color: #fff; font-size: 13px; font-weight: 800; letter-spacing: .03em; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .inv-title > div { font-size: 26px; font-weight: 800; letter-spacing: .12em; color: var(--dz-1f5fa8, #1F5FA8); }
@@ -17543,7 +17550,9 @@ async function openOnSite(jobId, jobType, jobClass, c) {
     SALES.rows = null; return openEstEdit(data, "You're on site. Here's the proposal.");
   }
   const walk = mcIsWalk(c), walkSay = "You are on site for the walk. The job is below. Type your notes for the walk in the box at the top.";
-  const setWalk = inv => { if (walk && !(WALK && WALK.visit === c.visit_id)) WALK = { visit: c.visit_id, job: jobId, inv, notes: "", done: false, png: null, signer: c.customer_name || "", qs: null, ans: {}, extra: null }; else if (walk) WALK.inv = inv; };
+  // This is the tech's own "I'm here": if an owner had remoted into this same walk from To be Booked (WALK.remote), the tech now has it open
+  // on their own device, so the remote flag and its banner are dropped here (Carlo, Nov 14, "its obvious with out changing it too much").
+  const setWalk = inv => { if (walk && !(WALK && WALK.visit === c.visit_id)) WALK = { visit: c.visit_id, job: jobId, inv, notes: "", done: false, png: null, signer: c.customer_name || "", qs: null, ans: {}, extra: null, remote: false }; else if (walk) { WALK.inv = inv; WALK.remote = false; } };
   const ji = await db.rpc("job_invoice", { p_job: jobId });   // the job's own finished invoice, with all its details: open that one, do not start a second one
   if (!ji.error && ji.data) { setWalk(ji.data); return openInvoiceEditor(ji.data, walk ? walkSay : "You're on site. Here's the invoice for this job."); }
   const { data, error } = await db.rpc("new_invoice", { p_job: jobId });
@@ -21973,11 +21982,13 @@ const TOB = { data: null, up: null, seq: 0, msg: "" };
 // Carlo, Nov 14: "i want it to open the same view the tech would get if its clicked from here so i can see what he types and edit it myself" --
 // a walk in progress is opened the same way the tech's own "I'm here" opens it (setWalk, in openOnSite): set WALK on that visit before the
 // invoice opens, so the walk box (ieWalkHtml) is drawn on it, and ieWalkWire's own walkLoadQs fills it in with whatever is saved so far.
+// Then (same day): "have it obvious that you have remoted into the invoice and anything you type is live and change the page colors so its
+// obvious with out changing it too much" -- WALK.remote marks it, so renderInvoiceEditor can show a banner and tint the page (ie-remote).
 function tobOpenLiveWalk(r) {
   if (!r || !r.invoice) return;
-  if (!(WALK && WALK.visit === r.visit_id)) WALK = { visit: r.visit_id, job: r.job_id, inv: r.invoice, notes: "", done: false, png: null, signer: r.customer || "", qs: null, ans: {}, extra: null };
-  else WALK.inv = r.invoice;
-  openInvoiceEditor(r.invoice, "This is the walk, the same page the tech has open. You can see what they've answered so far, and type in it or take pictures yourself.");
+  if (!(WALK && WALK.visit === r.visit_id)) WALK = { visit: r.visit_id, job: r.job_id, inv: r.invoice, notes: "", done: false, png: null, signer: r.customer || "", qs: null, ans: {}, extra: null, remote: true, remoteTech: r.tech || "" };
+  else { WALK.inv = r.invoice; WALK.remote = true; WALK.remoteTech = r.tech || ""; }
+  openInvoiceEditor(r.invoice, "");
 }
 async function openToBook(msg) {
   setPage("tobook", "tobook", "To be Booked"); TOB.msg = msg || "";
@@ -26859,6 +26870,10 @@ function renderInvoiceEditor(msg) {
   const notesOn = I.status !== "void" && I.can_edit && !I.st_edit && !I.from_st && I.lines.length > 0;
   // the signature box is only for the tech, on the call (Carlo, Nov 13: "remove the signature part, it should only show up when the call is being done by the tech")
   const walkOn = !!(WALK && WALK.inv === I.id);
+  // Carlo, Nov 14: "have it obvious that you have remoted into the invoice and anything you type is live and change the page colors so its
+  // obvious with out changing it too much": opened from the "Walk in progress" card (tobOpenLiveWalk sets WALK.remote), the page is tinted
+  // (ie-remote, a calm violet, the same idea as the orange after-hours banner) with a banner saying it plainly.
+  const remoteWalk = walkOn && !!WALK.remote;
   const signHere = ME.role === "technician" && !walkOn;
   const NO = {}; ieTodoRows(I, { draft, ppay, bk, pnm }).forEach((r, n) => { NO[r[4]] = n + 1; }); IE.stepNo = NO;
   // Carlo, Nov 13, 12:51 p.m.: "make add notes the second step and have the notes boxes next to the 3 in section one": while the invoice is being made,
@@ -26881,7 +26896,8 @@ function renderInvoiceEditor(msg) {
       `;
   const tankH = ieTankPoHtml(I);
   const sideTab = I.cost && IE_SIDE.tab === "cost" ? "cost" : "todo";
-  $("#main").innerHTML = `<article class="staff ie${ah ? " ie-ah" : ""}">
+  $("#main").innerHTML = `<article class="staff ie${ah ? " ie-ah" : ""}${remoteWalk ? " ie-remote" : ""}">
+    ${remoteWalk ? `<div class="remote-banner" role="status"><span aria-hidden="true">📡</span><div><b>REMOTED INTO ${esc((WALK.remoteTech || "the tech").toUpperCase())}'S WALK</b><small>You're on the same live page. Anything you type or add here is saved on their call, right now.</small></div></div>` : ""}
     ${ah ? `<div class="ah-banner" role="status"><span>🌙</span><div><b>AFTER HOURS CALL</b><small>Charge after-hours rates on this invoice</small></div></div>` : ""}
     <div class="ie-topbar"><button class="ie-sq ie-sq-s ie-close" type="button" data-ie-close><span class="ie-sq-ic" aria-hidden="true">✕</span><b>Close</b></button><button class="ie-sq ie-sq-s ie-sq-top" type="button" id="ie-view"><span class="ie-sq-ic" aria-hidden="true">🖨</span><b>See or print the invoice</b></button>${I.customer_id ? `<button class="ie-sq ie-sq-s ie-sq-top" type="button" id="ie-cust"><span class="ie-sq-ic" aria-hidden="true">👤</span><b>Open the customer</b></button>` : ""}
       <span class="quiet">${draft && I.can_edit ? "Close any time. It stays as it is, marked Not finished, so you can come back to it." : "Close and go back."}</span>
