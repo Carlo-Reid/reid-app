@@ -7996,6 +7996,11 @@ body.cpy-on #main, body.cpy-on #search-page { cursor: crosshair; } body.cpy-on #
 .sinv-needs .sn-ok .sn-m { background: #1f9d4a; } .sinv-needs .sn-need .sn-m { background: #b7791f; }
 .sinv-needs .sn-need { font-weight: 600; }
 .stv-t tr.stv-was > td { background: #fff6cf; box-shadow: inset 0 2px 0 #e0b100, inset 0 -2px 0 #e0b100; }
+
+.pr-tw-new { border: 2px solid #c0392b; background: #fdecea; border-radius: 10px; padding: 10px 12px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; color: #5a1a12; }
+.pr-tw-new .pr-tw-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.pr-tw-new a.btn { text-decoration: none; }
+.pr-tw-st { margin: 6px 0; }
 </style>
 </head>
 <body>
@@ -34264,7 +34269,7 @@ async function openPayroll() {
   const p = prPeriodOf(salesToday());
   const notes = new Map(); try { const n = await db.rpc("payroll_notes_period", { p_from: p.from }); (n.data || []).forEach(x => notes.set(Number(x.user), x.note)); } catch { }
   const priv = !!PR.priv;
-  if (priv) { PR.mSlips = null; try { const o = await db.rpc("payroll_overview"); PR.ov = o.error ? null : o.data; } catch { PR.ov = null; } }
+  if (priv) { PR.mSlips = null; try { const o = await db.rpc("payroll_overview"); PR.ov = o.error ? null : o.data; } catch { PR.ov = null; } prTaxWatchLoad(); }
   // names only unless Source/Private is on (George, Nov 13: staff may be looking over our shoulder)
   const row = x => `<button type="button" class="pr-person${x.block === "past" ? " off" : ""}${notes.has(Number(x.user)) ? " has-note" : ""}" ${x.user ? `data-pr-user="${x.user}"` : `data-pr-staff="${x.staff}"`}>
       <span class="pr-pname">${esc(x.name)}${notes.has(Number(x.user)) ? ` <span class="pr-has-note" title="${esc(notes.get(Number(x.user)))}">📝 Note</span>` : ""}</span>
@@ -34573,6 +34578,8 @@ function prOvDraw() {
   if ((PR.RT || []).length) bad(`${PR.RT.length} ${PR.RT.length === 1 ? "person is" : "people are"} back after 3 months: say why.`, "nb-back");
   if ((PR.NS || []).length) bad(`${PR.NS.length} pay slip${PR.NS.length === 1 ? "" : "s"} I did not see: say if that is right.`, "nb-noslip");
   if (smiss) bad(`${smiss} source period${smiss === 1 ? " has" : "s have"} no payment confirmation on file.`, "src");
+  prTaxWatchNew().forEach(e => bad(`The CRA's tax numbers have a new edition: T4127 ${prOrd(e.ed)} edition, effective ${e.month} 1, ${e.year}. ${e.month === "January" && !payTax(e.year) ? `Put the ${e.year} numbers in` : "Check the numbers in"} Run payroll, ⚙ Tax numbers.`, "taxrun"));
+  { const w = PR.taxWatch; if (w && w.checked_at && !prTaxWatchNew().length) (w.status === "ok" ? ok : bad)(w.status === "ok" ? `The CRA's tax numbers: checked ${fmtDate(String(w.checked_at).slice(0, 10))}, no new edition.` : `The app could not read the CRA's tax page on ${fmtDate(String(w.checked_at).slice(0, 10))}. Look in Run payroll, ⚙ Tax numbers.`, "taxrun"); }
   if (PR.t4) PR.t4.bad ? bad(`${PR.t4.bad} T4${PR.t4.bad === 1 ? " does" : "s do"} not balance with the pay slips and ${PR.t4.bad === 1 ? "has" : "have"} no reason typed.`, "t4") : PR.t4.n ? ok(`All ${PR.t4.n} T4s balance with the pay slips, or have a reason.`, "t4") : 0;
   host.innerHTML = `<section class="pr-ov"><div class="pr-ovtiles">${tiles}</div>
     <div class="pr-ovrow"><div class="pr-ovcard"><h3>Gross pay by month <small>${esc(perName)} · the % is payroll as a share of that month's sales · click a month to see why</small></h3>${ctl}${shown}${chart}
@@ -34628,6 +34635,7 @@ function prOvF() { if (!PR.ovf) { let o = {}; try { o = JSON.parse(localStorage.
     per: ["12", "y", "ytd", "cmp"].includes(o.per) ? o.per : "12", yr: Number(o.yr) || null, yB: Number(o.yB) || null, cmpYtd: !!o.cmpYtd, nojob: !!o.nojob }; } return PR.ovf; }
 function prOvGo(go) {
   let el = null;
+  if (go === "taxrun") { prRunOpen(); return; }
   if (go === "people") el = document.querySelector(".pr-page > .lead") || document.querySelector(".pr-page section.block");
   else if (go.startsWith("nb-")) { el = document.querySelector(`.pr-nbox[data-pr-nb="${go.slice(3)}"]`); if (el) el.open = true; }
   else { el = document.querySelector(`.pr-sec[data-pr-sec="${go}"]`); if (el) el.open = true; }
@@ -35291,11 +35299,27 @@ function prRunCalc(L) {
 const prRunL = L => ({ kind: L.kind, hours: L.hours, ot_h: L.ot_h, rate: L.rate, per_pay: L.per_pay, hourly: L.hourly, ot: L.otPay, com: L.com, jobs: L.jobs, vac_pct: L.vac_pct, vac: L.vac,
   oncall: L.oncall, other: L.other, other_what: L.other_what, gross: L.gross, cpp: L.cpp, cpp2: L.cpp2, ei: L.ei, tax: L.tax, fed: L.fed, on: L.on, ben: L.ben, oded: L.oded, net: L.net,
   earn: L.earn, dfg: L.dfg, adj: L.adj, src: L.src, tb: Number(L.tb || 0) || undefined, tb_kind: Number(L.tb || 0) ? (L.tb_kind || "40") : undefined });
+// The CRA tax watch (George, Nov 14): the database looks at the CRA's T4127 page once a day (298_payroll_tax_watch.sql) and keeps any new edition
+// until an owner presses "Done, I put them in". It only tells: the numbers are never filled in by themselves.
+const PR_T4127 = "https://www.canada.ca/en/revenue-agency/services/forms-publications/payroll/t4127-payroll-deductions-formulas.html";
+const prOrd = n => { n = Number(n); const t = n % 100, u = n % 10; return n + (t >= 11 && t <= 13 ? "th" : u === 1 ? "st" : u === 2 ? "nd" : u === 3 ? "rd" : "th"); };
+async function prTaxWatchLoad() { try { const r = await db.rpc("payroll_tax_watch"); if (!r.error) PR.taxWatch = r.data || {}; } catch { } }
+const prTaxWatchNew = () => ((PR.taxWatch || {}).new || []);
+function prTaxWatchHtml() {
+  const w = PR.taxWatch || {}, nw = prTaxWatchNew(), when = w.checked_at ? fmtDate(String(w.checked_at).slice(0, 10)) : "";
+  const news = nw.map(e => `<div class="pr-tw-new"><b>🔔 The CRA's new tax numbers are out: T4127 ${prOrd(e.ed)} edition, effective ${esc(e.month)} 1, ${e.year}.</b>
+      <span>${e.month === "January" && !payTax(e.year) ? `Add the ${e.year} numbers: press ＋ Add ${e.year} below and change them to the CRA's, or ask Claude to put them in.` : e.month === "July" ? `A July edition changes some numbers part way through the year. Open it and check if Ontario, federal, CPP or EI changed; if so, change ${e.year} below.` : `Check the ${e.year} numbers below against it.`}</span>
+      <span class="pr-tw-btns"><a class="btn" href="${PR_T4127}" target="_blank" rel="noopener">📄 Open the CRA's page</a>${e.month === "January" && !payTax(e.year) ? `<button type="button" class="btn" data-tax-ed="${e.year}">＋ Add ${e.year}</button>` : ""}<button type="button" class="btn" data-tw-ack="${e.ed}">✓ Done, I put them in</button></span></div>`).join("");
+  const st = !w.checked_at ? (w.asked_at ? "The app asked the CRA's page; the answer is read on the next check." : "The app has not looked at the CRA's page yet.")
+    : w.status === "ok" ? `The app looks at the CRA's page every day. Last look: ${when}. Editions on it: ${(w.on_page || []).map(e => `${prOrd(e.ed)} (${e.month} ${e.year})`).join(", ")}.`
+    : `⚠ The app could not read the CRA's page on ${when}${w.err ? ": " + esc(w.err) : ""}. It tries again every day.`;
+  return `${news}<p class="quiet pr-tw-st">${st} <button type="button" class="link" data-tw-now>🔄 Check the CRA now</button></p>`;
+}
 async function prRunOpen() {
   let ov = document.getElementById("pr-run"); if (!ov) { ov = document.createElement("div"); ov.id = "pr-run"; ov.className = "pr-prt-view pr-run"; ov.setAttribute("role", "dialog"); document.body.appendChild(ov); }
   ov.innerHTML = `<div class="pr-prt-bar"><b>💵 Run payroll</b><span></span><button type="button" class="btn" data-run-close>✕ Close</button></div><div class="pr-run-b"><div class="loading">Loading…</div></div>`;
   ov.querySelector("[data-run-close]").addEventListener("click", () => ov.remove());
-  await payTaxLoad();
+  await Promise.all([payTaxLoad(), prTaxWatchLoad()]);
   const { data, error } = await db.rpc("payroll_run_info", { p_pay: salesToday() });
   if (error || !data) { ov.querySelector(".pr-run-b").innerHTML = `<div class="error">Couldn't load: ${esc(rpcErr(error || {}))}. If the app was just updated, wait a few minutes and try again.</div>`; return; }
   PRUN.info = data; const E = data.employer || {};
@@ -35304,8 +35328,10 @@ async function prRunOpen() {
   // the tax numbers: built in, or saved by an owner; a warning from December 1 when next year's are not in yet
   const years = [...new Set([...Object.keys(PAYTAX), ...Object.keys(PR.taxDB || {})].map(Number))].sort();
   const nextMissing = today.slice(5) >= "12-01" && !payTax(ny), curMissing = !payTax(cy);
-  const taxCard = `<section class="pr-pcard"><details${nextMissing || curMissing ? " open" : ""}><summary><h3>⚙ Tax numbers ${nextMissing || curMissing ? `<span class="pr-cm-bad">⚠ ${curMissing ? cy : ny} missing</span>` : `<span class="pr-cm-ok">✓ ${years.join(", ")}</span>`}</h3></summary>
-      <p class="quiet">The tax, CPP and EI are worked out with the CRA's numbers for each year (the guide called T4127, Payroll Deductions Formulas). The CRA does not send them to programs by itself: QuickBooks gets them from Intuit. Here, an owner adds a new year once a year, usually in December (and again if the CRA puts out a July edition), or asks Claude to put them in. The app warns from December 1, and it will not run a pay in a year that has no numbers.</p>
+  const twNew = prTaxWatchNew().length;
+  const taxCard = `<section class="pr-pcard"><details${nextMissing || curMissing || twNew ? " open" : ""}><summary><h3>⚙ Tax numbers ${twNew ? `<span class="pr-cm-bad">🔔 New CRA numbers are out</span>` : nextMissing || curMissing ? `<span class="pr-cm-bad">⚠ ${curMissing ? cy : ny} missing</span>` : `<span class="pr-cm-ok">✓ ${years.join(", ")}</span>`}</h3></summary>
+      <div data-tw-host>${prTaxWatchHtml()}</div>
+      <p class="quiet">The tax, CPP and EI are worked out with the CRA's numbers for each year (the guide called T4127, Payroll Deductions Formulas). The CRA does not send them to programs by itself: QuickBooks gets them from Intuit. Here, the app looks at the CRA's page every day and says when a new edition is out; then an owner adds the new year (or changes it after a July edition), or asks Claude to put them in. The app also warns from December 1, and it will not run a pay in a year that has no numbers.</p>
       <ul class="pr-taxyrs">${years.map(y => { const t = payTax(y), db2 = !!(PR.taxDB || {})[y]; return `<li><b>${y}</b> · CPP max ${money(t.cpp.max)} · EI max ${money(t.ei.max)} · federal basic ${money(t.fed.bpaHi)} · Ontario basic ${money(t.on.bpa)} <span class="quiet">${db2 ? `Saved by ${esc(t.set_by || "an owner")}` : esc(t.src || "Built in")}</span> <button type="button" class="link" data-tax-ed="${y}">✎ Look or change</button></li>`; }).join("")}</ul>
       <button type="button" class="btn" data-tax-ed="${payTax(ny) ? ny + 1 : ny}">＋ Add ${payTax(ny) ? ny + 1 : ny}</button><div data-tax-box></div></details></section>`;
   ov.querySelector(".pr-run-b").innerHTML = `<div class="pr-run-top">
@@ -35329,7 +35355,25 @@ async function prRunOpen() {
         <button type="button" class="btn" data-emp-save>Save the company's numbers</button> <span class="quiet">Kept in the app's database, never in the code. No bank account number is asked for: cheques are printed on the bank's own pre-printed cheques.</span></details></section></div>`;
   ov.querySelector("[data-emp-save]").addEventListener("click", async () => { const p = {}; ov.querySelectorAll("[data-emp]").forEach(i => { p[i.dataset.emp] = i.value.trim(); });
     const { error } = await db.rpc("payroll_employer_set", { p }); if (error) return alertMsg("Not saved: " + rpcErr(error)); alertMsg("✓ Saved."); prRunOpen(); });
-  ov.querySelectorAll("[data-tax-ed]").forEach(b => b.addEventListener("click", () => prTaxEdit(ov.querySelector("[data-tax-box]"), Number(b.dataset.taxEd))));
+  ov.querySelectorAll("[data-tax-ed]").forEach(b => { if (!b.closest("[data-tw-host]")) b.addEventListener("click", () => prTaxEdit(ov.querySelector("[data-tax-box]"), Number(b.dataset.taxEd))); });
+  const twWire = () => {
+    const h = ov.querySelector("[data-tw-host]"); if (!h) return;
+    h.querySelectorAll("[data-tax-ed]").forEach(b => b.addEventListener("click", () => prTaxEdit(ov.querySelector("[data-tax-box]"), Number(b.dataset.taxEd))));
+    h.querySelectorAll("[data-tw-ack]").forEach(b => b.addEventListener("click", async () => {
+      const ed = Number(b.dataset.twAck), e = prTaxWatchNew().find(x => Number(x.ed) === ed);
+      if (e && e.month === "January" && !payTax(e.year) && !(await askChoice("The numbers are not in yet", `There are no ${e.year} numbers in the app yet. Take the warning off anyway?`, [["y", "Yes, take it off"], ["", "No, go back"]]))) return;
+      b.disabled = true; const r = await db.rpc("payroll_tax_watch_ack", { p_ed: ed });
+      if (r.error) { b.disabled = false; alertMsg("Not saved: " + rpcErr(r.error)); return; }
+      PR.taxWatch = r.data || {}; h.innerHTML = prTaxWatchHtml(); twWire();
+    }));
+    const nb = h.querySelector("[data-tw-now]"); if (nb) nb.addEventListener("click", async () => {
+      nb.disabled = true; nb.textContent = "Looking…"; const r = await db.rpc("payroll_tax_watch_now");
+      if (r.error) { nb.disabled = false; nb.textContent = "🔄 Check the CRA now"; alertMsg("Could not check: " + rpcErr(r.error)); return; }
+      if (r.data && r.data.wait) { nb.textContent = "It just looked. Try again in 2 minutes."; return; }
+      await new Promise(z => setTimeout(z, 8000)); await prTaxWatchLoad(); h.innerHTML = prTaxWatchHtml(); twWire();
+    });
+  };
+  twWire();
   const ppSorted = (PR.people || []).slice().sort((a, b) => (a.block === "past" ? 0 : 1) - (b.block === "past" ? 0 : 1) || String(a.name).localeCompare(String(b.name)));
   ov.querySelector("[data-t4-open]").addEventListener("click", () => prT4File(Number(ov.querySelector("[data-t4-y]").value)));
   ov.querySelector("[data-roe-open]").addEventListener("click", () => { const pp = ppSorted[Number(ov.querySelector("[data-roe-p]").value)]; if (pp) prRoeFile(pp); });
