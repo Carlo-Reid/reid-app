@@ -2075,6 +2075,7 @@
   .pr-sec-b { padding: 0 14px 12px; border-top: 1px solid #edf1f5; }
   .pr-sec .pr-tot > .src-bar { display: none; } .pr-sec .src > .src-bar { background: none; padding: 8px 0 0; justify-content: flex-end; box-shadow: none; } .pr-sec .src > .src-bar h2 { display: none; }
   .pr-sec .src, .pr-sec .pr-t4box { border: 0; box-shadow: none; margin: 0; padding-left: 0; padding-right: 0; background: none; }
+  .pr-prt-long td { background: #fff1e6 !important; } .pr-prt-warn { color: #b4530a; font-size: 11px; font-weight: 700; } .pr-prt-ok { color: #1b6b36; font-weight: 600; margin: 8px 0; }
   .pr-privzone { border: 1.5px dashed #f0c38a; border-radius: 12px; background: #fffaf3; padding: 12px 14px; margin: 8px 0 16px; }
   .pr-privh { font-size: 15px; color: #9a4d00; margin: 0 0 10px; }
   .pr-ptools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
@@ -35424,6 +35425,14 @@ function prPrintPick(only) {
     const bl = [...ov.querySelectorAll("[data-prt-b]:checked")].map(c => c.dataset.prtB); if (!bl.length) return alertMsg("Pick at least one block.");
     close(); prPrintSheets(pers, bl); });
 }
+// a person paid a set amount (salary, or sales paid a set number of hours a pay as a draw): their call times are not what they are paid on
+function blockedSalaryLike(pp, sl) {
+  const q = pp.rate; if (q && q.kind === "salary") return `a salary, ${money(q.amount)} a year`;
+  const h = sl.map(x => Number(x.hours || 0)).find(Boolean);
+  if (["sales", "owner"].includes(pp.block) && h) return `${h} hours a pay (a set amount, not their time)`;
+  if (["sales", "owner"].includes(pp.block) && sl.length && !h) return "commission only";
+  return "";
+}
 async function prPrintSheets(pers, blocks, people) {
   if (!Array.isArray(pers)) pers = [pers];
   const live = people || (PR.people || []).filter(x => blocks.includes(x.block)).sort((a, b) => blocks.indexOf(a.block) - blocks.indexOf(b.block) || String(a.name).localeCompare(String(b.name)));
@@ -35457,7 +35466,8 @@ async function prPrintSheets(pers, blocks, people) {
               <span class="quiet">on the way ${t(c.on_way)} · arrived ${t(c.arrived)} · done ${t(c.done)}</span></div>`).join("")
             + (x.blocks || []).filter(b => b.paid).map(b => `<div class="pr-prt-c"><b>${esc(b.name)}</b> <span class="quiet">${tm(b.a)} to ${tm(b.b)}</span></div>`).join("")
             + (x.pickup ? `<div class="pr-prt-c quiet">Picking up the equipment first: ${x.pickup.min} min</div>` : "");
-          return `<tr><td><b>${esc(longDate(z.d))}</b></td><td>${tm(x.start)}</td><td>${tm(x.end)}</td><td class="num"><b>${prHrs(x.span)}</b></td><td>${calls}</td></tr>`; }).join("");
+          const long = (x.span || 0) > 14 * 3600e3;   // a call left open (done the next morning) makes a day look 20 hours long
+          return `<tr${long ? ' class="pr-prt-long"' : ""}><td><b>${esc(longDate(z.d))}</b></td><td>${tm(x.start)}</td><td>${tm(x.end)}</td><td class="num"><b>${prHrs(x.span)}</b>${long ? `<br><span class="pr-prt-warn">⚠ Check: a call was not closed until the next day</span>` : ""}</td><td>${calls}</td></tr>`; }).join("");
         hrs = tot; work = `<table class="pr-prt-t"><thead><tr><th>Day</th><th>Start of the day</th><th>End of the day</th><th>Hours</th><th>Calls (time on the way, arrived, done)</th></tr></thead><tbody>${rows}</tbody></table>`;
       } else if (pp.user && isOff) {
         const { data } = await db.rpc("office_period", { p_user: pp.user, p_from: p.from, p_to: p.to });
@@ -35470,16 +35480,25 @@ async function prPrintSheets(pers, blocks, people) {
           <p class="quiet">Hours paid count only from 15 minutes before the expected start to 15 minutes after the expected end.</p>`;
       }
     } catch (e) { work = `<p class="error">Could not read their days: ${esc(rpcErr(e))}</p>`; }
-    const J = IL && pp.emp_ids ? prComJobs(IL, pp.emp_ids).filter(r => near(r.payDay) || r.onPay === p.pay) : [];
+    const CJ = IL && pp.emp_ids ? prComJobs(IL, pp.emp_ids) : [], J = CJ.filter(r => near(r.payDay) || r.onPay === p.pay);
+    // the jobs done by pay day that are not marked paid on any pay yet: the slip's commission is most likely some of these (George, Nov 14)
+    const U = CJ.filter(r => !r.onPay && !r.payDay && r.completed_on && String(r.completed_on).slice(0, 10) <= p.pay && String(r.completed_on).slice(0, 10) >= cvAddDays(p.pay, -120))
+      .sort((a, b) => String(b.completed_on).localeCompare(String(a.completed_on)));
+    const jSum = J.reduce((a, r) => a + r.com, 0), sCom = mySl.reduce((a, x) => a + Number(x.parts?.com || 0), 0), drawn = blockedSalaryLike(pp, mySl);
     const com = J.length ? `<h3>Commission on this pay</h3><table class="pr-prt-t"><thead><tr><th>Job</th><th>Customer and address</th><th>Kind</th><th>Done</th><th>Sale</th><th>Commission</th></tr></thead><tbody>${J.map(r => `<tr><td>${esc(r.job_number || "")}</td><td><b>${esc(r.customer_name || "")}</b><br>${esc(r.address || "")}</td><td>${esc(r.job_type || "")}</td><td>${r.completed_on ? esc(fmtDate(String(r.completed_on).slice(0, 10))) : "—"}</td><td>${money(r.sale_amount || 0)}</td><td><b>${money(r.com)}</b></td></tr>`).join("")}
         <tr class="pr-prt-tot"><td colspan="5">Commission in all</td><td>${money(J.reduce((a, r) => a + r.com, 0))}</td></tr></tbody></table>` : "";
+    const comChk = !mySl.length || !(sCom || jSum) ? "" : Math.abs(sCom - jSum) < 0.01 ? `<p class="pr-prt-ok">✓ The commission on the pay slip (${money(sCom)}) matches the jobs marked paid on this pay.</p>`
+      : `<p class="pr-prt-nos">⚠ The pay slip has ${money(sCom)} of commission; the jobs marked paid on this pay in the app add up to ${money(jSum)}${jSum ? ` (${money(Math.abs(sCom - jSum))} ${sCom > jSum ? "more on the slip" : "less on the slip"})` : ""}.
+        ${jSum ? "Ask the accountant which jobs the slip paid, then fix the pay on those jobs on the Installs page." : "No job is marked paid on this pay in the app: mark the jobs the slip paid on the Installs page."}</p>`;
+    const unp = U.length && Math.abs(sCom - jSum) >= 0.01 ? `<h3>Commission jobs done and not marked paid yet</h3><table class="pr-prt-t"><thead><tr><th>Job</th><th>Customer and address</th><th>Kind</th><th>Done</th><th>Sale</th><th>Commission</th></tr></thead><tbody>${U.map(r => `<tr><td>${esc(r.job_number || "")}</td><td><b>${esc(r.customer_name || "")}</b><br>${esc(r.address || "")}</td><td>${esc(r.job_type || "")}</td><td>${esc(fmtDate(String(r.completed_on).slice(0, 10)))}</td><td>${money(r.sale_amount || 0)}</td><td>${money(r.com)}</td></tr>`).join("")}</tbody></table>
+      <p class="quiet">Done in the 4 months before this pay day. The slip's commission is most likely some of these.</p>` : "";
     const slip = mySl.length ? `<h3>The pay slip${mySl.length > 1 ? "s" : ""} from the accountant</h3><table class="pr-prt-t"><thead><tr><th>Cheque</th><th>Hours</th><th>Hourly pay</th><th>Commission</th><th>Vacation pay</th><th>Gross</th><th>Benefits</th><th>Tax, CPP, EI</th><th>Net</th></tr></thead><tbody>${mySl.map(x => { const q = x.parts || {};
         return `<tr><td>${esc(fmtDate(String(x.cheque).slice(0, 10)))}</td><td>${x.hours ? Number(x.hours) : "—"}</td><td>${money(q.hourly || 0)}</td><td>${money(q.com || 0)}</td><td>${money(x.vac || 0)}</td><td><b>${money(x.gross)}</b></td><td>${money(q.ben || 0)}</td><td>${money(Number(x.tax || 0) + Number(x.cpp || 0) + Number(x.ei || 0))}</td><td><b>${money(x.net)}</b></td></tr>`; }).join("")}</tbody></table>`
       : `<p class="pr-prt-nos">The pay slip for this pay is not loaded yet: send this sheet to the accountant to make the official pay.</p>`;
     pages.insertAdjacentHTML("beforeend", `<section class="pr-prt-page"><header><img src="reid-logo.png" alt=""><div><h2>${esc(pp.name || "")}</h2><div>${esc(prBlockName(pp.block))}${pp.title ? " · " + esc(pp.title) : ""}</div></div>
       <div class="pr-prt-per"><b>Pay of ${esc(fmtDate(p.pay))}</b><br>Worked ${esc(fmtDate(p.from))} to ${esc(fmtDate(p.to))}</div></header>
-      <div class="pr-prt-sum"><span>Hours to be paid <b>${hrs != null ? prHrs(hrs) : "—"}</b></span>${pp.rate ? `<span>Rate <b>${esc(prRateLab(pp.rate))}</b></span>` : ""}${J.length ? `<span>Commission <b>${money(J.reduce((a, r) => a + r.com, 0))}</b></span>` : ""}</div>
-      ${work || (pp.user ? "" : `<p class="quiet">No log-in in the app, so no days on file: hours come from the accountant.</p>`)}${com}${slip}
+      <div class="pr-prt-sum"><span>${drawn ? "Hours on calls (not what they are paid on)" : "Hours to be paid"} <b>${hrs != null ? prHrs(hrs) : "—"}</b></span>${drawn ? `<span>Paid on the slip <b>${esc(drawn)}</b></span>` : ""}${pp.rate ? `<span>Rate <b>${esc(prRateLab(pp.rate))}</b></span>` : ""}${J.length ? `<span>Commission <b>${money(J.reduce((a, r) => a + r.com, 0))}</b></span>` : ""}</div>
+      ${work || (pp.user ? "" : `<p class="quiet">No log-in in the app, so no days on file: hours come from the accountant.</p>`)}${com}${slip}${comChk}${unp}
       <footer>Made by the app on ${esc(fmtDate(salesToday()))}. This is not a cheque: the official pay, tax, CPP and EI come from the accountant.</footer></section>`);
   }
   st.textContent = `${jobs.length} sheet${jobs.length === 1 ? "" : "s"} ready.`; ov.querySelector("[data-prt-print]").disabled = false;
