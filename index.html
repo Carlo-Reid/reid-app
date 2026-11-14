@@ -7777,8 +7777,13 @@ article.ie .ie-pickrow .ie-bookbtn.ie-off .ie-bookbtn-ic { filter: grayscale(1);
 .vr-supsw { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; } .vr-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .vr-pbsec .vr-rates { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); } .vr-pbsec .vr-rt[data-vr-ro] { cursor: default; }
 /* proposal line */
-.vr-chip { margin: 5px 0 2px; padding: 6px 10px; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 14.5px; line-height: 1.3; color: #23415f; background: linear-gradient(180deg, #ffffff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 10px; }
+.vr-chip { margin: 5px 0 2px; padding: 6px 10px; white-space: normal; max-width: 100%; box-sizing: border-box; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 14.5px; line-height: 1.3; color: #23415f; background: linear-gradient(180deg, #ffffff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 10px; }
 .vr-chip-t { font-weight: 800; } .vr-chip-w { color: #4a6480; } .vr-chip b { color: #1b6b36; } .vr-chip .link { font-weight: 700; }
+/* invoice line: no monthly rate picked yet. Green, a slow flash (Carlo, Nov 14) */
+.vr-chip .vr-ask { font: inherit; font-size: 16px; font-weight: 800; line-height: 1.25; color: #fff; background: #1f9d4a; border: 1.5px solid #17803b; border-radius: 10px; padding: 9px 14px; cursor: pointer; text-align: left; white-space: normal; max-width: 100%; min-width: 0; animation: vrAsk 2.6s ease-in-out infinite; }
+.vr-chip .vr-ask:hover, .vr-chip .vr-ask:focus-visible { animation: none; background: #17803b; color: #fff; }
+@keyframes vrAsk { 0%, 100% { background: #1f9d4a; color: #fff; box-shadow: 0 0 0 0 rgba(31, 157, 74, .5); } 50% { background: #d9f2e1; color: #1b6b36; box-shadow: 0 0 0 7px rgba(31, 157, 74, 0); } }
+@media (prefers-reduced-motion: reduce) { .vr-chip .vr-ask { animation: none; } }
 @media print { .vr-chip, .vr-pop { display: none !important; } }
 /* the rates page */
 .vr-page .vr-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; } .vr-page .vr-top h1 { margin: 0; }
@@ -33175,16 +33180,22 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
   if (EST.x?.id === estId && document.querySelector(".est-sheet")) renderEstEdit(); });
 // The Vista rental price on an invoice line (Carlo, Nov 13: "i added this PV50N 200… to an invoice but it did not show or give me any rental
 // price or options"). Kept on the job, for the line's item (vista_rental_picks kind 'job'). Shown when the item is set up as a rental tank, when a
-// rate was picked, or, on a Vista invoice, when the line's words look like one of Vista's tanks. Staff only: never printed.
+// rate was picked, or when the line's words look like one of Vista's tanks. Staff only: never printed.
+// On ANY invoice a hot water tank line gets it (Carlo, Nov 14: "when i add a hot water tank to an invoice have its button to pick the monthly
+// rate slow flash green saying please pick a monthly rate if this is a rental"): until a rate is picked on the job, the button is green,
+// flashes slowly and reads "Please pick a monthly rate if this is a rental." (`.vr-ask`); after a pick it is the plain Change link.
 const ieIsVista = I => /vista/i.test([I?.bill?.partner?.name, I?.prule?.name, I?.pbook?.name].filter(Boolean).join(" "));
 // A tech never sees the full amount of a Vista invoice, only the rental one (Carlo, Nov 13)
 const ieRentOnly = I => typeof ME !== "undefined" && ME?.role === "technician" && ieIsVista(I);
 function vrIeFor(I, l) {
   if (!l || !l.item_id || l.kit_parent || !I?.job_id || !VR.data || VR.ieJob !== I.job_id) return null;
   const item = Number(l.item_id), L = VR.data.links[item], P = VR.ie.get(item);
-  const G = !L && !P && ieIsVista(I) ? vrGuess({ name: l.description, sku: l.sku }) : null;
-  return L || P || G ? { item, L, P, G } : null;
+  const G = !L && !P ? vrGuess({ name: l.description, sku: l.sku }) : null;
+  return L || P || G || vrIeTankish(l) ? { item, L, P, G } : null;
 }
+// the line's words say it is a water heater itself (not a part, a repair or the labour for one)
+const vrIeTankish = l => { const t = [l?.description, l?.sku].filter(Boolean).join(" ");
+  return /hot water tank|water heater|\bhwt\b|tankless/i.test(t) && !/anode|drain|flush|mainten|repair|service call|vent(ing)? kit|valve|permit|remov|dispos|labou?r|thermocouple|element|igniter|pilot|warranty/i.test(t); };
 function vrIeChip(I, l) {
   const x = vrIeFor(I, l); if (!x) return "";
   const { L, P, G } = x; let p = P, usual = false;
@@ -33193,7 +33204,9 @@ function vrIeChip(I, l) {
   const B = L || G, T = !p && B ? vrTank(B) : null, rs = T ? T.r.map(z => Number(z[1])) : [];
   return `<div class="vr-chip no-print"><span class="vr-chip-t">🏷 Vista rental</span> ${p ? `<b>${vrRate(p.rate)} a month</b> · allowance <b>${vrAl(p.allowance)}</b> <span class="vr-chip-w">${esc(p.m)}${p.s !== "HVAC" ? ", from " + esc(p.s) : ""}${usual ? " · the usual rate" : ""}</span>`
       : `<span class="vr-chip-w">${G && !L ? "I think it is Vista's " : ""}${B ? esc(B.m) + (B.s !== "HVAC" ? ", from " + esc(B.s) : "") : ""}${rs.length ? ` · ${rs.length} monthly rates, ${vrRate(Math.min(...rs))} to ${vrRate(Math.max(...rs))}` : ""}</span>`}
-    <button type="button" class="link" data-vr-ie="${x.item}" data-vr-line="${l.id}">${p && !usual ? "Change" : "Pick the monthly rate"}</button></div>`;
+    ${p && !usual ? `<button type="button" class="link" data-vr-ie="${x.item}" data-vr-line="${l.id}">Change</button>`
+      : I.can_edit && (I.status === "draft" || I.st_edit) ? `<button type="button" class="vr-ask" data-vr-ie="${x.item}" data-vr-line="${l.id}">Please pick a monthly rate if this is a rental.</button>`
+      : `<button type="button" class="link" data-vr-ie="${x.item}" data-vr-line="${l.id}">Pick the monthly rate</button>`}</div>`;
 }
 async function vrIeLoad(job) {
   VR.ieJob = job || null; VR.ie = new Map(); if (!job) return;
