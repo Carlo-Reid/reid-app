@@ -7936,6 +7936,15 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
   .tob-live-go:hover, .tob-live-go:focus-visible { border-color: #1f9d4a; box-shadow: 0 0 0 2px #bfe8cb; }
   .tob-live-hint { font-weight: 700; color: #1b6b36; }
   /* Carlo, Nov 14, 2:21 p.m.: a login open in 2 places shows in the side bar for owners; a click remotes in to that place's page */
+  #online-list li.on-rem { display: flex; align-items: stretch; gap: 4px; }
+  #online-list li.on-rem .on-go { flex: 1 1 auto; min-width: 0; margin: 0 0 0 -6px; width: auto; }
+  #online-list .on-w { display: flex; flex-direction: column; min-width: 0; text-align: left; line-height: 1.25; }
+  #online-list .on-w .who { overflow: hidden; text-overflow: ellipsis; }
+  #online-list .on-pg { font-size: 11.5px; opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #online-list li.on-rem .on-go:hover { background: #1c1c1e; color: #fff; }
+  #online-list .on-chat { position: relative; flex: 0 0 34px; border: 1.5px solid #bcd0e3; border-radius: 8px; background: linear-gradient(180deg, #fff, #eef4fa); cursor: pointer; font-size: 15px; padding: 0; }
+  #online-list .on-chat:hover { border-color: #23415f; }
+  #online-list .on-chat .badge-n { position: absolute; top: -6px; right: -6px; margin: 0; }
   #second-loc:empty { display: none; }
   #second-loc { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; }
   .sl2-u { display: flex; flex-direction: column; gap: 5px; padding: 8px; border: 1.5px solid #e0a23a; border-radius: 10px; background: #fff7e8; color: #5a3b00; }
@@ -8380,17 +8389,17 @@ function viewAsApply() {
   window.sideApply?.();
 }
 // "Sign in as …" (owners): really signs in as them through the login-as function; "Back to me" puts the owner's own sign-in back
-async function loginAsStart(uid, name) {
-  const k = await askChoice(`Sign in as ${esc(name)}?`, `The app reloads signed in as <b>${esc(name)}</b>: everything is exactly what they see and can do, and anything you save is saved <b>as them</b>. Press <b>Back to me</b> at the bottom of the screen to come back.`, [["yes", `Sign in as ${esc(name)}`, true], ["", "Not now"]]);
+async function loginAsStart(uid, name, o) {   // o.direct = no question first (a click on a name in Online now); o.go = the page to open after
+  const k = o && o.direct ? "yes" : await askChoice(`Sign in as ${esc(name)}?`, `The app reloads signed in as <b>${esc(name)}</b>: everything is exactly what they see and can do, and anything you save is saved <b>as them</b>. Press <b>Back to me</b> at the bottom of the screen to come back.`, [["yes", `Sign in as ${esc(name)}`, true], ["", "Not now"]]);
   if (k !== "yes") return;
   const { data: { session } } = await db.auth.getSession(); if (!session) return alertMsg("Sign in first.");
   const { data, error } = await db.functions.invoke("login-as", { body: { app_user_id: uid } });
   if (error || !data?.token_hash) { let t = error?.message || "Couldn't sign in as them"; try { const j = await error.context.json(); if (j?.error) t = j.error; } catch {}
-    if (/Failed to send a request|not found|404/i.test(t)) t = "The login-as function isn't set up in Supabase yet."; return alertMsg("Not signed in as them: " + t); }
+    if (/Failed to send a request|not found|404/i.test(t)) t = "The login-as function isn't set up in Supabase yet."; try { sessionStorage.removeItem("reid.remoteGo"); } catch {} return alertMsg("Not signed in as them: " + t); }
   try { localStorage.setItem("reid.realSession", JSON.stringify({ access_token: session.access_token, refresh_token: session.refresh_token, email: session.user?.email, as: name })); } catch {}
   const r = await db.auth.verifyOtp({ token_hash: data.token_hash, type: "magiclink" });
-  if (r.error) { await db.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }).catch(() => {}); try { localStorage.removeItem("reid.realSession"); } catch {} return alertMsg("Not signed in as them: " + r.error.message); }
-  location.hash = ""; location.reload();
+  if (r.error) { await db.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token }).catch(() => {}); try { localStorage.removeItem("reid.realSession"); sessionStorage.removeItem("reid.remoteGo"); } catch {} return alertMsg("Not signed in as them: " + r.error.message); }
+  location.hash = (o && o.go) || ""; location.reload();
 }
 async function loginAsBack() {
   let real = null; try { real = JSON.parse(localStorage.getItem("reid.realSession") || "null"); } catch {}
@@ -8408,6 +8417,15 @@ function loginAsBar() {   // while signed in as someone else: the bar to come ba
   document.body.classList.add("viewing-as");
   bar.innerHTML = `<span>🔑 You're signed in as <b>${esc(real.as || ME.email)}</b>. Anything you save is saved as them.</span><button type="button" class="btn" id="viewas-back">Back to me</button>`;
   bar.querySelector("#viewas-back").addEventListener("click", loginAsBack);
+  // came here by a click on a name in Online now (Carlo, Nov 14, 2:39 p.m.): say where we landed; an invoice opens with the remoted-in banner
+  let go = null; try { go = JSON.parse(sessionStorage.getItem("reid.remoteGo") || "null"); sessionStorage.removeItem("reid.remoteGo"); } catch {}
+  if (go) {
+    const m = /^#invoice-edit=(\d+)$/.exec(go.hash || ""); if (m) REMOTE_INV = { inv: Number(m[1]), tech: go.name || "" };
+    const first = (go.name || "").split(" ")[0] || "them", t = document.createElement("div"); t.className = "remote-toast"; t.setAttribute("role", "status");
+    t.textContent = go.hash ? `📡 Remoted into ${first}: you are on the page ${first} has open${go.page ? " (" + go.page + ")" : ""}, signed in as ${first}. Press Back to me at the bottom when you are done.`
+      : `📡 Remoted into ${first}: you are signed in as ${first}. I could not open the exact page ${first} is on, so the app opened at its start.`;
+    document.body.append(t); setTimeout(() => t.remove(), 9000);
+  }
 }
 function viewAsStart(v) { try { sessionStorage.setItem("reid.viewAs", JSON.stringify(v)); } catch {} location.hash = ""; location.reload(); }
 function viewAsStop() { try { sessionStorage.removeItem("reid.viewAs"); } catch {} location.hash = "#staff"; location.reload(); }
@@ -8658,14 +8676,20 @@ function renderOnline() {
   // people who messaged me but aren't online right now still show, so I can answer
   Object.values(CHAT.unread).forEach(x => { if (!rows.some(r => r.app_user_id === x.from_user_id))
     rows.push({ app_user_id: x.from_user_id, name: x.name, login_email: "", role: "", online: false }); });
+  const rem = ME.role === "owner" && !ME.viewAs;
   $("#online-list").innerHTML = rows.map(u => {
     const n = CHAT.unread[u.app_user_id]?.unread || 0, label = esc(u.name || (u.login_email || "").split("@")[0]);
     return u.is_me
       ? `<li title="${esc(u.login_email)}"><span class="dot"></span><span class="who">${label} (you)</span><span class="role">${esc(ROLE_NAMES[u.role] || u.role)}</span></li>`
+      : rem && u.online   // owners: the name remotes in; the small 💬 beside it sends a message
+      ? `<li class="on-rem"><button type="button" class="chat-start on-go" data-remote-id="${u.app_user_id}" data-remote-name="${label}" title="Click to remote in: the app opens on the page ${label} is on, signed in as ${label}">
+           <span class="dot"></span><span class="on-w"><span class="who">${label}</span><span class="on-pg">📡 ${esc(onlinePlaceWords(u.app_user_id))}</span></span></button>
+         <button type="button" class="on-chat" data-chat-id="${u.app_user_id}" data-chat-name="${label}" title="Send ${label} a message" aria-label="Send ${label} a message">💬${n ? `<span class="badge-n">${n}</span>` : ""}</button></li>`
       : `<li><button type="button" class="chat-start" data-chat-id="${u.app_user_id}" data-chat-name="${label}" title="Send ${label} a message">
            <span class="dot ${u.online ? "" : "off"}"></span><span class="who">${label}</span>
            ${n ? `<span class="badge-n">${n}</span>` : `<span class="role">${esc(ROLE_NAMES[u.role] || u.role || "Offline")}</span>`}</button></li>`;
   }).join("");
+  document.querySelectorAll("#online-list [data-remote-id]").forEach(b => b.addEventListener("click", () => onlineRemote(Number(b.dataset.remoteId), b.dataset.remoteName)));
   document.querySelectorAll("[data-chat-id]").forEach(b => b.addEventListener("click", () => openChat(Number(b.dataset.chatId), b.dataset.chatName)));
   const total = Object.values(CHAT.unread).reduce((a, x) => a + x.unread, 0);
   PAGE_TITLE.unread = total; showPageBar();
@@ -25523,17 +25547,28 @@ let LOGIN_ID = null, LOGIN_BEAT_AT = 0, LOGIN_BEAT_OLD = false;
 const clientId = () => { try { let c = localStorage.getItem("reid.clientId"); if (!c) { c = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)); localStorage.setItem("reid.clientId", c); } return c; } catch (e) { return null; } };
 async function loginBeat() {
   if (!LOGIN_ID) return; LOGIN_BEAT_AT = Date.now();
+  try { if (localStorage.getItem("reid.realSession")) return; } catch (e) {}   // an owner remoted in as someone: not that person's own place
   if (!LOGIN_BEAT_OLD) { const { error } = await db.rpc("login_beat", { p_id: LOGIN_ID, p_client: clientId(), p_page: document.body.dataset.page || "", p_hash: location.hash || "" });
     if (!error) return; if (/login_beat|schema cache|not find/i.test(error.message || "")) LOGIN_BEAT_OLD = true; }   // the database part is not in yet: the old heartbeat
   db.rpc("touch_login", { p_id: LOGIN_ID });
 }
 window.addEventListener("hashchange", () => { if (LOGIN_ID && Date.now() - LOGIN_BEAT_AT > 15000) setTimeout(loginBeat, 1200); });
 // owners: a login that is open in 2 places shows in the side bar, above Online now; a click on a place opens the page that place is on
-let SECOND = [];
+let SECOND = [], PLACES = {};
 async function secondLocLoad() {
   if (ME.role !== "owner") return;
-  const { data, error } = await db.rpc("second_locations", { p_client: clientId() });
-  SECOND = error ? [] : (data || []); secondLocDraw();
+  const [a, b] = await Promise.all([db.rpc("second_locations", { p_client: clientId() }), db.rpc("online_places")]);
+  SECOND = a.error ? [] : (a.data || []); secondLocDraw();
+  if (!b.error) { PLACES = {}; (b.data || []).forEach(x => { PLACES[x.user_id] = x; }); renderOnline(); }
+}
+// Carlo, Nov 14, 2:39 p.m.: "click on a name on my left side bar and remote in… go right into the page he is on and be able to do anything he can do".
+// Owners: a click on a name in Online now signs in as that person (the login-as function, written in the history) and opens the page they have open.
+const onlinePlaceWords = id => { const pl = PLACES[id]; return pl ? (PAGE_NAMES[pl.page] || pl.page || "The app") : "Remote in"; };
+function onlineRemote(uid, name) {
+  if (ME.role !== "owner" || ME.viewAs) return;
+  const pl = PLACES[uid] || {};
+  try { sessionStorage.setItem("reid.remoteGo", JSON.stringify({ hash: pl.hash || "", name, page: PAGE_NAMES[pl.page] || pl.page || "", device: pl.device || "" })); } catch {}
+  loginAsStart(uid, name, { direct: true, go: pl.hash || "" });
 }
 function secondLocDraw() {
   const box = $("#second-loc"); if (!box) return;

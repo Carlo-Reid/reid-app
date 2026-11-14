@@ -36,3 +36,17 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
 REVOKE EXECUTE ON FUNCTION public.second_locations(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.second_locations(text) TO authenticated;
 NOTIFY pgrst, 'reload schema';
+
+-- Carlo, Nov 14, 2:39 p.m.: "click on a name on my left side bar and remote in to that employee… go right into the page he is on".
+-- owners only: the page each person who is online has open right now (their newest live place, seen in the last 3 minutes).
+CREATE OR REPLACE FUNCTION public.online_places() RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
+  SELECT CASE WHEN public.current_staff_role() IS DISTINCT FROM 'owner' THEN '[]'::jsonb ELSE coalesce((
+    SELECT jsonb_agg(jsonb_build_object('user_id', v.user_id, 'device', v.device, 'page', v.page, 'hash', v.hash, 'seen', v.last_seen))
+      FROM (SELECT DISTINCT ON (l.user_id) l.user_id, l.device, l.page, l.hash, l.last_seen
+              FROM staff_logins l
+             WHERE l.ended_at IS NULL AND l.event <> 'sign_out' AND l.client_id IS NOT NULL AND l.last_seen > now() - interval '3 minutes'
+             ORDER BY l.user_id, l.last_seen DESC) v), '[]'::jsonb) END $f$;
+REVOKE EXECUTE ON FUNCTION public.online_places() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.online_places() TO authenticated;
+NOTIFY pgrst, 'reload schema';
