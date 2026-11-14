@@ -24,11 +24,17 @@ BEGIN
 END $function$;
 
 -- what is answered so far on one walk
+-- Carlo, Nov 14, 2:25 p.m.: "if a second picture for a question is taken have it show as well and not replace the first one and have a
+-- way for the tech to delete the picture". A question can hold several pictures now, so the one-row-per-question key is gone.
+ALTER TABLE public.walk_answers DROP CONSTRAINT IF EXISTS walk_answers_pkey;
+CREATE INDEX IF NOT EXISTS walk_answers_visit_q ON public.walk_answers (visit_id, q);
+
 CREATE OR REPLACE FUNCTION public.walk_answers_for(p_visit_id bigint) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE
-    coalesce((SELECT jsonb_agg(jsonb_build_object('q', a.q, 'na', a.na, 'key', a.storage_key) ORDER BY a.q) FROM walk_answers a WHERE a.visit_id = p_visit_id), '[]'::jsonb) END $f$;
+    coalesce((SELECT jsonb_agg(jsonb_build_object('q', a.q, 'na', a.na, 'key', a.storage_key) ORDER BY a.q, a.at) FROM walk_answers a WHERE a.visit_id = p_visit_id), '[]'::jsonb) END $f$;
 
--- one answer: N/A, or the picture the app already put in the job-files bucket under forms/<job>/walk-...
+-- one answer: N/A (it takes the question's pictures off), or one more picture the app already put in the job-files bucket under
+-- forms/<job>/walk-... A second picture for the same question is ADDED, it does not replace the first.
 CREATE OR REPLACE FUNCTION public.walk_answer_set(p_visit_id bigint, p_q int, p_question text, p_na boolean, p_key text, p_size bigint) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
 DECLARE v visits; v_att bigint; v_key text := nullif(btrim(p_key), '');
@@ -41,17 +47,51 @@ BEGIN
   END IF;
   IF v.status IN ('completed', 'cancelled') THEN RAISE EXCEPTION 'That call is already closed'; END IF;
   IF p_q IS NULL OR p_q NOT BETWEEN 1 AND 20 THEN RAISE EXCEPTION 'Which question?'; END IF;
-  IF coalesce(p_na, false) THEN v_key := NULL;
-  ELSIF v_key IS NULL OR v_key NOT LIKE 'forms/' || v.job_id || '/walk-%' THEN RAISE EXCEPTION 'Take a picture, or press N/A';
-  ELSE
-    INSERT INTO attachments (entity_type, entity_id, category, file_name, storage_key, mime_type, size_bytes, caption, taken_by_employee_id, taken_at)
-    VALUES ('job', v.job_id, 'photo', 'Walk question ' || p_q || '.jpg', v_key, 'image/jpeg', p_size, left('Walk: ' || coalesce(p_question, ''), 400), public.my_employee_id(), now())
-    RETURNING id INTO v_att;
+  IF coalesce(p_na, false) THEN
+    BEGIN   -- the question's pictures leave the customer's file too (hidden, not erased: 299_attachment_delete.sql)
+      UPDATE attachments SET deleted_at = now(), deleted_by = public.current_app_user_id()
+       WHERE id IN (SELECT attachment_id FROM walk_answers WHERE visit_id = p_visit_id AND q = p_q AND attachment_id IS NOT NULL) AND deleted_at IS NULL;
+    EXCEPTION WHEN undefined_column THEN NULL; END;
+    DELETE FROM walk_answers WHERE visit_id = p_visit_id AND q = p_q;
+    INSERT INTO walk_answers (visit_id, q, question, na, storage_key, attachment_id, at, by_user)
+    VALUES (p_visit_id, p_q, left(p_question, 300), true, NULL, NULL, now(), public.current_app_user_id());
+    RETURN;
   END IF;
+  IF v_key IS NULL OR v_key NOT LIKE 'forms/' || v.job_id || '/walk-%' THEN RAISE EXCEPTION 'Take a picture, or press N/A'; END IF;
+  IF EXISTS (SELECT 1 FROM walk_answers WHERE visit_id = p_visit_id AND storage_key = v_key) THEN RETURN; END IF;   -- the save is retried: never twice
+  INSERT INTO attachments (entity_type, entity_id, category, file_name, storage_key, mime_type, size_bytes, caption, taken_by_employee_id, taken_at)
+  VALUES ('job', v.job_id, 'photo', 'Walk question ' || p_q || '.jpg', v_key, 'image/jpeg', p_size, left('Walk: ' || coalesce(p_question, ''), 400), public.my_employee_id(), now())
+  RETURNING id INTO v_att;
+  DELETE FROM walk_answers WHERE visit_id = p_visit_id AND q = p_q AND na;
   INSERT INTO walk_answers (visit_id, q, question, na, storage_key, attachment_id, at, by_user)
-  VALUES (p_visit_id, p_q, left(p_question, 300), coalesce(p_na, false), v_key, v_att, now(), public.current_app_user_id())
-  ON CONFLICT (visit_id, q) DO UPDATE SET question = excluded.question, na = excluded.na, storage_key = excluded.storage_key, attachment_id = excluded.attachment_id, at = now(), by_user = excluded.by_user;
+  VALUES (p_visit_id, p_q, left(p_question, 300), false, v_key, v_att, now(), public.current_app_user_id());
 END $function$;
+
+-- take one walk picture off (a numbered question's, or one of the extra ones): it leaves the walk and the customer's file
+-- (the photo is hidden, not erased, and a job note says so).
+CREATE OR REPLACE FUNCTION public.walk_answer_del(p_visit_id bigint, p_key text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE v visits; r walk_answers;
+BEGIN
+  SELECT * INTO v FROM visits WHERE id = p_visit_id;
+  IF v.id IS NULL THEN RAISE EXCEPTION 'That call no longer exists'; END IF;
+  IF NOT (public.has_permission('calls.dispatch')
+          OR EXISTS (SELECT 1 FROM visit_assignments WHERE visit_id = p_visit_id AND employee_id = public.my_employee_id())) THEN
+    RAISE EXCEPTION 'You can only change calls you''re on';
+  END IF;
+  IF v.status IN ('completed', 'cancelled') THEN RAISE EXCEPTION 'That call is already closed'; END IF;
+  SELECT * INTO r FROM walk_answers WHERE visit_id = p_visit_id AND storage_key = nullif(btrim(p_key), '') LIMIT 1;
+  IF r.visit_id IS NULL THEN RETURN; END IF;
+  IF r.attachment_id IS NOT NULL THEN
+    BEGIN UPDATE attachments SET deleted_at = now(), deleted_by = public.current_app_user_id() WHERE id = r.attachment_id AND deleted_at IS NULL;
+    EXCEPTION WHEN undefined_column THEN NULL; END;
+  END IF;
+  DELETE FROM walk_answers WHERE visit_id = p_visit_id AND storage_key = r.storage_key;
+  INSERT INTO notes (entity_type, entity_id, body, author_user_id, source)
+  VALUES ('job', v.job_id, 'Walk picture deleted' || CASE WHEN r.q < 1000 THEN ' (question ' || r.q || ')' ELSE '' END || '.', public.current_app_user_id(), 'call');
+END $function$;
+REVOKE EXECUTE ON FUNCTION public.walk_answer_del(bigint, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.walk_answer_del(bigint, text) TO authenticated;
 
 REVOKE EXECUTE ON FUNCTION public.walk_questions(), public.set_walk_questions(jsonb), public.walk_answers_for(bigint), public.walk_answer_set(bigint, int, text, boolean, text, bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.walk_questions(), public.set_walk_questions(jsonb), public.walk_answers_for(bigint), public.walk_answer_set(bigint, int, text, boolean, text, bigint) TO authenticated;

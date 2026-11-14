@@ -39,7 +39,7 @@ BEGIN
   END IF;
   IF v.status IN ('completed', 'cancelled') THEN RAISE EXCEPTION 'That call is already %', CASE v.status WHEN 'completed' THEN 'done' ELSE 'cancelled' END; END IF;
   IF to_regprocedure('public.walk_questions()') IS NOT NULL
-     AND (SELECT count(*) FROM walk_answers a WHERE a.visit_id = p_visit_id AND (a.na OR a.storage_key IS NOT NULL) AND a.q <= jsonb_array_length(public.walk_questions()))
+     AND (SELECT count(DISTINCT a.q) FROM walk_answers a WHERE a.visit_id = p_visit_id AND (a.na OR a.storage_key IS NOT NULL) AND a.q <= jsonb_array_length(public.walk_questions()))
          < jsonb_array_length(public.walk_questions()) THEN
     RAISE EXCEPTION 'Answer every question first: a picture, or N/A, for each one';
   END IF;
