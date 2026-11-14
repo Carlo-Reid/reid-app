@@ -35390,41 +35390,61 @@ const PR_PAYKIND = { hourly: "By the hour", salary: "Salary", commission: "Commi
 // worked (techs: each call with the customer's address, time on the way, arrived and done, the day's start and end; office: time in and
 // out), the hours to be paid, the commission jobs paid on that pay (with the address), and the pay slip's breakdown if it is loaded.
 // For the person, and to send to the accountant to make the official pay. It is not a cheque and works out no tax.
-function prPrintPick() {
+function prPrintPick(only) {
   const today = salesToday(), cur = prPeriodOf(today), last = prPeriodOf(cvAddDays(cur.from, -1));
-  const ps = []; for (let i = 0, q = cur; i < 8; i++, q = prPeriodOf(cvAddDays(q.from, -1))) ps.push(q);
-  const live = (PR.people || []).filter(x => x.block !== "past"), cnt = k => live.filter(x => x.block === k).length;
+  const ps = []; for (let i = 0, q = cur; i < 53; i++, q = prPeriodOf(cvAddDays(q.from, -1))) ps.push(q);   // two years of pays; older ones by a day
+  const opt = (q, sel) => `<option value="${q.from}"${sel ? " selected" : ""}>Pay of ${esc(fmtDate(q.pay))} · worked ${esc(fmtDate(q.from))} to ${esc(fmtDate(q.to))}${q.to >= today ? " (not over yet)" : ""}</option>`;
+  const all = PR.people || [], live = all.filter(x => x.block !== "past"), cnt = k => live.filter(x => x.block === k).length;
+  const key = x => x.user ? "u" + x.user : "s" + x.staff, onlyK = only ? key(only) : "";
+  const whoOpts = PR_BLOCKS.map(([k, n]) => { const xs = all.filter(x => x.block === k).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    return xs.length ? `<optgroup label="${esc(n)}">${xs.map(x => `<option value="${key(x)}"${key(x) === onlyK ? " selected" : ""}>${esc(x.name || "")}</option>`).join("")}</optgroup>` : ""; }).join("");
   const ov = document.createElement("div"); ov.className = "pr-prt-ov"; ov.setAttribute("role", "dialog"); ov.setAttribute("aria-modal", "true");
-  ov.innerHTML = `<div class="pr-prt-box"><h2>🖨 Print pay sheets</h2>
-    <label class="pr-prt-l">1 Which pay? <select data-prt-p>${ps.map(q => `<option value="${q.from}"${q.from === last.from ? " selected" : ""}>Pay of ${esc(fmtDate(q.pay))} · worked ${esc(fmtDate(q.from))} to ${esc(fmtDate(q.to))}${q.to >= today ? " (not over yet)" : ""}</option>`).join("")}</select></label>
-    <div class="pr-prt-l">2 Which blocks? ${PR_BLOCKS.filter(([k]) => k !== "past" && cnt(k)).map(([k, n]) => `<label><input type="checkbox" data-prt-b="${k}"${k !== "owner" ? " checked" : ""}> ${n} (${cnt(k)})</label>`).join("")}</div>
-    <p class="quiet">One page for each person on payroll now in those blocks, in order of the blocks, then by name. It reads each person's days, so it takes a little while.</p>
+  ov.innerHTML = `<div class="pr-prt-box"><h2>🖨 Print pay sheets${only ? ` for ${esc(only.name || "")}` : ""}</h2>
+    <label class="pr-prt-l">1 Which pay? <select data-prt-p>${ps.map(q => opt(q, q.from === last.from)).join("")}</select></label>
+    <label class="pr-prt-l">Up to which pay? <select data-prt-p2><option value="">Only that pay</option>${ps.map(q => opt(q, false)).join("")}</select></label>
+    <label class="pr-prt-l pr-prt-old">Older than these? Pick any day of that pay <input type="date" data-prt-d max="${esc(today)}"></label>
+    <label class="pr-prt-l">2 Who? <select data-prt-who><option value="">Everyone in the blocks I tick</option>${whoOpts}</select></label>
+    <div class="pr-prt-l" data-prt-blk>3 Which blocks? ${PR_BLOCKS.filter(([k]) => k !== "past" && cnt(k)).map(([k, n]) => `<label><input type="checkbox" data-prt-b="${k}"${k !== "owner" ? " checked" : ""}> ${n} (${cnt(k)})</label>`).join("")}</div>
+    <p class="quiet" data-prt-note></p>
     <div class="pr-prt-acts"><button type="button" class="btn save-go" data-prt-go>Make the sheets</button> <button type="button" class="btn" data-prt-x>Cancel</button></div></div>`;
   document.body.appendChild(ov);
-  const close = () => ov.remove(); ov.querySelector("[data-prt-x]").addEventListener("click", close);
+  const $o = s => ov.querySelector(s), sel1 = $o("[data-prt-p]"), sel2 = $o("[data-prt-p2]"), who = $o("[data-prt-who]");
+  const periods = () => { const a = prPeriodOf(cvAddDays(sel1.value, 1)), b = sel2.value ? prPeriodOf(cvAddDays(sel2.value, 1)) : a;
+    const [lo, hi] = a.from <= b.from ? [a, b] : [b, a], out = []; for (let q = lo; q.from <= hi.from && out.length < 60; q = prPeriodOf(cvAddDays(q.to, 1))) out.push(q); return out; };
+  const note = () => { const n = periods().length, one = !!who.value; $o("[data-prt-blk]").hidden = one;
+    $o("[data-prt-note]").textContent = (one ? `One page for each pay` : `One page for each person on payroll now in those blocks, in order of the blocks, then by name, for each pay`)
+      + (n > 1 ? ` (${n} pays).` : ".") + " It reads each person's days, so it takes a little while."; };
+  $o("[data-prt-d]").addEventListener("change", e => { const d = e.target.value; if (!d) return; const q = prPeriodOf(d);
+    [sel1, sel2].forEach(s => { if (![...s.options].some(o => o.value === q.from)) s.insertAdjacentHTML("beforeend", opt(q, false)); }); sel1.value = q.from; note(); });
+  [sel1, sel2, who].forEach(s => s.addEventListener("change", note)); note();
+  const close = () => ov.remove(); $o("[data-prt-x]").addEventListener("click", close);
   ov.addEventListener("click", e => { if (e.target === ov) close(); }); ov.addEventListener("keydown", e => { if (e.key === "Escape") close(); });
-  ov.querySelector("[data-prt-go]").addEventListener("click", () => { const p = prPeriodOf(cvAddDays(ov.querySelector("[data-prt-p]").value, 1));
+  $o("[data-prt-go]").addEventListener("click", () => { const pers = periods();
+    if (who.value) { const x = all.find(q => key(q) === who.value); if (!x) return alertMsg("Pick who."); close(); return prPrintSheets(pers, null, [x]); }
     const bl = [...ov.querySelectorAll("[data-prt-b]:checked")].map(c => c.dataset.prtB); if (!bl.length) return alertMsg("Pick at least one block.");
-    close(); prPrintSheets(p, bl); });
+    close(); prPrintSheets(pers, bl); });
 }
-async function prPrintSheets(p, blocks) {
-  const live = (PR.people || []).filter(x => blocks.includes(x.block)).sort((a, b) => blocks.indexOf(a.block) - blocks.indexOf(b.block) || String(a.name).localeCompare(String(b.name)));
+async function prPrintSheets(pers, blocks, people) {
+  if (!Array.isArray(pers)) pers = [pers];
+  const live = people || (PR.people || []).filter(x => blocks.includes(x.block)).sort((a, b) => blocks.indexOf(a.block) - blocks.indexOf(b.block) || String(a.name).localeCompare(String(b.name)));
+  const jobs = []; pers.forEach(p => live.forEach(pp => jobs.push([p, pp])));   // each pay, then each person in it
+  const one = people && people.length === 1 ? people[0] : null, p0 = pers[0], pN = pers[pers.length - 1];
   const ov = document.createElement("div"); ov.className = "pr-prt-view"; ov.id = "pr-prt-view"; ov.setAttribute("role", "dialog");
-  ov.innerHTML = `<div class="pr-prt-bar"><b>Pay sheets · pay of ${esc(fmtDate(p.pay))}</b> <span data-prt-st>Getting ready… 0 of ${live.length}</span>
+  ov.innerHTML = `<div class="pr-prt-bar"><b>Pay sheets${one ? " · " + esc(one.name || "") : ""} · ${pers.length > 1 ? `pays of ${esc(fmtDate(p0.pay))} to ${esc(fmtDate(pN.pay))}` : `pay of ${esc(fmtDate(p0.pay))}`}</b> <span data-prt-st>Getting ready… 0 of ${jobs.length}</span>
     <button type="button" class="btn save-go" data-prt-print disabled>🖨 Print</button> <button type="button" class="btn" data-prt-close>✕ Close</button></div><div class="pr-prt-pages"></div>`;
   document.body.appendChild(ov); document.body.classList.add("pr-printing");
   const close = () => { ov.remove(); document.body.classList.remove("pr-printing"); };
   ov.querySelector("[data-prt-close]").addEventListener("click", close);
   ov.querySelector("[data-prt-print]").addEventListener("click", () => window.print());
   const st = ov.querySelector("[data-prt-st]"), pages = ov.querySelector(".pr-prt-pages");
-  const months = [...new Set([p.pay.slice(0, 7), cvAddDays(p.pay, 4).slice(0, 7), cvAddDays(p.pay, -4).slice(0, 7)])];
+  const months = [...new Set(pers.flatMap(p => [p.pay.slice(0, 7), cvAddDays(p.pay, 4).slice(0, 7), cvAddDays(p.pay, -4).slice(0, 7)]))];
   const [SL, IL] = await Promise.all([Promise.all(months.map(m => db.rpc("payroll_month_slips", { p_m: m }).then(r => r.data || []))).then(a => a.flat()), prInstalls().catch(() => null)]);
-  const near = d => d && prDaysApart(String(d).slice(0, 10), p.pay) <= 4;
   const WD = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], wdOf = d => { const w = new Date(d + "T12:00:00Z").getUTCDay(); return w === 0 ? 7 : w; };
   const t = v => v ? torTime(v) : "—", tm = ms => ms != null ? torTime(new Date(ms).toISOString()) : "—";
   let i = 0;
-  for (const pp of live) {
-    i++; st.textContent = `Getting ready… ${i} of ${live.length}`;
+  for (const [p, pp] of jobs) {
+    const near = d => d && prDaysApart(String(d).slice(0, 10), p.pay) <= 4;
+    i++; st.textContent = `Getting ready… ${i} of ${jobs.length}`;
     const mySl = SL.filter(x => (pp.user ? Number(x.user) === Number(pp.user) : false) || Number(x.staff) === Number(pp.staff)).filter(x => near(x.cheque));
     const isOff = OFFICE_ROLES.includes(pp.role) && !pp.tech;
     let work = "", hrs = null;
@@ -35462,7 +35482,7 @@ async function prPrintSheets(p, blocks) {
       ${work || (pp.user ? "" : `<p class="quiet">No log-in in the app, so no days on file: hours come from the accountant.</p>`)}${com}${slip}
       <footer>Made by the app on ${esc(fmtDate(salesToday()))}. This is not a cheque: the official pay, tax, CPP and EI come from the accountant.</footer></section>`);
   }
-  st.textContent = `${live.length} sheet${live.length === 1 ? "" : "s"} ready.`; ov.querySelector("[data-prt-print]").disabled = false;
+  st.textContent = `${jobs.length} sheet${jobs.length === 1 ? "" : "s"} ready.`; ov.querySelector("[data-prt-print]").disabled = false;
 }
 // ===== A person's sales and commission (George, Nov 14): what they sold for what they were paid, each commission job tied to the pay it was
 // paid on (so a job is never paid twice and a slip can not carry more commission than its jobs), the leads given to them and what came of
@@ -36164,7 +36184,7 @@ async function prPrivSlot(user, staff) {
       ${sales ? `<dt title="${blk === "tech" ? "Our invoices (before HST) on the jobs they worked, split between the techs on each job." : "Our invoices (before HST) on the jobs they sold."}">Brought in</dt><dd>${q.brought_in != null ? money(q.brought_in) : "—"}</dd>` : ""}</dl>${verdict(q)}</div>`;
   const slips = d?.slips || [], last = slips[0], log = d?.log || [];
   const v = (x, f) => x == null || x === "" ? "—" : f ? f(x) : esc(String(x));
-  box.innerHTML = `<div class="pr-privtop"><h2 class="pr-privh">🔒 Private: owners only</h2><span class="pr-allbtns"><button type="button" class="btn" data-pr-all="1">▾ Open all</button><button type="button" class="btn" data-pr-all="0">▸ Close all</button></span></div>
+  box.innerHTML = `<div class="pr-privtop"><h2 class="pr-privh">🔒 Private: owners only</h2><span class="pr-allbtns">${pp ? `<button type="button" class="btn" data-pr-prt>🖨 Print their pay sheets</button>` : ""}<button type="button" class="btn" data-pr-all="1">▾ Open all</button><button type="button" class="btn" data-pr-all="0">▸ Close all</button></span></div>
     ${user ? `<details class="pr-pcard pr-fold" data-k="rate"><summary><h3>💲 Pay rate</h3></summary><div id="pr-rate-box"></div></details>` : ""}
     ${ps.id ? `<details class="pr-pcard pr-fold" data-k="sin"><summary><h3>🔒 SIN</h3></summary><div id="pr-sin-box"></div></details>` : ""}
     <section class="pr-pcard"><h3>What they cost us and what they bring in</h3><div class="pr-mcols">${col(per.ytd, "This year")}${col(per.m12, "Last 12 months")}</div>
@@ -36212,6 +36232,7 @@ async function prPrivSlot(user, staff) {
   const opened = PR.pOpen = PR.pOpen || new Set();
   box.querySelectorAll(".pr-fold").forEach(f => { f.open = opened.has(f.dataset.k); f.addEventListener("toggle", () => { f.open ? opened.add(f.dataset.k) : opened.delete(f.dataset.k); }); });
   box.querySelectorAll("[data-pr-all]").forEach(b => b.addEventListener("click", () => { const on = b.dataset.prAll === "1"; box.querySelectorAll(".pr-fold").forEach(f => { f.open = on; }); }));
+  box.querySelector("[data-pr-prt]")?.addEventListener("click", () => prPrintPick(pp));
   if (user) prRateBox(user);
   if (ps.id) prT4Person(ps.id);
   if (ps.id) prSinBox(box.querySelector("#pr-sin-box"), ps.id, user, ps.name);
