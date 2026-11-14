@@ -62,6 +62,9 @@ CREATE OR REPLACE FUNCTION public.payroll_missing_slips() RETURNS jsonb LANGUAGE
             (SELECT max(z.cheque_date) FROM payroll_slips z WHERE z.staff_id = c.staff AND z.cheque_date < c.d) AS ls,
             (SELECT min(z.cheque_date) FROM payroll_slips z WHERE z.staff_id = c.staff AND z.cheque_date > c.d) AS nx) g)
       AND NOT EXISTS (SELECT 1 FROM payroll_slips s WHERE s.staff_id = c.staff AND s.cheque_date BETWEEN c.d - 4 AND c.d + 4)
+      -- paid before and after the run: they are plainly still with us, so it is not asked; the pay history still says the run had no cheque
+      -- (George, Nov 14: "he just missed the 1 pay run but was paid after and before… just hide from this section… check in their profile")
+      AND NOT EXISTS (SELECT 1 FROM payroll_slips s WHERE s.staff_id = c.staff AND s.cheque_date > c.d + 4)
       AND NOT EXISTS (SELECT 1 FROM payroll_no_slip n WHERE n.staff_id = c.staff AND n.run_date = c.d)), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
 CREATE OR REPLACE FUNCTION public.payroll_no_slip_set(p_staff bigint, p_d date, p_on boolean) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
 BEGIN

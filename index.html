@@ -34223,11 +34223,13 @@ async function prSlipPage(path, d) {
 // should balance and if not we need to check why"). Read in the browser from the accountant's T4 PDF; the SIN is covered on the page picture
 // and never kept. Each T4 is checked against the pay slips with a cheque date in that year: box 14 = gross, 16 = CPP, 18 = EI, 22 = tax.
 const T4_BOXES = [["b14", "14", "Employment income"], ["b16", "16", "CPP"], ["b18", "18", "EI"], ["b22", "22", "Income tax"], ["b24", "24", "EI insurable earnings"],
-  ["b26", "26", "CPP pensionable earnings"], ["b20", "20", "RPP"], ["b44", "44", "Union dues"], ["b46", "46", "Charity"], ["b52", "52", "Pension adjustment"]];
+  ["b26", "26", "CPP pensionable earnings"], ["b16a", "16A", "CPP2"], ["b20", "20", "RPP"], ["b44", "44", "Union dues"], ["b46", "46", "Charity"], ["b52", "52", "Pension adjustment"]];
 const T4_CHECK = [["b14", "gross", "Pay (gross)"], ["b16", "cpp", "CPP"], ["b18", "ei", "EI"], ["b22", "tax", "Income tax"]];
 const T4_HELP = { b14: "Box 14: all the pay for the year. It should equal the gross on the pay slips with a cheque date in that year. Taxable benefits (a company car, gifts) are in box 14 but not on the pay slips, so they make it higher.",
   b16: "Box 16: the CPP taken off their pay in the year. It should equal the CPP on the pay slips.", b18: "Box 18: the EI taken off their pay. It should equal the EI on the pay slips.",
   b22: "Box 22: the income tax taken off their pay. It should equal the tax on the pay slips." };
+// CPP on a T4 from 2024 on is box 16 plus box 16A (CPP2); the pay slips' CPP is both
+const t4V = (t, b) => b !== "b16" ? t[b] : t.b16 == null && t.b16a == null ? null : Number(t.b16 || 0) + Number(t.b16a || 0);
 const t4Num = v => { if (v == null || v === "") return null; const n = Number(String(v).replace(/[\s$]/g, "").replace(/,(\d\d)$/, ".$1").replace(/,/g, "")); return isFinite(n) ? n : null; };
 // the T4s on the pages: the amount after each box number, in reading order; one T4 for each box 14 found on a page (copies are taken out after)
 // The accountant's T4s (seen Nov 14, 2022 and 2023) print only the amounts; the box numbers are a picture behind them, so the box goes by where
@@ -34244,7 +34246,7 @@ function t4ParseForm(L, pg) {
     const y0 = Math.max(...A.map(a => a.y)), at = (c, dy) => A.find(a => a.c === c && Math.abs((a.y - y0) - dy) <= 6)?.v ?? null;
     const o = { page: pg, year: Number(yr.t), b14: at("L", 0), b22: at("R", 0) };
     if (at("R", -36) != null) Object.assign(o, { b16: at("L", -36), b24: at("R", -36), b26: at("R", -72), b18: at("L", -108) });
-    else Object.assign(o, { b16: at("L", -31), b24: at("L", -103), b26: at("R", -103), b18: at("L", -135) });
+    else Object.assign(o, { b16: at("L", -31), b16a: at("L", -72), b24: at("L", -103), b26: at("R", -103), b18: at("L", -135) });
     ["b20", "b44", "b46", "b52"].forEach(b => { o[b] = null; });
     // the name: the first line under the SIN that starts at the left and has letters (LAST NAME, then the first name further right)
     const nl = [...new Set(zone.filter(i => i.y < sin.y && i.x0 < 130 && /[A-Za-z]{2}/.test(i.t) && !/^\d/.test(i.t)).map(i => i.y))].sort((a, b) => b - a)[0];
@@ -34288,7 +34290,7 @@ async function t4PageView(f, page) {
 // does a T4 balance with the pay slips? → { ok, off: [[label, t4, slips]], none }
 function t4Bal(t, s) {
   if (!s || !Number(s.n)) return { none: true, ok: false, off: [] };
-  const off = T4_CHECK.filter(([b, k]) => t[b] != null && Math.abs(Number(t[b]) - Number(s[k] || 0)) >= 1).map(([b, k, lab]) => [lab, Number(t[b]), Number(s[k] || 0)]);
+  const off = T4_CHECK.filter(([b, k]) => t4V(t, b) != null && Math.abs(Number(t4V(t, b)) - Number(s[k] || 0)) >= 1).map(([b, k, lab]) => [lab, Number(t4V(t, b)), Number(s[k] || 0)]);
   return { ok: !off.length, off };
 }
 const t4OffWords = b => b.none ? "No pay slips loaded for that year" : b.ok ? "✓ Balances with the pay slips"
@@ -34319,9 +34321,9 @@ async function prT4Load(files) {
           <td><select data-who><option value="new"${r.who === "new" ? " selected" : ""}>＋ New person</option><option value="skip"${r.who === "skip" ? " selected" : ""}>✕ Leave it out</option>
             ${people.map(q => `<option value="${paysKey(q)}"${paysKey(q) === r.who ? " selected" : ""}>${esc(q.name)}${q.user ? "" : " (payroll only)"}</option>`).join("")}</select></td>
           <td><input data-year inputmode="numeric" class="pr-t4y${t.year ? "" : " pr-ld-chq"}" value="${t.year || ""}" aria-label="Year"></td>
-          ${T4_CHECK.map(([b, k]) => { const off = s && t[b] != null && Math.abs(Number(t[b]) - Number(s[k] || 0)) >= 1;
+          ${T4_CHECK.map(([b, k]) => { const off = s && t4V(t, b) != null && Math.abs(Number(t4V(t, b)) - Number(s[k] || 0)) >= 1;
             return `<td><input data-box="${b}" inputmode="decimal" class="pr-t4in${off ? " pr-t4off" : ""}" value="${t[b] != null ? Number(t[b]).toFixed(2) : ""}" aria-label="Box ${b.slice(1)}">
-              <div class="quiet">${s ? `Slips: ${money(s[k] || 0)}` : "Slips: none"}</div></td>`; }).join("")}
+              ${b === "b16" && Number(t.b16a) ? `<div class="quiet">+ 16A (CPP2) ${money(t.b16a)}</div>` : ""}<div class="quiet">${s ? `Slips: ${money(s[k] || 0)}` : "Slips: none"}</div></td>`; }).join("")}
           <td class="${bal.ok ? "pr-t4-good" : bal.none ? "quiet" : "pr-t4-bad"}">${esc(t4OffWords(bal))}${s ? `<div class="quiet">${s.n} pay slip${s.n == 1 ? "" : "s"} in ${t.year}</div>` : ""}</td></tr>`; }).join("")}
       </tbody></table></div>
       <p class="quiet">The SIN is covered on the page before it is saved, and it is never kept. A T4 already on file for the same person and year is replaced.</p>
@@ -34353,8 +34355,8 @@ function prT4Rows(rows, one) {
       const st = !has ? (cur ? `<span class="quiet">The T4 comes after the year ends</span>` : `<span class="pr-t4-bad">No T4 loaded</span>`) : bal.none ? `<span class="quiet">No pay slips loaded for ${x.year}</span>`
         : bal.ok ? `<span class="pr-t4-good">✓ Balances</span>` : `<span class="pr-t4-bad">${esc(t4OffWords(bal))}</span>`;
       return `<tr class="${has && !bal.ok && !bal.none && !x.note ? "pr-t4-row-bad" : ""}">${one ? "" : `<td>${x.user ? `<button type="button" class="link" data-pr-user="${x.user}">` : `<button type="button" class="link" data-pr-staff="${x.staff}">`}${esc(x.name)}</button></td>`}
-        ${T4_CHECK.map(([b, k]) => { const off = has && x.n && Math.abs(Number(x[b] || 0) - Number(x[k] || 0)) >= 1;
-          return `<td class="${off ? "pr-t4-bad" : ""}">${has && x[b] != null ? money(x[b]) : "—"}<div class="quiet">${x.n ? money(x[k] || 0) : "—"}</div></td>`; }).join("")}
+        ${T4_CHECK.map(([b, k]) => { const off = has && x.n && Math.abs(Number(t4V(x, b) || 0) - Number(x[k] || 0)) >= 1;
+          return `<td class="${off ? "pr-t4-bad" : ""}">${has && t4V(x, b) != null ? money(t4V(x, b)) : "—"}<div class="quiet">${x.n ? money(x[k] || 0) : "—"}</div></td>`; }).join("")}
         <td>${st}</td><td>${x.page ? `<button type="button" class="btn" data-pr-slippg="${esc(x.page)}" data-pr-slipd="T4 ${x.year}">📄 Open</button>` : "—"}${has ? ` <button type="button" class="link" data-t4-del="${x.id}" title="Take this T4 off">✕</button>` : ""}</td>
         <td>${has && !bal.ok && !bal.none ? `<input class="pr-t4note" data-t4-note="${x.id}" value="${esc(x.note || "")}" placeholder="Type why, e.g. taxable benefit">` : esc(x.note || "")}</td></tr>`; }).join("")}
   </tbody></table></div>`;
