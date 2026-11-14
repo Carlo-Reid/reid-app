@@ -45,7 +45,8 @@ ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS payroll_wsib jsonb 
 -- the block a person goes in: their own pick, else from the role; Past when they left, are turned off, or had no pay for 3 months
 CREATE OR REPLACE FUNCTION public._payroll_block(p_role text, p_title text, p_tech boolean, p_active boolean, ps public.payroll_staff, p_last date)
 RETURNS text LANGUAGE sql STABLE AS $f$
-  SELECT CASE WHEN ps.left_on IS NOT NULL OR ps.block = 'past' THEN 'past'
+  -- a last day set by hand counts until a cheque after it (they came back: George, Nov 13)
+  SELECT CASE WHEN ps.left_on IS NOT NULL AND (p_last IS NULL OR p_last <= ps.left_on) OR ps.block = 'past' THEN 'past'
               WHEN ps.block IS NOT NULL THEN ps.block
               WHEN p_role = 'owner' THEN 'owner'
               WHEN p_active IS FALSE THEN 'past'
@@ -93,7 +94,7 @@ CREATE OR REPLACE FUNCTION public._payroll_block_name(b text) RETURNS text LANGU
 
 -- after slips change: the person's details from their newest slip, the pay history notes, and (app users) their pay rates from the slips
 CREATE OR REPLACE FUNCTION public._payroll_staff_refresh(p_staff bigint) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
-DECLARE ps payroll_staff; s record; p_kind text; p_rate numeric; p_per numeric; p_blk text; first boolean := true; amt numeric; k text; st_wage numeric; nw record;
+DECLARE ps payroll_staff; s record; p_kind text; p_rate numeric; p_per numeric; p_blk text; first boolean := true; amt numeric; k text; st_wage numeric; nw record; last_d date;
 BEGIN
   SELECT * INTO ps FROM payroll_staff WHERE id = p_staff; IF NOT FOUND THEN RETURN; END IF;
   SELECT * INTO s FROM payroll_slips WHERE staff_id = p_staff ORDER BY cheque_date DESC, gross DESC NULLS LAST LIMIT 1;
@@ -123,6 +124,19 @@ BEGIN
     END IF;
     first := false; p_kind := s.kind; p_rate := s.rate; p_per := s.per_pay;
   END LOOP;
+  -- breaks of more than 3 months: no longer with us, then back (George, Nov 13: "if someone did not receive a paycheque in 3 months then they are no longer with us")
+  IF to_regclass('public.payroll_return') IS NOT NULL THEN
+    FOR s IN SELECT g.*, r.reason, r.note FROM public._payroll_gaps(p_staff) g LEFT JOIN payroll_return r ON r.staff_id = p_staff AND r.back_on = g.back_on ORDER BY g.back_on LOOP
+      INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, s.left_after + 92, 'No longer with us: no cheque for 3 months after the cheque of ' || to_char(s.left_after, 'Mon DD, YYYY') || '.', true);
+      INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, s.back_on, 'Back on the cheque of ' || to_char(s.back_on, 'Mon DD, YYYY') || ', after ' || round(s.days / 30.4) || ' months with no cheque: '
+        || CASE WHEN s.days > 365 THEN 'a new hire (over a year away).' WHEN s.reason = 'rehired' THEN 'rehired.' WHEN s.reason = 'holiday' THEN 'back from a long holiday.'
+                WHEN s.reason = 'other' THEN coalesce(s.note, 'another reason') || '.' ELSE 'not answered yet (rehired, a long holiday or another reason?).' END, true);
+    END LOOP;
+  END IF;
+  SELECT max(cheque_date) INTO last_d FROM payroll_slips WHERE staff_id = p_staff;
+  IF last_d IS NOT NULL AND last_d < public._src_today() - 92 AND ps.left_on IS NULL THEN
+    INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, last_d + 92, 'No longer with us: no cheque for 3 months after the cheque of ' || to_char(last_d, 'Mon DD, YYYY') || '.', true);
+  END IF;
   -- block moves, from the blocks on the slips (George, Nov 13: "it should be recorded that they changed from the tech to whatever")
   FOR s IN SELECT cheque_date, block FROM payroll_slips WHERE staff_id = p_staff AND block IS NOT NULL ORDER BY cheque_date, slip_no LOOP
     IF p_blk IS NOT NULL AND s.block IS DISTINCT FROM p_blk THEN

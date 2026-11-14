@@ -57,6 +57,10 @@ CREATE OR REPLACE FUNCTION public.payroll_missing_slips() RETURNS jsonb LANGUAGE
       'name', coalesce((SELECT nullif(btrim(z.slip_name), '') FROM payroll_slips z WHERE z.staff_id = c.staff ORDER BY z.cheque_date DESC LIMIT 1), c.name),
       'last', (SELECT max(z.cheque_date) FROM payroll_slips z WHERE z.staff_id = c.staff AND z.cheque_date < c.d)) ORDER BY c.d DESC, c.name)
     FROM cand c WHERE c.seen >= 2 AND (c.left_on IS NULL OR c.left_on > c.d)
+      -- not asked inside a break of more than 3 months (George, Nov 13: no cheque in 3 months = no longer with us; a cheque after that is a return, asked in payroll_returns)
+      AND (SELECT CASE WHEN nx IS NULL THEN public._src_today() - ls <= 92 ELSE nx - ls <= 92 END FROM (SELECT
+            (SELECT max(z.cheque_date) FROM payroll_slips z WHERE z.staff_id = c.staff AND z.cheque_date < c.d) AS ls,
+            (SELECT min(z.cheque_date) FROM payroll_slips z WHERE z.staff_id = c.staff AND z.cheque_date > c.d) AS nx) g)
       AND NOT EXISTS (SELECT 1 FROM payroll_slips s WHERE s.staff_id = c.staff AND s.cheque_date BETWEEN c.d - 4 AND c.d + 4)
       AND NOT EXISTS (SELECT 1 FROM payroll_no_slip n WHERE n.staff_id = c.staff AND n.run_date = c.d)), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
 CREATE OR REPLACE FUNCTION public.payroll_no_slip_set(p_staff bigint, p_d date, p_on boolean) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
@@ -68,4 +72,34 @@ BEGIN
 END $f$;
 REVOKE EXECUTE ON FUNCTION public.payroll_missing_slips(), public.payroll_no_slip_set(bigint, date, boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.payroll_missing_slips(), public.payroll_no_slip_set(bigint, date, boolean) TO authenticated;
+-- a cheque after a break of more than 3 months (George, Nov 13): 3 months to a year → ask: rehired, back from a long holiday, or another reason;
+-- over a year → a new hire who came back, written by itself. payroll_return keeps the answer (and the pay history shows it).
+CREATE TABLE IF NOT EXISTS public.payroll_return (
+  staff_id bigint NOT NULL REFERENCES public.payroll_staff(id) ON DELETE CASCADE, back_on date NOT NULL, reason text NOT NULL, note text, by_name text, at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (staff_id, back_on));
+ALTER TABLE public.payroll_return ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.payroll_return FROM PUBLIC, anon, authenticated;
+CREATE OR REPLACE FUNCTION public._payroll_gaps(p_staff bigint) RETURNS TABLE (left_after date, back_on date, days int) LANGUAGE sql STABLE AS $f$
+  SELECT ls, d, (d - ls)::int FROM (SELECT d, lag(d) OVER (ORDER BY d) AS ls FROM (SELECT DISTINCT cheque_date AS d FROM payroll_slips WHERE staff_id = p_staff) x) y
+  WHERE ls IS NOT NULL AND d - ls > 92 $f$;
+CREATE OR REPLACE FUNCTION public.payroll_returns() RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
+  SELECT CASE WHEN public._src_owner() THEN coalesce((SELECT jsonb_agg(jsonb_build_object('staff', ps.id, 'user', ps.app_user_id,
+      'name', coalesce((SELECT nullif(btrim(z.slip_name), '') FROM payroll_slips z WHERE z.staff_id = ps.id ORDER BY z.cheque_date DESC LIMIT 1), ps.name),
+      'left_after', g.left_after, 'back_on', g.back_on, 'days', g.days) ORDER BY g.back_on DESC, ps.name)
+    FROM payroll_staff ps CROSS JOIN LATERAL public._payroll_gaps(ps.id) g
+    WHERE g.days <= 365 AND NOT EXISTS (SELECT 1 FROM payroll_return r WHERE r.staff_id = ps.id AND r.back_on = g.back_on)), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
+CREATE OR REPLACE FUNCTION public.payroll_return_set(p_staff bigint, p_back date, p_reason text, p_note text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+BEGIN
+  IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can change payroll'; END IF;
+  IF p_reason NOT IN ('rehired', 'holiday', 'other') THEN RAISE EXCEPTION 'Pick rehired, a long holiday or another reason'; END IF;
+  INSERT INTO payroll_return (staff_id, back_on, reason, note, by_name) VALUES (p_staff, p_back, p_reason, nullif(btrim(p_note), ''), public._staff_name(public.current_app_user_id()))
+    ON CONFLICT (staff_id, back_on) DO UPDATE SET reason = EXCLUDED.reason, note = EXCLUDED.note, by_name = EXCLUDED.by_name, at = now();
+  PERFORM public._payroll_staff_refresh(p_staff);
+END $f$;
+REVOKE EXECUTE ON FUNCTION public._payroll_gaps(bigint) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.payroll_returns(), public.payroll_return_set(bigint, date, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.payroll_returns(), public.payroll_return_set(bigint, date, text, text) TO authenticated;
+-- the pay history gets the breaks: written again for everyone on each update
+DO $do$ DECLARE r record; BEGIN FOR r IN SELECT DISTINCT staff_id FROM public.payroll_slips LOOP PERFORM public._payroll_staff_refresh(r.staff_id); END LOOP; END $do$;
 NOTIFY pgrst, 'reload schema';
+
