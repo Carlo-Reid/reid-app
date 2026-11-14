@@ -35253,7 +35253,7 @@ function prRunCalc(L) {
   L.hourly = sal ? r2(L.per_pay) : r2(L.hours * L.rate); L.otPay = sal ? 0 : r2(L.ot_h * L.rate * 1.5);
   L.vac = r2((L.hourly + L.otPay) * (L.vac_pct || 0) / 100);
   L.gross = r2(L.hourly + L.otPay + Number(L.com || 0) + L.vac + Number(L.oncall || 0) + Number(L.other || 0));
-  const cppY = Number(Y.cpp || 0), cm = payTax(Number(PRUN.run.pay.slice(0, 4)))?.cpp?.max || 4230.45, D = payDeduct({ year: Number(PRUN.run.pay.slice(0, 4)), P: 26, gross: L.gross, ytdCpp: Math.min(cppY, cm), ytdCpp2: Math.max(0, cppY - cm),
+  const cppY = Number(Y.cpp || 0), cm = payTax(Number(PRUN.run.pay.slice(0, 4)))?.cpp?.max || 4230.45, D = payDeduct({ year: Number(PRUN.run.pay.slice(0, 4)), P: 26, gross: r2(L.gross + Number(L.tb || 0)), insurable: L.gross, ytdCpp: Math.min(cppY, cm), ytdCpp2: Math.max(0, cppY - cm),
     ytdEi: Number(Y.ei || 0), ytdPens: Number(Y.gross || 0), td1Fed: T.td1_fed, td1On: T.td1_on, extraTax: T.extra_tax, deps: T.deps, cppExempt: T.cpp_exempt, eiExempt: T.ei_exempt });
   if (!D) { L.err = "The tax numbers for " + PRUN.run.pay.slice(0, 4) + " are not in the app yet. Add them in Tax numbers."; return L; }
   Object.assign(L, { cpp: D.cpp, cpp2: D.cpp2, ei: D.ei, tax: D.tax, fed: D.fed, on: D.on });
@@ -35272,7 +35272,7 @@ function prRunCalc(L) {
 }
 const prRunL = L => ({ kind: L.kind, hours: L.hours, ot_h: L.ot_h, rate: L.rate, per_pay: L.per_pay, hourly: L.hourly, ot: L.otPay, com: L.com, jobs: L.jobs, vac_pct: L.vac_pct, vac: L.vac,
   oncall: L.oncall, other: L.other, other_what: L.other_what, gross: L.gross, cpp: L.cpp, cpp2: L.cpp2, ei: L.ei, tax: L.tax, fed: L.fed, on: L.on, ben: L.ben, oded: L.oded, net: L.net,
-  earn: L.earn, dfg: L.dfg, adj: L.adj, src: L.src });
+  earn: L.earn, dfg: L.dfg, adj: L.adj, src: L.src, tb: Number(L.tb || 0) || undefined, tb_kind: Number(L.tb || 0) ? (L.tb_kind || "40") : undefined });
 async function prRunOpen() {
   let ov = document.getElementById("pr-run"); if (!ov) { ov = document.createElement("div"); ov.id = "pr-run"; ov.className = "pr-prt-view pr-run"; ov.setAttribute("role", "dialog"); document.body.appendChild(ov); }
   ov.innerHTML = `<div class="pr-prt-bar"><b>💵 Run payroll</b><span></span><button type="button" class="btn" data-run-close>✕ Close</button></div><div class="pr-run-b"><div class="loading">Loading…</div></div>`;
@@ -35385,6 +35385,7 @@ async function prRunNew(p, blocks) {
       hours: sal ? Number(last.hours || 80) : (h ? h.hours : Number(last.hours || 0)), ot_h: h ? h.ot : 0, src: sal ? "salary" : h ? "the app" : last.hours ? "their last pay slip" : "nowhere: type them",
       com: Math.round(J.reduce((t, r) => t + r.com, 0) * 100) / 100, jobs: J.map(r => ({ id: r.job_id, n: r.job_number, c: r.customer_name, a: r.address, amt: r.com })),
       vac_pct: Number(T.vac_pct ?? last.vac_pct ?? (sal ? 0 : 4)), oncall: 0, other: 0, ben: Number(T.ben_per_pay ?? last.ben ?? 0), inc: true,
+      tb: Number(T.tb_per_pay || 0), tb_kind: T.tb_kind || "40",
       // already paid on this pay day (the accountant's pay slip is on file): left out, so nobody is paid twice (George, Nov 14)
       onfile: (inf?.onfile || [])[0] || null };
     if (L.onfile) L.inc = false;
@@ -35409,7 +35410,7 @@ function prRunDraw() {
   const inp = (L, k, w) => fin ? money(L[k] || 0).replace("$", "") : `<input class="pr-ri" data-rk="${k}" value="${L[k] ?? ""}" style="width:${w || 70}px" inputmode="decimal">`;
   const row = (L, i) => `<tr class="${L.inc ? "" : "pr-run-off"}${L.err ? " pr-run-bad" : ""}" data-ri="${i}">
       <td>${fin ? (L.cheque_no ? "#" + L.cheque_no : "") : `<input type="checkbox" data-rinc${L.inc ? " checked" : ""}>`}</td>
-      <td><b>${esc(L.name || "")}</b><div class="quiet${/nowhere/.test(L.src || "") && !L.hours ? " pr-cm-bad" : ""}">${esc(prBlockName(L.block))} · ${L.kind === "salary" ? "Salary" : "Hours from " + esc(L.src || "")}</div>${L.err ? `<div class="pr-cm-bad">${esc(L.err)}</div>` : ""}${L.onfile ? `<div class="pr-cm-warn">Already paid: a pay slip of ${esc(fmtDate(String(L.onfile.cheque).slice(0, 10)))} (${money(L.onfile.net)} net) is on file. Left out so it is not paid twice.</div>` : ""}</td>
+      <td><b>${esc(L.name || "")}</b><div class="quiet${/nowhere/.test(L.src || "") && !L.hours ? " pr-cm-bad" : ""}">${esc(prBlockName(L.block))} · ${L.kind === "salary" ? "Salary" : "Hours from " + esc(L.src || "")}</div>${L.err ? `<div class="pr-cm-bad">${esc(L.err)}</div>` : ""}${Number(L.tb) ? `<div class="quiet">+ taxable benefit ${money(L.tb)} (code ${esc(L.tb_kind || "40")}): taxed and on the T4, not paid in cash</div>` : ""}${L.onfile ? `<div class="pr-cm-warn">Already paid: a pay slip of ${esc(fmtDate(String(L.onfile.cheque).slice(0, 10)))} (${money(L.onfile.net)} net) is on file. Left out so it is not paid twice.</div>` : ""}</td>
       <td>${L.kind === "salary" ? `${inp(L, "per_pay", 80)}<div class="quiet">a pay</div>` : `${inp(L, "hours", 56)} h${L.ot_h ? `<div class="quiet">+ ${L.ot_h} h overtime</div>` : ""}`}</td>
       <td>${L.kind === "salary" ? "" : inp(L, "rate", 60)}</td><td>${money(L.hourly + (L.otPay || 0))}</td>
       <td>${inp(L, "com", 72)}${L.jobs?.length ? `<div class="quiet" title="${esc(L.jobs.map(j => `${j.n} ${j.c}, ${j.a}: ${money(j.amt)}`).join("\n"))}">${L.jobs.length} job${L.jobs.length === 1 ? "" : "s"}</div>` : ""}</td>
@@ -35447,7 +35448,8 @@ function prRunDraw() {
 function prRunTd1Html(L) { const T = L.inf?.tax || {};
   return `<div class="pr-run-td1b"><b>${esc(L.name)}: TD1 and what comes off each pay</b> <span class="quiet">Empty = the basic amount (federal $16,452, Ontario $12,989 for 2026). Their TD1 forms say if it is more.</span>
     <div class="pr-run-emp">${[["td1_fed", "Federal TD1 total claim"], ["td1_on", "Ontario TD1ON total claim"], ["extra_tax", "Extra tax each pay (TD1 line)"], ["deps", "Dependants for the Ontario reduction"],
-      ["ben_per_pay", "Benefits (Manulife) each pay"], ["vac_pct", "Vacation pay %"]].map(([k, t]) => `<label>${t}<input data-td1="${k}" value="${esc(T[k] ?? (k === "ben_per_pay" ? L.ben : k === "vac_pct" ? L.vac_pct : "") ?? "")}"></label>`).join("")}
+      ["ben_per_pay", "Benefits (Manulife) each pay"], ["vac_pct", "Vacation pay %"], ["tb_per_pay", "Taxable benefit each pay (not paid in cash, it is taxed)"]].map(([k, t]) => `<label>${t}<input data-td1="${k}" value="${esc(T[k] ?? (k === "ben_per_pay" ? L.ben : k === "vac_pct" ? L.vac_pct : "") ?? "")}"></label>`).join("")}
+      <label>What is the benefit? <select data-td1="tb_kind"><option value="40"${T.tb_kind !== "34" ? " selected" : ""}>Other taxable benefit (T4 code 40)</option><option value="34"${T.tb_kind === "34" ? " selected" : ""}>Personal use of a company vehicle (T4 code 34)</option></select></label>
       <label><input type="checkbox" data-td1="cpp_exempt"${T.cpp_exempt ? " checked" : ""}> No CPP (under 18, over 70, or a CPT30 on file)</label>
       <label><input type="checkbox" data-td1="ei_exempt"${T.ei_exempt ? " checked" : ""}> No EI (owns more than 40%, or related)</label></div>
     <button type="button" class="btn" data-td1-save>Save for ${esc(String(L.name || "").split(" ")[0])}</button></div>`; }
@@ -35457,7 +35459,7 @@ async function prRunTd1Save(body) {
   const { data: sid, error } = await db.rpc("payroll_tax_set", { p_staff: L.staff || null, p_user: L.user || null, p_name: L.name, p });
   if (error) return alertMsg("Not saved: " + rpcErr(error));
   L.staff = sid; L.inf = L.inf || { staff: sid }; L.inf.tax = { ...(L.inf.tax || {}), ...p, td1_fed: p.td1_fed === "" ? null : p.td1_fed, td1_on: p.td1_on === "" ? null : p.td1_on };
-  if (p.ben_per_pay !== "") L.ben = Number(p.ben_per_pay); if (p.vac_pct !== "") L.vac_pct = Number(p.vac_pct);
+  if (p.ben_per_pay !== "") L.ben = Number(p.ben_per_pay); if (p.vac_pct !== "") L.vac_pct = Number(p.vac_pct); L.tb = Number(p.tb_per_pay || 0); L.tb_kind = p.tb_kind || "40";
   prRunCalc(L); PRUN.open = null; prRunDraw(); alertMsg("✓ Saved. The line is worked out again.");
 }
 async function prRunSave() {
@@ -35492,7 +35494,7 @@ function prRunStub(L, R, E) {
       <div class="prq-pp"><div>Pay Period: ${prMDY(R.from)} - ${prMDY(R.to)}</div><div>Cheque Date: ${prMDY(R.pay)}</div>${L.cheque_no ? `<div>Cheque #${esc(String(L.cheque_no))}</div>` : ""}</div></div>
     <div class="prq-cols"><table class="prq-t"><thead><tr><th>Earnings and Hours</th><th class="n">Hours</th><th class="n">Rate</th><th class="n">Current</th><th class="n">YTD Amount</th></tr></thead><tbody>
       ${(L.earn || []).map(e => row([esc(e.label), e.label === "Commision" ? prN2(e.qty) : e.qty != null && e.label !== "Salary" ? prHM(e.qty) : "", e.rate != null ? prN2(e.rate) : "", prN2(e.cur), prN2(ytd(e.label, e.cur))])).join("")}
-      <tr class="prq-tot"><td></td><td class="n">${hrsT ? prHM(hrsT) : ""}</td><td></td><td class="n">${prN2(L.gross)}</td><td class="n">${prN2(r2(Number(Y.gross || 0) + Number(L.gross || 0)))}</td></tr></tbody></table>
+      <tr class="prq-tot"><td></td><td class="n">${hrsT ? prHM(hrsT) : ""}</td><td></td><td class="n">${prN2(L.gross)}</td><td class="n">${prN2(r2(Number(Y.gross || 0) + Number(L.gross || 0)))}</td></tr>${Number(L.tb) ? `<tr><td>Taxable Benefit (not paid in cash)</td><td></td><td></td><td class="n">${prN2(L.tb)}</td><td></td></tr>` : ""}</tbody></table>
       <div><table class="prq-t"><thead><tr><th>Taxes</th><th class="n">Current</th><th class="n">YTD Amount</th></tr></thead><tbody>
         ${tx.map(d => row([esc(d.label), prN2(d.cur), prN2(ytd(d.label, d.cur))])).join("")}
         <tr class="prq-tot"><td></td><td class="n">${prN2(tx.reduce((t, d) => t + Number(d.cur || 0), 0))}</td><td class="n">${prN2(tx.reduce((t, d) => t + ytd(d.label, d.cur), 0))}</td></tr></tbody></table>
@@ -35563,18 +35565,21 @@ async function prT4File(year) {
   const E = data.employer || {}, miss = prEmpMissing(E);
   const ppl = (data.people || []).map(p => { const t = p.t4, nm = prSplitName(p.slip_name || p.name), ad = prSplitAddr(p.address), cp = Number(p.cpp || 0);
     const x = (PRUN.info?.staff || []).find(s => Number(s.staff) === Number(p.staff))?.tax || {};
+    // taxable benefits (not paid in cash) on the app's pay runs: in box 14 and box 26, and under code 40 or 34 (they are already in box 14 on a T4 on file)
+    const tb40 = Number(p.tb?.["40"] || 0), tb34 = Number(p.tb?.["34"] || 0);
     const v = t && p.useT4 !== false ? { b14: t.b14, b16: t.b16, b16a: t.b16a, b18: t.b18, b22: t.b22, b24: t.b24, b26: t.b26, b44: t.b44, b46: t.b46, b52: t.b52, from: "T4 on file" }
-      : { b14: p.gross, b16: Math.min(cp, Y.base), b16a: Math.max(0, cp - Y.base), b18: p.ei, b22: p.tax, b24: x.ei_exempt ? 0 : Math.min(Number(p.gross || 0), Y.mie), b26: x.cpp_exempt ? 0 : Math.min(Number(p.gross || 0), Y.yampe), from: "pay slips" };
+      : { b14: Number(p.gross || 0) + tb40 + tb34, b16: Math.min(cp, Y.base), b16a: Math.max(0, cp - Y.base), b18: p.ei, b22: p.tax, b24: x.ei_exempt ? 0 : Math.min(Number(p.gross || 0), Y.mie), b26: x.cpp_exempt ? 0 : Math.min(Number(p.gross || 0) + tb40 + tb34, Y.yampe), from: "pay slips" };
+    v.c40 = tb40; v.c34 = tb34;
     return { ...p, ...nm, ...ad, v, com: Number(p.com || 0), cppx: !!x.cpp_exempt, eix: !!x.ei_exempt, ben: Number(x.ben_per_pay || 0) > 0 }; });
   const r2 = x => (Math.round((Number(x) || 0) * 100) / 100).toFixed(2);
   const v = prFileBox(`🧾 T4 file for ${year}`, `${miss.length ? `<p class="error">Fill in the company's numbers first (Run payroll → ⚙ The company's numbers): ${esc(miss.join(", "))}.</p>` : ""}
     <p>One line for each person paid in ${year}. Check each name and address the way the CRA should have it. The SINs are locked in each person's file: <button type="button" class="btn" data-sin-fill>🔓 Fill in the SINs on file</button> (each one opened is written down). A SIN not on file can be typed. <label><input type="checkbox" data-sin-keep checked> Save the SINs I type to their files (locked)</label></p>
     <label>Dental benefits (box 45) for the people who have benefits taken off their pay: <select data-t4-dn><option value="3">Payee, spouse and dependent children</option><option value="2">Payee only</option><option value="4">Payee and spouse</option><option value="5">Payee and dependent children</option></select></label>
     <label>Sign-in used for Filing: <select data-t4-acct><option value="bn15">Web access code (account number with RP0001)</option><option value="bn9">My Business Account (9 digits)</option></select></label>
-    <div class="src-tw"><table class="src-sumt pr-t4f"><thead><tr><th>Put on</th><th>Surname</th><th>Given name</th><th>Street</th><th>City</th><th>Prov</th><th>Postal</th><th>SIN</th><th>14 Pay</th><th>16 CPP</th><th>16A CPP2</th><th>18 EI</th><th>22 Tax</th><th>24 EI pay</th><th>26 CPP pay</th><th>From</th></tr></thead>
+    <div class="src-tw"><table class="src-sumt pr-t4f"><thead><tr><th>Put on</th><th>Surname</th><th>Given name</th><th>Street</th><th>City</th><th>Prov</th><th>Postal</th><th>SIN</th><th>14 Pay</th><th>16 CPP</th><th>16A CPP2</th><th>18 EI</th><th>22 Tax</th><th>24 EI pay</th><th>26 CPP pay</th><th title="Other taxable benefits, already in box 14">40 Benefits</th><th title="Personal use of a company vehicle, already in box 14">34 Car</th><th>From</th></tr></thead>
     <tbody>${ppl.map((p, i) => `<tr data-t4i="${i}"><td><input type="checkbox" data-k="on" checked></td>${[["ln", 20, 110], ["fn", 12, 90], ["a1", 30, 170], ["city", 28, 90], ["prov", 2, 34], ["pc", 7, 64]].map(([k, mx, w]) => `<td><input data-k="${k}" maxlength="${mx}" style="width:${w}px" value="${esc(p[k] || "")}"></td>`).join("")}
-      <td><input data-k="sin" inputmode="numeric" autocomplete="off" style="width:96px" placeholder="9 digits"></td>${["b14", "b16", "b16a", "b18", "b22", "b24", "b26"].map(k => `<td><input data-k="${k}" style="width:76px" value="${r2(p.v[k])}"></td>`).join("")}<td class="quiet">${esc(p.v.from)}</td></tr>`).join("")}</tbody></table></div>
-    <p class="quiet">Box 14 counts the pay on the pay slips. Taxable benefits the company pays (not on the slips) must be added to box 14 by hand. Commission is listed under code 42 by itself.</p>
+      <td><input data-k="sin" inputmode="numeric" autocomplete="off" style="width:96px" placeholder="9 digits"></td>${["b14", "b16", "b16a", "b18", "b22", "b24", "b26", "c40", "c34"].map(k => `<td><input data-k="${k}" style="width:76px" value="${r2(p.v[k])}"></td>`).join("")}<td class="quiet">${esc(p.v.from)}</td></tr>`).join("")}</tbody></table></div>
+    <p class="quiet">Box 14 is the pay on the pay slips plus the taxable benefits on the app's pay runs (each person's TD1 box "Taxable benefit each pay"), which are also listed under code 40 (or 34 for a company vehicle). A benefit given outside the app's pay runs: type it in 40 or 34 and add it to boxes 14 and 26 by hand. Commission is listed under code 42.</p>
     <div class="pr-run-acts"><button type="button" class="btn save-go" data-t4-go>⬇ Make the T4 file</button><span data-t4-msg></span></div>`);
   prSinFillWire(v, ppl.map((p, i) => ({ staff: p.staff, el: v.querySelector(`tr[data-t4i="${i}"] [data-k="sin"]`) })), "T4 file " + year);
   v.querySelector("[data-t4-go]").addEventListener("click", () => {
@@ -35582,7 +35587,7 @@ async function prT4File(year) {
     v.querySelectorAll("tr[data-t4i]").forEach(tr => { const p = ppl[Number(tr.dataset.t4i)], g = k => tr.querySelector(`[data-k="${k}"]`); if (!g("on").checked) return;
       const s = g("sin").value.replace(/\D/g, ""); g("sin").classList.toggle("pr-bad-in", !sinOk(s)); if (!sinOk(s)) bad.push(p.name);
       if (!g("ln").value.trim()) bad.push(p.name + " (surname)");
-      rows.push({ p, sin: s, typed: g("sin").dataset.fromFile !== "1", ...Object.fromEntries(["ln", "fn", "a1", "city", "prov", "pc", ...["b14", "b16", "b16a", "b18", "b22", "b24", "b26"]].map(k => [k, g(k).value.trim()])) }); });
+      rows.push({ p, sin: s, typed: g("sin").dataset.fromFile !== "1", ...Object.fromEntries(["ln", "fn", "a1", "city", "prov", "pc", ...["b14", "b16", "b16a", "b18", "b22", "b24", "b26", "c40", "c34"]].map(k => [k, g(k).value.trim()])) }); });
     if (miss.length) { msg.innerHTML = `<span class="pr-cm-bad">Fill in the company's numbers first.</span>`; return; }
     if (bad.length) { msg.innerHTML = `<span class="pr-cm-bad">Check: ${esc([...new Set(bad)].join(", "))}. A SIN is 9 digits and must pass the check digit.</span>`; return; }
     const dn = v.querySelector("[data-t4-dn]").value, acct = v.querySelector("[data-t4-acct]").value, bn = String(E.bn).toUpperCase(), ph = prPhone(E.contact_phone) || { ac: "000", n: "0000000" };
@@ -35591,7 +35596,7 @@ async function prT4File(year) {
 <EMPE_ADDR>${r.a1 ? `<addr_l1_txt>${xesc(r.a1)}</addr_l1_txt>` : ""}${r.city ? `<cty_nm>${xesc(r.city)}</cty_nm>` : ""}<prov_cd>${up(r.prov || "ON")}</prov_cd><cntry_cd>CAN</cntry_cd>${r.pc ? `<pstl_cd>${up(r.pc.replace(/\s/g, ""))}</pstl_cd>` : ""}</EMPE_ADDR>
 <sin>${r.sin}</sin><bn>${xesc(bn)}</bn><cpp_qpp_xmpt_cd>${r.p.cppx ? 1 : 0}</cpp_qpp_xmpt_cd><ei_xmpt_cd>${r.p.eix ? 1 : 0}</ei_xmpt_cd><rpt_tcd>O</rpt_tcd><empt_prov_cd>ON</empt_prov_cd><empr_dntl_ben_rpt_cd>${r.p.ben ? dn : 1}</empr_dntl_ben_rpt_cd>
 <T4_AMT>${amt("empt_incamt", r.b14)}${amt("cpp_cntrb_amt", r.b16)}${amt("cppe_cntrb_amt", r.b16a)}${amt("empe_eip_amt", r.b18)}<itx_ddct_amt>${r2(r.b22)}</itx_ddct_amt><ei_insu_ern_amt>${r2(r.b24)}</ei_insu_ern_amt><cpp_qpp_ern_amt>${r2(r.b26)}</cpp_qpp_ern_amt></T4_AMT>
-${r.p.com > 0 ? `<OTH_INFO><empt_cmsn_amt>${r2(r.p.com)}</empt_cmsn_amt></OTH_INFO>` : ""}</T4Slip>`).join("\n");
+${r.p.com > 0 || Number(r.c40) > 0 || Number(r.c34) > 0 ? `<OTH_INFO>${amt("prsnl_vhcl_amt", r.c34)}${amt("oth_tx_ben_amt", r.c40)}${amt("empt_cmsn_amt", r.p.com)}</OTH_INFO>` : ""}</T4Slip>`).join("\n");
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Submission xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="layout-topologie.xsd">
 <T619><TransmitterAccountNumber>${acct === "bn9" ? `<bn9>${bn.slice(0, 9)}</bn9>` : `<bn15>${xesc(bn)}</bn15>`}</TransmitterAccountNumber>

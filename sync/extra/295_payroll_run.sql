@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS public.payroll_person_tax (
   cpp_exempt boolean NOT NULL DEFAULT false, ei_exempt boolean NOT NULL DEFAULT false,
   ben_per_pay numeric(10,2), other_ded jsonb NOT NULL DEFAULT '[]'::jsonb, vac_pct numeric(5,2),
   updated_by text, updated_at timestamptz NOT NULL DEFAULT now());
+-- a taxable benefit each pay (not paid in cash: personal use of a company vehicle = T4 code 34, other benefits = code 40)
+ALTER TABLE public.payroll_person_tax ADD COLUMN IF NOT EXISTS tb_per_pay numeric(10,2), ADD COLUMN IF NOT EXISTS tb_kind text;
 CREATE TABLE IF NOT EXISTS public.payroll_runs (
   id bigserial PRIMARY KEY, pay_date date NOT NULL, period_from date, period_to date,
   status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'final', 'void')), note text,
@@ -159,6 +161,7 @@ BEGIN
   UPDATE payroll_person_tax SET td1_fed = nullif(p ->> 'td1_fed', '')::numeric, td1_on = nullif(p ->> 'td1_on', '')::numeric,
     extra_tax = coalesce(nullif(p ->> 'extra_tax', '')::numeric, 0), deps = coalesce(nullif(p ->> 'deps', '')::int, 0),
     cpp_exempt = coalesce((p ->> 'cpp_exempt')::boolean, false), ei_exempt = coalesce((p ->> 'ei_exempt')::boolean, false),
+    tb_per_pay = nullif(p ->> 'tb_per_pay', '')::numeric, tb_kind = CASE WHEN p ->> 'tb_kind' IN ('34', '40') THEN p ->> 'tb_kind' ELSE '40' END,
     ben_per_pay = nullif(p ->> 'ben_per_pay', '')::numeric, other_ded = coalesce(p -> 'other_ded', '[]'::jsonb), vac_pct = nullif(p ->> 'vac_pct', '')::numeric,
     updated_by = public._staff_name(public.current_app_user_id()), updated_at = now()
     WHERE staff_id = sid;
@@ -181,13 +184,16 @@ REVOKE EXECUTE ON FUNCTION public.payroll_employer_set(jsonb) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.payroll_employer_set(jsonb) TO authenticated;
 
 -- the T4 file for a year: each person's pay slips added up (what the app and the accountant's slips have), with their T4 on file if loaded.
--- Their SIN is not here: it is typed in the browser when the file is made and never sent to the database.
+-- Their SIN is not here: it comes from payroll_sin_open (locked, logged) or is typed in the browser. tb = taxable benefits on the app's final pay runs, by T4 code.
 CREATE OR REPLACE FUNCTION public.payroll_t4_file_data(p_year int) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT CASE WHEN NOT public._src_owner() THEN NULL ELSE jsonb_build_object('employer', (SELECT payroll_employer FROM company_settings LIMIT 1),
     'people', coalesce((SELECT jsonb_agg(jsonb_build_object('staff', ps.id, 'user', ps.app_user_id, 'name', ps.name,
         'slip_name', (SELECT s.slip_name FROM payroll_slips s WHERE s.staff_id = ps.id ORDER BY s.cheque_date DESC LIMIT 1),
         'address', (SELECT s.address FROM payroll_slips s WHERE s.staff_id = ps.id AND s.address IS NOT NULL ORDER BY s.cheque_date DESC LIMIT 1),
         'gross', g.gross, 'cpp', g.cpp, 'ei', g.ei, 'tax', g.tax, 'com', g.com, 'n', g.n,
+        'tb', (SELECT jsonb_object_agg(k, v) FROM (SELECT coalesce(rl.l ->> 'tb_kind', '40') k, sum((rl.l ->> 'tb')::numeric) v
+          FROM payroll_run_lines rl JOIN payroll_runs r ON r.id = rl.run_id
+          WHERE rl.staff_id = ps.id AND r.status = 'final' AND extract(year FROM r.pay_date) = p_year AND coalesce((rl.l ->> 'tb')::numeric, 0) <> 0 GROUP BY 1) q),
         't4', (SELECT to_jsonb(t) - 'page_path' FROM payroll_t4 t WHERE t.staff_id = ps.id AND t.year = p_year LIMIT 1)) ORDER BY ps.name)
       FROM payroll_staff ps JOIN LATERAL (SELECT sum(s.gross) gross, sum(s.cpp) cpp, sum(s.ei) ei, sum(s.tax) tax,
           sum(coalesce((public._slip_parts(s.earn, s.adj, s.dfg) ->> 'com')::numeric, s.commission, 0)) com, count(*) n
