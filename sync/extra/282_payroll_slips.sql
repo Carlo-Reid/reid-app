@@ -157,7 +157,7 @@ BEGIN
       END IF;
       INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, s.back_on, 'Back on the cheque of ' || to_char(s.back_on, 'Mon DD, YYYY') || ', after ' || round(s.days / 30.4) || ' months with no cheque: '
         || CASE WHEN s.days > 365 THEN 'a new hire (over a year away).' WHEN s.reason = 'rehired' THEN 'rehired.' WHEN s.reason = 'holiday' THEN 'back from a long holiday.'
-                WHEN s.reason = 'other' THEN coalesce(s.note, 'another reason') || '.' ELSE 'not answered yet (rehired, a long holiday or another reason?).' END, true);
+                WHEN s.reason = 'other' THEN coalesce(s.note, 'another reason') || '.' WHEN s.back_on < DATE '2026-11-14' THEN 'the reason was not asked (before Nov 14, 2026).' ELSE 'not answered yet (rehired, a long holiday or another reason?).' END, true);
     END LOOP;
   END IF;
   -- a pay run with no cheque for them, while they were with us (George, Nov 14: "show in pay history if they missed a pay period cheque… when the pay period was")

@@ -95,7 +95,9 @@ CREATE OR REPLACE FUNCTION public.payroll_returns() RETURNS jsonb LANGUAGE sql S
       'name', coalesce((SELECT nullif(btrim(z.slip_name), '') FROM payroll_slips z WHERE z.staff_id = ps.id ORDER BY z.cheque_date DESC LIMIT 1), ps.name),
       'left_after', g.left_after, 'back_on', g.back_on, 'days', g.days) ORDER BY g.back_on DESC, ps.name)
     FROM payroll_staff ps CROSS JOIN LATERAL public._payroll_gaps(ps.id) g
-    WHERE g.days <= 365 AND NOT EXISTS (SELECT 1 FROM payroll_return r WHERE r.staff_id = ps.id AND r.back_on = g.back_on)), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
+    -- only returns from Nov 14, 2026 on are asked about; the older ones are left behind, and only the newest return of a person (George, Nov 14: "for all these in the past lets move on from them")
+    WHERE g.days <= 365 AND g.back_on >= DATE '2026-11-14' AND g.back_on = (SELECT max(g2.back_on) FROM public._payroll_gaps(ps.id) g2)
+      AND NOT EXISTS (SELECT 1 FROM payroll_return r WHERE r.staff_id = ps.id AND r.back_on = g.back_on)), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
 CREATE OR REPLACE FUNCTION public.payroll_return_set(p_staff bigint, p_back date, p_reason text, p_note text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
 BEGIN
   IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can change payroll'; END IF;
