@@ -3,6 +3,8 @@
 -- showed a walk once it was DONE. This adds the other two states, read by the same page: a walk still waiting for its day (status
 -- scheduled), and a walk a tech is on right now (en_route / on_site), with whatever pictures are saved on it so far -- they show up here
 -- as soon as the tech takes them, because walk_answer_set / walk_extra_photo_add save each picture the moment it's taken, not at the end.
+-- Nov 14, later: "when i click the walk in progress i want the invoice the tech is working on or finished to pop up" -- each row now also
+-- carries the job's own invoice (the same one I'm here / the walk box opens for the tech), so the office can click into the same invoice.
 CREATE OR REPLACE FUNCTION public.walk_upcoming() RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public' AS $function$
 BEGIN
@@ -14,7 +16,8 @@ BEGIN
       'tech', (SELECT string_agg(public._emp_name(va.employee_id), ' and ' ORDER BY (va.role <> 'lead'), va.id) FROM visit_assignments va WHERE va.visit_id = v.id),
       'total_q', (SELECT CASE WHEN to_regprocedure('public.walk_questions()') IS NOT NULL THEN jsonb_array_length(public.walk_questions()) ELSE 0 END),
       'answers', (SELECT coalesce(jsonb_agg(jsonb_build_object('q', a.q, 'question', a.question, 'na', a.na, 'key', a.storage_key) ORDER BY a.q), '[]'::jsonb) FROM walk_answers a WHERE a.visit_id = v.id AND a.q < 1000),
-      'extra', (SELECT coalesce(jsonb_agg(a.storage_key ORDER BY a.q), '[]'::jsonb) FROM walk_answers a WHERE a.visit_id = v.id AND a.q >= 1000)) AS x
+      'extra', (SELECT coalesce(jsonb_agg(a.storage_key ORDER BY a.q), '[]'::jsonb) FROM walk_answers a WHERE a.visit_id = v.id AND a.q >= 1000),
+      'invoice', (SELECT i.id FROM invoices i WHERE i.job_id = j.id AND i.status NOT IN ('void', 'draft') AND i.store_copy_of IS NULL ORDER BY i.id LIMIT 1)) AS x
     FROM visits v
     JOIN jobs j ON j.id = v.job_id
     JOIN job_types t ON t.id = j.job_type_id
