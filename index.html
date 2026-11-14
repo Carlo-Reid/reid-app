@@ -3588,7 +3588,9 @@ button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 
     #side .sl-click { display: none; }
     .side-m-btn { display: block; margin-left: auto; font: inherit; font-size: 15px; font-weight: 800; color: #23415f;
                   background: linear-gradient(180deg, #ffffff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 10px; padding: 8px 14px; cursor: pointer; }
-    body.side-m-open .side-m-btn { background: #dcebf8; border-color: #23415f; }
+    body.side-m-open .side-m-btn:not(.side-msg-btn) { background: #dcebf8; border-color: #23415f; }
+    .side-m-btn:not(.side-msg-btn) { margin-left: 8px; }
+    .chat { right: 8px; left: 8px; bottom: 8px; width: auto; z-index: 60; }
     #side header, #side .side-spacer, #side .online, #side #creq-btn { display: none; }
     body.side-m-open #side { max-height: 80vh; overflow-y: auto; }
     body.side-m-open #side header { display: block; width: 100%; }
@@ -7919,6 +7921,7 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
   .ie-walk-sign .sf-pad { max-width: 520px; }
   .ie-walk-msg.err { color: var(--red); font-weight: 700; }
   .mc-said { font-weight: 700; color: #1b6b36; }
+  .mc-bar .mc-msg { width: 112px; min-height: 84px; padding: 8px 6px; gap: 4px; font-size: 12.5px; flex: 0 0 auto; }
   .tob-cat { background: #fff; border: 1px solid #d3dbe4; border-radius: 12px; padding: 12px 14px; margin-top: 12px; }
   .tob-cat > h2 { margin: 0 0 10px; font-size: 20px; color: #23415f; }
   .tob-n { display: inline-block; min-width: 28px; text-align: center; background: #23415f; color: #fff; border-radius: 6px; padding: 1px 8px; font-size: 16px; margin-left: 6px; }
@@ -8921,7 +8924,7 @@ async function refreshUnread(announce) {
   if (error) return;                                    // setup step 14 not run yet
   const before = CHAT.unread;
   CHAT.unread = Object.fromEntries((data || []).filter(x => x.from_user_id !== CHAT.open).map(x => [x.from_user_id, x]));
-  renderOnline();
+  renderOnline(); msgBtnFresh();
   if (announce) Object.values(CHAT.unread).forEach(x => {
     if (!before[x.from_user_id] || before[x.from_user_id].unread < x.unread) chatToast(x);
   });
@@ -8937,6 +8940,28 @@ function chatToast(x) {
   $("#toasts").appendChild(t);
   setTimeout(() => t.remove(), 20000);
 }
+// Carlo, Nov 14, 3:38 p.m.: "add a way for a tech to send a message back to the office they can not see the box" -- on a phone the
+// Online now list (the only way into a chat) is behind the Menu, so a tech had no way to write first. openMsgPick lists the people to
+// write to (call_people: the office and owners for a tech, the techs for the office; people in the app now first) and opens the chat.
+async function openMsgPick() {
+  document.querySelector(".msgpick-wrap")?.remove();
+  const tech = creqTech(), d = document.createElement("div"); d.className = "opt-wrap creq-wrap msgpick-wrap"; d.setAttribute("role", "dialog");
+  d.innerHTML = `<div class="opt" style="width:min(620px,100%)"><h3>💬 ${tech ? "Send a message to the office" : "Send a message"}</h3>
+    <p class="quiet">Click who you want to write to. Then type your message and press Send.</p>
+    <div class="creq-list"><div class="quiet">Loading…</div></div>
+    <div class="opt-btns"><button type="button" class="btn quiet-btn" id="msgpick-x">Cancel</button></div></div>`;
+  document.body.append(d);
+  const close = () => d.remove(); d.addEventListener("click", e => { if (e.target === d) close(); }); d.querySelector("#msgpick-x").addEventListener("click", close);
+  const { data, error } = await db.rpc("call_people"); const list = d.querySelector(".creq-list");
+  if (error) { list.innerHTML = `<div class="staff-msg err">${esc(rpcErr(error))}</div>`; return; }
+  const on = new Set((ONLINE || []).map(u => u.app_user_id));
+  const P = (data || []).sort((a, b) => (on.has(b.id) - on.has(a.id)) || a.name.localeCompare(b.name));
+  if (!P.length) { list.innerHTML = `<div class="quiet">Nobody to write to.</div>`; return; }
+  list.innerHTML = P.map(p => { const u = CHAT.unread[p.id]; return `<button type="button" class="creq-p" data-id="${p.id}"><b>${esc(p.name)}${u ? ` <span class="badge-n">${u.unread}</span>` : ""}</b><small>${on.has(p.id) ? `<span class="dot"></span>In the app now` : esc(ROLE_NAMES[p.role] || p.role)}</small></button>`; }).join("");
+  list.querySelectorAll(".creq-p").forEach(b => b.addEventListener("click", () => { const x = P.find(p => p.id === Number(b.dataset.id)); close(); document.body.classList.remove("side-m-open"); openChat(x.id, x.name); }));
+}
+function msgBtnFresh() { const b = document.getElementById("side-msg-btn"); if (!b) return; const n = Object.values(CHAT.unread || {}).reduce((a, x) => a + (Number(x.unread) || 0), 0);
+  b.innerHTML = `💬 Message${n ? ` <span class="badge-n">${n}</span>` : ""}`; }
 async function openChat(id, name) {
   CHAT.open = id; CHAT.name = name; CHAT.msgs = [];
   document.querySelectorAll(`.chat-toast[data-from="${id}"]`).forEach(t => t.remove());
@@ -17719,6 +17744,7 @@ function renderMyCalls() {
   $("#main").innerHTML = `<article class="mycalls">
     ${said ? `<p class="staff-msg mc-said" role="status">${esc(said)}</p>` : ""}
     <div class="mc-bar">
+      <button class="mc-sq mc-msg" type="button" id="mc-msg"><span class="mc-sq-ic" aria-hidden="true">💬</span><span class="mc-sq-tn">${creqTech() ? "Message the office" : "Send a message"}</span></button>
       <h1>${!MC.all && D.employee_id && D.employee_id !== "all" ? empPhoto(D.employee_id, "mc-photo mc-photo-h") : ""}${MC.all ? "Every tech's calls" : D.employee_id && MC.emp && MC.emp !== ME.emp ? esc(D.name) + "'s calls" : "Tech Calls"}</h1>
       <div class="mc-day">
         <button class="btn quiet-btn" type="button" data-mday="-1" aria-label="Day before">‹</button>
@@ -17740,6 +17766,7 @@ function renderMyCalls() {
          ${calls.map(mcCard).join("")}`)}
   </article>`;
   $("#main").scrollTop = top;
+  document.getElementById("mc-msg")?.addEventListener("click", () => openMsgPick());
   document.querySelectorAll("[data-mday]").forEach(b => b.addEventListener("click", () => { MC.date = ymd(addDays(new Date(MC.date + "T12:00:00"), Number(b.dataset.mday))); MC.open = null; loadMyCalls(); }));
   $("[data-mtoday]")?.addEventListener("click", () => { MC.date = ymd(new Date()); MC.open = null; loadMyCalls(); });
   document.querySelectorAll("[data-mc-emp]").forEach(b => b.addEventListener("click", () => { const v = b.dataset.mcEmp;
@@ -39544,6 +39571,9 @@ const sideIsMini = () => document.body.dataset.side === "mini";
   { const sd = document.getElementById("side"), mb = document.createElement("button");
     mb.type = "button"; mb.className = "side-m-btn"; mb.id = "side-m-btn"; mb.setAttribute("aria-expanded", "false"); mb.textContent = "☰ Menu";
     sd.querySelector(".side-logo")?.after(mb);
+    // 💬 Message, beside ☰ Menu on a phone: the way to write to the office without opening the menu (Carlo, Nov 14)
+    const gb = document.createElement("button"); gb.type = "button"; gb.className = "side-m-btn side-msg-btn"; gb.id = "side-msg-btn"; gb.textContent = "💬 Message";
+    mb.before(gb); gb.addEventListener("click", () => openMsgPick());
     const mset = on => { document.body.classList.toggle("side-m-open", on); mb.setAttribute("aria-expanded", String(on)); mb.textContent = on ? "✕ Close" : "☰ Menu"; };
     mb.addEventListener("click", () => mset(!document.body.classList.contains("side-m-open")));
     sd.addEventListener("click", e => { if (document.body.classList.contains("side-m-open") && e.target.closest(".side-nav-list button, #home-link, #last-cust")) mset(false); });
