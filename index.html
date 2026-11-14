@@ -1942,7 +1942,7 @@
   tr.pr-mdet > td { background: #f7fafd !important; padding: 8px 10px 12px !important; white-space: normal !important; text-align: left !important; }
   .pr-mdet .src-sumt { background: #fff; } .src-est { color: #9a4d00 !important; } .src-estnote { color: #9a4d00; font-size: 13px !important; }
   .pr-privzone.pr-drop-on { outline: 3px dashed #1f9d4a; outline-offset: -3px; background: #eef9f1; }
-  .pr-privzone.pr-drop-on::before { content: "Drop the payroll PDF here"; display: block; text-align: center; font-weight: 700; color: #1b6b36; font-size: 18px; padding: 6px 0 10px; }
+  .pr-privzone.pr-drop-on::before { content: "Drop the payroll PDF, a T4 or an ROE here"; display: block; text-align: center; font-weight: 700; color: #1b6b36; font-size: 18px; padding: 6px 0 10px; }
   .pr-wsib { border: 1px solid #d3dbe4; border-radius: 10px; background: #fff; padding: 0 12px; } .pr-wsib summary { cursor: pointer; font-weight: 700; color: #23415f; } .pr-wsib[open] { padding-bottom: 8px; }
   .pr-wsib-g { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 6px 0; } .pr-wsib-g input { width: 70px; }
   .pr-pastb > summary { cursor: pointer; list-style: none; } .pr-pastb > summary h2 { display: inline; } .pr-pastb > summary::before { content: "▸ "; color: #6b7785; } .pr-pastb[open] > summary::before { content: "▾ "; }
@@ -25739,7 +25739,8 @@ async function pdfLinesY(f) {
   const pdf = await window.pdfjsLib.getDocument({ data: (await f.arrayBuffer()).slice(0) }).promise, out = [];
   for (let n = 1; n <= pdf.numPages; n++) { const tc = await (await pdf.getPage(n)).getTextContent(), rows = new Map();
     tc.items.forEach(it => { if (!String(it.str).trim()) return; const y = Math.round(it.transform[5]); const k = [...rows.keys()].find(v => Math.abs(v - y) <= 2) ?? y; if (!rows.has(k)) rows.set(k, []); rows.get(k).push(it); });
-    [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([y, its]) => out.push({ page: n, y, t: its.sort((a, b) => a.transform[4] - b.transform[4]).map(i => i.str).join(" ").replace(/\s+/g, " ").trim() })); }
+    [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([y, its]) => { its.sort((a, b) => a.transform[4] - b.transform[4]); out.push({ page: n, y, t: its.map(i => i.str).join(" ").replace(/\s+/g, " ").trim(),
+      its: its.map(i => ({ x0: i.transform[4], x1: i.transform[4] + (i.width || 0), t: String(i.str).trim() })) }); }); }
   return out;
 }
 const REMIT_MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -33996,6 +33997,7 @@ async function openPayroll() {
   $("#main").innerHTML = `<article class="staff pr-page pg-clean">${priv ? `<div class="pr-privban" role="note">🔒 PRIVATE · owners only</div>` : ""}<div class="pr-toph"><h1>Payroll</h1>${prPrivBtn()}</div>
     ${priv ? `<div class="pr-privzone">
       <div class="pr-ptools"><label class="btn pr-ldpdf" title="Click to pick the PDF, or drag it here">📄 Load a payroll PDF <span class="pr-ldhint">or drop it here</span><input type="file" accept=".pdf,application/pdf" id="pr-slips-in" multiple hidden></label>
+        <label class="btn pr-ldpdf" title="A Record of Employment PDF: the person moves to Past employees">📄 Load an ROE<input type="file" accept=".pdf,application/pdf" id="pr-roe-in" multiple hidden></label>
         <button type="button" class="btn" id="pr-addp">＋ Add someone to payroll</button>
         <details class="pr-wsib" id="pr-wsib"><summary>WSIB rates</summary><div class="pr-wsib-b">Loading…</div></details></div>
       <p class="quiet">Load the accountant's pay slips (a PDF) to set each person's pay, raises and gross pay from them. Nothing is saved until you check it.</p>
@@ -34018,6 +34020,7 @@ async function openPayroll() {
   if (priv) {
     prTotBox(); srcBox(); prT4Box();
     $("#pr-slips-in")?.addEventListener("change", e => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) prSlipsLoad(fs); });
+    $("#pr-roe-in")?.addEventListener("change", e => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) prRoeLoad(fs); });
     // a payroll PDF can be dropped anywhere on the private part (George, Nov 13)
     const zone = $(".pr-privzone"), isPdf = f => /pdf/i.test(f.type) || /\.pdf$/i.test(f.name);
     if (zone) { let n = 0;
@@ -34227,9 +34230,37 @@ const T4_HELP = { b14: "Box 14: all the pay for the year. It should equal the gr
   b22: "Box 22: the income tax taken off their pay. It should equal the tax on the pay slips." };
 const t4Num = v => { if (v == null || v === "") return null; const n = Number(String(v).replace(/[\s$]/g, "").replace(/,(\d\d)$/, ".$1").replace(/,/g, "")); return isFinite(n) ? n : null; };
 // the T4s on the pages: the amount after each box number, in reading order; one T4 for each box 14 found on a page (copies are taken out after)
+// The accountant's T4s (seen Nov 14, 2022 and 2023) print only the amounts; the box numbers are a picture behind them, so the box goes by where
+// each amount sits: two copies on a page, each starting at its year; amounts in a left column (right edge near x 429) and a right one (near 564),
+// rows counted down from the box 14 row. 2022 form: 14|22, 16|24, ·|26, 18|·. 2023 form: 14|22, 16|·, 24|26, 18|·. Anything read wrong can be typed.
+function t4ParseForm(L, pg) {
+  const its = []; L.filter(l => l.page === pg && l.its).forEach(l => l.its.forEach(i => its.push({ ...i, y: l.y })));
+  const yrs = its.filter(i => /^20\d\d$/.test(i.t) && i.x0 > 240 && i.x0 < 380).sort((a, b) => b.y - a.y), out = [];
+  const isAmt = t => /^\d{1,3}(?:,?\d{3})*\.\d\d$/.test(t), col = i => Math.abs(i.x1 - 429) <= 20 ? "L" : Math.abs(i.x1 - 564) <= 20 ? "R" : null;
+  yrs.forEach((yr, k) => {
+    const top = yr.y + 14, bot = k + 1 < yrs.length ? yrs[k + 1].y + 14 : -9999, zone = its.filter(i => i.y <= top && i.y > bot);
+    const sin = zone.find(i => /^\d{3}[ -]?\d{3}[ -]?\d{3}$/.test(i.t)); if (!sin) return;   // a T4 always has box 12 printed; it is only used to find the name, never kept
+    const A = zone.filter(i => isAmt(i.t) && col(i) && i.y > yr.y - 200).map(i => ({ v: t4Num(i.t), c: col(i), y: i.y })); if (!A.length) return;
+    const y0 = Math.max(...A.map(a => a.y)), at = (c, dy) => A.find(a => a.c === c && Math.abs((a.y - y0) - dy) <= 6)?.v ?? null;
+    const o = { page: pg, year: Number(yr.t), b14: at("L", 0), b22: at("R", 0) };
+    if (at("R", -36) != null) Object.assign(o, { b16: at("L", -36), b24: at("R", -36), b26: at("R", -72), b18: at("L", -108) });
+    else Object.assign(o, { b16: at("L", -31), b24: at("L", -103), b26: at("R", -103), b18: at("L", -135) });
+    ["b20", "b44", "b46", "b52"].forEach(b => { o[b] = null; });
+    // the name: the first line under the SIN that starts at the left and has letters (LAST NAME, then the first name further right)
+    const nl = [...new Set(zone.filter(i => i.y < sin.y && i.x0 < 130 && /[A-Za-z]{2}/.test(i.t) && !/^\d/.test(i.t)).map(i => i.y))].sort((a, b) => b - a)[0];
+    const parts = zone.filter(i => i.y === nl && /[A-Za-z]/.test(i.t)).sort((a, b) => a.x0 - b.x0).map(i => i.t);
+    const tc = w => w.toLowerCase().replace(/(^|[\s'-])\p{L}/gu, m => m.toUpperCase());
+    o.name = parts.length > 1 ? tc(parts.slice(1).join(" ") + " " + parts[0]) : tc(parts[0] || "");
+    // other information at the bottom (code, amount): kept as "other", e.g. code 42 = commissions
+    const oth = {}; zone.filter(i => /^\d{2}$/.test(i.t) && i.x0 < 160 && i.y < yr.y - 200).forEach(c => { const a = zone.find(i => i.y === c.y && i.x0 > c.x1 && isAmt(i.t) && i.x0 < 300); if (a) oth[c.t] = t4Num(a.t); });
+    if (Object.keys(oth).length) o.other = oth;
+    if (o.b14 != null) out.push(o); });
+  return out;
+}
 function t4Parse(L) {
   const out = [], pages = [...new Set(L.map(l => l.page))];
-  for (const pg of pages) { const ls = L.filter(l => l.page === pg).map(l => l.t), text = ls.join("\n");
+  for (const pg of pages) { const form = t4ParseForm(L, pg); if (form.length) { out.push(...form); continue; }
+    const ls = L.filter(l => l.page === pg).map(l => l.t), text = ls.join("\n");
     if (!/\bT4\b|remuneration|r[ée]mun[ée]ration|employment income|revenus d'emploi/i.test(text)) continue;
     const ym = text.match(/(?:Year|Ann[ée]e)\D{0,20}(20\d\d)/i) || text.match(/\b(20\d\d)\b(?![-/]\d)/); const year = ym ? Number(ym[1]) : null;
     const hits = {}; T4_BOXES.forEach(([k, n]) => { hits[k] = []; const re = new RegExp(`(?:^|\\s|box\\s*)${n}\\s+(?:[A-Za-zÀ-ÿ'’ ,()/.-]{0,60}?\\s)?\\$?\\s*(\\d{1,3}(?:[ ,]\\d{3})*[.,]\\d\\d)(?!\\d)`, "gi");
@@ -34305,7 +34336,7 @@ async function prT4Load(files) {
       const out = []; let k = 0, pgErr = 0; const say = body.querySelector(".src-pop-btns");
       for (const r of R.filter(r => r.use && r.who !== "skip")) { k++; if (say) say.innerHTML = `<span class="src-hint">Saving the T4 pages: ${k}…</span>`;
         const p = personOf(r.who), x = { name: r.t.name, year: r.t.year, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: "office" };
-        T4_BOXES.forEach(([b]) => { x[b] = r.t[b]; });
+        T4_BOXES.forEach(([b]) => { x[b] = r.t[b]; }); if (r.t.other) x.other = r.t.other;
         try { x.page = await paysPageSave({ _f: r.t._f, page: r.t.page, cheque: "t4-" + r.t.year }); } catch { pgErr++; }
         out.push(x); }
       const { data, error } = await db.rpc("payroll_t4_save", { p: { file: files.map(f => f.name).join(", "), t4s: out } });
@@ -34369,6 +34400,95 @@ async function prT4Person(staffId) {
   const rows = data || [];
   host.innerHTML = rows.length ? rows.map(x => `<h4 class="pr-t4yr">${x.year}</h4>${prT4Rows([x], true)}`).join("") : `<p class="quiet">No T4s or pay slips yet. Load T4s on the Payroll page (CG on).</p>`;
   prT4Wire(host, () => prT4Person(staffId));
+}
+// ===== ROE: Record of Employment (George, Nov 14: "a spot to add that for employees when we did give it to them, at least it is now noted on why
+// no more cheques and they move to past"). Read from the ROE PDF in the browser; the SIN is covered on the page picture and never kept.
+const ROE_CODES = { A: "Shortage of work / end of contract or season", B: "Strike or lockout", D: "Illness or injury", E: "Quit", F: "Maternity", G: "Mandatory retirement",
+  H: "Work-sharing", J: "Apprentice training", K: "Other", M: "Dismissal or suspension", N: "Leave of absence", P: "Parental", Z: "Compassionate care / family caregiver" };
+function roeParse(L) {
+  const out = [];
+  [...new Set(L.map(l => l.page))].forEach(pg => {
+    const ls = L.filter(l => l.page === pg).map(l => l.t), T = ls.join("\n");
+    if (!/RECORD OF EMPLOYMENT/i.test(T) || !/LAST DAY FOR WHICH PAID/i.test(T)) return;
+    const at = re => ls.findIndex(l => re.test(l)), nx = (re, k = 1) => { const i = at(re); return i < 0 ? "" : ls[i + k] || ""; };
+    const dmy = t => { const m = String(t).match(/(\d{1,2})\s+(\d{1,2})\s+((?:19|20)\d\d)\s*$/); return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : null; };
+    const o = { page: pg, serial: (T.match(/SERIAL NO\.[\s\S]{0,300}?\b([A-Z]\d{8})\b/) || [])[1] || "" };
+    const nl = nx(/EMPLOYEE'?S NAME AND ADDRESS/i); o.name = nl.replace(/\s+\d{1,2}\s+\d{1,2}\s+(?:19|20)\d\d\s*$/, "").trim(); o.first_day = dmy(nl);
+    o.last_paid = dmy(nx(/LAST DAY FOR WHICH PAID/i)); o.final_end = dmy(nx(/FINAL PAY PERIOD ENDING/i));
+    o.occupation = (nx(/\bOCCUPATION\b/i).match(/^([A-Za-z][A-Za-z /&,'-]*)/) || [])[1]?.trim() || "";
+    const ri = at(/REASON FOR ISSUING/i); o.code = ""; o.reason = "";
+    for (let i = ri + 1; ri >= 0 && i <= ri + 4 && i < ls.length; i++) { const m = ls[i].match(/([A-Za-z][A-Za-z ,/()'-]*[a-z)])\s+([A-HJKMNPZ])$/); if (m && !/ACCORDING/i.test(m[1])) { o.reason = m[1].trim(); o.code = m[2]; break; } }
+    if (o.code && !o.reason) o.reason = ROE_CODES[o.code];
+    o.hours = Number((nx(/TOTAL INSURABLE HOURS/i).match(/(\d[\d,.]*)\s*$/) || [])[1]?.replace(/,/g, "")) || null;
+    const ei = at(/TOTAL INSURABLE EARNINGS/i); o.earnings = null;
+    for (let i = ei + 1; ei >= 0 && i <= ei + 3; i++) { const m = (ls[i] || "").match(/\$\s*([\d,]+\.\d\d)/); if (m) { o.earnings = t4Num(m[1]); break; } }
+    const dated = ls.map(dmy).filter(Boolean); o.issued_on = dated.length > 3 ? dated[dated.length - 1] : null;   // the issuer's date, at the bottom
+    if (o.last_paid) out.push(o); });
+  return out.filter((o, i) => !out.slice(0, i).some(p => p.serial && p.serial === o.serial));
+}
+async function prRoeLoad(files, forWho) {
+  const { w, close } = srcModal("Load an ROE (Record of Employment)", `<div class="pr-ld"><p class="src-hint">Reading ${files.length === 1 ? esc(files[0].name) : files.length + " files"}…</p></div>`);
+  w.querySelector(".src-pop")?.classList.add("src-pop-wide"); const body = w.querySelector(".pr-ld"); const E = [];
+  try { for (const f of files) roeParse(await pdfLinesY(f)).forEach(o => E.push({ ...o, _f: f, file: f.name })); }
+  catch (e) { body.innerHTML = `<div class="error">Couldn't read it: ${esc(e.message || e)}</div>`; return; }
+  if (!E.length) { body.innerHTML = `<p class="src-bad"><b>I found no ROE in it.</b> It needs the Record of Employment from Service Canada (the PDF the payroll program prints).</p>`; return; }
+  if (!PR.people) { const r = await db.rpc("payroll_people"); PR.people = r.data || []; }
+  const people = PR.people.slice().sort((a, b) => a.name.localeCompare(b.name)), personOf = k => people.find(p => paysKey(p) === k);
+  const R = E.map((o, i) => { const m = forWho ? people.find(p => paysKey(p) === forWho) : paysMatch(o.name, people); return { i, o, who: m ? paysKey(m) : "new", use: true }; });
+  const draw = () => {
+    body.innerHTML = `<p class="src-hint">I read <b>${E.length} ROE${E.length === 1 ? "" : "s"}</b>. Check who it is for. Saving sets their <b>last day</b> to the last day paid (block 11), so they move to <b>Past employees</b> (unless they have a cheque after it), and the pay history says why the cheques stopped.</p>
+      <div class="src-tw"><table class="pr-ldt"><thead><tr><th>Use</th><th>Name on the ROE</th><th>Who in the app</th><th>Last day paid</th><th>Why</th><th>First day worked</th><th>Given on</th><th>Serial</th></tr></thead><tbody>
+      ${R.map(r => { const o = r.o; return `<tr data-r="${r.i}" class="${!r.use || r.who === "skip" ? "pr-ld-off" : ""}${r.who === "new" ? " pr-ld-f-new" : ""}">
+        <td><input type="checkbox" data-use ${r.use ? "checked" : ""} aria-label="Save this ROE"></td>
+        <td><b>${esc(o.name || "Name not read")}</b><div><button type="button" class="link" data-see>👁 See the page</button></div>${r.who === "new" ? `<div class="pr-ld-tag pr-ld-tag-new">🆕 New person</div>` : ""}</td>
+        <td><select data-who><option value="new"${r.who === "new" ? " selected" : ""}>＋ New person</option><option value="skip"${r.who === "skip" ? " selected" : ""}>✕ Leave it out</option>
+          ${people.map(q => `<option value="${paysKey(q)}"${paysKey(q) === r.who ? " selected" : ""}>${esc(q.name)}${q.user ? "" : " (payroll only)"}</option>`).join("")}</select></td>
+        <td><input type="date" data-k="last_paid" class="${o.last_paid ? "" : "pr-ld-chq"}" value="${o.last_paid || ""}" aria-label="Last day paid"></td>
+        <td><select data-k="code"><option value="">—</option>${Object.entries(ROE_CODES).map(([c, n]) => `<option value="${c}"${o.code === c ? " selected" : ""}>${c} · ${esc(n)}</option>`).join("")}</select></td>
+        <td>${o.first_day ? esc(fmtDate(o.first_day)) : "—"}</td><td>${o.issued_on ? esc(fmtDate(o.issued_on)) : "—"}</td><td>${esc(o.serial || "—")}</td></tr>`; }).join("")}
+      </tbody></table></div>
+      <p class="quiet">The SIN is covered on the page before it is saved, and it is never kept.</p>
+      <div class="src-pop-btns"><button type="button" class="btn" id="pr-roe-save"${R.some(r => r.use && r.who !== "skip" && !r.o.last_paid) ? " disabled" : ""}>Save the ROE${E.length === 1 ? "" : "s"}</button><button type="button" class="btn quiet-btn" data-src-x>Cancel</button></div>`;
+    body.querySelectorAll("tr[data-r]").forEach(tr => { const r = R[Number(tr.dataset.r)];
+      tr.querySelector("[data-see]").addEventListener("click", () => t4PageView(r.o._f, r.o.page));
+      tr.querySelector("[data-use]").addEventListener("change", e => { r.use = e.target.checked; draw(); });
+      tr.querySelector("[data-who]").addEventListener("change", e => { r.who = e.target.value; draw(); });
+      tr.querySelector('[data-k="last_paid"]').addEventListener("change", e => { r.o.last_paid = e.target.value || null; draw(); });
+      tr.querySelector('[data-k="code"]').addEventListener("change", e => { r.o.code = e.target.value; r.o.reason = ROE_CODES[r.o.code] || ""; draw(); }); });
+    body.querySelector("#pr-roe-save")?.addEventListener("click", async e => { e.target.disabled = true; const out = []; let pgErr = 0;
+      for (const r of R.filter(r => r.use && r.who !== "skip")) { const p = personOf(r.who), o = r.o;
+        const x = { name: o.name, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: "office", serial: o.serial, first_day: o.first_day, last_paid: o.last_paid,
+          final_end: o.final_end, reason_code: o.code, reason: o.reason, occupation: o.occupation, hours: o.hours, earnings: o.earnings, issued_on: o.issued_on };
+        try { x.page = await paysPageSave({ _f: o._f, page: o.page, cheque: "roe-" + (o.issued_on || o.last_paid) }); } catch { pgErr++; }
+        out.push(x); }
+      const { data, error } = await db.rpc("payroll_roe_save", { p: { file: files.map(f => f.name).join(", "), roes: out } });
+      if (error) { e.target.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
+      close(); PR.people = null; alertMsg(`✓ Saved ${data?.saved ?? out.length} ROE${out.length === 1 ? "" : "s"}. ${out.length === 1 ? "The person is" : "They are"} in Past employees now, unless they had a cheque after it.` + (pgErr ? ` ${pgErr} page${pgErr === 1 ? "" : "s"} could not be kept.` : ""));
+      if (document.body.dataset.page === "payroll") { const pr = $("#pr-roe-person"); if (pr) prRoePerson(Number(pr.dataset.staff), pr.dataset.key); else if ($("#pr-t4-box")) openPayroll(); } });
+  };
+  draw();
+}
+// the ROEs on a person's page (private part), with a button to load one for them
+async function prRoePerson(staffId, key) {
+  const host = document.getElementById("pr-roe-person"); if (!host) return;
+  const { data, error } = await db.rpc("payroll_roe_list", { p_staff: staffId }); if (!document.getElementById("pr-roe-person")) return;
+  if (error) { host.innerHTML = `<div class="error">Couldn't load the ROEs: ${esc(rpcErr(error))}</div>`; return; }
+  const rows = data || [];
+  host.innerHTML = `${rows.length ? `<div class="src-tw"><table class="pr-slipt"><thead><tr><th>Last day paid</th><th>Why</th><th>Given on</th><th>First day worked</th><th>ROE</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><b>${esc(fmtDate(String(r.last_paid).slice(0, 10)))}</b>${r.later ? `<div class="quiet">They had cheques after it (back later)</div>` : ""}</td>
+        <td>${esc(r.reason || "—")}${r.code ? ` <span class="quiet">(code ${esc(r.code)})</span>` : ""}</td><td>${r.issued ? esc(fmtDate(String(r.issued).slice(0, 10))) : "—"}</td>
+        <td>${r.first_day ? esc(fmtDate(String(r.first_day).slice(0, 10))) : "—"}</td>
+        <td>${r.page ? `<button type="button" class="btn" data-pr-slippg="${esc(r.page)}" data-pr-slipd="ROE · last day paid ${esc(fmtDate(String(r.last_paid).slice(0, 10)))}">📄 Open</button>` : "—"} <button type="button" class="link" data-roe-del="${r.id}" title="Take this ROE off">✕</button></td></tr>`).join("")}
+    </tbody></table></div>` : `<p class="quiet">No ROE on file for them.</p>`}
+    <label class="btn pr-ldpdf">📄 Load an ROE for them<input type="file" accept=".pdf,application/pdf" data-roe-in hidden></label>`;
+  host.querySelector("[data-roe-in]")?.addEventListener("change", e => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) prRoeLoad(fs, key); });
+  host.querySelectorAll("[data-pr-slippg]").forEach(b => b.addEventListener("click", async () => {
+    const { data: u, error: ue } = await db.storage.from("payroll-slips").createSignedUrl(b.dataset.prSlippg, 600);
+    if (ue || !u?.signedUrl) return alertMsg("Couldn't open it: " + rpcErr(ue || {}));
+    srcModal(b.dataset.prSlipd, `<img src="${esc(u.signedUrl)}" alt="The ROE" style="width:100%;height:auto;border:1px solid #d3dbe4;border-radius:8px">`); }));
+  host.querySelectorAll("[data-roe-del]").forEach(b => b.addEventListener("click", async () => {
+    const k = await askChoice("Take this ROE off?", "The last day it set is taken off too, so they may come back out of Past employees.", [["yes", "Yes, take it off", true], ["", "No, keep it"]]); if (k !== "yes") return;
+    const r = await db.rpc("payroll_roe_del", { p_id: Number(b.dataset.roeDel) }); if (r.error) return alertMsg("Not done: " + rpcErr(r.error)); PR.people = null; prRoePerson(staffId, key); }));
 }
 // a person's gross pay this year, from the pay slips loaded (the cards on the private list)
 function prVacPct(x) { const rs = (PR.ov?.people || []).filter(o => (x.user ? Number(o.user) === Number(x.user) : Number(o.staff) === Number(x.staff)) && o.vac_pct != null);
@@ -34446,6 +34566,7 @@ async function prPrivSlot(user, staff) {
     ${(d?.addresses || []).length ? `<section class="pr-pcard"><h3>🏠 Address on the pay slips</h3><dl class="pr-addr">${d.addresses.map((a, i) => `<dt>${i ? "Before" : "Now"}</dt><dd><b>${esc(a.addr)}</b> <span class="quiet">on the pay slips ${a.first === a.last ? "of " + esc(fmtDate(String(a.first).slice(0, 10))) : "from " + esc(fmtDate(String(a.first).slice(0, 10))) + " to " + esc(fmtDate(String(a.last).slice(0, 10)))}</span></dd>`).join("")}</dl></section>` : ""}
     ${log.length ? `<section class="pr-pcard"><h3>Pay history and notes</h3><ul class="pr-log">${log.map(l => `<li><span>${l.day ? esc(fmtDate(String(l.day).slice(0, 10))) : ""}</span> ${esc(l.note)}${l.by ? ` <span class="quiet">· ${esc(l.by)}</span>` : ""}</li>`).join("")}</ul></section>` : ""}
     ${ps.id ? `<details class="pr-pcard pr-fold" data-k="t4"><summary><h3>🧾 T4s</h3></summary><div id="pr-t4-person"><div class="loading">Loading…</div></div></details>` : ""}
+    ${ps.id ? `<details class="pr-pcard pr-fold" data-k="roe"><summary><h3>📄 ROE (Record of Employment)</h3></summary><div id="pr-roe-person" data-staff="${ps.id}" data-key="${user ? "u" + user : "s" + ps.id}"><div class="loading">Loading…</div></div></details>` : ""}
     ${slips.length ? `<details class="pr-pcard pr-slipd"><summary><h3>Pay slips (${slips.length})</h3></summary><div class="src-tw"><table class="pr-slipt"><thead><tr><th>Cheque</th><th>Pay period</th><th>Hours</th><th>Rate</th><th title="The vacation pay on this cheque. It is part of the gross.">Vacation pay</th><th>Gross</th><th>Tax, CPP, EI</th><th>Net</th><th>Slip</th></tr></thead><tbody>
       ${slips.map(s => `<tr title="${esc((s.earn || []).filter(e => e.cur).map(e => `${e.label}: ${money(e.cur)}`).join(" · "))}"><td>${esc(fmtDate(String(s.cheque).slice(0, 10)))}</td><td>${s.from ? esc(fmtDate(String(s.from).slice(0, 10)) + " – " + fmtDate(String(s.to).slice(0, 10))) : "—"}</td>
         <td>${v(s.hours)}</td><td>${s.kind === "salary" ? `${money(s.per_pay)} a pay` : s.rate != null ? money(s.rate) : "Commission"}</td><td>${Number(s.vac) ? money(s.vac) + (ps.vac_pct != null ? ` <span class="quiet">(${Number(ps.vac_pct)}%)</span>` : "") : "—"}</td><td>${money(s.gross)}</td><td>${money(Number(s.tax || 0) + Number(s.cpp || 0) + Number(s.ei || 0))}</td><td>${money(s.net)}</td><td>${s.page ? `<button type="button" class="btn" data-pr-slippg="${esc(s.page)}" data-pr-slipd="${esc(String(s.cheque).slice(0, 10))}">📄 Open</button>` : `<span class="quiet" title="This slip was saved before slip pages were kept. Load its payroll PDF again (📄 Load a payroll PDF) and the page is added.">Not attached yet</span>`}</td></tr>`).join("")}
@@ -34460,6 +34581,7 @@ async function prPrivSlot(user, staff) {
   box.querySelectorAll("[data-pr-all]").forEach(b => b.addEventListener("click", () => { const on = b.dataset.prAll === "1"; box.querySelectorAll(".pr-fold").forEach(f => { f.open = on; }); }));
   if (user) prRateBox(user);
   if (ps.id) prT4Person(ps.id);
+  if (ps.id) prRoePerson(ps.id, user ? "u" + user : "s" + ps.id);
   box.querySelectorAll("[data-pr-slippg]").forEach(b => b.addEventListener("click", async () => {
     const { data: u, error: ue } = await db.storage.from("payroll-slips").createSignedUrl(b.dataset.prSlippg, 600);
     if (ue || !u?.signedUrl) return alertMsg("Couldn't open the slip: " + rpcErr(ue || {}));
@@ -34627,12 +34749,13 @@ async function prSlipsLoad(files) {
   w.querySelector(".src-pop")?.classList.add("src-pop-wide");
   const body = w.querySelector(".pr-ld"); let slips = [];
   let twice = 0;   // the very same slip (name, cheque date, gross and net) in the files more than once: kept once (George, Nov 13)
-  let allT = "";
-  try { for (const f of files) { const L = await pdfLinesY(f); allT += L.map(l => l.t).join("\n"); paysParse(L).forEach(s => {
+  let allT = ""; const allL = [];
+  try { for (const f of files) { const L = await pdfLinesY(f); allL.push(L); allT += L.map(l => l.t).join("\n"); paysParse(L).forEach(s => {
     if (slips.some(o => o.name.toLowerCase() === s.name.toLowerCase() && o.cheque === s.cheque && Math.abs(o.gross - s.gross) < 0.01 && Math.abs(o.net - s.net) < 0.01)) { twice++; return; }
     slips.push({ ...s, file: f.name, _f: f }); }); } }
   catch (e) { body.innerHTML = `<div class="error">Couldn't read it: ${esc(e.message || e)}</div>`; return; }
-  if (!slips.length && /\bT4\b|statement of remuneration|employment income/i.test(allT)) { close(); return prT4Load(files); }   // a T4 PDF dropped or picked here goes to the T4s
+  if (!slips.length && /RECORD OF EMPLOYMENT/i.test(allT)) { close(); return prRoeLoad(files); }   // an ROE dropped or picked here goes to the ROEs
+  if (!slips.length && (/\bT4\b|statement of remuneration|employment income/i.test(allT) || allL.some(L => t4Parse(L).length))) { close(); return prT4Load(files); }   // a T4 PDF dropped or picked here goes to the T4s
   if (!slips.length) { body.innerHTML = `<p class="src-bad"><b>I found no pay slips in it.</b> It needs the accountant's pay slips with "Pay Period … Cheque Date …" on them. If it is a scanned picture, ask the accountant for the PDF they print from.</p>`; return; }
   if (!PR.people) { const r = await db.rpc("payroll_people"); PR.people = r.data || []; }
   const people = PR.people.slice().sort((a, b) => a.name.localeCompare(b.name));

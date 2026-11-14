@@ -127,7 +127,9 @@ BEGIN
   -- breaks of more than 3 months: no longer with us, then back (George, Nov 13: "if someone did not receive a paycheque in 3 months then they are no longer with us")
   IF to_regclass('public.payroll_return') IS NOT NULL THEN
     FOR s IN SELECT g.*, r.reason, r.note FROM public._payroll_gaps(p_staff) g LEFT JOIN payroll_return r ON r.staff_id = p_staff AND r.back_on = g.back_on ORDER BY g.back_on LOOP
-      INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, s.left_after + 92, 'No longer with us: no cheque for 3 months after the cheque of ' || to_char(s.left_after, 'Mon DD, YYYY') || '.', true);
+      IF to_regclass('public.payroll_roe') IS NULL OR NOT EXISTS (SELECT 1 FROM payroll_roe e WHERE e.staff_id = p_staff AND e.last_paid BETWEEN s.left_after - 31 AND s.left_after + 92) THEN
+        INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, s.left_after + 92, 'No longer with us: no cheque for 3 months after the cheque of ' || to_char(s.left_after, 'Mon DD, YYYY') || '.', true);
+      END IF;
       INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, s.back_on, 'Back on the cheque of ' || to_char(s.back_on, 'Mon DD, YYYY') || ', after ' || round(s.days / 30.4) || ' months with no cheque: '
         || CASE WHEN s.days > 365 THEN 'a new hire (over a year away).' WHEN s.reason = 'rehired' THEN 'rehired.' WHEN s.reason = 'holiday' THEN 'back from a long holiday.'
                 WHEN s.reason = 'other' THEN coalesce(s.note, 'another reason') || '.' ELSE 'not answered yet (rehired, a long holiday or another reason?).' END, true);
@@ -154,6 +156,15 @@ BEGIN
   SELECT max(cheque_date) INTO last_d FROM payroll_slips WHERE staff_id = p_staff;
   IF last_d IS NOT NULL AND last_d < public._src_today() - 92 AND ps.left_on IS NULL THEN
     INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, last_d + 92, 'No longer with us: no cheque for 3 months after the cheque of ' || to_char(last_d, 'Mon DD, YYYY') || '.', true);
+  END IF;
+  -- an ROE on file says why the cheques stopped (George, Nov 14: "at least it is now noted on why no more cheques and they move to past")
+  IF to_regclass('public.payroll_roe') IS NOT NULL THEN
+    FOR s IN SELECT * FROM payroll_roe WHERE staff_id = p_staff ORDER BY last_paid LOOP
+      INSERT INTO payroll_staff_log (staff_id, day, note, auto) VALUES (p_staff, s.last_paid, 'ROE (Record of Employment) given'
+        || CASE WHEN s.issued_on IS NOT NULL THEN ' on ' || to_char(s.issued_on, 'Mon DD, YYYY') ELSE '' END || ': '
+        || coalesce(s.reason, 'no reason read') || CASE WHEN s.reason_code IS NOT NULL THEN ' (code ' || s.reason_code || ')' ELSE '' END
+        || '. Last day paid ' || to_char(s.last_paid, 'Mon DD, YYYY') || '.', true);
+    END LOOP;
   END IF;
   -- block moves, from the blocks on the slips (George, Nov 13: "it should be recorded that they changed from the tech to whatever")
   FOR s IN SELECT cheque_date, block FROM payroll_slips WHERE staff_id = p_staff AND block IS NOT NULL ORDER BY cheque_date, slip_no LOOP
