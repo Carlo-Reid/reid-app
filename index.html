@@ -2078,6 +2078,9 @@
   .pr-prt-long td { background: #fff1e6 !important; } .pr-prt-warn { color: #b4530a; font-size: 11px; font-weight: 700; } .pr-prt-ok { color: #1b6b36; font-weight: 600; margin: 8px 0; }
   .pr-ld-done { background: #e9f6ed; border: 1.5px solid #a9d6b7; color: #1b6b36; border-radius: 10px; padding: 10px 14px; font-size: 16px; }
   .pr-ld-sum { font-size: 15px; } .src-bad-i { color: #b42318; } .pr-ld-pg { font-size: 12px; color: #1b6b36; font-weight: 600; } .pr-ld-pgno { color: #b4530a; }
+  .pr-t4sl { margin: 6px 0 16px; border: 1px solid #d3dbe4; border-radius: 10px; background: #fff; padding: 6px 10px; } .pr-t4sl > summary { cursor: pointer; font-weight: 700; color: #23415f; padding: 4px 0; }
+  .pr-t4slt tr.pr-t4-miss td { background: #fdecea; color: #b42318; } .pr-t4slt tr.pr-t4-out td { color: #8a94a3; } .pr-t4slt tr.pr-t4-extra td { background: #fff7e6; }
+  .pr-t4slt tr.pr-t4-cmp td { font-weight: 700; background: #eef4fa; } .pr-t4-hint { background: #fff7e6; border-left: 4px solid #e8a33d; padding: 8px 12px; border-radius: 6px; margin: 6px 0; }
   .pr-privzone { border: 1.5px dashed #f0c38a; border-radius: 12px; background: #fffaf3; padding: 12px 14px; margin: 8px 0 16px; }
   .pr-privh { font-size: 15px; color: #9a4d00; margin: 0 0 10px; }
   .pr-ptools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
@@ -35422,13 +35425,48 @@ async function prT4Box() {
   prT4Wire(host, prT4Box);
   prOvDraw();
 }
-async function prT4Person(staffId) {
+async function prT4Person(staffId, slips) {
   const host = document.getElementById("pr-t4-person"); if (!host) return;
+  if (slips) host._slips = slips; slips = host._slips || [];
   const { data, error } = await db.rpc("payroll_t4_list", { p_staff: staffId }); if (!document.getElementById("pr-t4-person")) return;
   if (error) { host.innerHTML = `<div class="error">Couldn't load the T4s: ${esc(rpcErr(error))}</div>`; return; }
   const rows = data || [];
-  host.innerHTML = rows.length ? rows.map(x => `<h4 class="pr-t4yr">${x.year}</h4>${prT4Rows([x], true)}`).join("") : `<p class="quiet">No T4s or pay slips yet. Load T4s on the Payroll page (CG on).</p>`;
+  PR.t4Open = PR.t4Open || {};
+  host.innerHTML = rows.length ? rows.map(x => `<h4 class="pr-t4yr">${x.year}</h4>${prT4Rows([x], true)}${prT4SlipsHtml(x, slips)}`).join("") : `<p class="quiet">No T4s or pay slips yet. Load T4s on the Payroll page (CG on).</p>`;
+  host.querySelectorAll("details.pr-t4sl").forEach(d => d.addEventListener("toggle", () => { PR.t4Open[d.dataset.y] = d.open; }));
+  host.querySelectorAll("[data-pr-slippg2]").forEach(b => b.addEventListener("click", () => prSlipPage(b.dataset.prSlippg2, b.dataset.prSlipd)));
+  host.querySelectorAll("[data-t4-load]").forEach(b => b.addEventListener("click", () => $("#pr-slips-in")?.click() || alertMsg("Load the payroll PDF on the Payroll page (CG on).")));
   prT4Wire(host, () => prT4Person(staffId));
+}
+// under a year's T4: every pay day of that year with the pay slip on file for it, and the pay days with no slip, so what the T4 has that the slips do not
+// can be found (George, Nov 14: "can the paystubs line up below the t4s when i look at the t4 to see what is missing")
+function prT4SlipsHtml(x, slips) {
+  const y = String(x.year), mine = slips.filter(s => String(s.cheque).slice(0, 4) === y).sort((a, b) => String(a.cheque).localeCompare(String(b.cheque)));
+  const all = slips.map(s => String(s.cheque).slice(0, 10)).sort(), first = all[0], last = all[all.length - 1];
+  if (!mine.length && !first) return "";
+  // the pay days of the year: every second Thursday on the app's cycle
+  const days = []; let d = cvPayDay(y + "-01-01"); while (d <= y + "-12-31") { days.push(d); d = cvAddDays(d, PAYROLL.every); }
+  const used = new Set(), rowsOut = [], today = salesToday();
+  days.forEach(pd => { const k = mine.findIndex((s, i) => !used.has(i) && Math.abs(srcDays(String(s.cheque).slice(0, 10), pd)) <= 4);
+    if (k >= 0) { used.add(k); rowsOut.push({ pd, s: mine[k] }); } else rowsOut.push({ pd, s: null }); });
+  mine.forEach((s, i) => { if (!used.has(i)) rowsOut.push({ pd: String(s.cheque).slice(0, 10), s, extra: true }); });
+  rowsOut.sort((a, b) => a.pd.localeCompare(b.pd) || (a.extra ? 1 : 0) - (b.extra ? 1 : 0));
+  const out = r => !r.s && (r.pd > today || !first || r.pd < cvAddDays(first, -4) || r.pd > cvAddDays(last, 4));   // before their first slip, after their last, or not come yet
+  const miss = rowsOut.filter(r => !r.s && !out(r));
+  const sum = k => mine.reduce((t, s) => t + Number(s[k] || 0), 0);
+  const gs = mine.map(s => Number(s.gross || 0)).filter(Boolean).sort((a, b) => a - b), usual = gs.length ? gs[Math.floor(gs.length / 2)] : 0;
+  const t4g = x.id != null ? Number(x.b14 || 0) : null, gap = t4g != null ? t4g - sum("gross") : null;
+  const hint = gap != null && Math.abs(gap) >= 1 && usual ? `<p class="pr-t4-hint">The T4 has <b>${money(Math.abs(gap))}</b> ${gap > 0 ? "more" : "less"} pay than the slips below. Their usual pay is about <b>${money(usual)}</b>, so that is about <b>${(Math.abs(gap) / usual).toFixed(1)} pays</b>.${gap > 0 && miss.length ? ` ${miss.length} pay day${miss.length === 1 ? " has" : "s have"} no slip on file (in red): load the accountant's PDF for ${miss.length === 1 ? "that date" : "those dates"}.` : gap > 0 ? " Every pay day has a slip: look for a second cheque, a bonus or a taxable benefit on the T4." : " Look for a slip loaded twice, or a cheque dated in the next year on the T4."}</p>` : "";
+  const td = v => v != null && v !== "" && Number(v) ? money(v) : "—";
+  return `<details class="pr-t4sl" data-y="${y}"${PR.t4Open?.[y] ?? (miss.length || (gap != null && Math.abs(gap) >= 1)) ? " open" : ""}><summary>📄 The pay slips of ${y} (${mine.length})${miss.length ? ` · <span class="pr-t4-bad">${miss.length} pay day${miss.length === 1 ? "" : "s"} with no slip</span>` : mine.length ? ` · <span class="pr-t4-good">every pay day has a slip</span>` : ""}</summary>
+    ${hint}<div class="src-tw"><table class="pr-slipt pr-t4slt"><thead><tr><th>Pay day</th><th>Cheque</th><th>Pay period</th><th>Gross</th><th>CPP</th><th>EI</th><th>Income tax</th><th>Slip</th></tr></thead><tbody>
+    ${rowsOut.map(r => r.s ? `<tr${r.extra ? ' class="pr-t4-extra"' : ""}><td>${r.extra ? "Extra cheque" : esc(fmtDate(r.pd))}</td><td>${esc(fmtDate(String(r.s.cheque).slice(0, 10)))}</td><td>${r.s.from ? esc(fmtDate(String(r.s.from).slice(0, 10)) + " – " + fmtDate(String(r.s.to).slice(0, 10))) : "—"}</td>
+        <td><b>${money(r.s.gross || 0)}</b></td><td>${td(r.s.cpp)}</td><td>${td(r.s.ei)}</td><td>${td(r.s.tax)}</td><td>${r.s.page ? `<button type="button" class="link" data-pr-slippg2="${esc(r.s.page)}" data-pr-slipd="Pay slip ${esc(fmtDate(String(r.s.cheque).slice(0, 10)))}">📄 Open</button>` : `<span class="quiet">No page</span>`}</td></tr>`
+      : out(r) ? `<tr class="pr-t4-out"><td>${esc(fmtDate(r.pd))}</td><td colspan="7" class="quiet">${r.pd > today ? "Not come yet" : r.pd < (first || "") ? "Before their first slip on file" : "After their last slip on file"}</td></tr>`
+      : `<tr class="pr-t4-miss"><td><b>${esc(fmtDate(r.pd))}</b></td><td colspan="6"><b>No pay slip on file for this pay day</b></td><td><button type="button" class="link" data-t4-load>📄 Load it</button></td></tr>`).join("")}
+    <tr class="pr-prt-tot"><td colspan="3">The slips of ${y}</td><td>${money(sum("gross"))}</td><td>${money(sum("cpp"))}</td><td>${money(sum("ei"))}</td><td>${money(sum("tax"))}</td><td></td></tr>
+    ${t4g != null ? `<tr class="pr-t4-cmp"><td colspan="3">The T4 (boxes 14, 16, 18, 22)</td><td>${money(t4g)}</td><td>${money(t4V(x, "b16") || 0)}</td><td>${money(x.b18 || 0)}</td><td>${money(x.b22 || 0)}</td><td></td></tr>` : ""}
+    </tbody></table></div><p class="quiet">Pay day is every second Thursday; a cheque up to 4 days off counts for it. The slips count in the year of their cheque date, as the T4 does.</p></details>`;
 }
 // ===== ROE: Record of Employment (George, Nov 14: "a spot to add that for employees when we did give it to them, at least it is now noted on why
 // no more cheques and they move to past"). Read from the ROE PDF in the browser; the SIN is covered on the page picture and never kept.
@@ -36415,7 +36453,7 @@ async function prPrivSlot(user, staff) {
   box.querySelectorAll("[data-pr-all]").forEach(b => b.addEventListener("click", () => { const on = b.dataset.prAll === "1"; box.querySelectorAll(".pr-fold").forEach(f => { f.open = on; }); }));
   box.querySelector("[data-pr-prt]")?.addEventListener("click", () => prPrintPick(pp));
   if (user) prRateBox(user);
-  if (ps.id) prT4Person(ps.id);
+  if (ps.id) prT4Person(ps.id, slips);
   if (ps.id) prSinBox(box.querySelector("#pr-sin-box"), ps.id, user, ps.name);
   if (ps.id) prRoePerson(ps.id, user ? "u" + user : "s" + ps.id);
   if (pp?.employee) { prLazyFold(box, "sold", () => prSoldPerson(box.querySelector("#pr-sold-person"), pp, slips));
