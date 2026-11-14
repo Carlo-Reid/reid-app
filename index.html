@@ -27145,12 +27145,29 @@ function walkCam(q) {
   shot.addEventListener("click", () => {
     if (!v.videoWidth) return; const cv = document.createElement("canvas"); cv.width = v.videoWidth; cv.height = v.videoHeight; cv.getContext("2d").drawImage(v, 0, 0);
     cv.toBlob(b => { close(); if (b) walkAnswer(q, b); }, "image/jpeg", .9); });
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }).then(st => {
-    if (shut) return st.getTracks().forEach(t => t.stop());
-    stream = st; v.srcObject = st; v.onloadedmetadata = () => { msg.textContent = ""; shot.disabled = false; shot.focus(); };
-  }).catch(err => { if (shut) return; const no = err && (err.name === "NotAllowedError" || err.name === "SecurityError");
-    msg.className = "wc-msg err"; msg.textContent = no ? "The camera is blocked on this device. Allow the camera for this page, then press Take a picture again. Or press Pick a file, or N/A."
-      : "I could not find a camera on this device. Press Pick a file, or Cancel and press N/A."; });
+  // Carlo, Nov 14: "it can't find the camera again". Try the back camera first, then any camera, then each camera by name; and say what really went wrong.
+  const why = (err, cams) => { const n = (err && err.name) || "";
+    return (n === "NotAllowedError" || n === "SecurityError" ? "The camera is blocked for this page. Click the small lock or camera picture at the left of the address bar, set Camera to Allow, then press Try again. If it still says this, the camera is turned off for the browser in the device's own privacy settings."
+      : n === "NotReadableError" || n === "AbortError" || n === "TrackStartError" ? "I found the camera, but I can not turn it on. Another program is most likely using it (a video call, the Camera app), or its cover is closed. Close that program, then press Try again."
+      : cams === 0 ? "This device has no camera that the browser can see. If it has one, it is turned off in the device's privacy settings (on Windows: Settings, Privacy and security, Camera, turn on Camera access and Let desktop apps use the camera). Then press Try again."
+      : "I could not turn the camera on. Press Try again.") + " Or press Pick a file, or Cancel and press N/A." + (n ? ` (What the browser said: ${n})` : ""); };
+  const start = async () => {
+    msg.className = "wc-msg"; msg.textContent = "Looking for the camera…"; shot.disabled = true; o.querySelector('[data-wc="again"]')?.remove();
+    const md = navigator.mediaDevices, tries = [{ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }, { video: true, audio: false }];
+    let st = null, err = null, cams = null;
+    for (const c of tries) { try { st = await md.getUserMedia(c); break; } catch (e) { err = e; if (e && (e.name === "NotAllowedError" || e.name === "SecurityError")) break; } }
+    if (!st && !(err && (err.name === "NotAllowedError" || err.name === "SecurityError"))) {
+      try { const ds = (await md.enumerateDevices()).filter(d => d.kind === "videoinput"); cams = ds.length;
+        for (const d of ds) { if (!d.deviceId) continue; try { st = await md.getUserMedia({ video: { deviceId: { exact: d.deviceId } }, audio: false }); break; } catch (e) { err = e; } } } catch (e) {}
+    }
+    if (shut) return st?.getTracks().forEach(t => t.stop());
+    if (st) { stream = st; v.srcObject = st; v.onloadedmetadata = () => { msg.textContent = ""; shot.disabled = false; shot.focus(); }; v.play?.().catch(() => {}); return; }
+    console.warn("walk camera", err);
+    msg.className = "wc-msg err"; msg.textContent = why(err, cams);
+    const b = document.createElement("button"); b.type = "button"; b.className = "mc-sq"; b.dataset.wc = "again"; b.innerHTML = `<span class="mc-sq-ic" aria-hidden="true">🔄</span><span class="mc-sq-tn">Try again</span>`;
+    b.addEventListener("click", start); o.querySelector(".wc-acts").prepend(b);
+  };
+  start();
 }
 async function walkAnswer(q, file) {
   const W = WALK; if (!W || W.busy) return; const say = t => { const m = $("#ie-walk-msg"); if (m) { m.className = "ie-walk-msg" + (t ? " err" : ""); m.textContent = t || ""; } };
