@@ -15,10 +15,10 @@ CREATE OR REPLACE FUNCTION public.payroll_overview() RETURNS jsonb LANGUAGE sql 
                    coalesce(sum((pp ->> 'ben')::numeric), 0) AS ben
             FROM payroll_slips s CROSS JOIN LATERAL public._slip_parts(s.earn, s.adj, s.dfg) pp GROUP BY 1, 2) t JOIN payroll_staff ps ON ps.id = t.staff_id), '[]'::jsonb),
     'months', coalesce((SELECT jsonb_agg(jsonb_build_object('staff', ps.id, 'user', ps.app_user_id, 'm', t.m, 'slips', t.slips,
-        'gross', t.gross, 'vac', t.vac, 'tax', t.tax, 'cpp', t.cpp, 'ei', t.ei, 'net', t.net, 'cost', t.gross + t.cpp + round(t.ei * 1.4, 2), 'hourly', t.hourly, 'ot', t.ot, 'com', t.com, 'oncall', t.oncall, 'stat', t.stat, 'other', t.other, 'ben', t.ben))
+        'gross', t.gross, 'vac', t.vac, 'tax', t.tax, 'cpp', t.cpp, 'ei', t.ei, 'net', t.net, 'cost', t.gross + t.cpp + round(t.ei * 1.4, 2), 'hourly', t.hourly, 'hours', t.hours, 'ot', t.ot, 'com', t.com, 'oncall', t.oncall, 'stat', t.stat, 'other', t.other, 'ben', t.ben))
       FROM (SELECT s.staff_id, to_char(s.cheque_date, 'YYYY-MM') AS m, count(*) AS slips, coalesce(sum(s.gross), 0) AS gross,
                    coalesce(sum(s.vac), 0) AS vac, coalesce(sum(s.tax), 0) AS tax, coalesce(sum(s.cpp), 0) AS cpp, coalesce(sum(s.ei), 0) AS ei,
-                   coalesce(sum(s.net), 0) AS net, coalesce(sum((pp ->> 'hourly')::numeric), 0) AS hourly, coalesce(sum((pp ->> 'ot')::numeric), 0) AS ot, coalesce(sum((pp ->> 'com')::numeric), 0) AS com,
+                   coalesce(sum(s.net), 0) AS net, coalesce(sum((pp ->> 'hours')::numeric), 0) AS hours, coalesce(sum((pp ->> 'hourly')::numeric), 0) AS hourly, coalesce(sum((pp ->> 'ot')::numeric), 0) AS ot, coalesce(sum((pp ->> 'com')::numeric), 0) AS com,
                    coalesce(sum((pp ->> 'oncall')::numeric), 0) AS oncall, coalesce(sum((pp ->> 'stat')::numeric), 0) AS stat, coalesce(sum((pp ->> 'other')::numeric), 0) AS other,
                    coalesce(sum((pp ->> 'ben')::numeric), 0) AS ben
             FROM payroll_slips s CROSS JOIN LATERAL public._slip_parts(s.earn, s.adj, s.dfg) pp GROUP BY 1, 2) t JOIN payroll_staff ps ON ps.id = t.staff_id), '[]'::jsonb),

@@ -32,7 +32,15 @@ CREATE OR REPLACE FUNCTION public.payroll_run_info(p_pay date) RETURNS jsonb LAN
         'tax', (SELECT to_jsonb(t) - 'staff_id' FROM payroll_person_tax t WHERE t.staff_id = ps.id),
         'ytd', (SELECT jsonb_build_object('gross', coalesce(sum(s.gross), 0), 'cpp', coalesce(sum(s.cpp), 0), 'ei', coalesce(sum(s.ei), 0),
             'tax', coalesce(sum(s.tax), 0), 'vac', coalesce(sum(s.vac), 0), 'net', coalesce(sum(s.net), 0), 'n', count(*))
-          FROM payroll_slips s WHERE s.staff_id = ps.id AND s.cheque_date < p_pay AND extract(year FROM s.cheque_date) = extract(year FROM p_pay)),
+          FROM payroll_slips s WHERE s.staff_id = ps.id AND s.cheque_date < p_pay - 4 AND extract(year FROM s.cheque_date) = extract(year FROM p_pay)),
+        'address', (SELECT s.address FROM payroll_slips s WHERE s.staff_id = ps.id AND s.address IS NOT NULL ORDER BY s.cheque_date DESC LIMIT 1),
+        'onfile', (SELECT jsonb_agg(jsonb_build_object('cheque', s.cheque_date, 'gross', s.gross, 'net', s.net, 'cpp', s.cpp, 'ei', s.ei, 'tax', s.tax, 'file', s.file_name))
+          FROM payroll_slips s WHERE s.staff_id = ps.id AND s.run_id IS NULL AND abs(s.cheque_date - p_pay) <= 4),
+        'ytdl', (SELECT jsonb_object_agg(l, v) FROM (SELECT x ->> 'label' l, sum(coalesce(nullif(x ->> 'cur', '')::numeric, 0)) v
+          FROM payroll_slips s CROSS JOIN LATERAL jsonb_array_elements(coalesce(s.earn, '[]'::jsonb) || coalesce(s.dfg, '[]'::jsonb) || coalesce(s.adj, '[]'::jsonb)) x
+          WHERE s.staff_id = ps.id AND s.cheque_date < p_pay - 4 AND extract(year FROM s.cheque_date) = extract(year FROM p_pay) AND jsonb_typeof(x) = 'object' GROUP BY 1) q WHERE l IS NOT NULL),
+        'ytdh', (SELECT sum((public._slip_parts(s.earn, s.adj, s.dfg) ->> 'hours')::numeric) FROM payroll_slips s
+          WHERE s.staff_id = ps.id AND s.cheque_date < p_pay - 4 AND extract(year FROM s.cheque_date) = extract(year FROM p_pay)),
         'last', (SELECT jsonb_build_object('cheque', s.cheque_date, 'kind', s.kind, 'rate', s.rate, 'per_pay', s.per_pay, 'hours', s.reg_hours,
             'vac_pct', s.vac_pct, 'ben', (public._slip_parts(s.earn, s.adj, s.dfg) ->> 'ben')::numeric, 'gross', s.gross)
           FROM payroll_slips s WHERE s.staff_id = ps.id ORDER BY s.cheque_date DESC, s.gross DESC LIMIT 1)))
