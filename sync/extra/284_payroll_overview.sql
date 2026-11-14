@@ -22,8 +22,8 @@ CREATE OR REPLACE FUNCTION public.payroll_overview() RETURNS jsonb LANGUAGE sql 
                    coalesce(sum((pp ->> 'oncall')::numeric), 0) AS oncall, coalesce(sum((pp ->> 'stat')::numeric), 0) AS stat, coalesce(sum((pp ->> 'other')::numeric), 0) AS other,
                    coalesce(sum((pp ->> 'ben')::numeric), 0) AS ben
             FROM payroll_slips s CROSS JOIN LATERAL public._slip_parts(s.earn, s.adj, s.dfg) pp GROUP BY 1, 2) t JOIN payroll_staff ps ON ps.id = t.staff_id), '[]'::jsonb),
-    'cheques', coalesce((SELECT jsonb_agg(jsonb_build_object('d', d, 'n', n, 'gross', g, 'src', src) ORDER BY d)
-      FROM (SELECT s.cheque_date AS d, count(*) AS n, coalesce(sum(s.gross), 0) AS g,
+    'cheques', coalesce((SELECT jsonb_agg(jsonb_build_object('d', d, 'n', n, 'gross', g, 'src', src, 'nopage', np) ORDER BY d)
+      FROM (SELECT s.cheque_date AS d, count(*) AS n, coalesce(sum(s.gross), 0) AS g, count(*) FILTER (WHERE s.page_path IS NULL) AS np,
                    coalesce(sum(coalesce(s.tax, 0) + 2 * coalesce(s.cpp, 0) + round(2.4 * coalesce(s.ei, 0), 2)), 0) AS src
             FROM payroll_slips s GROUP BY 1) c), '[]'::jsonb))
   ELSE '{}'::jsonb END $f$;

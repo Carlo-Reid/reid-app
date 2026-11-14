@@ -2076,6 +2076,8 @@
   .pr-sec .pr-tot > .src-bar { display: none; } .pr-sec .src > .src-bar { background: none; padding: 8px 0 0; justify-content: flex-end; box-shadow: none; } .pr-sec .src > .src-bar h2 { display: none; }
   .pr-sec .src, .pr-sec .pr-t4box { border: 0; box-shadow: none; margin: 0; padding-left: 0; padding-right: 0; background: none; }
   .pr-prt-long td { background: #fff1e6 !important; } .pr-prt-warn { color: #b4530a; font-size: 11px; font-weight: 700; } .pr-prt-ok { color: #1b6b36; font-weight: 600; margin: 8px 0; }
+  .pr-ld-done { background: #e9f6ed; border: 1.5px solid #a9d6b7; color: #1b6b36; border-radius: 10px; padding: 10px 14px; font-size: 16px; }
+  .pr-ld-sum { font-size: 15px; } .src-bad-i { color: #b42318; } .pr-ld-pg { font-size: 12px; color: #1b6b36; font-weight: 600; } .pr-ld-pgno { color: #b4530a; }
   .pr-privzone { border: 1.5px dashed #f0c38a; border-radius: 12px; background: #fffaf3; padding: 12px 14px; margin: 8px 0 16px; }
   .pr-privh { font-size: 15px; color: #9a4d00; margin: 0 0 10px; }
   .pr-ptools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
@@ -34836,13 +34838,17 @@ function prNeedsDraw() {
     g && (g.open.length || g.done || g.regs.length) ? nb("gross", "PA N2", "⚖", `Periods where the pay slips do not add up to the source gross${g.open.length && g.miss ? ` · ${money(g.miss)} missing` : ""}`, g.open.length ? g.open.length : "✓", prGrossHtml(g), g.open.length) : "",
     RT.length ? nb("back", "PA N3", "🔁", "Back after more than 3 months with no cheque", RT.length, prReturnHtml(RT), 1) : "",
     NS.length ? nb("noslip", "PA N4", "⚠", "Pay slips I did not see", NS.length, prNoSlipHtml(NS), 1) : "",
+    (() => { const C = (PR.ov?.cheques || []).filter(c => Number(c.nopage) > 0).sort((a, b) => String(b.d).localeCompare(String(a.d))); if (!C.length) return "";
+      const n = C.reduce((t, c) => t + Number(c.nopage), 0);
+      return nb("nopage", "PA N6", "📄", "Pay slips on file without their page (the PDF)", n, `<p class="quiet">Load the accountant's PDF for these cheque dates again: it only adds the missing pages, nothing is saved twice. A date not on this list has every page.</p>
+        <div class="src-misslist">${C.map(c => `<span>${esc(fmtDate(String(c.d).slice(0, 10)))}: ${Number(c.nopage) === Number(c.n) ? "all " + c.n : c.nopage + " of " + c.n}</span>`).join("")}</div><button type="button" class="btn" data-pr-loadmiss>📄 Load the PDFs</button>`, 1); })(),
     NR.length ? nb("rate", "PA N5", "💲", "No pay rate", NR.length, `<p>${NR.map(x => `<button type="button" class="link" ${x.user ? `data-pr-user="${x.user}"` : `data-pr-staff="${x.staff}"`}>${esc(x.name)}</button>`).join(", ")}. Load a payroll PDF, or click a name to set it.</p>`, 1) : ""].join("");
   host.hidden = !html;
   host.innerHTML = html ? `<div class="pr-needs-h"><h3>Needs you</h3><span class="pr-allbtns"><button type="button" class="link" data-pr-all="1">▾ Open all</button> · <button type="button" class="link" data-pr-all="0">▸ Close all</button></span></div>${html}` : "";
   host.querySelectorAll(".pr-nbox").forEach(d => d.addEventListener("toggle", () => { PR.nbOpen[d.dataset.prNb] = d.open; }));
   host.querySelectorAll("[data-pr-all]").forEach(b => b.addEventListener("click", () => { const on = b.dataset.prAll === "1";
     document.querySelectorAll(".pr-nbox, .pr-sec").forEach(d => d.open = on); }));
-  host.querySelector("[data-pr-loadmiss]")?.addEventListener("click", () => $("#pr-slips-in")?.click());
+  host.querySelectorAll("[data-pr-loadmiss]").forEach(b => b.addEventListener("click", () => $("#pr-slips-in")?.click()));
   host.querySelectorAll(".pr-nbox[data-pr-nb=rate] [data-pr-user]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollPerson(Number(b.dataset.prUser)); }));
   host.querySelectorAll(".pr-nbox[data-pr-nb=rate] [data-pr-staff]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollStaff(Number(b.dataset.prStaff)); }));
   host.querySelectorAll(".pr-tgo[data-pr-user]").forEach(b => b.addEventListener("click", () => { prKeep(); openPayrollPerson(Number(b.dataset.prUser)); }));
@@ -36614,7 +36620,10 @@ async function prSlipsLoad(files) {
   const ord = (a, b) => (a.s.cheque || "") < (b.s.cheque || "") ? -1 : (a.s.cheque || "") > (b.s.cheque || "") ? 1 : a.i - b.i;
   const mine = r => R.filter(o => pk(o) === pk(r) && o.who !== "skip").sort(ord);
   const blkFrom = r => { const L = mine(r); let src = null; for (const o of L) { if (o.blockSet) src = o; if (o === r) break; } return src; };
-  const blkOf = r => { const src = blkFrom(r); if (src) return src.block; const p = personOf(r.who); return p && p.block && p.block !== "past" ? p.block : r.block; };
+  // the block of a slip: picked here (it carries to the later slips), else the block saved on that slip, else the last one saved before it, else their block now.
+  // A block saved on a slip on file is kept, so loading the same PDF again never puts it back (George, Nov 14)
+  const blkOf = r => { let b = null; for (const o of mine(r)) { if (o.blockSet) b = o.block; else { const f = exactOf(o) || fileOf(o); if (f?.block) b = f.block; } if (o === r) break; }
+    if (b) return b; const p = personOf(r.who); return p && p.block && p.block !== "past" ? p.block : r.block; };
   const blkPrev = r => { const L = mine(r).filter(o => o.use); const k = L.indexOf(r); if (k > 0) return blkOf(L[k - 1]); const p = personOf(r.who); return p && p.block && p.block !== "past" ? p.block : null; };
   // what each line needs a look for: a new person, a slip already on file, two cheques on one date, or one that needs a pick
   const flagOf = r => { if (!r.use || r.who === "skip") return null;
@@ -36629,6 +36638,9 @@ async function prSlipsLoad(files) {
     body.innerHTML = `<p class="src-hint">I read <b>${slips.length} pay slips</b>${cheques.length === 1 ? ` for the cheque of <b>${esc(longDate(cheques[0]))}</b>` : ` for ${cheques.length} cheque dates`}. Check who each one is, then save. Gross pay in all: <b>${money(tot)}</b>.</p>
       ${noDate ? `<p class="src-bad"><b>⚠ I could not read the cheque date on ${noDate} slip${noDate === 1 ? "" : "s"}.</b> Type it in the red box on ${noDate === 1 ? "that line" : "those lines"}, or pick "Leave this slip out".</p>` : ""}
       ${twice ? `<p class="pr-ld-dupok"><b>⚠ ${twice} slip${twice === 1 ? " was" : "s were"} in ${files.length > 1 ? "these files" : "this file"} twice: the same person, the same cheque date and the same amounts.</b> I kept one of each.</p>` : ""}
+      ${(() => { const L = R.filter(r => r.use && r.who !== "skip"), F = L.filter(r => exactOf(r)), noPg = F.filter(r => !exactOf(r).page).length, nw = L.length - F.length;
+        return !nw && !noPg ? `<p class="pr-ld-done">✓ <b>This PDF is done.</b> All ${F.length} slip${F.length === 1 ? " is" : "s are"} already on file, each with its page. Nothing more to load from it${L.some(r => r.blockSet) ? " (Save keeps the blocks you changed)" : ""}.</p>`
+          : `<p class="pr-ld-sum">On file already: <b>${F.length}</b> of ${L.length}${F.length ? ` (<b>${F.length - noPg}</b> with their page${noPg ? `, <b class="src-bad-i">${noPg} without their page: Save adds it</b>` : ""})` : ""} · New: <b>${nw}</b></p>`; })()}
       ${same.length ? `<p class="pr-ld-dupok"><b>⚠ ${same.length} slip${same.length === 1 ? " is" : "s are"} already on file: the same cheque date and the same amounts</b> (${esc(same.slice(0, 4).map(r => r.s.name + ", " + fmtDate(r.s.cheque)).join(" · "))}${same.length > 4 ? " …" : ""}). They are marked <b>Duplicate</b> below and will not be saved again. A slip for a pay the app already ran is the same pay: it is a duplicate too.</p>` : ""}
       ${dups.length ? `<p class="pr-ld-dupok"><b>The same person has two slips for the same cheque date, with other amounts</b> (${esc([...new Set(dups.map(r => r.s.name + ", " + fmtDate(r.s.cheque)))].slice(0, 4).join(" · "))}). These are two cheques, so both are saved. Untick one in the Use column only if it is a mistake.</p>` : ""}
       ${need ? `<p class="src-bad"><b>⚠ ${need} slip${need === 1 ? " has" : "s have"} another slip already on file for the same person and cheque date, with other amounts.</b> On each one (in red below), pick: keep what is on file, use this one instead, or add it too as a second cheque.</p>` : ""}
@@ -36656,7 +36668,7 @@ async function prSlipsLoad(files) {
           <td>${esc(paysPayLab(s))}${s.commission ? `<div class="quiet">Commission ${money(s.commission)}</div>` : ""}</td>
           <td class="${changed ? "pr-ld-chg" : ""}">${now}${changed ? `<div class="quiet">${p.rate ? "will change to the slip's rate" : "will be set"}</div>` : hist ? `<div class="quiet" title="This slip is older than the pay on file. Its rate goes in the person's pay history; the rate now does not change.">stays · this slip goes in the pay history</div>` : ""}</td>
           <td><b>${money(s.gross)}</b><div class="quiet">net ${money(s.net)}</div>${diff ? `<div class="pr-ld-of">On file: gross ${money(o.gross)}, net ${money(o.net)}${o.file ? ` (${esc(o.file)})` : ""}
-            <select data-pick><option value="">Pick one…</option><option value="keep"${r.pick === "keep" ? " selected" : ""}>Keep what is on file</option>${fr.length === 1 ? `<option value="new"${r.pick === "new" ? " selected" : ""}>Use this one instead</option>` : ""}<option value="add"${r.pick === "add" ? " selected" : ""}>Add it too: a second cheque</option></select></div>` : o ? `<div class="pr-ld-dupt">${appRun(o) ? `Duplicate: the app's pay run already paid this${diff ? ` (the app's net was ${money(o.net)}, this slip ${money(s.net)})` : ""}` : "Duplicate: already on file with the same date and amounts"}</div>` : ""}</td></tr>`; }).join("")}
+            <select data-pick><option value="">Pick one…</option><option value="keep"${r.pick === "keep" ? " selected" : ""}>Keep what is on file</option>${fr.length === 1 ? `<option value="new"${r.pick === "new" ? " selected" : ""}>Use this one instead</option>` : ""}<option value="add"${r.pick === "add" ? " selected" : ""}>Add it too: a second cheque</option></select></div>` : o ? `<div class="pr-ld-dupt">${appRun(o) ? `Duplicate: the app's pay run already paid this${diff ? ` (the app's net was ${money(o.net)}, this slip ${money(s.net)})` : ""}` : "Duplicate: already on file with the same date and amounts"}${o.page ? `<div class="pr-ld-pg">✓ Its page is on file</div>` : `<div class="pr-ld-pg pr-ld-pgno">Its page is missing: Save adds it</div>`}</div>` : ""}</td></tr>`; }).join("")}
       </tbody></table></div>
       <p class="quiet">An older slip never changes the rate now: its rate goes in the person's pay history (for example "$27.00 → $32.50"). Each slip's page is kept with it (a SIN, if one is printed, is covered before it is saved), and the address on the slip goes in the person's address history. Family support (FRO) deductions are not kept.</p>
       <div class="src-pop-btns"><button type="button" class="btn" id="pr-ld-save"${need || noDate ? " disabled" : ""}>Save the pay slips</button><button type="button" class="btn quiet-btn" data-src-x>Cancel</button>${need ? ` <span class="src-bad">Pick one on each slip already on file first.</span>` : ""}</div>`;
@@ -36676,18 +36688,21 @@ async function prSlipsLoad(files) {
         .map(r => { const p = personOf(r.who), fr = freeOf(r), src = mine(r).some(o => o.blockSet && o.use);
           const slip_no = r.pick === "new" && fr.length === 1 ? Number(fr[0].slip_no || 1) : nextNo(r);
           // the slip's own block: a new person always; else every slip of a person whose block was changed in this load (so the move is written in their pay history)
-          return { ...r.s, slip_no, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: !p || src ? blkOf(r) : "", block_set: !p || !!src }; });
-      // slips already on file with the same amounts but no page yet: only their page and address are added
-      R.filter(r => r.use && r.who !== "skip").forEach(r => { const o = exactOf(r); if (o && !o.page) {
-        const p = personOf(r.who); out.push({ ...r.s, slip_no: Number(o.slip_no || 1), user: p?.user || null, staff: p && !p.user ? p.staff : null, page_only: true }); } });
-      if (!out.length) { close(); return alertMsg("Nothing new to save: every slip is already on file, with its page."); }
+          return { ...r.s, slip_no, user: p?.user || null, staff: p && !p.user ? p.staff : null, block: blkOf(r), block_set: true }; });
+      // slips already on file with the same amounts: their page is added when it is missing, and the block shown is saved on them when it differs
+      let blkN = 0;
+      R.filter(r => r.use && r.who !== "skip").forEach(r => { const o = exactOf(r); if (!o) return; const b = blkOf(r), bChg = !!b && b !== o.block;
+        if (o.page && !bChg) return; if (bChg) blkN++;
+        const p = personOf(r.who); out.push({ ...r.s, slip_no: Number(o.slip_no || 1), user: p?.user || null, staff: p && !p.user ? p.staff : null, page_only: true, keepPage: !!o.page, block: b, block_set: bChg }); });
+      if (!out.length) { close(); return alertMsg("Nothing new to save: every slip is already on file, with its page and its block."); }
       const say = body.querySelector(".src-pop-btns"); let k = 0, pgErr = 0, pgWhy = "";
       for (const x of out) { k++; if (say) say.innerHTML = `<span class="src-hint">Saving the pay slip pages: ${k} of ${out.length}…</span>`;
+        if (x.keepPage) { x.page = null; delete x._f; delete x.keepPage; continue; }
         try { x.page = await paysPageSave(x); } catch (er) { x.page = null; pgErr++; pgWhy = pgWhy || rpcErr(er); } delete x._f; }
       const { data, error } = await db.rpc("payroll_slips_save", { p: { file: files.map(f => f.name).join(", "), slips: out } });
       if (error) { e.target.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
       close(); PR.people = null; const nS = data?.saved ?? 0, nP = data?.pages ?? 0;
-      alertMsg((nS ? `✓ Saved ${nS} pay slip${nS === 1 ? "" : "s"} for ${data?.people ?? ""} ${data?.people === 1 ? "person" : "people"}.` : "✓ No new pay slips: they were all on file already.") + (nP ? ` Added the page to ${nP} slip${nP === 1 ? "" : "s"} already on file.` : "") + (pgErr ? ` But ${pgErr} slip page${pgErr === 1 ? "" : "s"} could not be saved (${pgWhy}). Load the PDF again in a few minutes to add them.` : "")); openPayroll(); });
+      alertMsg((nS ? `✓ Saved ${nS} pay slip${nS === 1 ? "" : "s"} for ${data?.people ?? ""} ${data?.people === 1 ? "person" : "people"}.` : "✓ No new pay slips: they were all on file already.") + (nP ? ` Added the page to ${nP} slip${nP === 1 ? "" : "s"} already on file.` : "") + (blkN ? ` Saved the block on ${blkN} slip${blkN === 1 ? "" : "s"} already on file, so it stays.` : "") + (pgErr ? ` But ${pgErr} slip page${pgErr === 1 ? "" : "s"} could not be saved (${pgWhy}). Load the PDF again in a few minutes to add them.` : "")); openPayroll(); });
   };
   draw();
 }

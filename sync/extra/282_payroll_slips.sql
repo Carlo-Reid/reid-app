@@ -111,7 +111,7 @@ END $function$;
 
 -- slips already on file for these cheque dates (to warn when a slip loaded again has other amounts)
 CREATE OR REPLACE FUNCTION public.payroll_slips_on_file(p_cheques date[]) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
-  SELECT CASE WHEN public._src_owner() THEN coalesce((SELECT jsonb_agg(jsonb_build_object('staff', s.staff_id, 'user', ps.app_user_id, 'cheque', s.cheque_date, 'gross', s.gross, 'net', s.net, 'file', s.file_name, 'page', s.page_path IS NOT NULL, 'slip_no', s.slip_no))
+  SELECT CASE WHEN public._src_owner() THEN coalesce((SELECT jsonb_agg(jsonb_build_object('staff', s.staff_id, 'user', ps.app_user_id, 'cheque', s.cheque_date, 'gross', s.gross, 'net', s.net, 'file', s.file_name, 'page', s.page_path IS NOT NULL, 'slip_no', s.slip_no, 'block', s.block))
     FROM payroll_slips s JOIN payroll_staff ps ON ps.id = s.staff_id WHERE s.cheque_date = ANY (p_cheques)), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
 
 CREATE OR REPLACE FUNCTION public._payroll_block_name(b text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
