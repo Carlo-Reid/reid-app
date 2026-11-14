@@ -2082,6 +2082,7 @@
   .pr-t4slt tr.pr-t4-miss td { background: #fdecea; color: #b42318; } .pr-t4slt tr.pr-t4-out td { color: #8a94a3; } .pr-t4slt tr.pr-t4-extra td { background: #fff7e6; }
   .pr-t4slt tr.pr-t4-cmp td { font-weight: 700; background: #eef4fa; } .pr-t4-hint { background: #fff7e6; border-left: 4px solid #e8a33d; padding: 8px 12px; border-radius: 6px; margin: 6px 0; }
 .pr-run-t tr.pr-run-fixing td { background: #fff8e8; } .pr-run-fixrow td, .pr-run-void td { background: #fff8e8; font-size: 13.5px; text-align: left !important; } .pr-run-void td { color: #8a4b00; } .pr-fix-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; } .pr-fixbtn { white-space: nowrap; font-size: 12.5px; padding: 4px 8px; }
+.pr-run-t td.pr-run-bank { white-space: nowrap; font-size: 12.5px; } .pr-run-bank label { display: block; margin-top: 2px; } .pr-bank-bal { font-size: 18px; margin: 0 0 4px; } .pr-bank-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 8px 0 10px; } .pr-bank-form label { display: grid; gap: 3px; font-size: 13px; } .pr-bank-tag, .pr-bankp { background: #eef4fa !important; border-color: #bcd0e3 !important; color: #23415f !important; } .pr-bank-tag { font-size: 13px; padding: 1px 8px; border-radius: 10px; border: 1px solid; margin-left: 6px; font-weight: 600; }
 .src-gfix { margin: 6px 0 0; } .src-gform { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 8px 0; padding: 10px; border: 1.5px solid #bcd0e3; border-radius: 10px; background: #f4f8fc; }
 .src-gform label { display: grid; gap: 3px; font-size: 13px; } .src-gform input { width: 160px; } .src-gmsg { color: #b42318; font-size: 13px; }
   .pr-privzone { border: 1.5px dashed #f0c38a; border-radius: 12px; background: #fffaf3; padding: 12px 14px; margin: 8px 0 16px; }
@@ -34853,7 +34854,7 @@ async function openPayroll() {
   const p = prPeriodOf(salesToday());
   const notes = new Map(); try { const n = await db.rpc("payroll_notes_period", { p_from: p.from }); (n.data || []).forEach(x => notes.set(Number(x.user), x.note)); } catch { }
   const priv = !!PR.priv;
-  if (priv) { PR.mSlips = null; try { const o = await db.rpc("payroll_overview"); PR.ov = o.error ? null : o.data; } catch { PR.ov = null; } prTaxWatchLoad(); }
+  if (priv) { PR.mSlips = null; try { const o = await db.rpc("payroll_overview"); PR.ov = o.error ? null : o.data; } catch { PR.ov = null; } prTaxWatchLoad(); await prBankLoad(); }
   // names only unless Source/Private is on (George, Nov 13: staff may be looking over our shoulder)
   const row = x => `<button type="button" class="pr-person${x.block === "past" ? " off" : ""}${notes.has(Number(x.user)) ? " has-note" : ""}" ${x.user ? `data-pr-user="${x.user}"` : `data-pr-staff="${x.staff}"`}>
       <span class="pr-pname">${esc(x.name)}${notes.has(Number(x.user)) ? ` <span class="pr-has-note" title="${esc(notes.get(Number(x.user)))}">📝 Note</span>` : ""}</span>
@@ -34861,7 +34862,7 @@ async function openPayroll() {
       <span class="pr-plast${x.last_pay && String(x.last_pay).slice(0, 10) < prDaysAgo(92) ? " pr-plast-old" : ""}">${x.last_pay ? "Last cheque: " + esc(fmtDate(String(x.last_pay).slice(0, 10))) : "No pay slips loaded"}</span>
       ${priv ? (() => { const ytd = prYtd(x), yl = ytd != null ? `<small class="pr-ytd" title="Gross pay on the pay slips loaded for ${salesToday().slice(0, 4)}">${money(ytd)} this year</small>` : "";
         const rt = x.rate ? (x.rate.kind === "salary" ? "Salary" : prRateLab(x.rate)) : x.pay_kind === "commission" ? "Commission" : "";
-        const vp = prVacPct(x), vl = vp != null ? `<span class="pr-vacp" title="Vacation pay on their newest pay slip">${vp}% vacation</span>` : "";
+        const vp = prVacPct(x), bh = x.user ? Number(PR.bankU?.get(Number(x.user)) || 0) : prBankOf(x.staff), vl = (vp != null ? `<span class="pr-vacp" title="Vacation pay on their newest pay slip">${vp}% vacation</span>` : "") + (bh ? `<span class="pr-vacp pr-bankp" title="Hours in their bank">⏳ ${Math.round(bh * 100) / 100} h banked</span>` : "");
         return rt || yl ? `<span class="pr-pwage">${rt}${yl}${vl}</span>` : x.block !== "owner" && x.block !== "past" ? `<span class="pr-pwage pr-norate">No pay rate</span>` : ""; })() : ""}</button>`;
   const by = k => PR.people.filter(x => x.block === k);
   const blk = (k, title) => { const xs = by(k); if (!xs.length && (k === "greeter" || k === "sales")) return "";
@@ -35941,9 +35942,13 @@ async function prHoursFor(pp, p) {
 function prRunCalc(L) {
   const T = L.inf?.tax || {}, Y = L.inf?.ytd || {}, r2 = x => Math.round((Number(x) || 0) * 100) / 100;
   const sal = L.kind === "salary";
-  L.hourly = sal ? r2(L.per_pay) : r2(L.hours * L.rate); L.otPay = sal ? 0 : r2(L.ot_h * L.rate * 1.5);
-  L.vac = r2((L.hourly + L.otPay) * (L.vac_pct || 0) / 100);
-  L.gross = r2(L.hourly + L.otPay + Number(L.com || 0) + L.vac + Number(L.oncall || 0) + Number(L.other || 0));
+  L.hourly = sal ? r2(L.per_pay) : r2(L.hours * L.rate);
+  // banked hours (George, Nov 14): overtime hours put in the bank are not paid now (banked at 1.5, Ontario); hours taken out of the bank are paid at their rate
+  L.bank_ot = Math.max(0, Math.min(Number(L.bank_ot || 0), sal ? Infinity : Number(L.ot_h || 0))); L.bank_add = r2(L.bank_ot * 1.5);
+  L.otPay = sal ? 0 : r2((Number(L.ot_h || 0) - L.bank_ot) * L.rate * 1.5);
+  L.bank_used = Math.max(0, Number(L.bank_used || 0)); L.bank_rate = sal ? r2(Number(L.per_pay || 0) / (Number(L.hours) || 80)) : Number(L.rate || 0); L.bankPay = r2(L.bank_used * L.bank_rate);
+  L.vac = r2((L.hourly + L.otPay + L.bankPay) * (L.vac_pct || 0) / 100);
+  L.gross = r2(L.hourly + L.otPay + L.bankPay + Number(L.com || 0) + L.vac + Number(L.oncall || 0) + Number(L.other || 0));
   const cppY = Number(Y.cpp || 0), cm = payTax(Number(PRUN.run.pay.slice(0, 4)))?.cpp?.max || 4230.45, D = payDeduct({ year: Number(PRUN.run.pay.slice(0, 4)), P: 26, gross: r2(L.gross + Number(L.tb || 0)), insurable: L.gross, ytdCpp: Math.min(cppY, cm), ytdCpp2: Math.max(0, cppY - cm),
     ytdEi: Number(Y.ei || 0), ytdPens: Number(Y.gross || 0), td1Fed: T.td1_fed, td1On: T.td1_on, extraTax: T.extra_tax, deps: T.deps, cppExempt: T.cpp_exempt, eiExempt: T.ei_exempt });
   if (!D) { L.err = "The tax numbers for " + PRUN.run.pay.slice(0, 4) + " are not in the app yet. Add them in Tax numbers."; return L; }
@@ -35953,6 +35958,7 @@ function prRunCalc(L) {
   // the same words as the accountant's pay slips, so the year-to-date of each line carries on (Hourly Pay Rate, VacPay-Paid Out…)
   L.earn = [sal ? { label: "Salary", cur: L.hourly } : { label: "Hourly Pay Rate", qty: L.hours, rate: L.rate, cur: L.hourly }];
   if (L.otPay || (L.inf?.ytdl || {})["Overtime Pay Rate"] != null) L.earn.push({ label: "Overtime Pay Rate", qty: L.ot_h || 0, rate: r2(L.rate * 1.5), cur: L.otPay || 0 });
+  if (L.bankPay) L.earn.push({ label: "Banked Hours Paid Out", qty: L.bank_used, rate: L.bank_rate, cur: L.bankPay });
   if (Number(L.com)) L.earn.push({ label: "Commision", qty: r2(L.com), rate: 1, cur: r2(L.com) });
   if (L.vac) L.earn.push({ label: "VacPay-Paid Out", cur: L.vac });
   if (Number(L.oncall)) L.earn.push({ label: "On Call", cur: r2(L.oncall) });
@@ -35963,7 +35969,7 @@ function prRunCalc(L) {
 }
 const prRunL = L => ({ kind: L.kind, hours: L.hours, ot_h: L.ot_h, rate: L.rate, per_pay: L.per_pay, hourly: L.hourly, ot: L.otPay, com: L.com, jobs: L.jobs, vac_pct: L.vac_pct, vac: L.vac,
   oncall: L.oncall, other: L.other, other_what: L.other_what, gross: L.gross, cpp: L.cpp, cpp2: L.cpp2, ei: L.ei, tax: L.tax, fed: L.fed, on: L.on, ben: L.ben, oded: L.oded, net: L.net,
-  earn: L.earn, dfg: L.dfg, adj: L.adj, src: L.src, tb: Number(L.tb || 0) || undefined, tb_kind: Number(L.tb || 0) ? (L.tb_kind || "40") : undefined });
+  earn: L.earn, dfg: L.dfg, adj: L.adj, src: L.src, bank_used: L.bank_used || undefined, bank_ot: L.bank_ot || undefined, bank_add: L.bank_add || undefined, bank_pay: L.bankPay || undefined, tb: Number(L.tb || 0) || undefined, tb_kind: Number(L.tb || 0) ? (L.tb_kind || "40") : undefined });
 // The CRA tax watch (George, Nov 14): the database looks at the CRA's T4127 page once a day (298_payroll_tax_watch.sql) and keeps any new edition
 // until an owner presses "Done, I put them in". It only tells: the numbers are never filled in by themselves.
 const PR_T4127 = "https://www.canada.ca/en/revenue-agency/services/forms-publications/payroll/t4127-payroll-deductions-formulas.html";
@@ -36092,12 +36098,35 @@ function prTaxEdit(host, y) {
     const { error } = await db.rpc("payroll_tax_year_set", { p_year: y, p: o }); if (error) return alertMsg("Not saved: " + rpcErr(error));
     await payTaxLoad(); alertMsg(`✓ The ${y} numbers are saved.`); prRunOpen(); });
 }
+// ===== Banked hours (George, Nov 14): a running balance for each person, + put in, - used; it carries forward by itself (304_payroll_bank.sql)
+async function prBankLoad() { try { const r = await db.rpc("payroll_bank_balances"); PR.bank = new Map((r.data || []).map(x => [Number(x.staff), Number(x.hours)])); PR.bankU = new Map((r.data || []).filter(x => x.user).map(x => [Number(x.user), Number(x.hours)])); } catch { PR.bank = PR.bank || new Map(); } }
+const prBankOf = staff => Math.round(Number((PR.bank && PR.bank.get(Number(staff))) || 0) * 100) / 100;
+async function prBankPerson(el, staffId) {
+  if (!el) return; el.innerHTML = `<div class="loading">Loading…</div>`;
+  const { data: d, error } = await db.rpc("payroll_bank_list", { p_staff: staffId }); if (error) { el.innerHTML = `<p class="error">Couldn't load it: ${esc(rpcErr(error))}</p>`; return; }
+  const rows = d?.rows || [], bal = Number(d?.balance || 0);
+  el.innerHTML = `<p class="pr-bank-bal">In the bank now: <b>${bal} hours</b></p>
+    <p class="quiet">Hours put in are added, hours used are taken off, and the total carries forward. On an app pay run, use the Bank column (Use / Bank OT) and it is written here by itself when the pay is made final. A mistake is fixed with a line the other way.</p>
+    <div class="pr-bank-form"><label>What happened? <select data-bk-kind><option value="in">➕ Hours put in the bank</option><option value="out">➖ Hours used (paid out or time off)</option></select></label>
+      <label>Hours <input data-bk-h inputmode="decimal" style="width:80px"></label><label>Day <input data-bk-d type="date" value="${salesToday()}"></label>
+      <label class="pp-wide">Why <input data-bk-why placeholder="e.g. 6 h overtime banked, week of Nov 2 · Took Friday off"></label>
+      <button type="button" class="btn" data-bk-save>Save it</button> <span class="quiet" data-bk-msg></span></div>
+    ${rows.length ? `<table class="src-sumt pr-bank-t"><thead><tr><th>Day</th><th>Hours</th><th>Why</th><th>Balance after</th><th>Who</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${esc(fmtDate(String(r.day).slice(0, 10)))}</td><td class="${Number(r.hours) < 0 ? "pr-cm-bad" : "pr-cm-ok"}">${Number(r.hours) > 0 ? "+" : ""}${Number(r.hours)}</td><td>${esc(r.why || "")}${r.run ? ` <span class="quiet">(app pay run)</span>` : ""}</td><td><b>${Number(r.after)}</b></td><td class="quiet">${esc(r.by || "")}</td></tr>`).join("")}</tbody></table>` : `<p class="quiet">Nothing in their bank yet.</p>`}`;
+  el.querySelector("[data-bk-save]").addEventListener("click", async e => { const b = e.currentTarget, msg = el.querySelector("[data-bk-msg]");
+    const h = Number(String(el.querySelector("[data-bk-h]").value).replace(/[^\d.]/g, "")), why = el.querySelector("[data-bk-why]").value.trim(), out = el.querySelector("[data-bk-kind]").value === "out";
+    if (!h) { msg.textContent = "Type the hours."; return; } if (!why) { msg.textContent = "Say why."; return; }
+    if (out && h > bal && !(await askChoice("Use more than they have?", `They have ${bal} hours in the bank. This takes off ${h}, so the bank goes below zero.`, [["y", "Yes, save it"], ["", "No, go back"]]))) return;
+    b.disabled = true; const { error: er } = await db.rpc("payroll_bank_add", { p_staff: staffId, p_day: el.querySelector("[data-bk-d]").value || null, p_hours: out ? -h : h, p_why: why });
+    if (er) { b.disabled = false; msg.textContent = "Not saved: " + rpcErr(er); return; }
+    await prBankLoad(); prBankPerson(el, staffId); });
+}
 async function prRunNew(p, blocks) {
   const ov = document.getElementById("pr-run"), body = ov.querySelector(".pr-run-b");
   if (!payTax(Number(p.pay.slice(0, 4)))) { body.insertAdjacentHTML("afterbegin", `<p class="error">The tax numbers for ${p.pay.slice(0, 4)} are not in the app yet. Add them in ⚙ Tax numbers below (the CRA's T4127 for that year).</p>`); return; }
   body.innerHTML = `<div class="loading" data-run-st>Getting ready…</div>`;
   const st = body.querySelector("[data-run-st]");
-  const { data } = await db.rpc("payroll_run_info", { p_pay: p.pay }); PRUN.info = data || PRUN.info;
+  const { data } = await db.rpc("payroll_run_info", { p_pay: p.pay }); PRUN.info = data || PRUN.info; await prBankLoad();
   PRUN.run = { id: null, pay: p.pay, from: p.from, to: p.to, status: "draft" };
   const IL = await prInstalls().catch(() => null), near = d => d && prDaysApart(String(d).slice(0, 10), p.pay) <= 4;
   const people = prRunPeople().filter(x => blocks.includes(x.block)).sort((a, b) => blocks.indexOf(a.block) - blocks.indexOf(b.block) || String(a.name).localeCompare(String(b.name)));
@@ -36122,7 +36151,7 @@ async function prRunNew(p, blocks) {
 }
 async function prRunLoad(id) {
   const { data, error } = await db.rpc("payroll_run_get", { p_id: id }); if (error || !data) return alertMsg("Couldn't open it: " + rpcErr(error || {}));
-  const { data: inf } = await db.rpc("payroll_run_info", { p_pay: String(data.pay_date).slice(0, 10) }); PRUN.info = inf || PRUN.info;
+  const { data: inf } = await db.rpc("payroll_run_info", { p_pay: String(data.pay_date).slice(0, 10) }); PRUN.info = inf || PRUN.info; await prBankLoad();
   PRUN.run = { id: data.id, pay: String(data.pay_date).slice(0, 10), from: String(data.period_from || "").slice(0, 10), to: String(data.period_to || "").slice(0, 10), status: data.status };
   PRUN.lines = (data.lines || []).map(x => { const pp = (PR.people || []).find(q => Number(q.staff) === Number(x.staff)) || {};
     const inf = (PRUN.info?.staff || []).find(s => Number(s.staff) === Number(x.staff));
@@ -36140,19 +36169,24 @@ function prRunDraw() {
       <td>${fin ? (L.fixing ? `<span class="pr-cm-warn">Fixing</span>` : L.cheque_no ? "#" + L.cheque_no : "") : `<input type="checkbox" data-rinc${L.inc ? " checked" : ""}>`}</td>
       <td><b>${esc(L.name || "")}</b><div class="quiet${/nowhere/.test(L.src || "") && !L.hours ? " pr-cm-bad" : ""}">${esc(prBlockName(L.block))} · ${L.kind === "salary" ? "Salary" : "Hours from " + esc(L.src || "")}</div>${L.err ? `<div class="pr-cm-bad">${esc(L.err)}</div>` : ""}${Number(L.tb) ? `<div class="quiet">+ taxable benefit ${money(L.tb)} (code ${esc(L.tb_kind || "40")}): taxed and on the T4, not paid in cash</div>` : ""}${L.onfile ? `<div class="pr-cm-warn">Already paid: a pay slip of ${esc(fmtDate(String(L.onfile.cheque).slice(0, 10)))} (${money(L.onfile.net)} net) is on file. Left out so it is not paid twice.</div>` : ""}</td>
       <td>${L.kind === "salary" ? `${inp(L, "per_pay", 80)}<div class="quiet">a pay</div>` : `${inp(L, "hours", 56)} h${L.ot_h ? `<div class="quiet">+ ${L.ot_h} h overtime</div>` : ""}`}</td>
-      <td>${L.kind === "salary" ? "" : inp(L, "rate", 60)}</td><td>${money(L.hourly + (L.otPay || 0))}</td>
+      <td>${L.kind === "salary" ? "" : inp(L, "rate", 60)}</td><td>${money(L.hourly + (L.otPay || 0))}${L.bankPay ? `<div class="quiet">+ ${money(L.bankPay)} banked hours</div>` : ""}</td>
       <td>${inp(L, "com", 72)}${L.jobs?.length ? `<div class="quiet" title="${esc(L.jobs.map(j => `${j.n} ${j.c}, ${j.a}: ${money(j.amt)}`).join("\n"))}">${L.jobs.length} job${L.jobs.length === 1 ? "" : "s"}</div>` : ""}</td>
-      <td>${money(L.vac || 0)}<div class="quiet">${L.vac_pct}%</div></td><td>${inp(L, "other", 66)}</td><td><b>${money(L.gross || 0)}</b></td>
+      <td>${money(L.vac || 0)}<div class="quiet">${L.vac_pct}%</div></td><td>${inp(L, "other", 66)}</td>
+      <td class="pr-run-bank">${(() => { const b = prBankOf(L.staff), after = fin ? b : Math.round((b - Number(L.bank_used || 0) + Number(L.bank_add || 0)) * 100) / 100;
+        return `<div class="quiet" title="Hours in their bank${fin ? " (after this pay)" : " now, before this pay"}">⏳ ${b} h</div>
+        <label title="Hours taken out of the bank and paid now, at their rate">Use ${inp(L, "bank_used", 46)}</label>${L.kind === "salary" ? "" : `<label title="Overtime hours put in the bank instead of paid (each one banks 1.5 hours)">Bank OT ${inp(L, "bank_ot", 46)}</label>`}
+        ${!fin && (Number(L.bank_used) || Number(L.bank_add)) ? `<div class="quiet">After: ${after} h</div>` : ""}${Number(L.bank_used) > b && !fin ? `<div class="pr-cm-bad">More than they have</div>` : ""}`; })()}</td>
+      <td><b>${money(L.gross || 0)}</b></td>
       <td>${money((L.cpp || 0) + (L.cpp2 || 0))}</td><td>${money(L.ei || 0)}</td><td>${money(L.tax || 0)}</td><td>${inp(L, "ben", 60)}</td><td><b>${money(L.net || 0)}</b></td>
       <td>${fin && !L.fixing ? `<button type="button" class="btn quiet-btn pr-fixbtn" data-rfix>✎ Fix this person</button>` : `<button type="button" class="link" data-rtd1>TD1</button>`}</td></tr>
-      ${(L.voided || []).length ? `<tr class="pr-run-void" data-ri="${i}"><td></td><td colspan="14">${L.voided.map(v => `Voided: cheque ${v.cheque_no ? "#" + esc(String(v.cheque_no)) : "(no number)"} for ${money(v.net || 0)}${v.why ? `, ${esc(v.why)}` : ""}${v.by ? ` (${esc(v.by)}, ${esc(fmtDate(String(v.at || "").slice(0, 10)))})` : ""}. Mark the paper cheque VOID and keep it.`).join("<br>")}</td></tr>` : ""}
-      ${L.fixing ? `<tr class="pr-run-fixrow" data-ri="${i}"><td></td><td colspan="14"><b>Fixing ${esc(L.name || "")}'s pay.</b> Change the white boxes on the line above (or their TD1). The tax, CPP and EI are worked out again. Net now: <b>${money(L.net || 0)}</b>.
+      ${(L.voided || []).length ? `<tr class="pr-run-void" data-ri="${i}"><td></td><td colspan="15">${L.voided.map(v => `Voided: cheque ${v.cheque_no ? "#" + esc(String(v.cheque_no)) : "(no number)"} for ${money(v.net || 0)}${v.why ? `, ${esc(v.why)}` : ""}${v.by ? ` (${esc(v.by)}, ${esc(fmtDate(String(v.at || "").slice(0, 10)))})` : ""}. Mark the paper cheque VOID and keep it.`).join("<br>")}</td></tr>` : ""}
+      ${L.fixing ? `<tr class="pr-run-fixrow" data-ri="${i}"><td></td><td colspan="15"><b>Fixing ${esc(L.name || "")}'s pay.</b> Change the white boxes on the line above (or their TD1). The tax, CPP and EI are worked out again. Net now: <b>${money(L.net || 0)}</b>.
         <div class="pr-fix-acts"><button type="button" class="btn save-go" data-rfix-save>Save and give a new cheque${E0.next_cheque ? ` #${esc(String(E0.next_cheque))}` : ""}</button><button type="button" class="btn" data-rfix-keep>↩ Keep the old cheque</button></div></td></tr>` : ""}
-      ${PRUN.open === i ? `<tr class="pr-run-td1" data-ri="${i}"><td></td><td colspan="14">${prRunTd1Html(L)}</td></tr>` : ""}`;
+      ${PRUN.open === i ? `<tr class="pr-run-td1" data-ri="${i}"><td></td><td colspan="15">${prRunTd1Html(L)}</td></tr>` : ""}`;
   body.innerHTML = `<div class="pr-run-h"><h2>Pay of ${esc(fmtDate(R.pay))} <small>worked ${esc(fmtDate(R.from))} to ${esc(fmtDate(R.to))}</small></h2>
       ${fin ? `<span class="pr-cm-ok">✓ Final</span>` : `<span class="pr-cm-warn">Draft: nothing is paid until it is made final</span>`}</div>
-    <div class="src-tw"><table class="src-sumt pr-run-t"><thead><tr><th>${fin ? "Cheque" : "Pay"}</th><th>Who</th><th>Hours</th><th>Rate</th><th>Hourly pay</th><th>Commission</th><th>Vacation</th><th>Other pay</th><th>Gross</th><th>CPP</th><th>EI</th><th>Tax</th><th>Benefits</th><th>Net</th><th></th></tr></thead>
-      <tbody>${PRUN.lines.map(row).join("")}<tr class="src-ytd"><td></td><td>${inc.length} people</td><td></td><td></td><td>${money(sum("hourly") + sum("otPay"))}</td><td>${money(sum("com"))}</td><td>${money(sum("vac"))}</td><td>${money(sum("other"))}</td><td>${money(sum("gross"))}</td>
+    <div class="src-tw"><table class="src-sumt pr-run-t"><thead><tr><th>${fin ? "Cheque" : "Pay"}</th><th>Who</th><th>Hours</th><th>Rate</th><th>Hourly pay</th><th>Commission</th><th>Vacation</th><th>Other pay</th><th title="Banked hours: what is in their bank, hours used (paid now) and overtime hours banked instead of paid">Bank (hours)</th><th>Gross</th><th>CPP</th><th>EI</th><th>Tax</th><th>Benefits</th><th>Net</th><th></th></tr></thead>
+      <tbody>${PRUN.lines.map(row).join("")}<tr class="src-ytd"><td></td><td>${inc.length} people</td><td></td><td></td><td>${money(sum("hourly") + sum("otPay"))}</td><td>${money(sum("com"))}</td><td>${money(sum("vac"))}</td><td>${money(sum("other"))}</td><td></td><td>${money(sum("gross"))}</td>
         <td>${money(sum("cpp") + sum("cpp2"))}</td><td>${money(sum("ei"))}</td><td>${money(sum("tax"))}</td><td>${money(sum("ben"))}</td><td>${money(sum("net"))}</td><td></td></tr></tbody></table></div>
     <p class="pr-run-src">Source to send the CRA for this pay: <b>${money(src)}</b> <span class="quiet">(tax ${money(sum("tax"))} + CPP twice, theirs and ours, ${money(2 * (sum("cpp") + sum("cpp2")))} + EI theirs and ours, 1.4 times, ${money(2.4 * sum("ei"))})</span></p>
     <p class="quiet">Overtime: hours over 44 in a week, at 1.5 times the rate (Ontario). Vacation pay is on the hourly pay and overtime. Change any white box and the line is worked out again. Hover the jobs to see them.</p>
@@ -36256,6 +36290,7 @@ function prRunStub(L, R, E) {
         <tr class="prq-tot"><td></td><td class="n">${prN2(tx.reduce((t, d) => t + Number(d.cur || 0), 0))}</td><td class="n">${prN2(tx.reduce((t, d) => t + ytd(d.label, d.cur), 0))}</td></tr></tbody></table>
       ${(L.adj || []).length ? `<table class="prq-t"><thead><tr><th>Adjustments to Net Pay</th><th class="n">Current</th><th class="n">YTD Amount</th></tr></thead><tbody>
         ${(L.adj || []).map(d => row([esc(d.label), prN2(d.cur), prN2(ytd(d.label, d.cur))])).join("")}</tbody></table>` : ""}
+      ${prBankOf(L.staff) || Number(L.bank_used) || Number(L.bank_add) ? `<table class="prq-t"><tbody><tr><td>Banked hours after this pay</td><td class="n">${prN2(PRUN.run?.status === "final" ? prBankOf(L.staff) : prBankOf(L.staff) - Number(L.bank_used || 0) + Number(L.bank_add || 0))} h</td></tr></tbody></table>` : ""}
       <table class="prq-t prq-net"><tbody><tr><td>Net Pay</td><td class="n">${prN2(L.net)}</td><td class="n">${prN2(r2(Number(Y.net || 0) + Number(L.net || 0)))}</td></tr></tbody></table></div></div>
     ${L.jobs?.length ? `<div class="prq-jobs">Commission on: ${L.jobs.map(j => `${esc(j.n || "")} ${esc(j.c || "")} (${money(j.amt)})`).join(" · ")}</div>` : ""}
     <div class="prq-co">${esc(E.legal_name || "")}</div></div>`;
@@ -36566,7 +36601,7 @@ async function prPrivSlot(user, staff) {
   host.innerHTML = `<div class="pr-privbar">${prPrivBtn()}</div>${PR.priv ? `<div class="pr-privzone" id="pr-priv"><div class="loading">Loading the private part…</div></div>` : ""}`;
   host.querySelector("#pr-privbtn")?.addEventListener("click", () => prPrivClick(redraw)); prPrivPlace();
   if (!PR.priv) return;
-  const { data: d, error } = await db.rpc("payroll_person_private", { p_user: user || null, p_staff: staff || null });
+  const [{ data: d, error }] = await Promise.all([db.rpc("payroll_person_private", { p_user: user || null, p_staff: staff || null }), prBankLoad()]);
   const box = document.getElementById("pr-priv"); if (!box) return;
   if (error) { box.innerHTML = `<div class="error">Couldn't load it: ${esc(rpcErr(error))}</div>`; return; }
   const ps = d?.staff || {}, per = Object.fromEntries((d?.periods || []).map(x => [x.k, x])), blk = d?.block || "office";
@@ -36588,6 +36623,7 @@ async function prPrivSlot(user, staff) {
   const v = (x, f) => x == null || x === "" ? "—" : f ? f(x) : esc(String(x));
   box.innerHTML = `<div class="pr-privtop"><h2 class="pr-privh">🔒 Private: owners only</h2><span class="pr-allbtns">${pp ? `<button type="button" class="btn" data-pr-prt>🖨 Print their pay sheets</button>` : ""}<button type="button" class="btn" data-pr-all="1">▾ Open all</button><button type="button" class="btn" data-pr-all="0">▸ Close all</button></span></div>
     ${user ? `<details class="pr-pcard pr-fold" data-k="rate"><summary><h3>💲 Pay rate</h3></summary><div id="pr-rate-box"></div></details>` : ""}
+    ${ps.id ? `<details class="pr-pcard pr-fold" data-k="bank"><summary><h3>⏳ Banked hours${prBankOf(ps.id) ? ` <span class="pr-bank-tag">${prBankOf(ps.id)} h</span>` : ""}</h3></summary><div id="pr-bank-person"></div></details>` : ""}
     ${ps.id ? `<details class="pr-pcard pr-fold" data-k="sin"><summary><h3>🔒 SIN</h3></summary><div id="pr-sin-box"></div></details>` : ""}
     <section class="pr-pcard"><h3>What they cost us and what they bring in</h3><div class="pr-mcols">${col(per.ytd, "This year")}${col(per.m12, "Last 12 months")}</div>
       <p class="quiet">From the pay slips loaded. Pay includes vacation pay, overtime, on call and commission.</p></section>
@@ -36638,6 +36674,7 @@ async function prPrivSlot(user, staff) {
   if (user) prRateBox(user);
   if (ps.id) prT4Person(ps.id, slips);
   if (ps.id) prSinBox(box.querySelector("#pr-sin-box"), ps.id, user, ps.name);
+  if (ps.id) prLazyFold(box, "bank", () => prBankPerson(box.querySelector("#pr-bank-person"), ps.id));
   if (ps.id) prRoePerson(ps.id, user ? "u" + user : "s" + ps.id);
   if (pp?.employee) { prLazyFold(box, "sold", () => prSoldPerson(box.querySelector("#pr-sold-person"), pp, slips));
     prLazyFold(box, "leads", () => prLeadsPerson(box.querySelector("#pr-leads-person"), pp)); prLazyFold(box, "crates", () => prRatesPerson(box.querySelector("#pr-crates-person"), pp)); }
