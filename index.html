@@ -7715,6 +7715,11 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
   .ie-walk-qb { display: flex; gap: 8px; align-items: stretch; } .ie-walk-qb .mc-sq { width: 112px; height: 104px; min-height: 0; margin: 0; cursor: pointer; }
   .ie-walk-qb .mc-sq[aria-pressed="true"] { background: #e9f6ed; border-color: #1b6b36; }
   .ie-walk-msg.err { color: #b42318; font-weight: 700; font-size: 16px; }
+  .ie-walk-extra { display: flex; flex-direction: column; gap: 8px; background: #fff; border: 1.5px solid #bcd0e3; border-radius: 12px; padding: 10px 12px; }
+  .ie-walk-extra .ie-walk-qh .quiet { font-weight: 400; margin-left: 6px; }
+  .ie-walk-extra-list { display: flex; flex-wrap: wrap; gap: 10px; }
+  .ie-walk-extra-item { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 13.5px; color: #1b6b36; }
+  .ie-walk-th-ph { display: flex; align-items: center; justify-content: center; background: #e9f6ed; font-size: 26px; }
   .tob-qs { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; } .tob-q { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
   .ie-walk-p { margin: 0; font-size: 16px; }
   .ie-walk-l { display: flex; flex-direction: column; gap: 4px; font-size: 16px; color: #23415f; margin: 0; }
@@ -17450,7 +17455,7 @@ async function openOnSite(jobId, jobType, jobClass, c) {
     SALES.rows = null; return openEstEdit(data, "You're on site. Here's the proposal.");
   }
   const walk = mcIsWalk(c), walkSay = "You are on site for the walk. The job is below. Type your notes for the walk in the box at the top.";
-  const setWalk = inv => { if (walk && !(WALK && WALK.visit === c.visit_id)) WALK = { visit: c.visit_id, job: jobId, inv, notes: "", done: false, png: null, signer: c.customer_name || "", qs: null, ans: {} }; else if (walk) WALK.inv = inv; };
+  const setWalk = inv => { if (walk && !(WALK && WALK.visit === c.visit_id)) WALK = { visit: c.visit_id, job: jobId, inv, notes: "", done: false, png: null, signer: c.customer_name || "", qs: null, ans: {}, extra: null }; else if (walk) WALK.inv = inv; };
   const ji = await db.rpc("job_invoice", { p_job: jobId });   // the job's own finished invoice, with all its details: open that one, do not start a second one
   if (!ji.error && ji.data) { setWalk(ji.data); return openInvoiceEditor(ji.data, walk ? walkSay : "You're on site. Here's the invoice for this job."); }
   const { data, error } = await db.rpc("new_invoice", { p_job: jobId });
@@ -21902,6 +21907,7 @@ function renderToBook() {
           <div><b>Walk done</b> ${r.done_at ? esc(day(r.done_at)) : ""}${r.tech ? " by " + esc(r.tech) : ""}</div>
           ${(r.answers || []).length ? `<div class="tob-qs"><b>The questions:</b>${r.answers.map(a => `<div class="tob-q"><span>${a.q}. ${esc(a.question || "")}</span>
             ${a.key ? `<button class="btn" type="button" data-tob-pic="${esc(a.key)}" data-tob-picname="Question ${a.q}: ${esc(a.question || "")}">📷 See the picture</button>` : `<span class="quiet">N/A: no picture</span>`}</div>`).join("")}</div>` : ""}
+          ${(r.extra || []).length ? `<div class="tob-qs"><b>More pictures:</b><div class="tob-q">${r.extra.map((k, j) => `<button class="btn" type="button" data-tob-pic="${esc(k)}" data-tob-picname="Extra picture ${j + 1}">📷 Picture ${j + 1}</button>`).join("")}</div></div>` : ""}
           ${r.notes ? `<div class="tob-notes"><b>Notes from the walk:</b> ${esc(r.notes)}</div>` : `<div class="quiet">No notes from the walk.</div>`}
           ${r.signed ? `<div class="tob-sig"><img alt="Signature" src="data:image/png;base64,${r.sig}"><span class="quiet">✔ Signed${r.signer ? " by " + esc(r.signer) : ""}</span></div>` : `<div class="quiet">The customer did not sign.</div>`}
         </div>
@@ -27068,6 +27074,7 @@ function ieWalkHtml(I) {
     <h2><span aria-hidden="true">🚶</span> The walk</h2>
     <p class="ie-walk-p">Look at the job below. Then answer the questions, and type what you see, so we can get ready for the install.</p>
     ${walkQsHtml(W)}
+    ${walkExtraHtml(W)}
     <label class="ie-walk-l"><b>Notes for the walk</b>
       <textarea id="ie-walk-notes" rows="4" maxlength="8000" placeholder="Where the tank goes. What is in the way. What parts we need to bring.">${esc(W.notes || "")}</textarea></label>
     ${!W.done ? `<div class="ie-actions"><button class="ie-sq ie-sq-go" type="button" id="ie-walk-done"><span class="ie-sq-ic" aria-hidden="true">✅</span><b>Walk completed</b></button></div>`
@@ -27106,11 +27113,40 @@ function walkQsHtml(W) {
 }
 async function walkLoadQs(W) {
   if (W.qs || W.qLoading) return; W.qLoading = true;
-  const [q, a] = await Promise.all([db.rpc("walk_questions"), db.rpc("walk_answers_for", { p_visit_id: W.visit })]);
+  const [q, a, ex] = await Promise.all([db.rpc("walk_questions"), db.rpc("walk_answers_for", { p_visit_id: W.visit }), db.rpc("walk_extra_photos_for", { p_visit_id: W.visit })]);
   W.qLoading = false; if (WALK !== W) return;
   W.qs = Array.isArray(q.data) && q.data.length ? q.data : ["Take a picture of the job."];
   (a.data || []).forEach(x => { if (!W.ans[x.q]) W.ans[x.q] = { na: !!x.na, key: x.key || null }; });
+  if (!W.extra) W.extra = (ex.data || []).map(x => ({ q: x.q, key: x.key || null }));
   if (document.querySelector("#ie-walk")) renderInvoiceEditor();
+}
+// Extra pictures (Carlo, Nov 14: "add a button to add more pictures without notes in case they need to take more or want to"): as many as the tech
+// likes, with no question attached. They go in the job's photos the same way, under walk_answers q 1000 and up, which walk_complete's count ignores.
+function walkExtraHtml(W) {
+  const rows = W.extra || [], busy = !!W.extraBusy;
+  return `<div class="ie-walk-extra">
+    <b class="ie-walk-qh">More pictures <span class="quiet">Add as many as you like. No question needed.</span></b>
+    ${rows.length ? `<div class="ie-walk-extra-list">${rows.map((x, i) => `<div class="ie-walk-extra-item">
+      ${x.url ? `<img class="ie-walk-th" alt="Extra picture ${i + 1}" src="${x.url}">` : `<span class="ie-walk-th ie-walk-th-ph" aria-hidden="true">📷</span>`}
+      <span class="quiet">Picture ${i + 1} saved</span></div>`).join("")}</div>` : ""}
+    ${W.extraErr ? `<p class="ie-walk-qerr">${esc(W.extraErr)}</p>` : ""}
+    <div class="ie-walk-qb">
+      <input type="file" accept="image/*" capture="environment" hidden id="walk-extra-pic">
+      <button class="mc-sq" type="button" id="walk-extra-cam" ${busy ? "disabled" : ""}><span class="mc-sq-ic" aria-hidden="true">📷</span><span class="mc-sq-tn">${busy ? "Saving…" : "Add another picture"}</span></button>
+    </div>
+  </div>`;
+}
+async function walkExtraAdd(file) {
+  const W = WALK; if (!W || W.busy || W.extraBusy) return;
+  W.extraBusy = true; W.extraErr = null; renderInvoiceEditor();
+  try {
+    const blob = await walkShrink(file), key = `forms/${W.job}/walk-${W.visit}-extra-${Date.now()}.jpg`;
+    const up = await db.storage.from("job-files").upload(key, blob, { contentType: "image/jpeg" }); if (up.error) throw new Error(up.error.message);
+    let error = null, data = null;
+    for (let n = 0; n < 4; n++) { ({ data, error } = await db.rpc("walk_extra_photo_add", { p_visit_id: W.visit, p_key: key, p_size: blob.size })); if (!error) break; await new Promise(r => setTimeout(r, 3000)); }
+    if (error) throw new Error(rpcErr(error));
+    (W.extra ||= []).push({ q: data, key, url: URL.createObjectURL(blob) }); W.extraBusy = false; renderInvoiceEditor();
+  } catch (e) { W.extraBusy = false; W.extraErr = "The picture was not saved: " + (e.message || "try again") + ". Try again."; renderInvoiceEditor(); }
 }
 // a phone's picture is made smaller (1600px at most, JPEG) before it is saved, so it loads fast for the office
 async function walkShrink(file) {
@@ -27124,12 +27160,12 @@ async function walkShrink(file) {
 // camera and take the pic"). The back camera on a phone, the webcam on a computer. No camera, or the person says no to it: it says so and offers the file
 // picker (on a phone that one opens the camera app).
 function walkCam(q) {
-  const W = WALK; if (!W || W.busy) return;
-  const pickFile = () => document.querySelector(`[data-walk-pic="${q}"]`)?.click();
+  const W = WALK; if (!W || W.busy) return; const isExtra = q === "extra"; if (isExtra && W.extraBusy) return;
+  const pickFile = () => document.querySelector(isExtra ? "#walk-extra-pic" : `[data-walk-pic="${q}"]`)?.click();
   if (!navigator.mediaDevices?.getUserMedia) return pickFile();
   document.getElementById("walk-cam")?.remove();
   const o = document.createElement("div"); o.id = "walk-cam"; o.setAttribute("role", "dialog"); o.setAttribute("aria-modal", "true"); o.setAttribute("aria-label", "Take a picture");
-  o.innerHTML = `<div class="wc-box"><b class="wc-h">Question ${q}: ${esc((W.qs || [])[q - 1] || "")}</b>
+  o.innerHTML = `<div class="wc-box"><b class="wc-h">${isExtra ? "Add another picture" : `Question ${q}: ${esc((W.qs || [])[q - 1] || "")}`}</b>
     <div class="wc-view"><video autoplay playsinline muted></video><p class="wc-msg" role="status">Looking for the camera…</p></div>
     <div class="wc-acts"><button type="button" class="mc-sq mc-sq-go" data-wc="shot" disabled><span class="mc-sq-ic" aria-hidden="true">📸</span><span class="mc-sq-tn">Take the picture</span></button>
       <button type="button" class="mc-sq" data-wc="file"><span class="mc-sq-ic" aria-hidden="true">📁</span><span class="mc-sq-tn">Pick a file</span></button>
@@ -27144,7 +27180,7 @@ function walkCam(q) {
   o.querySelector('[data-wc="file"]').addEventListener("click", () => { close(); pickFile(); });
   shot.addEventListener("click", () => {
     if (!v.videoWidth) return; const cv = document.createElement("canvas"); cv.width = v.videoWidth; cv.height = v.videoHeight; cv.getContext("2d").drawImage(v, 0, 0);
-    cv.toBlob(b => { close(); if (b) walkAnswer(q, b); }, "image/jpeg", .9); });
+    cv.toBlob(b => { close(); if (b) (isExtra ? walkExtraAdd(b) : walkAnswer(q, b)); }, "image/jpeg", .9); });
   // Carlo, Nov 14: "it can't find the camera again". Try the back camera first, then any camera, then each camera by name; and say what really went wrong.
   const why = (err, cams) => { const n = (err && err.name) || "";
     return (n === "NotAllowedError" || n === "SecurityError" ? "The camera is blocked for this page. Click the small lock or camera picture at the left of the address bar, set Camera to Allow, then press Try again. If it still says this, the camera is turned off for the browser in the device's own privacy settings."
@@ -27192,6 +27228,8 @@ function ieWalkWire() {
   box.querySelectorAll("[data-walk-pic]").forEach(i => i.addEventListener("change", () => { const f = i.files && i.files[0]; if (f) walkAnswer(Number(i.dataset.walkPic), f); }));
   box.querySelectorAll("[data-walk-cam]").forEach(b => b.addEventListener("click", () => walkCam(Number(b.dataset.walkCam))));
   box.querySelectorAll("[data-walk-na]").forEach(b => b.addEventListener("click", () => walkAnswer(Number(b.dataset.walkNa), null)));
+  $("#walk-extra-pic")?.addEventListener("change", e => { const f = e.target.files && e.target.files[0]; if (f) walkExtraAdd(f); });
+  $("#walk-extra-cam")?.addEventListener("click", () => walkCam("extra"));
   $("#ie-walk-notes")?.addEventListener("input", e => { W.notes = e.target.value; });
   $("#ie-walk-signer")?.addEventListener("input", e => { W.signer = e.target.value; });
   $("#ie-walk-done")?.addEventListener("click", () => {
