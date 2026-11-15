@@ -18,6 +18,13 @@ CREATE TABLE IF NOT EXISTS public.payroll_advances (
   day date NOT NULL, hours numeric(8,2) NOT NULL CHECK (hours <> 0), per_pay numeric(8,2), note text,
   run_id bigint, by_name text, at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS payroll_advances_staff ON public.payroll_advances (staff_id, day);
+-- advances are kept in money (George, Nov 15: "if i loaned them the money at 20 per hour and they got a raise for 25 per hour the banked is for the 20 per hour
+-- scenario so it would need to adjust itself and have a reason beside it"): amount = dollars (+ given, - paid back), rate = their rate an hour when it happened,
+-- hours = amount / rate (what it was in hours that day). per_amt = dollars paid back each pay. What is owed is the dollars; its hours are worked out at today's rate.
+ALTER TABLE public.payroll_advances ADD COLUMN IF NOT EXISTS amount numeric(10,2), ADD COLUMN IF NOT EXISTS rate numeric(10,2), ADD COLUMN IF NOT EXISTS per_amt numeric(10,2);
+ALTER TABLE public.payroll_advances DROP CONSTRAINT IF EXISTS payroll_advances_hours_check; ALTER TABLE public.payroll_advances ALTER COLUMN hours DROP NOT NULL;
+ALTER TABLE public.payroll_pay_plan ADD COLUMN IF NOT EXISTS adv_amt numeric(10,2), ADD COLUMN IF NOT EXISTS adv_rate numeric(10,2), ADD COLUMN IF NOT EXISTS adv_per_amt numeric(10,2),
+  ADD COLUMN IF NOT EXISTS adv_mode text, ADD COLUMN IF NOT EXISTS adv_per_mode text;
 -- who reopened a closed pay run, when and why
 ALTER TABLE public.payroll_runs ADD COLUMN IF NOT EXISTS log jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE public.payroll_day_ok ENABLE ROW LEVEL SECURITY; ALTER TABLE public.payroll_pay_plan ENABLE ROW LEVEL SECURITY; ALTER TABLE public.payroll_advances ENABLE ROW LEVEL SECURITY;
@@ -29,10 +36,13 @@ CREATE OR REPLACE FUNCTION public._pay_closed_run(p_user bigint, p_pay date) RET
   WHERE r.status = 'final' AND r.pay_date = p_pay AND ps.app_user_id = p_user LIMIT 1 $f$;
 
 CREATE OR REPLACE FUNCTION public._adv_owing(p_staff bigint) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
-  SELECT jsonb_build_object('owing', coalesce((SELECT sum(hours) FROM payroll_advances WHERE staff_id = p_staff), 0),
-    'per_pay', (SELECT per_pay FROM payroll_advances WHERE staff_id = p_staff AND hours > 0 ORDER BY day DESC, id DESC LIMIT 1),
-    'rows', coalesce((SELECT jsonb_agg(jsonb_build_object('day', a.day, 'hours', a.hours, 'note', a.note, 'by', a.by_name, 'after', a.after) ORDER BY a.day DESC, a.id DESC)
-      FROM (SELECT x.*, sum(x.hours) OVER (ORDER BY x.day, x.id) AS after FROM payroll_advances x WHERE x.staff_id = p_staff) a), '[]'::jsonb)) $f$;
+  WITH a AS (SELECT x.*, coalesce(x.amount, round(x.hours * x.rate, 2), 0) AS amt FROM payroll_advances x WHERE x.staff_id = p_staff),
+       g AS (SELECT * FROM a WHERE amt > 0 ORDER BY day DESC, id DESC LIMIT 1)
+  SELECT jsonb_build_object('owing', coalesce((SELECT sum(amt) FROM a), 0),
+    'per_amt', (SELECT coalesce(per_amt, round(per_pay * rate, 2)) FROM g), 'given', (SELECT amt FROM g), 'given_rate', (SELECT rate FROM g),
+    'given_h', (SELECT hours FROM g), 'given_day', (SELECT day FROM g), 'given_note', (SELECT note FROM g),
+    'rows', coalesce((SELECT jsonb_agg(jsonb_build_object('day', b.day, 'amount', b.amt, 'rate', b.rate, 'hours', b.hours, 'note', b.note, 'by', b.by_name, 'after', b.after) ORDER BY b.day DESC, b.id DESC)
+      FROM (SELECT a.*, sum(a.amt) OVER (ORDER BY a.day, a.id) AS after FROM a) b), '[]'::jsonb)) $f$;
 
 -- everything the owner's Approve for payroll box needs for one person and one pay period
 CREATE OR REPLACE FUNCTION public.payroll_approvals(p_user bigint, p_from date, p_to date, p_pay date) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
@@ -43,6 +53,7 @@ CREATE OR REPLACE FUNCTION public.payroll_approvals(p_user bigint, p_from date, 
     'staff', (SELECT id FROM payroll_staff WHERE app_user_id = p_user),
     'bank', coalesce((SELECT sum(b.hours) FROM payroll_bank b JOIN payroll_staff ps ON ps.id = b.staff_id WHERE ps.app_user_id = p_user), 0),
     'adv', (SELECT public._adv_owing(ps.id) FROM payroll_staff ps WHERE ps.app_user_id = p_user),
+    'rate', public._pay_rate_on(p_user, p_to),
     'closed', public._pay_closed_run(p_user, p_pay)) END $f$;
 
 -- approve (p_on) or take back days; p_hours goes with p_days, one for each
@@ -62,15 +73,17 @@ END $f$;
 
 -- banked hours to use and a banked advance for one pay
 CREATE OR REPLACE FUNCTION public.payroll_plan_set(p_user bigint, p_pay date, p jsonb) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE amt numeric := greatest(0, coalesce(nullif(p ->> 'adv_amt', '')::numeric, 0)); per numeric := nullif(p ->> 'adv_per_amt', '')::numeric;
 BEGIN
   IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can approve payroll'; END IF;
   IF public._pay_closed_run(p_user, p_pay) IS NOT NULL THEN RAISE EXCEPTION 'The pay of % is closed. An owner reopens it in Run payroll first.', to_char(p_pay, 'Mon DD, YYYY'); END IF;
-  IF coalesce(nullif(p ->> 'adv_h', '')::numeric, 0) > 0 AND coalesce(nullif(p ->> 'adv_per_pay', '')::numeric, 0) <= 0 THEN
-    RAISE EXCEPTION 'Say how many hours of the advance are paid back each pay'; END IF;
-  INSERT INTO payroll_pay_plan (user_id, pay_date, bank_use, adv_h, adv_per_pay, adv_note, by_name)
+  IF amt > 0 AND coalesce(per, 0) <= 0 THEN RAISE EXCEPTION 'Say how much of the advance is paid back each pay'; END IF;
+  INSERT INTO payroll_pay_plan (user_id, pay_date, bank_use, adv_h, adv_per_pay, adv_amt, adv_rate, adv_per_amt, adv_mode, adv_per_mode, adv_note, by_name)
     VALUES (p_user, p_pay, greatest(0, coalesce(nullif(p ->> 'bank_use', '')::numeric, 0)), greatest(0, coalesce(nullif(p ->> 'adv_h', '')::numeric, 0)),
-      nullif(p ->> 'adv_per_pay', '')::numeric, nullif(btrim(p ->> 'adv_note'), ''), public._staff_name(public.current_app_user_id()))
-    ON CONFLICT (user_id, pay_date) DO UPDATE SET bank_use = EXCLUDED.bank_use, adv_h = EXCLUDED.adv_h, adv_per_pay = EXCLUDED.adv_per_pay,
+      nullif(p ->> 'adv_per_pay', '')::numeric, amt, nullif(p ->> 'adv_rate', '')::numeric, per, nullif(p ->> 'adv_mode', ''), nullif(p ->> 'adv_per_mode', ''),
+      nullif(btrim(p ->> 'adv_note'), ''), public._staff_name(public.current_app_user_id()))
+    ON CONFLICT (user_id, pay_date) DO UPDATE SET bank_use = EXCLUDED.bank_use, adv_h = EXCLUDED.adv_h, adv_per_pay = EXCLUDED.adv_per_pay, adv_amt = EXCLUDED.adv_amt,
+      adv_rate = EXCLUDED.adv_rate, adv_per_amt = EXCLUDED.adv_per_amt, adv_mode = EXCLUDED.adv_mode, adv_per_mode = EXCLUDED.adv_per_mode,
       adv_note = EXCLUDED.adv_note, by_name = EXCLUDED.by_name, at = now();
 END $f$;
 
@@ -79,9 +92,8 @@ CREATE OR REPLACE FUNCTION public.payroll_period_ok(p_from date, p_to date, p_pa
   SELECT CASE WHEN NOT public._src_owner() THEN NULL ELSE jsonb_build_object(
     'days', coalesce((SELECT jsonb_agg(jsonb_build_object('user', d.user_id, 'day', d.day, 'hours', d.hours)) FROM payroll_day_ok d WHERE d.day BETWEEN p_from AND p_to), '[]'::jsonb),
     'plans', coalesce((SELECT jsonb_agg(to_jsonb(p)) FROM payroll_pay_plan p WHERE p.pay_date = p_pay), '[]'::jsonb),
-    'adv', coalesce((SELECT jsonb_agg(jsonb_build_object('staff', t.staff_id, 'owing', t.o, 'per_pay',
-        (SELECT per_pay FROM payroll_advances a WHERE a.staff_id = t.staff_id AND a.hours > 0 ORDER BY a.day DESC, a.id DESC LIMIT 1)))
-      FROM (SELECT staff_id, sum(hours) o FROM payroll_advances GROUP BY staff_id HAVING sum(hours) > 0) t), '[]'::jsonb)) END $f$;
+    'adv', coalesce((SELECT jsonb_agg(public._adv_owing(t.staff_id) || jsonb_build_object('staff', t.staff_id))
+      FROM (SELECT staff_id FROM payroll_advances GROUP BY staff_id HAVING sum(coalesce(amount, round(hours * rate, 2), 0)) > 0) t), '[]'::jsonb)) END $f$;
 
 -- reopen a closed (final) pay run for an adjustment: owners only, with a reason; it is written on the run
 CREATE OR REPLACE FUNCTION public.payroll_run_reopen(p_id bigint, p_why text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
@@ -93,9 +105,10 @@ BEGIN
   PERFORM public.payroll_run_undo(p_id);
 END $f$;
 
--- the app's pay run: l.adv_h (advance given, paid now) and l.adv_rep (advance hours paid back on this pay) on the line
+-- the app's pay run, in money: l.adv_pay (dollars given now), l.adv_back (dollars paid back on this pay), l.adv_rate (their rate an hour on this pay),
+-- l.adv_per_amt (dollars paid back each pay after)
 CREATE OR REPLACE FUNCTION public._payroll_adv_slip() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
-DECLARE l jsonb; g numeric; r numeric;
+DECLARE l jsonb; g numeric; r numeric; rt numeric;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     IF OLD.run_id IS NOT NULL THEN DELETE FROM payroll_advances WHERE run_id = OLD.run_id AND staff_id = OLD.staff_id; END IF;
@@ -103,12 +116,13 @@ BEGIN
   END IF;
   IF NEW.run_id IS NULL THEN RETURN NEW; END IF;
   SELECT x.l INTO l FROM payroll_run_lines x WHERE x.run_id = NEW.run_id AND x.staff_id = NEW.staff_id;
-  g := nullif(l ->> 'adv_h', '')::numeric; r := nullif(l ->> 'adv_rep', '')::numeric;
+  g := nullif(l ->> 'adv_pay', '')::numeric; r := nullif(l ->> 'adv_back', '')::numeric; rt := nullif(nullif(l ->> 'adv_rate', '')::numeric, 0);
   DELETE FROM payroll_advances WHERE run_id = NEW.run_id AND staff_id = NEW.staff_id;
-  IF coalesce(g, 0) > 0 THEN INSERT INTO payroll_advances (staff_id, day, hours, per_pay, note, run_id, by_name)
-    VALUES (NEW.staff_id, NEW.cheque_date, round(g, 2), nullif(l ->> 'adv_per_pay', '')::numeric, coalesce(nullif(l ->> 'adv_note', ''), 'Banked advance on the pay of ' || to_char(NEW.cheque_date, 'Mon DD, YYYY')), NEW.run_id, NEW.loaded_by); END IF;
-  IF coalesce(r, 0) > 0 THEN INSERT INTO payroll_advances (staff_id, day, hours, note, run_id, by_name)
-    VALUES (NEW.staff_id, NEW.cheque_date, -round(r, 2), 'Paid back on the pay of ' || to_char(NEW.cheque_date, 'Mon DD, YYYY'), NEW.run_id, NEW.loaded_by); END IF;
+  IF coalesce(g, 0) > 0 THEN INSERT INTO payroll_advances (staff_id, day, amount, rate, hours, per_amt, note, run_id, by_name)
+    VALUES (NEW.staff_id, NEW.cheque_date, round(g, 2), rt, round(g / rt, 2), nullif(l ->> 'adv_per_amt', '')::numeric,
+      coalesce(nullif(l ->> 'adv_note', ''), 'Banked advance on the pay of ' || to_char(NEW.cheque_date, 'Mon DD, YYYY')), NEW.run_id, NEW.loaded_by); END IF;
+  IF coalesce(r, 0) > 0 THEN INSERT INTO payroll_advances (staff_id, day, amount, rate, hours, note, run_id, by_name)
+    VALUES (NEW.staff_id, NEW.cheque_date, -round(r, 2), rt, -round(r / rt, 2), 'Paid back on the pay of ' || to_char(NEW.cheque_date, 'Mon DD, YYYY'), NEW.run_id, NEW.loaded_by); END IF;
   RETURN NEW;
 END $f$;
 DROP TRIGGER IF EXISTS trg_payroll_adv_slip ON public.payroll_slips;

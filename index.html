@@ -2286,6 +2286,7 @@
   .pr-ap-done { background: #e9f6ed !important; color: #1b6b36 !important; border-color: #a9d6b7 !important; }
   .pr-ap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; margin-top: 8px; }
   .pr-ap-card { background: #fff; border: 1px solid #d3dbe4; border-radius: 10px; padding: 10px 12px; } .pr-ap-card h3 { margin: 0 0 6px; font-size: 15px; color: #23415f; }
+  .pr-ap-why-l, .pr-run-why, .prq-why { font-size: 12.5px; color: #6a4a00; background: #fff6df; border-left: 3px solid #e0a800; padding: 4px 8px; border-radius: 4px; } .pr-ap-calc { font-size: 13px; color: #1b6b36; font-weight: 600; margin: 2px 0; min-height: 1em; } .pr-ap-card select { font-size: 14px; padding: 2px 4px; } td.od-ap { white-space: nowrap; }
   .pr-ap-card label { display: flex; align-items: center; gap: 6px; margin: 4px 0; flex-wrap: wrap; } .pr-ap-why input { flex: 1; min-width: 160px; }
   .pr-ap-chip { min-height: 0; } .pr-ap-chip .btn, .pr-ap-ok { width: 100%; font-size: 11.5px; padding: 3px 6px; min-height: 0; }
   .pr-ap-ok { background: #e9f6ed; color: #1b6b36; border: 1.5px solid #a9d6b7; border-radius: 8px; font-weight: 700; cursor: pointer; }
@@ -33033,7 +33034,7 @@ async function openOfficePayroll(user, p, seq) {
   const mins = hm => { const [h, m] = String(hm).split(":").map(Number); return h * 60 + m; }, hm12 = hm => { if (!hm) return ""; const [h, m] = hm.split(":").map(Number); return `${(h % 12) || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "am" : "pm"}`; };
   const wdOf = d => { const w = new Date(d + "T12:00:00Z").getUTCDay(); return w === 0 ? 7 : w; };
   const minOn = (d, v) => { const q = torDate(v); let m = mins(torHM(v)); if (q > d) m += 1440; return m; };
-  let tot = 0, totRaw = 0, worked = 0;
+  let tot = 0, totRaw = 0, worked = 0; const apDays = [];   // for Approve for payroll: each day with its paid time (George, Nov 15: "approve box for all staff should be the same as techs")
   const rows = []; for (let d = p.from; d <= p.to; d = cvAddDays(d, 1)) {
     const x = byDay.get(d), s = sch.get(wdOf(d));
     let paid = null, raw = null, note = "";
@@ -33045,12 +33046,13 @@ async function openOfficePayroll(user, p, seq) {
       else paid = raw;
       tot += paid; totRaw += raw; worked++;
     }
+    apDays.push({ d, x: paid != null ? { span: paid * 60000, open: !x?.time_out } : null });
     const src = !x?.time_out ? (x && d === today ? "working now" : "") : x.source === "button" ? "Done work" : x.source === "auto" ? "⚠️ last activity, not verified yet" : x.source === "verified" ? "verified by them" : x.source === "edited" ? "changed by " + (x.edited_by || "an owner") : "";
-    rows.push(`<tr class="${x ? "" : "od-off"}${x?.source === "auto" ? " od-unv" : ""}" data-od-day="${d}">
+    rows.push(`<tr class="${x ? "" : "od-off"}${x?.source === "auto" ? " od-unv" : ""}" data-od-day="${d}" data-w="${Math.floor((Date.parse(d + "T12:00:00Z") - Date.parse(p.from + "T12:00:00Z")) / 864e5 / 7) + 1}">
       <td><b>${esc(longDate(d))}</b></td><td>${s ? `${hm12(s.starts)} – ${hm12(s.ends)}` : '<span class="quiet">day off</span>'}</td>
       <td>${x ? torTime(x.time_in) : "—"}</td><td>${x?.time_out ? torTime(x.time_out) : "—"}${src ? `<div class="quiet od-src">${esc(src)}</div>` : ""}</td>
       <td class="num">${paid != null ? prHrs(paid * 60000) : "—"}${note ? `<div class="od-cut">${esc(note)}</div>` : ""}</td>
-      ${owner ? `<td><button type="button" class="link" data-od-edit>${x ? "Change" : "Add"}</button></td>` : ""}</tr>`);
+      ${owner ? `<td class="od-ap" data-ap-chip="${d}"></td><td><button type="button" class="link" data-od-edit>${x ? "Change" : "Add"}</button></td>` : ""}</tr>`);
   }
   const prev = cvAddDays(p.from, -1), next = cvAddDays(p.to, 1);
   $("#main").innerHTML = `<article class="staff pr-page pr-office"><p class="pr-back"${owner ? "" : " hidden"}><button type="button" class="pr-x" id="pr-back" title="Back to Payroll, where you were">✕ Close</button></p>
@@ -33064,7 +33066,8 @@ async function openOfficePayroll(user, p, seq) {
       <button type="button" class="btn" data-od-go="${next}"${p.from > today ? " disabled" : ""}>Next →</button></div>
     <div class="pr-tiles od-tiles"><div class="pr-tile"><span>Days worked</span><b>${worked}</b></div><div class="pr-tile"><span>Hours paid</span><b>${prHrs(tot * 60000)}</b></div>
       <div class="pr-tile"><span>Hours at work</span><b>${prHrs(totRaw * 60000)}</b><small>time in to time out</small></div><div class="pr-tile"><span>Not paid</span><b>${prHrs(Math.max(0, totRaw - tot) * 60000)}</b><small>more than 15 min outside expected hours</small></div></div>
-    <section class="block"><h2>🗓️ Days</h2><div class="od-wrap"><table class="od-tbl"><thead><tr><th>Day</th><th>Expected</th><th>Time in</th><th>Time out</th><th class="num">Paid</th>${owner ? "<th></th>" : ""}</tr></thead><tbody>${rows.join("")}</tbody></table></div>
+    ${owner ? `<section class="pr-appr" id="pr-appr"><div class="loading">Loading…</div></section>` : ""}
+    <section class="block"><h2>🗓️ Days</h2><div class="od-wrap"><table class="od-tbl"><thead><tr><th>Day</th><th>Expected</th><th>Time in</th><th>Time out</th><th class="num">Paid</th>${owner ? "<th>Approved</th><th></th>" : ""}</tr></thead><tbody>${rows.join("")}</tbody></table></div>
       <p class="quiet">Pay counts from 15 minutes before the expected start to 15 minutes after the expected end. Time in is when they press <b>Let's start the day</b> (or sign in in the morning); time out is <b>Done work</b>, or their last activity if they forget.</p></section>
     <section class="block"><h2>⏰ Expected hours</h2>${owner ? "" : '<p class="quiet">Set by the owners.</p>'}
       <div class="od-sched">${[1, 2, 3, 4, 5, 6, 7].map(w => { const s = sch.get(w); return `<div class="od-srow" data-wd="${w}"><span>${WD[w]}</span>${owner
@@ -33075,6 +33078,7 @@ async function openOfficePayroll(user, p, seq) {
   $("#pr-back")?.addEventListener("click", () => openPayroll());
   document.querySelectorAll("[data-od-go]").forEach(b => b.addEventListener("click", () => openPayrollPerson(user, b.dataset.odGo)));
   prWireNote(user, p); prPrivSlot(user, null);
+  if (owner) prApprDraw(user, p, apDays, data.name);
   if (owner) {
     const sv = $("#od-ssave"); document.querySelectorAll(".od-sched input").forEach(i => i.addEventListener("input", () => { sv.disabled = false; }));
     sv.addEventListener("click", async () => {
@@ -35965,8 +35969,12 @@ function prRunCalc(L) {
   L.bank_ot = Math.max(0, Math.min(Number(L.bank_ot || 0), sal ? Infinity : Number(L.ot_h || 0))); L.bank_add = r2(L.bank_ot * 1.5);
   L.otPay = sal ? 0 : r2((Number(L.ot_h || 0) - L.bank_ot) * L.rate * 1.5);
   L.bank_used = Math.max(0, Number(L.bank_used || 0)); L.bank_rate = sal ? r2(Number(L.per_pay || 0) / (Number(L.hours) || 80)) : Number(L.rate || 0); L.bankPay = r2(L.bank_used * L.bank_rate);
-  // a banked advance (George, Nov 15): hours paid ahead now, paid back a set number of hours on each pay after, at the same rate
-  L.adv_h = Math.max(0, Number(L.adv_h || 0)); L.adv_rep = Math.max(0, Number(L.adv_rep || 0)); L.advPay = r2(L.adv_h * L.bank_rate); L.advRep = r2(L.adv_rep * L.bank_rate);
+  // a banked advance (George, Nov 15): kept in dollars. Paid now (adv_amt), then a set amount paid back each pay (adv_back_amt). The hours shown are the dollars at this pay's rate.
+  if (L.adv_amt == null || L.adv_amt === "") L.adv_amt = r2(Number(L.adv_h || 0) * L.bank_rate);
+  if (L.adv_back_amt == null || L.adv_back_amt === "") L.adv_back_amt = r2(Number(L.adv_rep || 0) * L.bank_rate);
+  if ((L.adv_per_amt == null || L.adv_per_amt === "") && Number(L.adv_per_pay)) L.adv_per_amt = r2(Number(L.adv_per_pay) * L.bank_rate);
+  L.advPay = r2(Math.max(0, Number(L.adv_amt || 0))); L.advRep = r2(Math.max(0, Number(L.adv_back_amt || 0)));
+  L.adv_h = L.bank_rate ? r2(L.advPay / L.bank_rate) : 0; L.adv_rep = L.bank_rate ? r2(L.advRep / L.bank_rate) : 0;
   L.vac = r2((L.hourly + L.otPay + L.bankPay + L.advPay - L.advRep) * (L.vac_pct || 0) / 100);
   L.gross = r2(L.hourly + L.otPay + L.bankPay + L.advPay - L.advRep + Number(L.com || 0) + L.vac + Number(L.oncall || 0) + Number(L.other || 0));
   const cppY = Number(Y.cpp || 0), cm = payTax(Number(PRUN.run.pay.slice(0, 4)))?.cpp?.max || 4230.45, D = payDeduct({ year: Number(PRUN.run.pay.slice(0, 4)), P: 26, gross: r2(L.gross + Number(L.tb || 0)), insurable: L.gross, ytdCpp: Math.min(cppY, cm), ytdCpp2: Math.max(0, cppY - cm),
@@ -35992,7 +36000,8 @@ function prRunCalc(L) {
 const prRunL = L => ({ kind: L.kind, hours: L.hours, ot_h: L.ot_h, rate: L.rate, per_pay: L.per_pay, hourly: L.hourly, ot: L.otPay, com: L.com, jobs: L.jobs, vac_pct: L.vac_pct, vac: L.vac,
   oncall: L.oncall, other: L.other, other_what: L.other_what, gross: L.gross, cpp: L.cpp, cpp2: L.cpp2, ei: L.ei, tax: L.tax, fed: L.fed, on: L.on, ben: L.ben, oded: L.oded, net: L.net,
   earn: L.earn, dfg: L.dfg, adj: L.adj, src: L.src, bank_used: L.bank_used || undefined, bank_ot: L.bank_ot || undefined, bank_add: L.bank_add || undefined, bank_pay: L.bankPay || undefined,
-  adv_h: L.adv_h || undefined, adv_rep: L.adv_rep || undefined, adv_per_pay: L.adv_h ? (Number(L.adv_per_pay) || undefined) : undefined, adv_note: L.adv_h ? (L.adv_note || undefined) : undefined,
+  adv_h: L.adv_h || undefined, adv_rep: L.adv_rep || undefined, adv_amt: L.advPay || undefined, adv_back_amt: L.advRep || undefined, adv_rate: L.advPay || L.advRep ? (L.bank_rate || undefined) : undefined,
+  adv_per_amt: L.advPay ? (Number(L.adv_per_amt) || undefined) : undefined, adv_note: L.advPay ? (L.adv_note || undefined) : undefined, adv_why: L.adv_why || undefined,
   adv_owing: Number(L.adv_owing || 0) || undefined, adv_pay: L.advPay || undefined, adv_back: L.advRep || undefined, unappr: L.unappr || undefined, tb: Number(L.tb || 0) || undefined, tb_kind: Number(L.tb || 0) ? (L.tb_kind || "40") : undefined });
 // The CRA tax watch (George, Nov 14): the database looks at the CRA's T4127 page once a day (298_payroll_tax_watch.sql) and keeps any new edition
 // until an owner presses "Done, I put them in". It only tells: the numbers are never filled in by themselves.
@@ -36172,8 +36181,10 @@ async function prRunNew(p, blocks) {
     const L = { staff: inf?.staff || pp.staff || null, user: pp.user || null, name: pp.name, block: pp.block, inf, kind: sal ? "salary" : "hourly",
       rate: sal ? 0 : Number(pp.rate?.amount || last.rate || 0), per_pay: sal ? Math.round(Number(pp.rate?.amount || 0) / 26 * 100) / 100 || Number(last.per_pay || last.gross || 0) : 0,
       hours: sal ? Number(last.hours || 80) : (h ? h.hours : Number(last.hours || 0)), ot_h: h ? h.ot : 0, src: sal ? "salary" : h?.approved ? `the approved days (${h.approved})` : h ? "the app (not approved yet)" : last.hours ? "their last pay slip" : "nowhere: type them",
-      unappr, bank_used: Number(pl.bank_use || 0), adv_h: Number(pl.adv_h || 0), adv_per_pay: pl.adv_per_pay ?? null, adv_note: pl.adv_note || "",
-      adv_owing: owing, adv_rep: owing > 0 ? Math.round(Math.min(owing, Number(av.per_pay || owing)) * 100) / 100 : 0,
+      unappr, bank_used: Number(pl.bank_use || 0), adv_h: Number(pl.adv_h || 0), adv_amt: pl.adv_amt != null ? Number(pl.adv_amt) : null, adv_per_pay: pl.adv_per_pay ?? null,
+      adv_per_amt: pl.adv_per_amt ?? null, adv_note: pl.adv_note || "",
+      adv_owing: owing, adv_back_amt: owing > 0 ? Math.round(Math.min(owing, Number(av.per_amt || owing)) * 100) / 100 : 0,
+      adv_why: av ? prAdvWhy(av, sal ? Math.round(Number(pp.rate?.amount || 0) / 2080 * 100) / 100 : Number(pp.rate?.amount || last.rate || 0)) : "",
       com: Math.round(J.reduce((t, r) => t + r.com, 0) * 100) / 100, jobs: J.map(r => ({ id: r.job_id, n: r.job_number, c: r.customer_name, a: r.address, amt: r.com })),
       vac_pct: Number(T.vac_pct ?? last.vac_pct ?? (sal ? 0 : 4)), oncall: 0, other: 0, ben: Number(T.ben_per_pay ?? last.ben ?? 0), inc: true,
       tb: Number(T.tb_per_pay || 0), tb_kind: T.tb_kind || "40",
@@ -36211,7 +36222,7 @@ function prRunDraw() {
         return `<div class="quiet" title="Hours in their bank${fin ? " (after this pay)" : " now, before this pay"}">⏳ ${b} h</div>
         <label title="Hours taken out of the bank and paid now, at their rate">Use ${inp(L, "bank_used", 46)}</label>${L.kind === "salary" ? "" : `<label title="Overtime hours put in the bank instead of paid (each one banks 1.5 hours)">Bank OT ${inp(L, "bank_ot", 46)}</label>`}
         ${!fin && (Number(L.bank_used) || Number(L.bank_add)) ? `<div class="quiet">After: ${after} h</div>` : ""}${Number(L.bank_used) > b && !fin ? `<div class="pr-cm-bad">More than they have</div>` : ""}
-        <label title="A banked advance: hours paid now, paid back on the pays after">Advance ${inp(L, "adv_h", 46)}</label>${Number(L.adv_owing) || Number(L.adv_rep) ? `<label title="Advance hours paid back on this pay (taken off the pay)">Pay back ${inp(L, "adv_rep", 46)}</label><div class="quiet">Owed before this pay: ${Math.round(Number(L.adv_owing || 0) * 100) / 100} h</div>` : ""}`; })()}</td>
+        <label title="A banked advance in dollars: paid now, paid back on the pays after">Advance $ ${inp(L, "adv_amt", 60)}</label>${Number(L.adv_amt) && L.bank_rate ? `<div class="quiet">= ${L.adv_h} h at ${money(L.bank_rate)}</div>` : ""}${Number(L.adv_owing) || Number(L.adv_back_amt) ? `<label title="Dollars of the advance paid back on this pay (taken off the pay)">Pay back $ ${inp(L, "adv_back_amt", 60)}</label><div class="quiet">Owed before this pay: ${money(Number(L.adv_owing || 0))}</div>${L.adv_why ? `<div class="quiet pr-run-why">${esc(L.adv_why)}</div>` : ""}` : ""}`; })()}</td>
       <td><b>${money(L.gross || 0)}</b></td>
       <td>${money((L.cpp || 0) + (L.cpp2 || 0))}</td><td>${money(L.ei || 0)}</td><td>${money(L.tax || 0)}</td><td>${inp(L, "ben", 60)}</td><td><b>${money(L.net || 0)}</b></td>
       <td>${fin && !L.fixing ? `<button type="button" class="btn quiet-btn pr-fixbtn" data-rfix>✎ Fix this person</button>` : `<button type="button" class="link" data-rtd1>TD1</button>`}</td></tr>
@@ -36331,7 +36342,9 @@ function prRunStub(L, R, E) {
       ${(L.adj || []).length ? `<table class="prq-t"><thead><tr><th>Adjustments to Net Pay</th><th class="n">Current</th><th class="n">YTD Amount</th></tr></thead><tbody>
         ${(L.adj || []).map(d => row([esc(d.label), prN2(d.cur), prN2(ytd(d.label, d.cur))])).join("")}</tbody></table>` : ""}
       ${prBankOf(L.staff) || Number(L.bank_used) || Number(L.bank_add) ? `<table class="prq-t"><tbody><tr><td>Banked hours after this pay</td><td class="n">${prN2(PRUN.run?.status === "final" ? prBankOf(L.staff) : prBankOf(L.staff) - Number(L.bank_used || 0) + Number(L.bank_add || 0))} h</td></tr></tbody></table>` : ""}
-      ${Number(L.adv_h) || Number(L.adv_rep) || Number(L.adv_owing) ? `<table class="prq-t"><tbody>${Number(L.adv_h) ? `<tr><td>Banked advance this pay</td><td class="n">${prN2(Number(L.adv_h))} h</td></tr>` : ""}${Number(L.adv_rep) ? `<tr><td>Advance paid back this pay</td><td class="n">${prN2(Number(L.adv_rep))} h</td></tr>` : ""}<tr><td>Banked advance still owed</td><td class="n">${prN2(Math.max(0, Number(L.adv_owing || 0) + Number(L.adv_h || 0) - Number(L.adv_rep || 0)))} h</td></tr></tbody></table>` : ""}
+      ${Number(L.adv_pay || L.advPay) || Number(L.adv_back || L.advRep) || Number(L.adv_owing) ? (() => { const g = Number(L.adv_pay ?? L.advPay ?? 0), b = Number(L.adv_back ?? L.advRep ?? 0), rt = Number(L.adv_rate || L.bank_rate || 0),
+        left = Math.max(0, Math.round((Number(L.adv_owing || 0) + g - b) * 100) / 100), hh = v => rt ? ` (${prN2(Math.round(v / rt * 100) / 100)} h)` : "";
+        return `<table class="prq-t"><tbody>${g ? `<tr><td>Banked advance this pay</td><td class="n">${prN2(g)}${hh(g)}</td></tr>` : ""}${b ? `<tr><td>Advance paid back this pay</td><td class="n">${prN2(b)}${hh(b)}</td></tr>` : ""}<tr><td>Banked advance still owed</td><td class="n">${prN2(left)}${hh(left)}</td></tr>${L.adv_why ? `<tr><td colspan="2" class="prq-why">${esc(L.adv_why)}</td></tr>` : ""}</tbody></table>`; })() : ""}
       <table class="prq-t prq-net"><tbody><tr><td>Net Pay</td><td class="n">${prN2(L.net)}</td><td class="n">${prN2(r2(Number(Y.net || 0) + Number(L.net || 0)))}</td></tr></tbody></table></div></div>
     ${L.jobs?.length ? `<div class="prq-jobs">Commission on: ${L.jobs.map(j => `${esc(j.n || "")} ${esc(j.c || "")} (${money(j.amt)})`).join(" · ")}</div>` : ""}
     <div class="prq-co">${esc(E.legal_name || "")}</div></div>`;
@@ -37568,13 +37581,15 @@ async function prApprDraw(user, p, days, name) {
     if (a) c.innerHTML = `<button type="button" class="pr-ap-ok" data-ap-off="${d}"${closed ? " disabled" : ""} title="Approved by ${esc(a.by || "")}${closed ? "" : ". Click to take the approval back."}">✓ Approved ${r2(Number(a.hours))} h</button>`;
     else c.innerHTML = z?.x?.span && !closed ? `<button type="button" class="btn pr-ap-btn" data-ap-on="${d}" title="${z.x.open ? "A call was never marked Done: check the hours first" : "Approve this day for payroll"}">${z.x.open ? "⚠ " : ""}✓ Approve ${hOf(z)} h</button>` : ""; });
   const [a0, n0] = cnt(0), [a1, n1] = cnt(1), [a2, n2] = cnt(2), apH = r2([...ok.values()].reduce((t, x) => t + Number(x.hours || 0), 0));
-  const pl = A.plan || {}, bank = r2(Number(A.bank || 0)), adv = A.adv || { owing: 0, rows: [] }, owing = r2(Number(adv.owing || 0));
+  const pl = A.plan || {}, bank = r2(Number(A.bank || 0)), adv = A.adv || { owing: 0, rows: [] }, owing = r2(Number(adv.owing || 0)), rNow = prHrRate(A.rate);
+  const advM = pl.adv_mode || (Number(pl.adv_amt) && !Number(pl.adv_h) ? "$" : rNow ? "h" : "$"), perM = pl.adv_per_mode || (pl.adv_per_amt != null && pl.adv_per_pay == null ? "$" : rNow ? "h" : "$");
+  const advV = advM === "h" ? Number(pl.adv_h || 0) : Number(pl.adv_amt || 0), perV = perM === "h" ? (pl.adv_per_pay ?? "") : (pl.adv_per_amt ?? "");
   const dayOpts = worked.map(z => `<option value="${z.d}">${esc(new Date(z.d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }))}</option>`).join("");
   const btn = (w, a, n, words) => n ? `<button type="button" class="btn ${a === n ? "pr-ap-done" : "save-go"}" data-ap-w="${w}"${closed || a === n ? " disabled" : ""}>${a === n ? "✓ " + words + " approved" : "✓ Approve " + words.toLowerCase()} <small>(${a} of ${n} days)</small></button>` : "";
   box.innerHTML = `<h2 class="pr-ap-h">✅ Approve for payroll <small>· the pay of ${esc(fmtDate(p.pay))} · owners only</small></h2>
     ${closed ? `<p class="pr-ap-closed">🔒 This pay is closed: it was paid on the final pay run of ${esc(fmtDate(p.pay))}. Only an owner can reopen it for an adjustment: Run payroll, open that pay run, then 🔓 Reopen for an adjustment.</p>`
       : n0 && a0 === n0 ? `<p class="pr-ap-ready">✓ Ready for payroll: all ${n0} days ${esc(first)} worked are approved (${apH} hours). They go to Run payroll for the pay of ${esc(fmtDate(p.pay))}.</p>`
-      : `<p class="pr-ap-st">${n0 ? `${a0} of ${n0} days worked are approved${a0 ? ` (${apH} hours)` : ""}. Approve a day under its square, or a whole week below.` : "No days worked in this pay period yet."}</p>`}
+      : `<p class="pr-ap-st">${n0 ? `${a0} of ${n0} days worked are approved${a0 ? ` (${apH} hours)` : ""}. Approve one day at a time, or a whole week below.` : "No days worked in this pay period yet."}</p>`}
     <div class="pr-ap-row">${btn(0, a0, n0, "The 2 weeks")}${btn(1, a1, n1, "Week 1")}${btn(2, a2, n2, "Week 2")}${a0 && !closed ? `<button type="button" class="link" data-ap-clear>Take back all the approvals</button>` : ""}</div>
     <div class="pr-ap-row pr-ap-prt"><span>🖨 Print:</span><button type="button" class="btn" data-ap-prt="all">The 2 weeks</button><button type="button" class="btn" data-ap-prt="w1">Week 1</button><button type="button" class="btn" data-ap-prt="w2">Week 2</button>
       ${dayOpts ? `<select data-ap-day aria-label="Pick a day to print">${dayOpts}</select><button type="button" class="btn" data-ap-prt="day">That day</button>` : ""}</div>
@@ -37583,11 +37598,15 @@ async function prApprDraw(user, p, days, name) {
         <label>Use on this pay <input data-ap-k="bank_use" inputmode="decimal" value="${Number(pl.bank_use || 0) || ""}" style="width:70px"${closed ? " disabled" : ""}> h</label>
         <p class="quiet">Paid at their rate on this pay and taken out of the bank when the pay run is made final.</p></div>
       <div class="pr-ap-card"><h3>💵 Banked advance</h3>
-        ${owing > 0 ? `<p>Still owed from an earlier advance: <b>${owing} h</b>${adv.per_pay ? `, paid back ${r2(Number(adv.per_pay))} h each pay` : ""}. The next pay takes off <b>${r2(Math.min(owing, Number(adv.per_pay || owing)))} h</b> by itself.</p>` : `<p class="quiet">No advance owed.</p>`}
-        <label>Give an advance on this pay <input data-ap-k="adv_h" inputmode="decimal" value="${Number(pl.adv_h || 0) || ""}" style="width:70px"${closed ? " disabled" : ""}> h</label>
-        <label>Paid back each pay after <input data-ap-k="adv_per_pay" inputmode="decimal" value="${pl.adv_per_pay ?? ""}" style="width:70px"${closed ? " disabled" : ""}> h</label>
+        ${owing > 0 ? `<p>Still owed from an earlier advance: <b>${money(owing)}</b>${adv.per_amt ? `, paid back ${money(Number(adv.per_amt))} each pay` : ""}. The next pay takes off <b>${money(Math.min(owing, Number(adv.per_amt || owing)))}</b> by itself.</p><p class="pr-ap-why-l">${esc(prAdvWhy(adv, rNow))}</p>` : `<p class="quiet">No advance owed.</p>`}
+        <p class="quiet">${rNow ? `${esc(first)}'s rate now: <b>${money(rNow)} an hour</b>${A.rate?.kind === "salary" ? " (salary ÷ 2,080 hours)" : ""}.` : "No pay rate on file: give the advance in dollars."}</p>
+        <label>Give an advance on this pay <input data-ap-k="adv_v" inputmode="decimal" value="${advV || ""}" style="width:80px"${closed ? " disabled" : ""}>
+          <select data-ap-k="adv_mode"${closed ? " disabled" : ""}><option value="h"${advM === "h" ? " selected" : ""}${rNow ? "" : " disabled"}>hours</option><option value="$"${advM === "$" ? " selected" : ""}>dollars</option></select></label>
+        <label>Paid back each pay after <input data-ap-k="per_v" inputmode="decimal" value="${perV || ""}" style="width:80px"${closed ? " disabled" : ""}>
+          <select data-ap-k="adv_per_mode"${closed ? " disabled" : ""}><option value="h"${perM === "h" ? " selected" : ""}${rNow ? "" : " disabled"}>hours</option><option value="$"${perM === "$" ? " selected" : ""}>dollars</option></select></label>
+        <p class="pr-ap-calc" data-ap-calc></p>
         <label class="pr-ap-why">Why <input data-ap-k="adv_note" value="${esc(pl.adv_note || "")}" placeholder="e.g. short week, family emergency"${closed ? " disabled" : ""}></label>
-        <p class="quiet">The advance is paid now (at their rate) and shows on the pay stub, with what is still owed. Each pay after, the hours paid back are taken off their pay until it is all paid back.</p></div></div>
+        <p class="quiet">An advance is kept in dollars. Given in hours, it is the hours at their rate today. If their rate changes later, what is owed stays the same in dollars and its hours are worked out again at the new rate, with the reason beside it. It is paid now, shows on the pay stub, and is taken off each pay after until it is paid back.</p></div></div>
     ${closed ? "" : `<div class="pr-ap-row"><button type="button" class="btn save-go" data-ap-save>Save the banked hours and the advance</button> <span class="quiet" data-ap-msg>${pl.at ? `Saved by ${esc(pl.by_name || "")}` : ""}</span></div>`}`;
   const go = async (ds, on) => { if (!ds.length) return; const { error: er } = await db.rpc("payroll_day_approve", { p_user: user, p_pay: p.pay, p_days: ds.map(z => z.d), p_hours: ds.map(hOf), p_on: on });
     if (er) return alertMsg("Not saved: " + rpcErr(er)); prApprDraw(user, p, days, name); };
@@ -37596,15 +37615,44 @@ async function prApprDraw(user, p, days, name) {
   box.querySelectorAll("[data-ap-w]").forEach(b => b.onclick = () => go(pick(Number(b.dataset.apW)).filter(z => !ok.has(z.d)), true));
   box.querySelector("[data-ap-clear]")?.addEventListener("click", async () => { if (await askChoice("Take back all the approvals?", "Every day of this pay period goes back to not approved.", [["y", "Yes, take them all back"], ["", "No, keep them"]]) !== "y") return; go(worked.filter(z => ok.has(z.d)), false); });
   box.querySelectorAll("[data-ap-prt]").forEach(b => b.onclick = () => { const m = b.dataset.apPrt; prPrintPart(m === "day" ? "d:" + box.querySelector("[data-ap-day]").value : m, p, name); });
-  box.querySelector("[data-ap-save]")?.addEventListener("click", async e => { const b = e.currentTarget, msg = box.querySelector("[data-ap-msg]"), P = {};
-    box.querySelectorAll("[data-ap-k]").forEach(i => P[i.dataset.apK] = i.dataset.apK === "adv_note" ? i.value : String(i.value).replace(/[^\d.]/g, ""));
+  const advCalc = () => { const v = Number(String(box.querySelector('[data-ap-k="adv_v"]')?.value || "").replace(/[^\d.]/g, "")) || 0, m = box.querySelector('[data-ap-k="adv_mode"]')?.value,
+      pv = Number(String(box.querySelector('[data-ap-k="per_v"]')?.value || "").replace(/[^\d.]/g, "")) || 0, pm = box.querySelector('[data-ap-k="adv_per_mode"]')?.value;
+    const amt = r2(m === "h" ? v * rNow : v), per = r2(pm === "h" ? pv * rNow : pv);
+    return { v, m, pv, pm, amt, per, h: rNow ? r2(amt / rNow) : null, ph: rNow ? r2(per / rNow) : null }; };
+  const calcShow = () => { const c = advCalc(), el = box.querySelector("[data-ap-calc]"); if (!el) return;
+    el.textContent = c.amt ? `= ${money(c.amt)}${rNow ? ` (${c.h} h at ${money(rNow)} an hour)` : ""} paid now${c.per ? `, then ${money(c.per)}${rNow ? ` (${c.ph} h)` : ""} paid back each pay, about ${Math.ceil(c.amt / c.per)} pays` : ""}.` : ""; };
+  box.querySelectorAll('[data-ap-k="adv_v"],[data-ap-k="per_v"],[data-ap-k="adv_mode"],[data-ap-k="adv_per_mode"]').forEach(i => i.addEventListener("input", calcShow)); calcShow();
+  box.querySelector("[data-ap-save]")?.addEventListener("click", async e => { const b = e.currentTarget, msg = box.querySelector("[data-ap-msg]"), c = advCalc();
+    const P = { bank_use: String(box.querySelector('[data-ap-k="bank_use"]').value).replace(/[^\d.]/g, ""), adv_note: box.querySelector('[data-ap-k="adv_note"]').value,
+      adv_mode: c.m, adv_per_mode: c.pm, adv_amt: c.amt ? String(c.amt) : "", adv_h: c.h != null && c.amt ? String(c.h) : "", adv_rate: rNow ? String(rNow) : "",
+      adv_per_amt: c.amt && c.per ? String(c.per) : "", adv_per_pay: c.amt && c.ph != null && c.per ? String(c.ph) : "" };
     if (Number(P.bank_use) > bank && await askChoice("Use more than they have?", `${first} has ${bank} hours in the bank. Using ${P.bank_use} takes the bank below zero.`, [["y", "Yes, save it"], ["", "No, go back"]]) !== "y") return;
     b.disabled = true; const { error: er } = await db.rpc("payroll_plan_set", { p_user: user, p_pay: p.pay, p: P });
     if (er) { b.disabled = false; msg.textContent = "Not saved: " + rpcErr(er); return; } msg.textContent = "✓ Saved. Run payroll uses it for the pay of " + fmtDate(p.pay) + "."; b.disabled = false; });
 }
+// a person's rate an hour from _pay_rate_on (salary = the year ÷ 2,080 hours)
+function prHrRate(rt) { const a = Number(rt?.amount || 0); if (!a) return 0; return Math.round((rt.kind === "salary" ? a / 2080 : a) * 100) / 100; }
+// the reason line for a banked advance still owed: it is kept in dollars at the rate when it was given; its hours change with the rate (George, Nov 15)
+function prAdvWhy(adv, rNow) {
+  if (!adv || !Number(adv.owing)) return ""; const owing = Number(adv.owing), gr = Number(adv.given_rate || 0), g = Number(adv.given || 0);
+  const r = v => Math.round(v * 100) / 100, when = adv.given_day ? fmtDate(String(adv.given_day).slice(0, 10)) : "";
+  let t = `Given${when ? " " + when : ""} as ${gr ? `${r(g / gr)} h at ${money(gr)} an hour (${money(g)})` : money(g)}${adv.given_note ? `: ${adv.given_note}` : ""}. ${money(owing)} still owed.`;
+  if (rNow && gr && Math.abs(rNow - gr) >= 0.01) t += ` Their rate is ${money(rNow)} an hour now, so what is owed is ${r(owing / rNow)} h now (it was ${r(owing / gr)} h at ${money(gr)}).`;
+  else if (rNow) t += ` That is ${r(owing / rNow)} h at ${money(rNow)} an hour.`;
+  return t;
+}
 // print the whole pay period, one week, or one day of a tech's payroll page (the parts not printed are hidden while the print box is open)
 function prPrintPart(mode, p, name) {
-  const art = document.querySelector("article.pr-tech"); if (!art) return;
+  const art = document.querySelector("article.pr-tech, article.pr-office"); if (!art) return;
+  if (art.classList.contains("pr-office")) {   // office staff: the days are lines of one table
+    const hide = [...art.querySelectorAll(".pr-appr, .pr-note, .od-sched")].map(e => e.closest("section") || e); let what = `${fmtDate(p.from)} – ${fmtDate(p.to)}`;
+    art.querySelectorAll("tr[data-od-day]").forEach(tr => { if ((mode === "w1" || mode === "w2") && tr.dataset.w !== mode.slice(1)) hide.push(tr); if (mode.startsWith("d:") && tr.dataset.odDay !== mode.slice(2)) hide.push(tr); });
+    if (mode !== "all") hide.push(...art.querySelectorAll(".pr-tiles")); if (mode === "w1" || mode === "w2") what = `Week ${mode.slice(1)}`; if (mode.startsWith("d:")) what = longDate(mode.slice(2));
+    hide.forEach(e => e.classList.add("pr-prt-x"));
+    const head = document.createElement("p"); head.className = "pr-prt-what"; head.textContent = `${name ? name + " · " : ""}${what} · pay of ${fmtDate(p.pay)}`; art.querySelector("h1")?.after(head);
+    const done = () => { hide.forEach(e => e.classList.remove("pr-prt-x")); head.remove(); window.removeEventListener("afterprint", done); };
+    window.addEventListener("afterprint", done); window.print(); return;
+  }
   const hide = [...art.querySelectorAll(".pr-appr")]; let what = `${fmtDate(p.from)} – ${fmtDate(p.to)}`;
   if (mode === "w1" || mode === "w2") { art.querySelectorAll(".pr-week").forEach(w => { if (w.dataset.w !== mode.slice(1)) hide.push(w); }); hide.push(...art.querySelectorAll(".pr-tiles"));
     const w = art.querySelector(`.pr-week[data-w="${mode.slice(1)}"] .pr-wkh span`); what = `Week ${mode.slice(1)}${w ? ": " + w.textContent : ""}`; }
