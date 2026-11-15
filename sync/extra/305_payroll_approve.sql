@@ -23,6 +23,8 @@ CREATE INDEX IF NOT EXISTS payroll_advances_staff ON public.payroll_advances (st
 -- hours = amount / rate (what it was in hours that day). per_amt = dollars paid back each pay. What is owed is the dollars; its hours are worked out at today's rate.
 ALTER TABLE public.payroll_advances ADD COLUMN IF NOT EXISTS amount numeric(10,2), ADD COLUMN IF NOT EXISTS rate numeric(10,2), ADD COLUMN IF NOT EXISTS per_amt numeric(10,2);
 ALTER TABLE public.payroll_advances DROP CONSTRAINT IF EXISTS payroll_advances_hours_check; ALTER TABLE public.payroll_advances ALTER COLUMN hours DROP NOT NULL;
+-- some staff want to be paid up to a set number of hours a week and have the rest banked (George, Nov 15): null = pay them all
+ALTER TABLE public.payroll_staff ADD COLUMN IF NOT EXISTS bank_cap numeric(5,2);
 ALTER TABLE public.payroll_pay_plan ADD COLUMN IF NOT EXISTS adv_amt numeric(10,2), ADD COLUMN IF NOT EXISTS adv_rate numeric(10,2), ADD COLUMN IF NOT EXISTS adv_per_amt numeric(10,2),
   ADD COLUMN IF NOT EXISTS adv_mode text, ADD COLUMN IF NOT EXISTS adv_per_mode text;
 -- who reopened a closed pay run, when and why
@@ -54,6 +56,9 @@ CREATE OR REPLACE FUNCTION public.payroll_approvals(p_user bigint, p_from date, 
     'bank', coalesce((SELECT sum(b.hours) FROM payroll_bank b JOIN payroll_staff ps ON ps.id = b.staff_id WHERE ps.app_user_id = p_user), 0),
     'adv', (SELECT public._adv_owing(ps.id) FROM payroll_staff ps WHERE ps.app_user_id = p_user),
     'rate', public._pay_rate_on(p_user, p_to),
+    'cap', (SELECT bank_cap FROM payroll_staff WHERE app_user_id = p_user),
+    'bank_rows', coalesce((SELECT jsonb_agg(jsonb_build_object('day', b.day, 'hours', b.hours, 'why', b.why, 'by', b.by_name) ORDER BY b.day DESC, b.id DESC)
+      FROM (SELECT b.* FROM payroll_bank b JOIN payroll_staff ps ON ps.id = b.staff_id WHERE ps.app_user_id = p_user ORDER BY b.day DESC, b.id DESC LIMIT 8) b), '[]'::jsonb),
     'closed', public._pay_closed_run(p_user, p_pay)) END $f$;
 
 -- approve (p_on) or take back days; p_hours goes with p_days, one for each
@@ -92,8 +97,27 @@ CREATE OR REPLACE FUNCTION public.payroll_period_ok(p_from date, p_to date, p_pa
   SELECT CASE WHEN NOT public._src_owner() THEN NULL ELSE jsonb_build_object(
     'days', coalesce((SELECT jsonb_agg(jsonb_build_object('user', d.user_id, 'day', d.day, 'hours', d.hours)) FROM payroll_day_ok d WHERE d.day BETWEEN p_from AND p_to), '[]'::jsonb),
     'plans', coalesce((SELECT jsonb_agg(to_jsonb(p)) FROM payroll_pay_plan p WHERE p.pay_date = p_pay), '[]'::jsonb),
+    'caps', coalesce((SELECT jsonb_agg(jsonb_build_object('staff', id, 'user', app_user_id, 'cap', bank_cap)) FROM payroll_staff WHERE bank_cap IS NOT NULL), '[]'::jsonb),
     'adv', coalesce((SELECT jsonb_agg(public._adv_owing(t.staff_id) || jsonb_build_object('staff', t.staff_id))
       FROM (SELECT staff_id FROM payroll_advances GROUP BY staff_id HAVING sum(coalesce(amount, round(hours * rate, 2), 0)) > 0) t), '[]'::jsonb)) END $f$;
+
+-- the weekly limit: paid up to p_cap hours a week, the rest banked (null or 0 = pay them all)
+CREATE OR REPLACE FUNCTION public.payroll_bank_cap_set(p_staff bigint, p_cap numeric) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+BEGIN
+  IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can change this'; END IF;
+  IF p_cap IS NOT NULL AND (p_cap < 0 OR p_cap > 80) THEN RAISE EXCEPTION 'Type the hours a week, 1 to 80'; END IF;
+  UPDATE payroll_staff SET bank_cap = nullif(round(p_cap, 2), 0) WHERE id = p_staff;
+END $f$;
+
+-- what a person sees about their own bank and advance on their payroll page (George, Nov 15: "only thing that should show for the tech is total banked
+-- hours… and if they are given an advance it should also show up"). Themselves or an owner.
+CREATE OR REPLACE FUNCTION public.payroll_my_bank(p_user bigint) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
+  SELECT CASE WHEN NOT (public._src_owner() OR p_user = public.current_app_user_id()) THEN NULL ELSE (
+    SELECT jsonb_build_object('bank', coalesce((SELECT sum(hours) FROM payroll_bank WHERE staff_id = ps.id), 0), 'cap', ps.bank_cap,
+      'rows', coalesce((SELECT jsonb_agg(jsonb_build_object('day', b.day, 'hours', b.hours, 'why', b.why) ORDER BY b.day DESC, b.id DESC)
+        FROM (SELECT * FROM payroll_bank WHERE staff_id = ps.id ORDER BY day DESC, id DESC LIMIT 6) b), '[]'::jsonb),
+      'adv', public._adv_owing(ps.id), 'rate', public._pay_rate_on(p_user, current_date))
+    FROM payroll_staff ps WHERE ps.app_user_id = p_user) END $f$;
 
 -- reopen a closed (final) pay run for an adjustment: owners only, with a reason; it is written on the run
 CREATE OR REPLACE FUNCTION public.payroll_run_reopen(p_id bigint, p_why text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
@@ -129,6 +153,8 @@ DROP TRIGGER IF EXISTS trg_payroll_adv_slip ON public.payroll_slips;
 CREATE TRIGGER trg_payroll_adv_slip AFTER INSERT OR DELETE ON public.payroll_slips FOR EACH ROW EXECUTE FUNCTION public._payroll_adv_slip();
 
 REVOKE EXECUTE ON FUNCTION public._payroll_adv_slip(), public._pay_closed_run(bigint, date), public._adv_owing(bigint) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.payroll_bank_cap_set(bigint, numeric), public.payroll_my_bank(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.payroll_bank_cap_set(bigint, numeric), public.payroll_my_bank(bigint) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.payroll_approvals(bigint, date, date, date), public.payroll_day_approve(bigint, date, date[], numeric[], boolean),
   public.payroll_plan_set(bigint, date, jsonb), public.payroll_period_ok(date, date, date), public.payroll_run_reopen(bigint, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.payroll_approvals(bigint, date, date, date), public.payroll_day_approve(bigint, date, date[], numeric[], boolean),

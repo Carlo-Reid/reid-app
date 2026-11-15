@@ -33,7 +33,7 @@ END $f$;
 
 -- the app's pay run: l.bank_used (hours paid out of the bank) and l.bank_add (hours put in: overtime banked at 1.5) on the line
 CREATE OR REPLACE FUNCTION public._payroll_bank_slip() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
-DECLARE l jsonb; u numeric; a numeric; pd date;
+DECLARE l jsonb; u numeric; a numeric; rg numeric; pd date;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     IF OLD.run_id IS NOT NULL THEN DELETE FROM payroll_bank WHERE run_id = OLD.run_id AND staff_id = OLD.staff_id; END IF;
@@ -42,11 +42,15 @@ BEGIN
   IF NEW.run_id IS NULL THEN RETURN NEW; END IF;
   SELECT x.l INTO l FROM payroll_run_lines x WHERE x.run_id = NEW.run_id AND x.staff_id = NEW.staff_id;
   u := nullif(l ->> 'bank_used', '')::numeric; a := nullif(l ->> 'bank_add', '')::numeric; pd := NEW.cheque_date;
+  rg := least(coalesce(nullif(l ->> 'bank_reg', '')::numeric, 0), coalesce(a, 0)); a := coalesce(a, 0) - rg;   -- bank_reg: hours over their weekly limit, banked 1 for 1
   DELETE FROM payroll_bank WHERE run_id = NEW.run_id AND staff_id = NEW.staff_id;
   IF coalesce(u, 0) > 0 THEN INSERT INTO payroll_bank (staff_id, day, hours, why, run_id, by_name)
     VALUES (NEW.staff_id, pd, -round(u, 2), 'Paid out on the pay of ' || to_char(pd, 'Mon DD, YYYY'), NEW.run_id, NEW.loaded_by); END IF;
   IF coalesce(a, 0) > 0 THEN INSERT INTO payroll_bank (staff_id, day, hours, why, run_id, by_name)
     VALUES (NEW.staff_id, pd, round(a, 2), 'Overtime banked on the pay of ' || to_char(pd, 'Mon DD, YYYY') || ' (' || (round(a / 1.5, 2))::text || ' h × 1.5)', NEW.run_id, NEW.loaded_by); END IF;
+  IF rg > 0 THEN INSERT INTO payroll_bank (staff_id, day, hours, why, run_id, by_name)
+    VALUES (NEW.staff_id, pd, round(rg, 2), 'Hours over their weekly limit banked on the pay of ' || to_char(pd, 'Mon DD, YYYY')
+      || coalesce(' (paid up to ' || (SELECT bank_cap FROM payroll_staff WHERE id = NEW.staff_id)::text || ' h a week)', ''), NEW.run_id, NEW.loaded_by); END IF;
   RETURN NEW;
 END $f$;
 DROP TRIGGER IF EXISTS trg_payroll_bank_slip ON public.payroll_slips;
