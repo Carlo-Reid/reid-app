@@ -7950,6 +7950,9 @@ html body #main article.ie .seg > button[aria-pressed="true"] { background: #dce
 .ie .ie-doc.ie-doc-ok::before { background: #1f9d4a; } .ie .ie-doc.ie-doc-ok small:first-of-type { color: #1b6b36; font-weight: 700; }
 .ie .ie-doc.ie-doc-off::before { background: #98a3ae; } .ie .ie-doc[aria-expanded="true"] { border: 2px solid #23415f; background: #f3f8fc; }
 .ie .ie-tco-box { margin: 0 0 12px; } .ie .ie-tco-box .ie-tco { border-radius: 12px; }
+.cost-techs { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 5px; }
+.cost-tech-b { font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; padding: 6px 10px; color: #23415f; background: linear-gradient(180deg, #ffffff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 10px; }
+.cost-tech-b:hover { background: #dcebf8; border-color: #23415f; } .cost-tech-b[disabled] { opacity: .5; cursor: default; }
 .ie .ie-side-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
 .ie .ie-side-tabs button { font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; padding: 10px 6px; color: #23415f; background: linear-gradient(180deg, #ffffff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 12px; }
 .ie .ie-side-tabs button[aria-pressed="true"] { background: #dcebf8; border: 2px solid #23415f; }
@@ -28177,6 +28180,7 @@ async function openInvoiceEditor(id, msg) {
   if (data) { const pb = await db.rpc("inv_price_book", { p_invoice: id }); data.pbook = pb.error ? null : pb.data;   // a partner's job: only that partner's price book (Carlo, Nov 12)
     if (data.pbook && !(IE?.id === id && IE.bookFor === data.pbook.book && IE.bookItems)) { const r = await db.rpc("inv_item_search_book", { p_invoice: id, p_search: "", p_limit: 200 }); data.bookItems = r.error ? null : r.data || []; data.bookFor = data.pbook.book; } }
   if (data && !cost.error && cost.data) cost.data.plan = await costPlan(data.lines).catch(() => null);
+  if (data && !cost.error && cost.data) { const ct = await db.from("invoices").select("cost_techs").eq("id", id).maybeSingle(); cost.data.techs_n = ct.error ? null : ct.data?.cost_techs ?? null; }   // techs set by hand on the Job costs tab
   if (data) { data.cost = cost.error ? null : cost.data; data.bill = bill.error || !bill.data ? null : { ...bill.data, invoice_id: id }; data.prule = prule.error ? null : prule.data; }
   if (data) { data.tankpo = null;   // a Vista tank job: the tank's P.O. (and credit order) at the bottom of the invoice
     if (["reid", "partner"].includes(data.prule?.tank)) { const [t, ts] = await Promise.all([db.rpc("tank_order_for", { p_invoice: id }), db.rpc("tank_suppliers_for", { p_invoice: id }), loadSuppliers()]); data.tankpo = t.error ? null : t.data; data.tanksups = ts.error ? null : ts.data; } }
@@ -28249,7 +28253,10 @@ function costingCalc(I) {
   const planRate = P && P.hrs > 0 ? P.labour / P.hrs : 0, rate = rate0 > 0 ? rate0 : planRate, planLab = !(rate0 > 0) && planRate > 0;
   const onSite = actual ? new Set((A.visits || []).flatMap(v => v.techs.map(t => t.name))).size : 0;
   const estN = n(C.est_techs) || 1;   // the price book sets the estimate: its hours and its number of techs
-  const techsN = onSite || (C.hours != null ? C.techs.length || estN : estN);
+  // the number of techs can be set by hand on the Job costs tab (Carlo, Nov 16, 2026: "have a way to add a second tech to the side bar");
+  // once the techs' real time is in, the real techs count and the hand number is not used
+  const techsSet = !actual && n(C.techs_n) >= 1 ? Math.round(n(C.techs_n)) : 0;
+  const techsN = onSite || techsSet || (C.hours != null ? C.techs.length || estN : estN);
   const hours = C.hours != null ? n(C.hours) : actual ? n(A.crew_hours) : n(C.est_hours);
   const labour = actual ? (A.visits || []).reduce((a, v) => a + (v.techs.length ? v.techs : [{}]).reduce((b, t) => b + n(v.hours) * (n(t.rate) || n(C.labour_rate) || planRate), 0), 0)
     : hours * techsN * rate;
@@ -28261,7 +28268,7 @@ function costingCalc(I) {
   const expParts = P ? Math.max(0, P.parts - rtCost) : parts, expLab = P && P.labour > 0 ? P.labour : n(C.est_hours) * estN * rate, expVeh = C.vehicle_default != null ? n(C.vehicle_default) : vehicle;
   const exp = { parts: expParts, labour: expLab, office, vehicle: expVeh, other: 0, comm, hours: P && P.hrs ? P.hrs : n(C.est_hours) * estN };
   exp.profit = revenue - exp.parts - exp.labour - exp.office - exp.vehicle - exp.comm;
-  return { sale, total, st, cut, card, tk, tank, tankCost, rt, rtCost, supCr, revenue, parts, noCost, hours, rate, techsN, labSrc, actual, A, exp, rateFromTechs: rates.length > 0, labour, planLab, office, vehicle, comm, other, profit,
+  return { sale, total, st, cut, card, tk, tank, tankCost, rt, rtCost, supCr, revenue, parts, noCost, hours, rate, techsN, techsSet, labSrc, actual, A, exp, rateFromTechs: rates.length > 0, labour, planLab, office, vehicle, comm, other, profit,
            margin: revenue > 0 ? profit / revenue * 100 : 0 };
 }
 // Expected (what the price book planned) against actual (what the job really took)
@@ -28391,7 +28398,8 @@ function costingHtml(I) {
           const per = new Map(); (k.A.visits || []).forEach(v => (v.techs.length ? v.techs : [{ name: "Tech" }]).forEach(t => per.set(t.name, (per.get(t.name) || 0) + Number(v.hours || 0))));
           return `Labour: ${[...per].map(([nm, x]) => `${esc(nm.trim())} ${hm(x)}`).join(" + ")} = <b>${hm(k.A.tech_hours)}</b> (${+Number(k.A.tech_hours).toFixed(2)} hrs) × ${money(k.rate)}/hr
             <br><span class="quiet">Change it: <input data-cost="hours" inputmode="decimal" value="" placeholder="${+k.hours.toFixed(2)}" aria-label="Hours each tech worked"> hrs each × ${k.techsN} tech${k.techsN === 1 ? "" : "s"}</span>`; })()
-        : `Labour <input data-cost="hours" inputmode="decimal" value="${+k.hours.toFixed(2)}" aria-label="Hours each tech worked"> hrs each × ${k.techsN} tech${k.techsN === 1 ? "" : "s"} × ${money(k.rate)}/hr`}
+        : `Labour <input data-cost="hours" inputmode="decimal" value="${+k.hours.toFixed(2)}" aria-label="Hours each tech worked"> hrs each × ${k.techsN} tech${k.techsN === 1 ? "" : "s"} × ${money(k.rate)}/hr
+            <br><span class="cost-techs"><button class="cost-tech-b" type="button" data-cost-techs="${Math.min(6, k.techsN + 1)}" ${k.techsN >= 6 ? "disabled" : ""}>＋ Add a ${["", "second", "third", "fourth", "fifth", "sixth"][Math.min(5, k.techsN)] || "second"} tech</button>${k.techsN > 1 ? `<button class="cost-tech-b" type="button" data-cost-techs="${k.techsN - 1}">− Take one tech off</button>` : ""}${k.techsSet ? `<button class="link" type="button" data-cost-techs="">use the usual number</button>` : ""}</span>`}
           <br><span class="quiet">${k.labSrc === "actual" ? `real time on the job, from ${k.A.from_timesheets ? "the techs' timesheets" : "the arrived and done times"} (${+Number(k.A.tech_hours).toFixed(2)} tech-hours, each at their own rate)` : k.labSrc === "typed" ? `hours you typed${Number(k.A.tech_hours) > 0 ? ` · <button class="link" type="button" data-cost-hreset>use the real time on site</button>` : ""}` : "the price book's hours for these items (Labour cost box on each item's page)"}${C.techs.length ? " · " + esc(C.techs.map(t => t.name).join(", ")) : ""}</span>
           ${k.planLab ? `<br><span class="quiet">No tech pay rate or company labour rate yet, so it uses the price book's ${money(k.rate)}/hr.</span>` : ""}
           ${!(k.rate > 0) ? (C.can_set_rate ? `<br><span class="warn">What does a tech hour cost you?</span> <input data-cost="rate" inputmode="decimal" placeholder="$/hr" aria-label="Labour cost per hour">` : `<br><span class="warn">No labour cost set (Settings)</span>`) : ""}</td><td class="r">−${money(k.labour)}</td></tr>
@@ -28428,6 +28436,8 @@ function wireCosting(root, I, call, reload) {
     call("inv_set_costs", { p_invoice: I.id, p: { [f]: v == null ? "" : String(v) } }, "Saved.");
   }));
   root.querySelector("[data-cost-vreset]")?.addEventListener("click", () => call("inv_set_vehicle", { p_invoice: I.id, p_amount: null }, "Back to the usual vehicle cost."));
+  root.querySelectorAll("[data-cost-techs]").forEach(b => b.addEventListener("click", () => { const v = b.dataset.costTechs === "" ? null : Number(b.dataset.costTechs);
+    call("inv_set_cost_techs", { p_invoice: I.id, p_n: v }, v == null ? "Back to the usual number of techs." : `Labour is now counted for ${v} tech${v === 1 ? "" : "s"}.`); }));
   root.querySelector("[data-cost-hreset]")?.addEventListener("click", () => call("inv_set_costs", { p_invoice: I.id, p: { hours: "" } }, "Back to the real time on site."));
   root.querySelectorAll("[data-cmp-open]").forEach(b => b.addEventListener("click", () => openCostCompare(I)));
   root.querySelector("[data-cost-lines]")?.addEventListener("toggle", e => { window.COST_LINES_OPEN = e.target.open; });
@@ -40449,6 +40459,7 @@ async function showInvoiceCosting(inv, msg) {
   const [{ data, error }, t] = await Promise.all([db.rpc("inv_costing", { p_invoice: inv.id }),
     db.from("invoices").select("subtotal, total").eq("id", inv.id).single()]);
   if (box.dataset.inv !== String(inv.id)) return;
+  if (data) { const ct = await db.from("invoices").select("cost_techs").eq("id", inv.id).maybeSingle(); data.techs_n = ct.error ? null : ct.data?.cost_techs ?? null; }
   if (error || !data) { box.innerHTML = `<div class="staff-msg err">Couldn't work out the costs${error ? ": " + esc(rpcErr(error)) : ""}</div>`; return; }
   { const ed = await db.rpc("inv_editor", { p_invoice: inv.id }); const skipped = new Set((data.lines || []).filter(l => l.skip).map(l => l.id));
     data.plan = ed.error ? null : await costPlan((ed.data?.lines || []).filter(l => !skipped.has(l.id))).catch(() => null);
