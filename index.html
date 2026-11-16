@@ -28213,6 +28213,20 @@ async function costPlan(lines) {
   return { labour: r2(labour), office: r2(office), hrs, parts: r2(parts), lines: per };
 }
 // Job costing: what the job cost, what the store keeps, and the profit
+// Which lines are a tank the partner pays for (who pays for the tank = the partner): the lines a Tank P.O. was made for; before the P.O. is made,
+// the lines that have a rental rate picked, else the line the Tank P.O. box would pick. Gives { ids, cost, partner, supplier, po, credit, st } or null.
+function costingRentTank(I, L) {
+  try {
+    const T = I.tankpo; if (!T || T.payer !== "partner") return null;
+    const n = v => Number(v) || 0, O = (T.orders || []).filter(o => (o.payer || "partner") === "partner" && o.po_status !== "cancelled");
+    let ids = new Set(O.map(o => Number(o.line)).filter(Boolean));
+    if (!ids.size && typeof vrIeFor === "function") (I.lines || []).forEach(l => { try { if (vrIeFor(I, l)?.P) ids.add(Number(l.id)); } catch {} });
+    if (!ids.size) { const TL = T.lines || [], pk = TL.find(x => (I.prule?.lines || {})[x.id] === "tank") || TL.find(x => x.tankish); if (pk) ids.add(Number(pk.id)); }
+    const mine = L.filter(l => ids.has(Number(l.id))); if (!mine.length) return null;
+    const cost = mine.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0), o = O[0];
+    return { ids, cost, partner: String(I.prule?.name || "Vista").replace(/\s*\(.*\)\s*$/, ""), supplier: o?.supplier || "the supplier", po: o?.po_number || "", credit: o?.credit_number || "", st: o?.credit_status || "" };
+  } catch { return null; }
+}
 function costingCalc(I) {
   const C = I.cost, n = v => Number(v) || 0, sale = n(I.subtotal), total = n(I.total);
   const st = C.store && !C.store.pay?.copy ? C.store : null, cut = st ? (st.pay ? n(st.pay.keeps) : Math.round(total * n(st.cut_pct)) / 100) : 0, card = st ? (st.pay ? n(st.pay.card) : n(st.card_fee)) : 0;
@@ -28221,7 +28235,11 @@ function costingCalc(I) {
   const L = C.lines.filter(l => !l.skip);   // lines taken out of the costing (the X) don't count
   const tankCost = tk ? L.filter(l => l.equip).reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) : 0;
   const revenue = st?.pay?.method === "discount_fee" ? (st.pay.from_statement ? n(st.pay.pays) / (1 + n(C.hst ?? 13) / 100) : n(st.pay.after) - n(st.pay.fee) - card) - tank : sale - cut - card - tank;   // Costco way: our price less the % off and the fee, before HST
-  const parts = L.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) - tankCost + n(C.actual?.stock_cost) - n(C.supplier_credit);   // less the supplier's credit (Lennox on Costco sales)
+  // A tank the partner pays for through a Tank P.O. and a Credit Order (a Vista rental): we order it and pay the supplier, and the supplier credits us
+  // the same money, so it is not our cost (Carlo, Nov 16, 2026: "it should show that we do not actually pay for the tank and remove it from the margin")
+  const rt = tk ? null : costingRentTank(I, L), rtCost = rt ? rt.cost : 0;
+  const supCr = Math.max(0, n(C.supplier_credit) - rtCost);   // the supplier's credit for that tank is the same money: not taken off twice
+  const parts = L.reduce((a, l) => a + n(l.quantity) * n(l.unit_cost), 0) - tankCost - rtCost + n(C.actual?.stock_cost) - supCr;   // less the supplier's credit (Lennox on Costco sales)
   const noCost = L.filter(l => n(l.unit_price) > 0 && (l.unit_cost == null || n(l.unit_cost) === 0)).length;
   // labour: hours on the job × techs × cost per hour. Hours are the real time on site (each visit's arrived to done) once there
   // is some, or what you typed, or the price book's hours. A tech with no pay rate set counts at the company rate, or the price book's rate.
@@ -28240,10 +28258,10 @@ function costingCalc(I) {
   const comm = S ? (S.amount != null ? n(S.amount) : (S.sale_amount != null ? n(S.sale_amount) : sale) * n(S.pct) / 100) : 0;
   const vehicle = n(C.vehicle), other = n(C.other), profit = revenue - parts - labour - office - vehicle - comm - other;
   // what the price book expected for this job (same costing as the item page and proposals)
-  const expParts = P ? P.parts : parts, expLab = P && P.labour > 0 ? P.labour : n(C.est_hours) * estN * rate, expVeh = C.vehicle_default != null ? n(C.vehicle_default) : vehicle;
+  const expParts = P ? Math.max(0, P.parts - rtCost) : parts, expLab = P && P.labour > 0 ? P.labour : n(C.est_hours) * estN * rate, expVeh = C.vehicle_default != null ? n(C.vehicle_default) : vehicle;
   const exp = { parts: expParts, labour: expLab, office, vehicle: expVeh, other: 0, comm, hours: P && P.hrs ? P.hrs : n(C.est_hours) * estN };
   exp.profit = revenue - exp.parts - exp.labour - exp.office - exp.vehicle - exp.comm;
-  return { sale, total, st, cut, card, tk, tank, tankCost, revenue, parts, noCost, hours, rate, techsN, labSrc, actual, A, exp, rateFromTechs: rates.length > 0, labour, planLab, office, vehicle, comm, other, profit,
+  return { sale, total, st, cut, card, tk, tank, tankCost, rt, rtCost, supCr, revenue, parts, noCost, hours, rate, techsN, labSrc, actual, A, exp, rateFromTechs: rates.length > 0, labour, planLab, office, vehicle, comm, other, profit,
            margin: revenue > 0 ? profit / revenue * 100 : 0 };
 }
 // Expected (what the price book planned) against actual (what the job really took)
@@ -28303,8 +28321,9 @@ function openCostCompare(I) {
   const extra = [];
   if (n(C.actual?.stock_cost)) extra.push(["Taken out of stock for this job (not on the invoice)", 0, n(C.actual.stock_cost)]);
   if (k.tankCost) extra.push([`Tank paid by ${C.partner_tank?.partner || "the partner"} (not ours)`, 0, -k.tankCost]);
-  if (n(C.supplier_credit)) extra.push([`${C.supplier_credit_from || "Supplier"} credit`, 0, -n(C.supplier_credit)]);
-  extra.forEach(x => { aP += x[2]; });
+  if (k.rtCost) extra.push([`Tank paid by ${k.rt.partner}: ${k.rt.supplier} credits us (not our cost)`, -k.rtCost, -k.rtCost]);
+  if (k.supCr) extra.push([`${C.supplier_credit_from || "Supplier"} credit`, 0, -k.supCr]);
+  extra.forEach(x => { eP += x[1]; aP += x[2]; });
   // labour: planned hours per item | each tech's real time
   const labPlan = tops.filter(l => planBy.get(Number(l.id))?.hrs > 0 && !byId.get(Number(l.id))?.skip).map(l => { const pl = planBy.get(Number(l.id));
     return `<tr><td>${esc(String(l.description || "").split("\n")[0].slice(0, 80))}</td><td class="r">${+n(pl.hrs).toFixed(2)} h</td><td class="r">${money(pl.labour)}</td></tr>`; }).join("");
@@ -28328,7 +28347,7 @@ function openCostCompare(I) {
     <h2>Parts and equipment, item by item</h2>
     <table class="cost-sheet"><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Sold for</th><th class="r">Expected cost</th><th class="r">Actual cost</th><th class="r">Difference</th></tr></thead><tbody>
       ${partRows}
-      ${extra.map(x => `<tr><td>${esc(x[0])}</td><td></td><td></td><td class="r">—</td><td class="r">${x[2] < 0 ? "−" : ""}${money(Math.abs(x[2]))}</td>${dif(0, x[2])}</tr>`).join("")}
+      ${extra.map(x => `<tr><td>${esc(x[0])}</td><td></td><td></td><td class="r">${x[1] ? "−" + money(Math.abs(x[1])) : "—"}</td><td class="r">${x[2] < 0 ? "−" : ""}${money(Math.abs(x[2]))}</td>${dif(x[1], x[2])}</tr>`).join("")}
     </tbody><tfoot><tr><th colspan="3">Total</th><th class="r">${money(eP)}</th><th class="r">${money(aP)}</th>${dif(eP, aP)}</tr></tfoot></table>
     <h2>Labour</h2>
     <div class="cmp-two">
@@ -28353,7 +28372,7 @@ function costingHtml(I) {
   const hrsNote = C.hours != null ? "you set" : Number(C.est_hours) ? "price book estimate" : "type the hours";
   return `<h2>Job costing</h2>
     <div class="ie-cost-top ${lvl}"><div><span>Profit</span><strong>${money(k.profit)}</strong></div><div style="text-align:right"><span>Margin</span><strong>${pct(k.margin)}</strong></div></div>
-    <div class="quiet" style="margin-top:-6px">${k.tk ? `Margin is profit ÷ what ${esc(k.tk.partner)} pays Reid before HST (${money(k.revenue)}).` : k.st ? `Margin is profit ÷ Reid's share after ${esc(k.st.name)} (${money(k.revenue)}).` : "Margin is profit ÷ the sale before HST."} Green is 40% or more, orange 25 to 40%, red under 25%.</div>
+    <div class="quiet" style="margin-top:-6px">${k.tk ? `Margin is profit ÷ what ${esc(k.tk.partner)} pays Reid before HST (${money(k.revenue)}).` : k.st ? `Margin is profit ÷ Reid's share after ${esc(k.st.name)} (${money(k.revenue)}).` : "Margin is profit ÷ the sale before HST."}${k.rt ? ` The tank is left out: we do not pay for it.` : ""} Green is 40% or more, orange 25 to 40%, red under 25%.</div>
     <div class="ie-cost-bar" role="img" aria-label="Where the money goes">${segs.map(x => `<i style="width:${x[1] / base * 100}%;background:${x[2]}" title="${esc(x[0])} ${money(x[1])}"></i>`).join("")}</div>
     <div class="ie-cost-key">${segs.map(x => `<span><b style="background:${x[2]}"></b>${esc(x[0])} ${pct(x[1] / base * 100)}</span>`).join("")}</div>
     ${costingVsHtml(I, k)}
@@ -28365,7 +28384,8 @@ function costingHtml(I) {
         <tr><td>Reid's share (before HST)</td><td class="r">${money(k.revenue)}</td></tr>` : ""}
       ${k.tk ? `<tr class="store"><td><strong>Tank: ${esc(k.tk.partner)} pays ${esc(k.tk.supplier)}</strong><br><span class="quiet">${money(k.tk.amount)} with HST, not Reid's money</span></td><td class="r"><strong>−${money(k.tank)}</strong></td></tr>
         <tr><td>Reid's share (before HST)</td><td class="r">${money(k.revenue)}</td></tr>` : ""}
-      <tr><td>Parts and equipment${k.tk && k.tankCost ? `<br><span class="quiet">not counting the tank (${money(k.tankCost)}): ${esc(k.tk.supplier)} is paid by ${esc(k.tk.partner)}</span>` : ""}${k.noCost ? `<br><span class="warn">${k.noCost} line${k.noCost > 1 ? "s" : ""} with no cost</span>` : ""}${Number(I.cost.supplier_credit) ? `<br><span class="quiet">less ${esc(I.cost.supplier_credit_from || "supplier")} credit ${money(I.cost.supplier_credit)}</span>` : ""}</td><td class="r">−${money(k.parts)}</td></tr>
+      ${k.rt ? `<tr class="store"><td><strong>Tank: we do not pay for it</strong><br><span class="quiet">${esc(k.rt.partner)} pays for the tank. We order it${k.rt.po ? ` (P.O. ${esc(k.rt.po)})` : ""} and pay ${esc(k.rt.supplier)}, then ${esc(k.rt.supplier)} credits us the same money${k.rt.credit ? ` (Credit Order ${esc(k.rt.credit)}: ${k.rt.st === "received" ? "the credit came back" : "waiting for the credit"})` : k.rt.po ? "" : " (the P.O. is not made yet)"}. It is not in the costs or the margin.</span></td><td class="r"><strong>${money(k.rtCost)}</strong><br><span class="quiet">not counted</span></td></tr>` : ""}
+      <tr><td>Parts and equipment${k.rt ? `<br><span class="quiet">not counting the tank (${money(k.rtCost)})</span>` : ""}${k.tk && k.tankCost ? `<br><span class="quiet">not counting the tank (${money(k.tankCost)}): ${esc(k.tk.supplier)} is paid by ${esc(k.tk.partner)}</span>` : ""}${k.noCost ? `<br><span class="warn">${k.noCost} line${k.noCost > 1 ? "s" : ""} with no cost</span>` : ""}${k.supCr ? `<br><span class="quiet">less ${esc(I.cost.supplier_credit_from || "supplier")} credit ${money(k.supCr)}</span>` : ""}</td><td class="r">−${money(k.parts)}</td></tr>
       <tr><td>${k.labSrc === "actual" && k.A.from_timesheets ? (() => {   // each tech's own time, from their timesheet: never multiplied by the number of techs
           const hm = x => { const m = Math.round(Number(x) * 60); return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`; };
           const per = new Map(); (k.A.visits || []).forEach(v => (v.techs.length ? v.techs : [{ name: "Tech" }]).forEach(t => per.set(t.name, (per.get(t.name) || 0) + Number(v.hours || 0))));
@@ -28389,7 +28409,7 @@ function costingHtml(I) {
             <br><span class="quiet">not counted · taken out by ${esc(l.skip.by || "someone")} ${l.skip.at ? "on " + esc(fmtDate(String(l.skip.at).slice(0, 10))) : ""}</span>
             ${C.can_set_store || C.can_edit_costs || can("jobs.costing") ? ` <button class="link" type="button" data-cost-skip="${l.id}" data-skip-to="0">Count it again</button>` : ""}</td>
           <td class="r"><s>${c != null ? money(c) : "—"}</s></td></tr>`;
-        return `<tr><td>${can("jobs.costing") ? `<button type="button" class="link" data-cost-skip="${l.id}" data-skip-to="1" title="Take this line out of the costing (it stays on the invoice)" aria-label="Take this line out of the costing" style="float:right;margin-left:6px;font-weight:700;color:var(--red)">✕</button>` : ""}${esc(l.description)}${Number(l.quantity) !== 1 ? ` <span class="quiet">× ${Number(l.quantity)}</span>` : ""}<br><span class="quiet">sells ${money(p)}${m != null ? " · margin " + pct(m) : ""}</span></td>
+        return `<tr><td>${can("jobs.costing") ? `<button type="button" class="link" data-cost-skip="${l.id}" data-skip-to="1" title="Take this line out of the costing (it stays on the invoice)" aria-label="Take this line out of the costing" style="float:right;margin-left:6px;font-weight:700;color:var(--red)">✕</button>` : ""}${esc(l.description)}${Number(l.quantity) !== 1 ? ` <span class="quiet">× ${Number(l.quantity)}</span>` : ""}<br><span class="quiet">${k.rt && k.rt.ids.has(Number(l.id)) ? `sells ${money(p)} · not our cost: ${esc(k.rt.partner)} pays for the tank` : `sells ${money(p)}${m != null ? " · margin " + pct(m) : ""}`}</span></td>
           <td class="r">${e ? `<input data-cost-line="${l.id}" inputmode="decimal" value="${c != null ? c.toFixed(2) : ""}" placeholder="cost" aria-label="Cost each">` : c != null ? money(c) : "—"}</td></tr>`; }).join("")}
     </table></details>` : ""}
     <p class="quiet" style="margin:0">Only people allowed to see job costing see this box. The customer never sees it.</p>`;
