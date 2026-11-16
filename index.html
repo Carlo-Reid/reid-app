@@ -8049,6 +8049,7 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
   #walk-cam video { width: 100%; max-height: 60vh; display: block; object-fit: contain; }
   #walk-cam .wc-msg { position: absolute; left: 0; right: 0; margin: 0; padding: 10px 14px; text-align: center; color: #fff; font-size: 17px; font-weight: 700; } #walk-cam .wc-msg:empty { display: none; }
   #walk-cam .wc-msg.err { color: #ffd9d4; }
+  #walk-cam .wc-msg.wc-cam { top: auto; bottom: 0; font-size: 13.5px; font-weight: 600; padding: 6px 10px; background: rgba(0,0,0,.55); }
   #walk-cam .wc-acts { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; } #walk-cam .wc-acts .mc-sq { width: 132px; height: 112px; min-height: 0; }
   #walk-cam .mc-sq:disabled { opacity: .5; cursor: default; }
   /* the questions of a walk: a picture or N/A for each (Carlo, Nov 13). Compact grid Nov 14: small cards side by side, so every question fits one screen. */
@@ -29206,8 +29207,23 @@ function walkCam(q) {
       : n === "NotReadableError" || n === "AbortError" || n === "TrackStartError" ? "I found the camera, but I can not turn it on. Another program is most likely using it (a video call, the Camera app), or its cover is closed. Close that program, then press Try again."
       : cams === 0 ? "This device has no camera that the browser can see. If it has one, it is turned off in the device's privacy settings (on Windows: Settings, Privacy and security, Camera, turn on Camera access and Let desktop apps use the camera). Then press Try again."
       : "I could not turn the camera on. Press Try again.") + " Or press Pick a file, or Cancel and press N/A." + (n ? ` (What the browser said: ${n})` : ""); };
+  // Carlo, Nov 16: on his laptop the box showed the laptop's own "camera off" picture. A laptop can have more than one camera
+  // (a covered one, an infrared one, a program's pretend one): name the camera in use and let the person switch to the next one.
+  const camName = () => { try { return (stream?.getVideoTracks()[0]?.label || "").replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, ""); } catch (e) { return ""; } };
+  const use = async st => { try { stream?.getTracks().forEach(t => t.stop()); } catch (e) {} stream = st; v.srcObject = st;
+    v.onloadedmetadata = () => { shot.disabled = false; shot.focus(); }; v.play?.().catch(() => {});
+    let ds = []; try { ds = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput" && d.deviceId); } catch (e) {}
+    if (shut || stream !== st) return;
+    const nm = camName(); msg.className = "wc-msg wc-cam"; msg.textContent = nm ? "Camera: " + nm + (ds.length > 1 ? ". Wrong one, or a camera with an X? Press Other camera." : ". A camera with an X on it means this camera is switched off on the device (its cover, or its key).") : "";
+    o.querySelector('[data-wc="other"]')?.remove();
+    if (ds.length > 1) { const b = document.createElement("button"); b.type = "button"; b.className = "mc-sq"; b.dataset.wc = "other"; b.innerHTML = `<span class="mc-sq-ic" aria-hidden="true">🔁</span><span class="mc-sq-tn">Other camera</span>`;
+      b.addEventListener("click", async () => { const cur = stream?.getVideoTracks()[0]?.getSettings?.().deviceId, i = ds.findIndex(d => d.deviceId === cur), nx = ds[(i + 1) % ds.length];
+        b.disabled = true; shot.disabled = true; try { stream?.getTracks().forEach(t => t.stop()); } catch (e) {}
+        try { use(await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: nx.deviceId } }, audio: false })); }
+        catch (e) { stream = null; msg.className = "wc-msg err"; msg.textContent = why(e, ds.length); b.disabled = false; } });
+      o.querySelector('[data-wc="file"]').before(b); } };
   const start = async () => {
-    msg.className = "wc-msg"; msg.textContent = "Looking for the camera…"; shot.disabled = true; o.querySelector('[data-wc="again"]')?.remove();
+    msg.className = "wc-msg"; msg.textContent = "Looking for the camera…"; shot.disabled = true; o.querySelector('[data-wc="again"]')?.remove(); o.querySelector('[data-wc="other"]')?.remove();
     const md = navigator.mediaDevices, tries = [{ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }, { video: true, audio: false }];
     let st = null, err = null, cams = null;
     for (const c of tries) { try { st = await md.getUserMedia(c); break; } catch (e) { err = e; if (e && (e.name === "NotAllowedError" || e.name === "SecurityError")) break; } }
@@ -29216,7 +29232,7 @@ function walkCam(q) {
         for (const d of ds) { if (!d.deviceId) continue; try { st = await md.getUserMedia({ video: { deviceId: { exact: d.deviceId } }, audio: false }); break; } catch (e) { err = e; } } } catch (e) {}
     }
     if (shut) return st?.getTracks().forEach(t => t.stop());
-    if (st) { stream = st; v.srcObject = st; v.onloadedmetadata = () => { msg.textContent = ""; shot.disabled = false; shot.focus(); }; v.play?.().catch(() => {}); return; }
+    if (st) { use(st); return; }
     console.warn("walk camera", err);
     msg.className = "wc-msg err"; msg.textContent = why(err, cams);
     const b = document.createElement("button"); b.type = "button"; b.className = "mc-sq"; b.dataset.wc = "again"; b.innerHTML = `<span class="mc-sq-ic" aria-hidden="true">🔄</span><span class="mc-sq-tn">Try again</span>`;
