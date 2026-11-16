@@ -22864,13 +22864,18 @@ function renderToBook() {
   document.querySelectorAll("[data-tob-book]").forEach(b => b.addEventListener("click", async () => { const r = R[Number(b.dataset.tobBook)]; if (!r) return;
     let inv = r.invoice || null;
     if (!inv && r.job_id) { b.disabled = true;
-      try { const q = await db.from("invoices").select("id").eq("job_id", r.job_id).neq("status", "void").is("store_copy_of", null).order("id", { ascending: false }).limit(1);
-        inv = q.data && q.data[0] ? q.data[0].id : null;
-        if (!inv) { const n = await db.rpc("new_invoice", { p_job: r.job_id }); if (!n.error && n.data) inv = typeof n.data === "object" ? (n.data.id || n.data.invoice_id || null) : n.data; } } catch (e) {}
+      // Carlo, 5:57 p.m.: "it should start with all the info the first invoice from the walk has". Always the job's FIRST invoice
+      // (the one made before the walk), never a new empty one. A job whose invoice was deleted has none: ask, do not start one silently.
+      try { const q = await db.from("invoices").select("id").eq("job_id", r.job_id).neq("status", "void").is("store_copy_of", null).is("deleted_at", null).order("id", { ascending: true }).limit(1);
+        inv = q.data && q.data[0] ? q.data[0].id : null; } catch (e) {}
       b.disabled = false; }
     if (inv) { INSTALL_BOOK = { inv: Number(inv), r }; REMOTE_INV = null; return openInvoiceEditor(Number(inv)); }
-    alertMsg("I could not open this job's invoice, so the booking page is open. Check the invoice from the customer's page.");
-    tobBookInstall(r, ""); }));
+    const k = await askChoice("This job has no invoice", `<span class="ask-sq"></span>The invoice that was made before the walk is not there any more. It was deleted or cancelled, so I have nothing to show. Pick one:`,
+      [["new", "🧾|Start a new invoice|It starts empty", true], ["tech", "📅|Pick the tech|Book with no invoice", true], ["", "Cancel"]]);
+    if (k === "new" && r.job_id) { const n = await db.rpc("new_invoice", { p_job: r.job_id }); const id = !n.error && n.data ? (typeof n.data === "object" ? (n.data.id || n.data.invoice_id || null) : n.data) : null;
+      if (id) { INSTALL_BOOK = { inv: Number(id), r }; REMOTE_INV = null; return openInvoiceEditor(Number(id)); }
+      return alertMsg("I could not start a new invoice" + (n.error ? ": " + n.error.message : ".")); }
+    if (k === "tech") tobBookInstall(r, ""); }));
 }
 // Credit Memos page (Carlo, Nov 11: "there should be a tab for Credit Memos like there is for Purchase Orders"): every supplier credit's memo, to find and open
 const CMP = { q: "", sup: "", kind: "all", data: null, seq: 0 };
