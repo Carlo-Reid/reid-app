@@ -29199,7 +29199,8 @@ function walkCam(q) {
   o.querySelector('[data-wc="x"]').addEventListener("click", close);
   o.querySelector('[data-wc="file"]').addEventListener("click", () => { close(); pickFile(); });
   shot.addEventListener("click", () => {
-    if (!v.videoWidth) return; const cv = document.createElement("canvas"); cv.width = v.videoWidth; cv.height = v.videoHeight; cv.getContext("2d").drawImage(v, 0, 0);
+    if (!v.videoWidth) return; try { const lb = stream?.getVideoTracks()[0]?.label; if (lb) localStorage.setItem("reid.cam", lb); } catch (e) {}   // remember the camera that worked, on this computer
+    const cv = document.createElement("canvas"); cv.width = v.videoWidth; cv.height = v.videoHeight; cv.getContext("2d").drawImage(v, 0, 0);
     cv.toBlob(b => { close(); if (b) (isExtra ? walkExtraAdd(b) : walkAnswer(q, b)); }, "image/jpeg", .9); });
   // Carlo, Nov 14: "it can't find the camera again". Try the back camera first, then any camera, then each camera by name; and say what really went wrong.
   const why = (err, cams) => { const n = (err && err.name) || "";
@@ -29210,16 +29211,25 @@ function walkCam(q) {
   // Carlo, Nov 16: on his laptop the box showed the laptop's own "camera off" picture. A laptop can have more than one camera
   // (a covered one, an infrared one, a program's pretend one): name the camera in use and let the person switch to the next one.
   const camName = () => { try { return (stream?.getVideoTracks()[0]?.label || "").replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, ""); } catch (e) { return ""; } };
-  const use = async st => { try { stream?.getTracks().forEach(t => t.stop()); } catch (e) {} stream = st; v.srcObject = st;
+  // Carlo, Nov 16: his laptop has a pretend camera ("Mirametrix Virtual Camera") that the browser gave first; the other camera works.
+  // So: never start on a pretend or infrared camera when a real one is there, and start on the camera a picture was last taken with on this computer.
+  const camFake = l => /virtual|mirametrix|\bobs\b|snap camera|manycam|droidcam|xsplit|splitcam|\bir\b|infrared/i.test(l || "");
+  const use = async (st, byHand) => { try { stream?.getTracks().forEach(t => t.stop()); } catch (e) {} stream = st; v.srcObject = st;
     v.onloadedmetadata = () => { shot.disabled = false; shot.focus(); }; v.play?.().catch(() => {});
     let ds = []; try { ds = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput" && d.deviceId); } catch (e) {}
     if (shut || stream !== st) return;
+    if (!byHand && ds.length > 1) { let was = ""; try { was = localStorage.getItem("reid.cam") || ""; } catch (e) {}
+      const curId = st.getVideoTracks()[0]?.getSettings?.().deviceId, cur = ds.find(d => d.deviceId === curId);
+      const want = (was && ds.find(d => d.label === was)) || (camFake(cur ? cur.label : st.getVideoTracks()[0]?.label) ? ds.find(d => !camFake(d.label)) : null);
+      if (want && want.deviceId !== curId) { shot.disabled = true;
+        try { const st2 = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: want.deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+          if (shut) return st2.getTracks().forEach(t => t.stop()); return use(st2, true); } catch (e) { shot.disabled = !v.videoWidth; } } }
     const nm = camName(); msg.className = "wc-msg wc-cam"; msg.textContent = nm ? "Camera: " + nm + (ds.length > 1 ? ". Wrong one, or a camera with an X? Press Other camera." : ". A camera with an X on it means this camera is switched off on the device (its cover, or its key).") : "";
     o.querySelector('[data-wc="other"]')?.remove();
     if (ds.length > 1) { const b = document.createElement("button"); b.type = "button"; b.className = "mc-sq"; b.dataset.wc = "other"; b.innerHTML = `<span class="mc-sq-ic" aria-hidden="true">🔁</span><span class="mc-sq-tn">Other camera</span>`;
       b.addEventListener("click", async () => { const cur = stream?.getVideoTracks()[0]?.getSettings?.().deviceId, i = ds.findIndex(d => d.deviceId === cur), nx = ds[(i + 1) % ds.length];
         b.disabled = true; shot.disabled = true; try { stream?.getTracks().forEach(t => t.stop()); } catch (e) {}
-        try { use(await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: nx.deviceId } }, audio: false })); }
+        try { use(await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: nx.deviceId } }, audio: false }), true); }
         catch (e) { stream = null; msg.className = "wc-msg err"; msg.textContent = why(e, ds.length); b.disabled = false; } });
       o.querySelector('[data-wc="file"]').before(b); } };
   const start = async () => {
