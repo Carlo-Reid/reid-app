@@ -28852,7 +28852,7 @@ const IE_HELP = { root: "article.ie", list: [
   [".ie-mydisc", "Your discounts. Click one to add the item with your discount."],
   ["#ie-customopen, details.ie-custom:not(.ie-custom-sq)", "Not in the price book, or a discount? Click here. Type what it is and its price. For a discount, put a minus in front of the price."],
   ['[data-ie-card="lines"]', "Step 2. Everything that is on the invoice. To change how many or the price, type in its box. The × at the end of a line takes it off."],
-  ['.ie-rx', "A rental only. Once the monthly rate is picked, two more lines are offered here. Add Dealer Promo: type the promo's name and the amount we get paid, then press Add it to the invoice. Add Drive Time: press Yes and I measure the drive from the office to the call and charge $1 for each kilometre. Press No when there is none."],
+  ['.ie-rx', "A rental only. Once the monthly rate is picked, two more lines are offered here. Add Dealer Promo: type the promo's name and the amount we get paid, then press Add it to the invoice. Add Drive Time: press Yes and I measure the drive from the office to the call. Only a call over 50 km gets it: $1 for each kilometre, there and back. Press No when there is none."],
   [".ie-totals", "The totals: before tax, the HST, and the total the customer or the partner pays."],
   ['[data-ie-card="tank"]', "The P.O. for the tank. Pick the tank line and the supplier, then press the green button to make the P.O."],
   ['[data-ie-card="partner"]', "The partner's numbers, like the account number and the approval number. Fill them in when you have them."],
@@ -29274,7 +29274,7 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
 // A rental, once the monthly rate is picked and the tank's price is the allowance: two more lines are offered by themselves under the invoice's
 // lines (Carlo, Nov 16): "Add Dealer Promo" (the promo's name and the amount we get paid) and "Add Drive Time" (Yes / No; Yes measures the
 // drive from the office, 36 Capital Drive, to the call and charges $1 for each kilometre).
-const IE_OFFICE = { lat: 45.32257, lng: -75.72046, name: "36 Capital Drive" }, IE_KM_RATE = 1;
+const IE_OFFICE = { lat: 45.32257, lng: -75.72046, name: "36 Capital Drive" }, IE_KM_RATE = 1, IE_KM_OVER = 50;   // Carlo, Nov 16: only a call over 50 km from the office, $1 a km there and back
 const IE_RX = { key: "reid.ie.rentx", get(id) { try { return (JSON.parse(localStorage.getItem(this.key) || "{}")[id]) || {}; } catch (e) { return {}; } },
   set(id, k, v) { try { const o = JSON.parse(localStorage.getItem(this.key) || "{}"); o[id] = { ...(o[id] || {}), [k]: v }; const ks = Object.keys(o); if (ks.length > 300) ks.slice(0, ks.length - 300).forEach(x => delete o[x]); localStorage.setItem(this.key, JSON.stringify(o)); } catch (e) {} } };
 const ieIsPromo = l => /^\s*dealer promo/i.test(l?.description || ""), ieIsDrive = l => /^\s*drive time/i.test(l?.description || "");
@@ -29287,8 +29287,9 @@ function ieRentExtrasHtml(I) {
       <button class="btn" type="button" data-ie-rx="promo-add">Add it to the invoice</button>${promo.length ? "" : `<button class="btn quiet-btn" type="button" data-ie-rx="promo-no">No promo</button>`}</div>` : "";
   const promoNo = !promo.length && R.promo === "no" ? `<p class="quiet">No dealer promo on this one. <button class="link" type="button" data-ie-rx="promo-back">Add one after all</button></p>` : "";
   const driveH = drive.length ? `<p class="ie-rx-ok">✔ Drive Time is on the invoice: ${drive.map(l => esc(l.description) + " · " + money(l.line_total)).join("; ")}</p>`
+    : R.drive === "near" ? `<p class="quiet">No drive time: this call is ${Number(R.km) || "under " + IE_KM_OVER} km from the office. Drive time is only for a call over ${IE_KM_OVER} km. <button class="link" type="button" data-ie-rx="drive-back">Measure it again</button></p>`
     : R.drive === "no" ? `<p class="quiet">No drive time on this one. <button class="link" type="button" data-ie-rx="drive-back">Add it after all</button></p>`
-    : `<div class="ie-rx-form"><span>Charge the drive from the office (${IE_OFFICE.name}) to this call? It is ${money(IE_KM_RATE)} for each kilometre.</span>
+    : `<div class="ie-rx-form"><span>Is this call over ${IE_KM_OVER} km from the office (${IE_OFFICE.name})? Then we get ${money(IE_KM_RATE)} for each kilometre, there and back. Press Yes and I measure it.</span>
       <button class="btn" type="button" data-ie-rx="drive-yes">Yes</button><button class="btn quiet-btn" type="button" data-ie-rx="drive-no">No</button><span class="ie-rx-say" id="ie-rx-dsay"></span></div>`;
   return `<div class="ie-rx no-print"><div class="ie-rx-row"><h4>Add Dealer Promo</h4>${promoH}${promoForm}${promoNo}</div><div class="ie-rx-row"><h4>Add Drive Time</h4>${driveH}</div></div>`;
 }
@@ -29317,10 +29318,12 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
     IE_RX.set(id, "promo", ""); return again("✓ Dealer Promo is on the invoice: " + nm + ", " + money(amt) + "."); }
   if (k === "drive-yes") { const say = $("#ie-rx-dsay"); b.disabled = true; if (say) say.textContent = "Measuring the drive…";
     const d = await ieDriveKm(I); if (d.err) { b.disabled = false; if (say) say.textContent = ""; return alertMsg(d.err); }
-    const km = Math.max(1, Math.round(d.km));
-    const { error } = await db.rpc("inv_add_custom", { p_invoice: id, p_description: `Drive Time: ${km} km from ${IE_OFFICE.name} to the call`, p_qty: km, p_price: IE_KM_RATE, p_taxable: true });
+    const one = Math.max(1, Math.round(d.km)), km = one * 2, how = d.road ? " by road" : " (straight line plus 30%, the route service did not answer)";
+    if (d.km <= IE_KM_OVER) { IE_RX.set(id, "drive", "near"); IE_RX.set(id, "km", one); renderInvoiceEditor();
+      return alertMsg(`No drive time: this call is ${one} km from the office${how}. Drive time is only for a call over ${IE_KM_OVER} km.`); }
+    const { error } = await db.rpc("inv_add_custom", { p_invoice: id, p_description: `Drive Time: ${one} km each way, ${km} km there and back from ${IE_OFFICE.name}`, p_qty: km, p_price: IE_KM_RATE, p_taxable: true });
     if (error) { b.disabled = false; if (say) say.textContent = ""; return alertMsg("Not saved: " + rpcErr(error)); }
-    return again(`✓ Drive Time is on the invoice: ${km} km${d.road ? " by road" : " (straight line plus 30%, the route service did not answer)"} × ${money(IE_KM_RATE)} = ${money(km * IE_KM_RATE)}.`); }
+    return again(`✓ Drive Time is on the invoice: ${one} km each way${how}, ${km} km there and back × ${money(IE_KM_RATE)} = ${money(km * IE_KM_RATE)}.`); }
 });
 async function ieApplyPartnerRates() {
   const I = IE, R = I.prule, lines = I.lines.filter(l => !l.kit_parent), K = R.lines || {};   // each line's kind comes from the price book: tank, labour, service_call
