@@ -8339,6 +8339,14 @@ body.cpy-on #main, body.cpy-on #search-page { cursor: crosshair; } body.cpy-on #
 .ssp-form .ssp-totals { width: 300px; } .ssp-form .ssp-totals td { text-align: right; } .ssp-form .ssp-grand th, .ssp-form .ssp-grand td { font-weight: 700; font-size: 16px; }
 @media (max-width: 700px) { .ssp-form .ssp-head, .ssp-form .ssp-foot { flex-direction: column; align-items: stretch; } .ssp-form .ssp-box, .ssp-form .ssp-totals { min-width: 0; width: 100%; } .ssp-form .ssp-lines { font-size: 12px; } }
 .sinv-syspaper .ssp-nol { margin: 8px 18px; } .sinv-syspaper .ssp-tot { display: flex; justify-content: flex-end; gap: 22px; padding: 8px 18px; font-size: calc(16px * var(--fs, 1)); }
+.sinv-chg { display: flex; flex-wrap: wrap; gap: 10px 26px; align-items: flex-start; margin: 0 0 12px; padding: 10px 14px; border: 1.5px solid #bcd0e3; border-radius: 12px; background: linear-gradient(180deg, #fff, #f5f9fd); }
+.sinv-chg-g { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .sinv-chg-k { display: grid; font-size: 13px; color: #44566b; min-width: 120px; } .sinv-chg-k b { font-size: 15.5px; color: #23415f; overflow-wrap: anywhere; }
+.sinv-chg-b { display: grid; place-items: center; align-content: center; gap: 3px; width: 86px; min-height: 70px; padding: 6px 5px; border: 1.5px solid #bcd0e3; border-radius: 12px; background: linear-gradient(180deg, #fff, #eef4fa); color: #23415f; font: 700 13px/1.15 inherit; text-align: center; cursor: pointer; box-shadow: 0 1px 3px rgba(35, 65, 95, .1); }
+.sinv-chg-b > span:first-child { font-size: 19px; line-height: 1; } .sinv-chg-b:hover { background: #e3eef9; border-color: #23415f; } .sinv-chg-b.on { background: #dbe9f7; border: 2px solid #23415f; }
+.sinv-chg-b.bad { color: #a12626; border-color: #e3b9b9; background: linear-gradient(180deg, #fff, #fdf1f1); } .sinv-chg-b.bad:hover { background: #fbe3e3; border-color: #a12626; }
+.sinv-chg-form { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; padding-top: 10px; border-top: 1px solid #d3dbe4; }
+.sinv-chg-form label { display: grid; gap: 3px; font-weight: 700; color: #23415f; font-size: 14px; } .sinv-chg-form input { font-size: 16px; padding: 7px 9px; border: 2px solid #23415f; border-radius: 6px; background: #f7fbff; width: 190px; max-width: 100%; }
+.sinv-chg-form p { flex: 1 1 100%; margin: 0; font-size: 13.5px; } @media print { .sinv-chg { display: none; } }
 .sinv-needs { margin: 0 0 12px; padding: 12px 16px; border: 1px solid #c9d6e6; border-left: 5px solid #b7791f; border-radius: 6px; background: #fff; }
 .sinv-needs.sn-done { border-left-color: #1f9d4a; }
 .sinv-needs .sn-h { font-size: 17px; font-weight: 800; color: #23415f; margin: 0 0 6px; }
@@ -21667,7 +21675,23 @@ document.addEventListener("click", async e => { const b = e.target.closest?.("[d
   b.disabled = true; const { error } = await db.rpc("supplier_invoice_mark_slip", { p_id: id, p_on: on }); if (error) { b.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
   SINV.data = null; SINV.det.delete(id); await openSupInv(on ? "Moved to the packing slips." : "Taken off the packing slips."); }, true);
 function sinvPoFindHtml(r, edit) {
-  return edit && !r.po_id && SINV.poFind === r.id ? `<div class="sci-po"><label>Match to PO <input id="sinv-po-${r.id}" placeholder="PO number, job number or customer" value="${esc(r.po_by_hand ? r.po_number || "" : "")}" autocomplete="off"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button><div class="sci-po-found" data-sci-pofound="${r.id}"></div></div>` : "";
+  return edit && SINV.poFind === r.id ? `<div class="sci-po"><label>${r.po_id ? "Change to another P.O." : "Match to PO"} <input id="sinv-po-${r.id}" placeholder="PO number, job number or customer" value="${esc(r.po_by_hand && !r.po_id ? r.po_number || "" : "")}" autocomplete="off"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button><div class="sci-po-found" data-sci-pofound="${r.id}"></div></div>` : "";
+}
+// Edit, change or delete the supplier's invoice and its P.O., right on the open invoice (Carlo, Nov 16)
+function sinvChgHtml(r, edit) {
+  if (!edit) return "";
+  const kind = sinvIsCredit(r) ? "credit" : "invoice", own = ME.role === "owner";
+  const b = (attr, ic, w, cls) => `<button class="sinv-chg-b${cls ? " " + cls : ""}" type="button" ${attr}><span aria-hidden="true">${ic}</span><span>${w}</span></button>`;
+  const form = SINV.edInv === r.id ? `<form class="sinv-chg-form" data-sinv-edform="${r.id}">
+      <label>Their ${kind} number <input name="number" value="${esc(r.number || "")}" autocomplete="off" required></label>
+      <label>Date on it <input name="date" type="date" value="${esc(String(r.invoice_date || "").slice(0, 10))}"></label>
+      <label>Total with tax <input name="total" inputmode="decimal" value="${r.total == null ? "" : Number(r.total).toFixed(2)}" autocomplete="off"></label>
+      <button class="btn" type="submit">Save the ${kind}</button><button class="btn quiet-btn" type="button" data-sinv-ed="${r.id}">Cancel</button>
+      <p class="quiet">The before-tax amount and the HST are worked out again from the total, at 13%.</p></form>` : "";
+  return `<div class="sinv-chg">
+    <div class="sinv-chg-g"><span class="sinv-chg-k">This supplier ${kind}<b>${esc(r.number || "")}</b></span>${b(`data-sinv-ed="${r.id}"`, "✎", "Edit it", SINV.edInv === r.id ? "on" : "")}${own ? b(`data-sinv-del="${r.id}" data-n="${esc(r.number || "")}"`, "🗑", "Delete it", "bad own-only") : ""}</div>
+    ${r.po_id ? `<div class="sinv-chg-g"><span class="sinv-chg-k">Its P.O.<b>${esc(r.po_number || "")}</b></span>${b(`data-sci-poopen="${r.po_id}"`, "✎", "Edit it")}${b(`data-sci-pofind="${r.id}"`, "🔁", "Change it", SINV.poFind === r.id ? "on" : "")}${b(`data-sinv-podel="${r.id}" data-po="${r.po_id}" data-n="${esc(r.po_number || "")}"`, "✕", "Delete it", "bad")}</div>` : ""}
+    ${form}</div>`;
 }
 function sinvToolsHtml(r, edit, d) {
   return edit && ((d && d.pages) || []).length ? `<div class="sci-po sci-tools"><button class="btn quiet-btn" type="button" data-sinv-reread="${r.id}" title="Read the scanned pages again, in case the lines were read wrong the first time">🔄 Read it again</button><button class="btn quiet-btn" type="button" data-sinv-print="${r.id}" title="Print the scanned pages of this invoice">🖨 Print the invoice</button><span class="quiet" data-sinv-rereadmsg role="status"></span></div>` : "";
@@ -21769,12 +21793,12 @@ function sinvNeedsHtml(r, d) {
 }
 document.addEventListener("click", e => { const b = e.target.closest?.("[data-sci-slipsee]"); if (!b) return; e.preventDefault(); SLIPS.q = b.dataset.sciSlipsee || ""; openPackingSlips(null); });
 function sinvCustHtml(r, d, edit) {
-  const C = d.cinv; if (!C) return `<section class="sinv-cust">${sinvMissHtml(r, d, edit)}${sinvNeedsHtml(r, d)}<div class="sci-apps sci-top">${sinvPoTile(r, edit)}${sinvMemoTile(r, d, edit)}${sinvSlipTile(r, edit, d)}</div>${sinvPoFindHtml(r, edit)}${sinvToolsHtml(r, edit, d)}</section>`;
+  const C = d.cinv; if (!C) return `<section class="sinv-cust">${sinvMissHtml(r, d, edit)}${sinvNeedsHtml(r, d)}${sinvChgHtml(r, edit)}<div class="sci-apps sci-top">${sinvPoTile(r, edit)}${sinvMemoTile(r, d, edit)}${sinvSlipTile(r, edit, d)}</div>${sinvPoFindHtml(r, edit)}${sinvToolsHtml(r, edit, d)}</section>`;
   const row = (i, act) => `<div class="sci-row"><button class="link" type="button" data-sci-open="${i.id}"><b>#${esc(i.number || i.id)}</b></button> <span>${esc(fmtDate(i.date))}</span> <span><b>${esc(i.who || "")}</b>${i.street ? ` · ${esc(i.street)}` : ""}${i.job ? ` · job ${esc(i.job)}` : ""}</span> <span class="r">${money(i.total)}${Number(i.balance) > 0.004 ? ` <span class="quiet">(${money(i.balance)} owing)</span>` : ""}</span>${act}</div>`;
   const F = SINV.sciFind?.id === r.id ? SINV.sciFind : null, showFind = edit && (SINV.invFind === r.id || !!F);
   const invTiles = C.linked.length ? C.linked.map((i, ix) => `<div class="sci-app"><button class="apb apb-green sci-big" type="button" data-sci-open="${i.id}" title="Open invoice ${esc(String(i.number || i.id))}${i.who ? " · " + esc(i.who) : ""}"><span class="sci-app-k">Customer Invoice</span><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">Invoice Found and Matched</span><span class="sci-app-n">#${esc(String(i.number || i.id))}</span></button>${edit ? `<button class="link danger" type="button" data-sci-off="${i.id}" title="Take this invoice off">✕ Take it off</button>${ix === C.linked.length - 1 ? `<button class="link" type="button" data-sci-invfind="${r.id}">＋ Attach another invoice</button>` : ""}` : ""}</div>`).join("")
     : `<div class="sci-app"><button class="apb apb-blue sci-big${d.stock && d.stock.done ? " sci-off" : ""}" type="button" ${edit ? `data-sci-invfind="${r.id}"` : "disabled"} title="${d.stock && d.stock.done ? "Not needed: these parts are in our stock. You can still click it." : "Find our invoice for these parts"}"><span class="sci-app-k">Customer Invoice</span><span class="apb-ic" aria-hidden="true">🔎</span><span class="apb-tn">${edit ? "Click to find the invoice" : "No invoice yet"}</span></button>${edit && d.stock && !d.stock.not_invoice && !d.stock.done ? `<span class="sci-pick sci-pick-inv" aria-label="Pick one: find the invoice, or add it to our stock. Not both."></span>` : ""}</div>`;
-  return `<section class="sinv-cust" data-sci="${r.id}">${sinvMissHtml(r, d, edit)}${sinvNeedsHtml(r, d)}
+  return `<section class="sinv-cust" data-sci="${r.id}">${sinvMissHtml(r, d, edit)}${sinvNeedsHtml(r, d)}${sinvChgHtml(r, edit)}
     <div class="sci-apps sci-top${ME.role === "owner" ? " sci-drag" : ""}">${sciBoxes({ po: sinvPoTile(r, edit), memo: sinvMemoTile(r, d, edit), inv: invTiles, slip: sinvSlipTile(r, edit, d), stock: sinvStockTile(r, d, edit) })}</div>
     ${sinvPoFindHtml(r, edit)}
     ${showFind && C.suggest.length ? `<div class="sci-sug"><span class="cl-label">On this PO's job</span>${C.suggest.map(i => row(i, `<button class="btn quiet-btn vtp-small" type="button" data-sci-on="${i.id}">＋ Attach</button>`)).join("")}</div>` : ""}
@@ -22363,6 +22387,31 @@ function wireSupInv() {
       hf.querySelectorAll("[data-sci-popick]").forEach(b => b.addEventListener("click", () => { b.disabled = true; save(id, { po_number: b.dataset.sciPopick }, `Matched to PO ${b.dataset.sciPopick}.`); })); }, 250); });
     hi.addEventListener("keydown", e => { if (e.key !== "Enter") return; e.preventDefault(); const one = hf.querySelectorAll("[data-sci-popick]"); if (one.length === 1) one[0].click(); else if (hi.value.trim()) save(id, { po_number: hi.value.trim() }, `Matched to PO ${hi.value.trim()}.`); }); });
   document.querySelectorAll("[data-sinv-unpo]").forEach(b => b.addEventListener("click", () => save(Number(b.dataset.sinvUnpo), { po_number: "" }, "Back to the PO printed on it.")));
+  // Edit, change or delete the supplier's invoice and its P.O. (Carlo, Nov 16)
+  document.querySelectorAll("[data-sinv-ed]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.sinvEd); SINV.edInv = SINV.edInv === id ? null : id; redo(); document.querySelector(".sinv-chg-form input")?.focus(); }));
+  document.querySelectorAll("[data-sinv-edform]").forEach(f => f.addEventListener("submit", async e => { e.preventDefault(); const id = Number(f.dataset.sinvEdform), row = (SINV.data?.rows || []).find(x => x.id === id) || {};
+    const num = f.number.value.trim(), dt = f.date.value, tv = f.total.value.replace(/[$,\s]/g, ""), tot = tv === "" ? null : Number(tv);
+    if (!num) return alertMsg("Type the invoice number."); if (tot != null && !isFinite(tot)) return alertMsg("Type the total as a number, like 116.96.");
+    const sb = f.querySelector("button[type=submit]"); sb.disabled = true; sb.textContent = "Saving…"; const did = [];
+    if (num !== String(row.number || "")) { const { error } = await db.rpc("supplier_invoice_number_set", { p_id: id, p_number: num }); if (error) { sb.disabled = false; sb.textContent = "Save"; return alertMsg("Not saved: " + rpcErr(error)); } did.push("number"); }
+    const p = {}; if (dt && dt !== String(row.invoice_date || "").slice(0, 10)) { p.invoice_date = dt; did.push("date"); } if (tot != null && Math.abs(tot - Number(row.total || 0)) > 0.004) { p.total = String(tot); did.push("total"); }
+    SINV.edInv = null;
+    if (Object.keys(p).length) return save(id, p, `✓ Saved: the ${did.join(", the ")} changed.`);
+    SINV.det.delete(id); await openSupInv(did.length ? "✓ Saved: the number changed." : "Nothing was changed."); }));
+  document.querySelectorAll("[data-sinv-del]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sinvDel), n = b.dataset.n || "";
+    const { data: dry, error: e0 } = await db.rpc("supplier_invoice_delete", { p_id: id, p_dry: true }); if (e0) return alertMsg("I could not check it: " + rpcErr(e0));
+    if (!dry.ok) return alertMsg(`${n} can not be deleted: ${dry.why}.`);
+    const k = await askChoice(`Delete ${n} for good?`, `<span class="ask-sq"></span><b>This can not be undone.</b> It erases our record of ${esc(n)}${dry.pages ? `, its ${dry.pages} scanned page${dry.pages === 1 ? "" : "s"}` : ""}${dry.memo ? `, and its Credit Memo ${esc(dry.memo)}` : ""}.${dry.statement_lines ? ` Its line stays on the supplier's statement and will read “not loaded in our system”.` : ""} The P.O. is not touched.`,
+      [["yes", "🗑|Yes, delete it|It is erased for good"], ["", "↩|No, keep it|Nothing changes"]]);
+    if (k !== "yes") return; const { error } = await db.rpc("supplier_invoice_delete", { p_id: id }); if (error) return alertMsg("Not deleted: " + rpcErr(error));
+    SINV.det.delete(id); SINV.open = null; SINV.edInv = null; await openSupInv(`✓ ${n} was deleted for good.`); }));
+  document.querySelectorAll("[data-sinv-podel]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sinvPodel), po = Number(b.dataset.po), n = b.dataset.n || "";
+    const k = await askChoice(`P.O. ${n}: what do you want to do?`, `<span class="ask-sq"></span>Nothing is erased. A cancelled P.O. is kept on file and can be put back from its own page.`,
+      [["off", "↩|Take it off|The P.O. stays as it is. It is only taken off this invoice"], ["cancel", "✕|Cancel the P.O.|It is marked Cancelled and kept on file"], ["", "👍|Keep it|Nothing changes"]]);
+    if (k === "off") return save(id, { po_number: "" }, `P.O. ${n} was taken off this invoice.`);
+    if (k !== "cancel") return; const num = (SINV.data?.rows || []).find(x => x.id === id)?.number || "";
+    const { error } = await db.rpc("po_full_save", { p_id: po, p: { status: "cancelled" }, p_lines: [], p_reason: "Cancelled from supplier invoice " + num }); if (error) return alertMsg("Not cancelled: " + rpcErr(error));
+    SINV.det.delete(id); await openSupInv(`✓ P.O. ${n} is cancelled. It is kept on file.`); }));
   document.querySelectorAll("[data-sinv-date]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.sinvDate), v = $("#sinv-date-" + id).value; if (v) save(id, { invoice_date: v }, `Date changed to ${fmtDate(v)}.`); }));
   document.querySelectorAll("[data-sinv-note]").forEach(b => b.addEventListener("click", () => { const id = Number(b.dataset.sinvNote); save(id, { match_note: $("#sinv-note-" + id).value }, "Note saved."); }));
   document.querySelectorAll("[data-sinv-ok]").forEach(b => b.addEventListener("click", () => save(Number(b.dataset.sinvOk), { match_state: b.dataset.v }, b.dataset.v ? "Marked checked." : "Not checked any more.")));
