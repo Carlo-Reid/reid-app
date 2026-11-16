@@ -18647,6 +18647,14 @@ function custTechs(job) {
     const e = a.employees; if (!e) return; const full = [e.first_name, e.last_name].filter(Boolean).join(" ").trim(); if (full && !seen.has(full)) seen.set(full, e.first_name || full); }));
   return [...seen];
 }
+// Carlo, Nov 16, 2026: a job that has an invoice can not be deleted, so it gets ✕ Cancel on its line instead.
+// Only when cancelling its calls really cancels the job: it has a call, and none of its calls is done.
+function custJobCancelOk(j) {
+  if (!j || j.status === "completed" || j.status === "cancelled" || j.completed_at) return false;
+  if (!(ME.role === "owner" || can("calls.dispatch") || can("calls.book"))) return false;
+  const vs = j.visits || [];
+  return vs.some(v => v.status !== "cancelled") && !vs.some(v => v.status === "completed" || v.status === "needs_return");
+}
 const custTechCell = jobId => { const t = custTechs((current?.jobs || []).find(j => j.id === jobId));
   return `<td class="ol-tech" title="${esc(t.map(x => x[0]).join(", "))}">${t.length ? t.map(x => `<span>${esc(x[1])}</span>`).join("") : `<span class="quiet">—</span>`}</td>`; };
 function attBtns(inv, x, noSinv) {
@@ -38982,6 +38990,20 @@ document.addEventListener("click", async e => {   // Booked calls waiting to be 
   if (error) { d.disabled = false; d.textContent = "✕ Delete"; return alertMsg("Not deleted: " + rpcErr(error)); }
   alertMsg("✓ The call is deleted."); if (current?.c?.id) openCustomer(current.c.id);
 }, true);
+document.addEventListener("click", async e => {   // Section 5: cancel a job that has an invoice (asks first; kept in the history)
+  const d = e.target.closest("[data-job-cancel]"); if (!d) return; e.stopPropagation();
+  const id = Number(d.dataset.jobCancel), j = (current?.jobs || []).find(x => x.id === id); if (!j) return;
+  const live = (current?.invoices || []).filter(x => x.job_id === id && x.status !== "void");
+  const k = await askChoice("Cancel this job?", `<span class="ask-sq"></span>Job ${esc(d.dataset.jobNum)} is cancelled. It stays in Job history as Cancelled. Its calls leave the dispatch board, and a P.O. that is not received yet is cancelled too.${live.length ? ` <b>Its invoice ${esc(live.map(x => x.invoice_number).join(", "))} is not cancelled. It stays as it is.</b>` : ""}`,
+    [["yes", "✕|Yes, cancel it|The job is cancelled"], ["", "↩|No, keep it|Nothing changes"]]);
+  if (k !== "yes") return;
+  d.disabled = true;
+  for (const v of (j.visits || []).filter(v => v.status !== "cancelled")) {
+    const { error } = await db.rpc("set_call_status", { p_visit_id: v.id, p_status: "cancelled", p_note: "Job cancelled from the customer's page" });
+    if (error) { d.disabled = false; return alertMsg("Not cancelled: " + rpcErr(error)); }
+  }
+  alertMsg("✓ Job " + d.dataset.jobNum + " is cancelled."); if (current?.c?.id) openCustomer(current.c.id);
+}, true);
 document.addEventListener("click", async e => {   // Section 5: delete a job that was never done (asks first)
   const d = e.target.closest("[data-job-del]"); if (!d) return; e.stopPropagation();
   const k = await askChoice("Delete this job?", `Job ${esc(d.dataset.jobNum)}, its visits and its notes are deleted for good. This can't be undone.`, [["yes", "Delete it", true], ["", "Keep it"]]);
@@ -39750,7 +39772,7 @@ function jobsHtml(jobs) {
         return b?.booked ? `<b>${fmtDate(b.d)}</b><div class="quiet">booked · made ${fmtDate(made)}</div>` : `${fmtDate(b?.d || made)}${b?.d && b.d !== made ? `<div class="quiet">made ${fmtDate(made)}</div>` : ""}`; })()}</td><td class="num" title="${esc(j.job_number)}">${esc(j.job_number)}</td>
       <td class="ol-what" title="${esc([j.job_types?.name, (j.summary || "").slice(0, 300)].filter(Boolean).join(" · "))}">${esc(j.job_types?.name || "")}<div class="quiet" title="${esc((j.summary || "").slice(0, 300))}">${esc((j.summary || "").slice(0, 120))}</div></td>
       <td class="hide-sm" title="${esc([j.business_units?.name, j.partners?.name, j.tank_payer ? BK_TANK.find(x => x[0] === j.tank_payer)?.[1] : ""].filter(Boolean).join(" · "))}">${esc(j.business_units?.name || "")}${j.partners ? `<div class="quiet">${esc(j.partners.name)}</div>` : ""}${j.tank_payer ? `<div class="htin-tank">${esc(BK_TANK.find(x => x[0] === j.tank_payer)?.[1] || "")}</div>` : ""}</td>
-      <td>${badge(j.status)}</td>${custTechCell(j.id)}${custAttCell("job", j.id, j.id)}<td class="no-print">${j.status !== "completed" && !j.completed_at && (ME.role === "owner" || can("calls.dispatch")) && !(current?.invoices || []).some(x => x.job_id === j.id) ? `<button class="row-del" type="button" data-job-del="${j.id}" data-job-num="${esc(j.job_number)}" title="Delete this job"><span aria-hidden="true">✕</span> Delete</button>` : ""}</td></tr>`).join("")}
+      <td>${badge(j.status)}</td>${custTechCell(j.id)}${custAttCell("job", j.id, j.id)}<td class="no-print">${j.status !== "completed" && !j.completed_at && (ME.role === "owner" || can("calls.dispatch")) && !(current?.invoices || []).some(x => x.job_id === j.id) ? `<button class="row-del" type="button" data-job-del="${j.id}" data-job-num="${esc(j.job_number)}" title="Delete this job"><span aria-hidden="true">✕</span> Delete</button>` : custJobCancelOk(j) ? `<button class="row-del" type="button" data-job-cancel="${j.id}" data-job-num="${esc(j.job_number)}" title="Cancel this job. It has an invoice, so it is cancelled and kept in the history, not deleted."><span aria-hidden="true">✕</span> Cancel</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>${jobs.length > 8 ? `<div class="notes-foot">Scroll inside the box to see all ${jobs.length} jobs.</div>` : ""}`;
 }
 
