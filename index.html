@@ -10896,7 +10896,7 @@ async function openCustomer(id) {
   const invIds = (invoices.data || []).map(i => i.id);
   let [allNotes, move, tp] = await Promise.all([earlyNotes, earlyMove, earlyTp]);
   if (!allNotes) allNotes = await fetchNotes(noteFilter, jobIds);   // the early fetch failed: the usual way
-  current = { c, noteFilter, jobIds, notes: allNotes, move, tankPairs: tp?.data || [], emails, dupes: [], plans: plans.data || [], jobs: jobs.data || [], invoices: invoices.data || [],
+  current = { c, noteFilter, jobIds, notes: allNotes, move, tankPairs: tp?.data || [], emails, dupes: [], plans: plans.data || [], jobs: jobs.data || [], invoices: (invoices.data || []).filter(i => !i.deleted_at),
               estimates: estimates.data || [], equipment: eq.data || [],
               loc: (c.locations || []).find(l => l.active)?.id ?? locIds[0] };
   if (MV_TAB) { current.notesTab = MV_TAB; MV_TAB = null; }
@@ -40950,6 +40950,29 @@ document.addEventListener("click", async e => {
   if (document.body.classList.contains("inv-open")) closeInvoice();
   if (current?.c?.id && document.body.dataset.page === "customer") openCustomer(current.c.id);
 }, true);
+// Carlo, Nov 16: owners delete an invoice from the customer's page (invoice_delete). One made in the app is erased for good; one from
+// ServiceTitan can not be erased (the sync would bring it back), so it is marked Void, hidden from this page and left alone by the sync.
+var invCanDelete = i => i && ME.role === "owner" && !i.store_copy_of;
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-inv-del]"); if (!b) return; e.preventDefault(); e.stopPropagation();
+  const id = Number(b.dataset.invDel), num = b.dataset.invNum || "";
+  const dry = await db.rpc("invoice_delete", { p_id: id, p_dry: true });
+  if (dry.error) return alertMsg("I could not check invoice " + num + ": " + rpcErr(dry.error));
+  const d = dry.data || {};
+  if (!d.ok) return void askChoice("Invoice " + num + " can not be deleted", `It can not be deleted because <b>${esc(d.why || "something is tied to it")}</b>.`, [["", "Close"]]);
+  const what = `Invoice <b>${esc(num)}</b> · ${money(d.total || 0)} · ${d.lines || 0} ${d.lines === 1 ? "line" : "lines"}.` +
+    (d.tank ? ` Its tank P.O. and a Credit Order that is still waiting are cancelled too.` : "");
+  const k = await askChoice("Delete invoice " + num + "?", `<span class="ask-sq"></span>${what}<br>` + (d.st
+    ? `This invoice came from ServiceTitan. I take it off this customer's page and mark it Void, so it is not owed and not counted. <b>This can not be undone from the app.</b>`
+    : `It is erased for good, with everything on it. <b>This can not be undone.</b>`),
+    [["yes", "🗑|Yes, delete it|" + (d.st ? "Off this page" : "Erased for good"), true], ["", "↩|No, keep it|Nothing changes"]]);
+  if (k !== "yes") return;
+  const { data, error } = await db.rpc("invoice_delete", { p_id: id, p_dry: false });
+  if (error) return alertMsg("Not deleted: " + rpcErr(error));
+  alertMsg("✓ Invoice " + num + (data && data.done === "hidden" ? " is off this customer's page and marked Void." : " is deleted for good."));
+  if (document.body.classList.contains("inv-open")) closeInvoice();
+  if (current?.c?.id && document.body.dataset.page === "customer") openCustomer(current.c.id);
+}, true);
 document.addEventListener("input", e => { if (e.target.id === "inv-cancel-why") window.__invWhy = e.target.value; if (e.target.id === "sret-ra") window.__ra = e.target.value; });
 // Vista tank + labour pairs: the tank invoice (partner pays our supplier) and the labour invoice it goes with
 const tankPairOf = id => (current?.tankPairs || []).find(p => p.tank_id === id || p.labour_id === id) || null;
@@ -40969,7 +40992,7 @@ async function invTankPairNote(i) {
 function invoicesHtml(list) {
   return `<div class="scroll-box one-line" tabindex="0" aria-label="Invoices"><table><thead><tr><th>Date</th><th>Invoice</th><th class="r">Total</th><th class="r">Owing</th><th>Status</th><th>Tech</th><th class="no-print">Attached</th><th class="no-print"></th></tr></thead><tbody>
     ${list.map((i, n) => `<tr class="inv-row ${tankPairOf(i.id) ? "inv-paired" : ""}" tabindex="0" data-invoice="${i.id}" title="Open invoice"><td class="num">${fmtDate(i.invoice_date)}${(() => { const b = jobBookedDay((current?.jobs || []).find(j => j.id === i.job_id)); return b?.booked ? `<div class="quiet">work booked for ${fmtDate(b.d)}</div>` : ""; })()}</td><td class="num"><span class="inv-link">${esc(i.invoice_number)}</span>${tankPairTag(i.id)}</td>
-      <td class="r num">${money(i.total)}</td><td class="r num">${i.paid_at_store ? `<span class="quiet">Paid at the store</span>` : i.balance_due > 0.004 ? (i.not_owed_reason ? `<span class="not-owed" title="${esc(i.not_owed_reason)}">Not owed</span>` : money(i.balance_due)) : ""}</td><td>${badge(i.status)}</td>${custTechCell(i.job_id)}${custAttCell("inv", i.id, i.job_id)}<td class="no-print">${invCanCancel(i) ? `<button class="row-del" type="button" data-inv-cancel="${i.id}" data-inv-num="${esc(i.invoice_number || "")}" title="Made by mistake: cancel this invoice"><span aria-hidden="true">✕</span> Cancel</button>` : ""}</td></tr>`).join("")}
+      <td class="r num">${money(i.total)}</td><td class="r num">${i.paid_at_store ? `<span class="quiet">Paid at the store</span>` : i.balance_due > 0.004 ? (i.not_owed_reason ? `<span class="not-owed" title="${esc(i.not_owed_reason)}">Not owed</span>` : money(i.balance_due)) : ""}</td><td>${badge(i.status)}</td>${custTechCell(i.job_id)}${custAttCell("inv", i.id, i.job_id)}<td class="no-print">${invCanDelete(i) ? `<button class="row-del own-only" type="button" data-inv-del="${i.id}" data-inv-num="${esc(i.invoice_number || "")}" title="Delete this invoice"><span aria-hidden="true">✕</span> Delete</button>` : invCanCancel(i) ? `<button class="row-del" type="button" data-inv-cancel="${i.id}" data-inv-num="${esc(i.invoice_number || "")}" title="Made by mistake: cancel this invoice"><span aria-hidden="true">✕</span> Cancel</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>${list.length > 10 ? `<div class="notes-foot">Scroll inside the box to see all ${list.length} invoices.</div>` : ""}`;
 }
 
