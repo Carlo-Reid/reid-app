@@ -7965,7 +7965,7 @@ html body #main article.ie .seg > button[aria-pressed="true"] { background: #dce
 .ie .ie-split h3 { margin: 0 0 6px; font-size: 16px; color: #23415f; } .ie .ie-split h3 small { font-weight: 400; font-size: 12.5px; color: #5a6f84; margin-left: 6px; }
 .ie .ie-split table { width: 100%; border-collapse: collapse; font-size: 14.5px; } .ie .ie-split td { padding: 6px 0; border-bottom: 1px solid #e3e8ee; vertical-align: top; } .ie .ie-split td.r { text-align: right; white-space: nowrap; padding-left: 14px; font-variant-numeric: tabular-nums; }
 .ie .ie-split td small { display: block; font-size: 12.5px; color: #5a6f84; } .ie .ie-split tr.ie-split-t td { font-weight: 800; color: #1b6b36; border-top: 2px solid #23415f; }
-.ie .ie-split p { margin: 6px 0 0; font-size: 12.5px; } @media print { .ie-split { display: none !important; } }
+.ie .ie-split p { margin: 6px 0 0; font-size: 12.5px; } .ie .ie-split tr.ie-split-no td { color: #8a4b00; } .ie .ie-split tr.ie-split-off td { color: #8a4b00; } .ie .ie-split tr.ie-split-off small { color: #8a4b00; } @media print { .ie-split { display: none !important; } }
 .ie .ie-wait-inst { color: #8a5300; background: #fdeed2; border: 1px solid #f0cf94; border-radius: 10px; padding: 8px 12px; font-weight: 700; }
 .ie .ie-todo-now .ie-todo-d { grid-column: 2; font-size: 13px; font-weight: 400; line-height: 1.3; color: #3d5873; }
 .ie .ie-flash { outline: 3px solid #5b9bd5; outline-offset: 3px; transition: outline-color .3s; }
@@ -28916,13 +28916,19 @@ function ieTankPoHtml(I) {
     const live = O.filter(o => o.credit_number && o.credit_status !== "cancelled"), known = live.length && live.every(o => o.credit_amount != null);
     const pl = L.find(x => x.id === pick), guess = !live.length && pl && pl.unit_cost != null ? Number(pl.unit_cost) * Number(pl.quantity || 1) : null;
     const credit = known ? live.reduce((t, o) => t + Number(o.credit_amount || 0), 0) : guess;
-    if (credit != null) { const sub = Number(I.subtotal || 0), rate = Number(I.hst != null ? I.hst : 13) / 100, lab = sub - credit, back = known && live.every(o => o.credit_status === "received"), sup = esc((live[0] || {}).supplier || "the supplier");
+    // The allowance of the monthly rate picked for the tank is the labour we get paid, and it is what is billed to the partner (Carlo, Nov 16)
+    let allow = 0, picked = 0, usual = false; const rates = [];
+    (I.lines || []).forEach(l => { const x = vrIeFor(I, l); if (!x) return; let q = x.P;
+      if (!q && x.L && x.L.rate != null) { const T = vrTank(x.L), y = T && T.r.find(z => Number(z[1]) === Number(x.L.rate)); if (y) { q = { rate: y[1], allowance: y[2] }; usual = true; } }
+      if (q && q.allowance != null) { picked++; allow += Number(q.allowance) * Number(l.quantity || 1); rates.push(vrRate(q.rate) + " a month"); } });
+    { const sub = Number(I.subtotal || 0), rate = Number(I.hst != null ? I.hst : 13) / 100, back = known && live.every(o => o.credit_status === "received"), sup = esc((live[0] || {}).supplier || "the supplier"), off = picked && Math.abs(sub - allow) > 0.005;
       split = `<div class="ie-split"><h3>The money on this job <small>Office only. Never printed.</small></h3><table><tbody>
-        <tr><td>This invoice, before HST</td><td class="r">${money(sub)}</td></tr>
-        <tr><td>The tank: ${nm} pays ${sup} for it, so ${sup} credits us <small>${back ? "✔ The credit came back" : known ? "⏳ Waiting for the credit" : "About: the P.O. is not made yet"}</small></td><td class="r">${known ? "" : "about "}${money(credit)}</td></tr>
-        <tr class="ie-split-t"><td>${nm} owes us for the labour, before HST</td><td class="r">${known ? "" : "about "}${money(lab)}</td></tr>
-        <tr><td>With HST (${Number(rate * 100)}%)</td><td class="r">${known ? "" : "about "}${money(lab * (1 + rate))}</td></tr></tbody></table>
-        <p class="quiet">The supplier credit is the tank's cost on the P.O., before HST. The labour is what is left of the invoice after the tank.</p></div>`; }
+        ${picked ? `<tr class="ie-split-t"><td>Billed to ${nm}: the allowance. This is the labour we get paid, before HST <small>From the rental rate ${usual ? "that is usual for this tank" : "picked"}: ${esc(rates.join(", "))}</small></td><td class="r">${money(allow)}</td></tr>
+        <tr><td>With HST (${Number(rate * 100)}%)</td><td class="r">${money(allow * (1 + rate))}</td></tr>`
+        : `<tr class="ie-split-t ie-split-no"><td>Billed to ${nm}: the allowance. This is the labour we get paid <small>The monthly rate is not picked yet. Press “pick a monthly rate” under the tank's line, and the allowance shows here.</small></td><td class="r">Not picked yet</td></tr>`}
+        ${credit != null ? `<tr><td>The tank: ${nm} pays ${sup} for it, so ${sup} credits us <small>${back ? "✔ The credit came back" : known ? "⏳ Waiting for the credit" : "About: the P.O. is not made yet"}</small></td><td class="r">${known ? "" : "about "}${money(credit)}</td></tr>` : ""}
+        <tr${off ? ' class="ie-split-off"' : ""}><td>This invoice's lines add up to, before HST${off ? ` <small>⚠ That is ${money(Math.abs(sub - allow))} ${sub > allow ? "more" : "less"} than the allowance. The invoice's own total was not changed.</small>` : picked ? " <small>✔ The same as the allowance</small>" : ""}</td><td class="r">${money(sub)}</td></tr></tbody></table>
+        <p class="quiet">The allowance comes from Vista's rate table for the monthly rate on this tank. The supplier credit is the tank's cost on the P.O., before HST.</p></div>`; }
   }
   return `<section class="ie-tankpo">${made}${form}${split}</section>`;
 }
