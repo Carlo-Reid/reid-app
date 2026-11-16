@@ -28133,7 +28133,7 @@ async function openInvoiceEditor(id, msg) {
   if (data.job_id) { const tn = await db.from("notes").select("id, body, created_at").eq("entity_type", "job").eq("entity_id", data.job_id).like("body", "For the techs (the customer does not see this)%").order("created_at");
     IE.techNotes = tn.error ? (IE.techNotes || []) : tn.data || [];
     // the job's visits, for the Book a tech step (Carlo, Nov 13)
-    const vs = await db.from("visits").select("id, status, scheduled_date, arrival_start, arrival_end, visit_assignments(role, employees(first_name, last_name))").eq("job_id", data.job_id).order("id");
+    const vs = await db.from("visits").select("id, status, scheduled_date, arrival_start, arrival_end, visit_purpose, visit_assignments(role, employees(first_name, last_name))").eq("job_id", data.job_id).order("id");
     IE.visits = vs.error ? null : vs.data || [];
     // the job's other invoices, to flip between them from section 1 (Carlo, Nov 13)
     const iv = await db.from("invoices").select("id, invoice_number, status, total").eq("job_id", data.job_id).neq("status", "void").order("id");
@@ -28518,6 +28518,7 @@ function renderInvoiceEditor(msg) {
   // then Step 6 should be Book a Tech". So the note boxes are not in section 1 any more: they are their own step, after Finish, at the bottom.
   const notesUp = false, post = !draft && I.status !== "void" && I.can_edit && !I.st_edit;
   const bookedV = (IE.visits || []).filter(v => !["unscheduled", "cancelled"].includes(v.status)).sort((a, b) => String(b.scheduled_date || "").localeCompare(String(a.scheduled_date || "")))[0] || null;
+  const walkedV = bookedV && bookedV.status === "completed" && mcIsWalk(bookedV) ? bookedV : null;
   const waitV = (IE.visits || []).find(v => v.status === "unscheduled") || null, bookOn = post && I.job_id && ME.role !== "technician";
   // 10:55 a.m.: "change it so step 4 is add notes and step 5 is finish the invoice": the notes card is before the Finish card, and shows as soon as something is on the invoice
   const notesOn = I.status !== "void" && I.can_edit && !I.st_edit && !I.from_st && I.lines.length > 0;
@@ -28635,8 +28636,8 @@ function renderInvoiceEditor(msg) {
         : `<button class="link danger" type="button" id="ie-cancel">Cancel this invoice (made by mistake)</button>`}</div>` : ""}
       ${I.status === "void" ? `<div class="approve-banner"><div><strong>This invoice was cancelled (void).</strong> It doesn't count toward anything owing.</div></div>` : ""}
     </section></div>
-    ${bookOn ? `<section class="cl-tools ie-post" data-ie-card="book"><h2>${NO.book ? `<span class="ie-sec-n ie-sec-n-sm">${NO.book}</span> ` : ""}Book a tech</h2>
-      ${bookedV ? `<p class="ie-booked">✔ A tech is booked: <b>${esc(ieVisitWords(bookedV))}</b></p>`
+    ${bookOn ? `<section class="cl-tools ie-post" data-ie-card="book"><h2>${NO.book ? `<span class="ie-sec-n ie-sec-n-sm">${NO.book}</span> ` : ""}${walkedV ? "The walk" : "Book a tech"}</h2>
+      ${walkedV ? `<p class="ie-booked">✔ The tech that walked this was <b>${esc(ieWalkWho(walkedV, I))}</b>.</p>` : bookedV ? `<p class="ie-booked">✔ A tech is booked: <b>${esc(ieVisitWords(bookedV))}</b></p>`
         : IE.visits == null ? `<p class="quiet">I could not look up this job's calls. Book the tech from the customer's page.</p>`
         : `<p>Press this box. I will show you the techs who are free, with the best one to send first. Then pick one.</p>
           <div class="ie-actions"><button class="ie-sq ie-sq-go" type="button" id="ie-booktech" data-wait="${waitV ? waitV.id : ""}"><span class="ie-sq-ic" aria-hidden="true">📅</span><b>Book a tech</b></button></div>`}
@@ -28691,6 +28692,14 @@ function ieTodoRows(I, o) {
   if (ME.role === "technician" || I.signature) rows.push([!!I.signature, "The customer signs", "sign", "", "sign"]);
   rows.push([!o.draft && Number(I.balance) <= 0.004, o.ppay ? `${o.ppay} pays us` : "Take the payment", "pay", o.ppay && !o.draft && Number(I.balance) > 0.004 ? "Waiting" : "", "pay"]);
   return rows;
+}
+// a walk that is done: "Scott, on Monday, November 16, 2026" (Carlo, Nov 16, 2026, 4:15 p.m.)
+function ieWalkWho(v, I) {
+  const who = (v.visit_assignments || []).slice().sort((a, b) => (a.role === "lead" ? 0 : 1) - (b.role === "lead" ? 0 : 1)).map(a => a.employees?.first_name || "").filter(Boolean);
+  const tb = INSTALL_BOOK && I && INSTALL_BOOK.inv === I.id ? INSTALL_BOOK.r : null;
+  const name = who.length ? who.join(" and ") : (tb && tb.tech) || "not on file";
+  const d = (tb && tb.done_at && String(tb.done_at).slice(0, 10)) || (v.scheduled_date ? String(v.scheduled_date).slice(0, 10) : "");
+  return name + (d ? ", on " + dayText(d) : "");
 }
 function ieVisitWords(v) {
   const hm = t => { if (!t) return ""; const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(":00", ""); };
