@@ -28650,7 +28650,8 @@ function renderInvoiceEditor(msg) {
           <span class="ie-note-row"><button class="btn" type="button" id="ie-notes-save">Save the note for the job</button><span class="ie-note-msg" id="ie-notes-msg" role="status"></span></span></label>
       `;
   const tankH = ieTankPoHtml(I);
-  const sideTab = I.cost && IE_SIDE.tab === "cost" ? "cost" : "todo";
+  const sideCost = !!I.cost && !rentOnly;   // a tech on a rental has no Job costs view
+  const sideTab = sideCost && IE_SIDE.tab === "cost" ? "cost" : "todo";
   $("#main").innerHTML = `<article class="staff ie${ah ? " ie-ah" : ""}${remoteWalk ? " ie-remote" : ""}${walkOnly ? " ie-walk-only" : ""}">
     ${remoteWalk ? `<div class="remote-banner" role="status"><span aria-hidden="true">📡</span><div><b>REMOTED INTO ${esc(remoteTechName.toUpperCase())}'S ${walkOn && WALK.remote ? "WALK" : "CALL"}</b><small>You're on the same live page. Anything you type or add here is saved on their call, right now.</small></div></div>` : ""}
     ${ah ? `<div class="ah-banner" role="status"><span>🌙</span><div><b>AFTER HOURS CALL</b><small>Charge after-hours rates on this invoice</small></div></div>` : ""}
@@ -28759,7 +28760,7 @@ function renderInvoiceEditor(msg) {
         ${(IE.method || "card") === "card" ? `<p class="quiet">Run the card on your card machine first, then record it here with the approval number.</p>` : ""}
       </form></section>` : ""}
     </div><aside class="cl-tools ie-cost ie-side" aria-label="What is done, and the job costing">
-      ${I.cost ? `<div class="ie-side-tabs" role="group"><button type="button" data-ie-side="todo" aria-pressed="${sideTab === "todo"}">✅ What is done</button><button type="button" data-ie-side="cost" aria-pressed="${sideTab === "cost"}">💲 Job costs</button></div>` : ""}
+      ${sideCost ? `<div class="ie-side-tabs" role="group"><button type="button" data-ie-side="todo" aria-pressed="${sideTab === "todo"}">✅ What is done</button><button type="button" data-ie-side="cost" aria-pressed="${sideTab === "cost"}">💲 Job costs</button></div>` : ""}
       ${sideTab === "cost" ? costingHtml(I) : ieTodoHtml(I, { draft, ppay, bk, pnm })}</aside></div>
     ${!draft ? `<div class="ie-actions ie-foot">${can("email.send") ? `<button class="ie-sq" type="button" id="ie-email"><span class="ie-sq-ic" aria-hidden="true">✉</span><b>Email the invoice</b></button>` : ""}<button class="ie-sq" type="button" data-ie-close><span class="ie-sq-ic" aria-hidden="true">✕</span><b>Close</b></button><button class="ie-sq" type="button" data-ie-press="ie-view"><span class="ie-sq-ic" aria-hidden="true">🖨</span><b>See or print the invoice</b></button>${I.customer_id ? `<button class="ie-sq" type="button" data-ie-press="ie-cust"><span class="ie-sq-ic" aria-hidden="true">👤</span><b>Open the customer</b></button>` : ""}</div>` : ""}
   </article>`;
@@ -35396,7 +35397,8 @@ document.addEventListener("click", async e => { const b = e.target.closest("[dat
 // flashes slowly and reads "Please pick a monthly rate if this is a rental." (`.vr-ask`); after a pick it is the plain Change link.
 const ieIsVista = I => /vista/i.test([I?.bill?.partner?.name, I?.prule?.name, I?.pbook?.name].filter(Boolean).join(" "));
 // A tech never sees the full amount of a Vista invoice, only the rental one (Carlo, Nov 13)
-const ieRentOnly = I => typeof ME !== "undefined" && ME?.role === "technician" && ieIsVista(I);
+// a tech on a rental: a Vista invoice, or any job with a monthly rental rate picked. He only ever gets the rental amount (Carlo, Nov 16)
+const ieRentOnly = I => typeof ME !== "undefined" && ME?.role === "technician" && (ieIsVista(I) || !!(I?.job_id && typeof VR !== "undefined" && VR.ieJob === I.job_id && VR.ie && VR.ie.size));
 function vrIeFor(I, l) {
   if (!l || !l.item_id || l.kit_parent || !I?.job_id || !VR.data || VR.ieJob !== I.job_id) return null;
   const item = Number(l.item_id), L = VR.data.links[item], P = VR.ie.get(item);
@@ -40450,7 +40452,7 @@ let INV_COST_OPEN = false;
 try { INV_COST_OPEN = sessionStorage.getItem("invCostOpen") === "1"; } catch (e) {}
 async function showInvoiceCosting(inv, msg) {
   const box = $("#inv-cost"), view = $("#inv-view");
-  const shown = INV_COST_OPEN && can("jobs.costing");
+  const shown = INV_COST_OPEN && can("jobs.costing") && !(ME?.role === "technician" && INV_VT.rent && INV_VT.id === inv.id);
   box.classList.toggle("hidden", !shown); view.classList.toggle("with-cost", shown);
   $("#inv-costbtn").textContent = shown ? "Hide job costing" : "Job costing";
   if (!shown) return;
@@ -40517,12 +40519,14 @@ async function openInvoice(id, keep) {
   const bpAddr = bp ? [bp.street, [bp.city, bp.province, bp.postal_code].filter(Boolean).join(", ")].filter(Boolean) : [];
   // A Vista invoice: our logo and Vista's logo on top, and two views with a tab to switch: the full amount, or only the rental amount
   // (the monthly rate picked for the tank). Carlo, Nov 13.
-  const isV = /vista/i.test([i.bill_partner?.name, i.jobs?.partners?.name].filter(Boolean).join(" "));
+  const isTech = ME?.role === "technician";
+  let isV = /vista/i.test([i.bill_partner?.name, i.jobs?.partners?.name].filter(Boolean).join(" "));
   let vLogo = "", vPicks = new Map();
-  if (isV) { const vp = /vista/i.test(i.bill_partner?.name || "") && i.bill_to_partner_id ? i.bill_to_partner_id : i.jobs?.partner_id;
+  if (!isV && isTech && i.job_id) { const pk = await db.rpc("vista_picks", { p_kind: "job", p_ref: i.job_id }); (pk?.data || []).forEach(x => vPicks.set(Number(x.item), x)); if (vPicks.size) isV = true; }   // a tech on any job with a rental rate picked: the rental side only
+  else if (isV) { const vp = /vista/i.test(i.bill_partner?.name || "") && i.bill_to_partner_id ? i.bill_to_partner_id : i.jobs?.partner_id;
     const [lg, pk] = await Promise.all([bkPLogo(vp).catch(() => ""), i.job_id ? db.rpc("vista_picks", { p_kind: "job", p_ref: i.job_id }) : Promise.resolve({ data: [] })]);
     vLogo = lg || ""; (pk?.data || []).forEach(x => vPicks.set(Number(x.item), x)); }
-  const techV = isV && ME?.role === "technician";   // a tech only ever gets the rental side
+  const techV = isV && isTech;   // a tech only ever gets the rental side
   if (INV_VT.id !== id) { INV_VT.id = id; INV_VT.rent = isV; INV_VT.tools = false; }   // a Vista invoice opens on the rental side: that is the one a customer may see
   if (techV) INV_VT.rent = true;
   const vName = i.bill_partner?.name && /vista/i.test(i.bill_partner.name) ? i.bill_partner.name : i.jobs?.partners?.name || "Vista";
@@ -40692,7 +40696,7 @@ async function openInvoice(id, keep) {
       + `\n\nSubtotal ${money(subtotal)}\nHST ${money(tax)}\nTotal ${money(total)}\nPaid ${money(paid)}\nBalance owing ${money(balance)}`;
     const ok = await copyText(text); $("#inv-copy").textContent = ok ? "Copied ✓" : "Couldn't copy"; setTimeout(() => $("#inv-copy").textContent = "Copy", 1600);
   };
-  const cb = $("#inv-costbtn"); cb.classList.toggle("hidden", !can("jobs.costing"));
+  const cb = $("#inv-costbtn"); cb.classList.toggle("hidden", !can("jobs.costing") || techV);   // a tech on a rental: no job costing view
   cb.onclick = () => { INV_COST_OPEN = !INV_COST_OPEN; try { sessionStorage.setItem("invCostOpen", INV_COST_OPEN ? "1" : "0"); } catch (e) {} showInvoiceCosting(i); };
   showInvoiceCosting(i);
   invTankPairNote(i);
