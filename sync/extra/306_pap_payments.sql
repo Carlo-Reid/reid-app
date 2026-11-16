@@ -12,6 +12,11 @@
 --   * NSF: the payment that was counted stays; a new charge for the returned amount goes on, plus the NSF fee; flagged for the office.
 --     Chargeback: the payment stays; a new charge says what came back and why; flagged; no fee.
 --     Anything else (account closed, frozen, stop payment): flagged with the reason and the plan is marked paused.
+--   * The bill (George, Nov 16, later): each plan has a bill = the lines that make up the monthly payment (what, how much, HST in it
+--     or not). The monthly charge follows the bill in effect that month. A change of price is a new bill from a month on
+--     ("duplicate and adjust"); a mistake is fixed on the bill itself. pap_bills, _pap_bill_on, _pap_charge_on, _pap_resync.
+--   * Cancelling: the customer asks, the office types the expiry date (pap_plans.expire_on). No draw is charged after that day,
+--     the plan ends by itself the day after, and the date goes into the cancellation email.
 --   * No bank details are read or kept here. Safe to run more than once.
 -- Who: the Security page's people (_sec_ok: owners and "Security page" staff) see it, set up plans and follow up.
 --      Posting a file, undoing one, the NSF fee and deleting are owners only (_pap_owner).
@@ -53,8 +58,30 @@ CREATE TABLE IF NOT EXISTS public.pap_plans (
   created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS pap_plans_cust ON public.pap_plans (customer_id);
+-- cancelling: the day the customer asked, the expiry date (the last day of the account: no draw after it), and the email about it
+ALTER TABLE public.pap_plans ADD COLUMN IF NOT EXISTS expire_on      date;
+ALTER TABLE public.pap_plans ADD COLUMN IF NOT EXISTS cancel_on      date;
+ALTER TABLE public.pap_plans ADD COLUMN IF NOT EXISTS cancel_by      text;
+ALTER TABLE public.pap_plans ADD COLUMN IF NOT EXISTS cancel_note    text;
+ALTER TABLE public.pap_plans ADD COLUMN IF NOT EXISTS cancel_mail_at timestamptz;
+ALTER TABLE public.pap_plans ADD COLUMN IF NOT EXISTS cancel_mail_to text;
 ALTER TABLE public.pap_plans ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.pap_plans FROM PUBLIC, anon, authenticated;
+
+-- the bill: what the monthly payment is made of, from a month on. items: [{"d": what, "a": amount each month, "tax": HST is in it}]
+CREATE TABLE IF NOT EXISTS public.pap_bills (
+  id          bigserial PRIMARY KEY,
+  plan_id     bigint NOT NULL REFERENCES public.pap_plans(id) ON DELETE CASCADE,
+  from_month  date NOT NULL,
+  items       jsonb NOT NULL,
+  total       numeric(12,2) NOT NULL CHECK (total > 0),
+  note        text,
+  by_name     text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (plan_id, from_month));
+ALTER TABLE public.pap_bills ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.pap_bills FROM PUBLIC, anon, authenticated;
 
 -- payment: money received. Every other kind is money owed (adjust can be a minus: a credit).
 CREATE TABLE IF NOT EXISTS public.pap_entries (
@@ -169,24 +196,95 @@ CREATE OR REPLACE FUNCTION public._pap_kind(p_resp text, p_settled text, p_more 
     WHEN r = '' AND s = 'AA' THEN 'paid'
     ELSE 'other' END FROM w $f$;
 
+-- ---------- the bill ----------
+-- the lines of a bill, cleaned: what it is, the amount each month (to the cent), and if HST is in that amount
+CREATE OR REPLACE FUNCTION public._pap_items(p jsonb) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $f$
+DECLARE x jsonb; o jsonb := '[]'::jsonb; d text; a numeric;
+BEGIN
+  IF p IS NULL OR jsonb_typeof(p) <> 'array' THEN RAISE EXCEPTION 'The bill needs at least one line'; END IF;
+  FOR x IN SELECT * FROM jsonb_array_elements(p) LOOP
+    d := nullif(btrim(coalesce(x ->> 'd', '')), ''); a := round(public._pap_num(x ->> 'a'), 2);
+    IF d IS NULL AND a IS NULL THEN CONTINUE; END IF;
+    IF d IS NULL THEN RAISE EXCEPTION 'Say what each line of the bill is for'; END IF;
+    IF a IS NULL OR a = 0 THEN RAISE EXCEPTION 'Type the amount for “%”', d; END IF;
+    o := o || jsonb_build_array(jsonb_build_object('d', left(d, 120), 'a', a, 'tax', coalesce((x ->> 'tax')::boolean, true)));
+  END LOOP;
+  IF jsonb_array_length(o) = 0 THEN RAISE EXCEPTION 'The bill needs at least one line'; END IF;
+  IF jsonb_array_length(o) > 20 THEN RAISE EXCEPTION 'A bill can have 20 lines at most'; END IF;
+  IF (SELECT sum((y ->> 'a')::numeric) FROM jsonb_array_elements(o) y) <= 0 THEN RAISE EXCEPTION 'The lines of the bill have to add up to more than $0'; END IF;
+  RETURN o;
+END $f$;
+
+-- every plan has a bill: one made before bills existed (or made from a settlement file) gets one line, its own words and amount
+CREATE OR REPLACE FUNCTION public._pap_bill_ensure() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path TO 'public' AS $f$
+  INSERT INTO pap_bills (plan_id, from_month, items, total, by_name)
+  SELECT p.id, p.start_on, jsonb_build_array(jsonb_build_object('d', p.label, 'a', p.amount, 'tax', p.tax_in)), p.amount, p.created_by
+  FROM pap_plans p WHERE NOT EXISTS (SELECT 1 FROM pap_bills b WHERE b.plan_id = p.id)
+  ON CONFLICT (plan_id, from_month) DO NOTHING $f$;
+
+-- the monthly amount of the bill in effect in a month (before the first bill's month: the first bill)
+CREATE OR REPLACE FUNCTION public._pap_bill_on(p_plan bigint, p_month date) RETURNS numeric LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
+  SELECT coalesce((SELECT b.total FROM pap_bills b WHERE b.plan_id = p_plan AND b.from_month <= p_month ORDER BY b.from_month DESC LIMIT 1),
+                  (SELECT b.total FROM pap_bills b WHERE b.plan_id = p_plan ORDER BY b.from_month LIMIT 1),
+                  (SELECT p.amount FROM pap_plans p WHERE p.id = p_plan)) $f$;
+
+-- the charge of one month. service: the bill of that month. payment plan: the same, but its last month takes up what is left of the whole amount.
+CREATE OR REPLACE FUNCTION public._pap_charge_on(p pap_plans, p_month date) RETURNS numeric LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE v_first date := date_trunc('month', p.start_on)::date;
+        n int := (extract(year FROM age(p_month, v_first)) * 12 + extract(month FROM age(p_month, v_first)))::int + 1;
+BEGIN
+  IF p.kind = 'plan' AND p.months IS NOT NULL AND n = p.months THEN
+    RETURN greatest(coalesce(p.total, p.amount * p.months)
+           - (SELECT coalesce(sum(public._pap_bill_on(p.id, g::date)), 0) FROM generate_series(v_first::timestamp, (v_first + make_interval(months => p.months - 2))::timestamp, interval '1 month') g), 0.01);
+  END IF;
+  RETURN public._pap_bill_on(p.id, p_month);
+END $f$;
+
+-- after a bill is made, fixed or taken off: the plan's amount is the bill of this month, and every monthly charge follows its bill
+CREATE OR REPLACE FUNCTION public._pap_resync(p_plan bigint) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE pl pap_plans; v_m date := date_trunc('month', public._pap_today())::date;
+BEGIN
+  UPDATE pap_plans SET amount = public._pap_bill_on(p_plan, v_m),
+         tax_in = coalesce((SELECT bool_or(coalesce((x ->> 'tax')::boolean, true)) FROM pap_bills b, jsonb_array_elements(b.items) x
+                             WHERE b.id = (SELECT b2.id FROM pap_bills b2 WHERE b2.plan_id = p_plan AND b2.from_month <= v_m ORDER BY b2.from_month DESC LIMIT 1)), tax_in),
+         updated_at = now()
+  WHERE id = p_plan RETURNING * INTO pl;
+  IF pl.id IS NULL THEN RETURN; END IF;
+  UPDATE pap_entries e SET amount = public._pap_charge_on(pl, e.period)
+  WHERE e.plan_id = p_plan AND e.kind = 'charge' AND e.amount <> public._pap_charge_on(pl, e.period);
+END $f$;
+
 -- ---------- the monthly charge fills itself in ----------
--- service: one charge every month from the start month, on the draw day, while the plan is not ended.
--- plan: one charge a month for its number of months; the last one takes up any cents left over.
-CREATE OR REPLACE FUNCTION public._pap_fill() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path TO 'public' AS $f$
+-- service: one charge every month from the start month, on the draw day, until the plan ends. plan: one charge a month for its
+-- number of months. No draw is charged after the expiry date (a draw on that day still is), and the plan ends by itself on that day.
+CREATE OR REPLACE FUNCTION public._pap_fill() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE v_today date := public._pap_today(); v_m date := date_trunc('month', public._pap_today())::date;
+BEGIN
+  PERFORM public._pap_bill_ensure();
+  UPDATE pap_plans SET status = 'ended', end_on = date_trunc('month', expire_on)::date, pause_why = NULL, paused_inbox = NULL, updated_at = now()
+  WHERE status <> 'ended' AND expire_on IS NOT NULL AND expire_on <= v_today;
+  -- a new bill whose first month has come: the plan's amount follows it
+  UPDATE pap_plans p SET amount = x.t, updated_at = now()
+  FROM (SELECT q.id, public._pap_bill_on(q.id, v_m) AS t FROM pap_plans q
+        WHERE q.status <> 'ended' AND (SELECT count(*) FROM pap_bills b WHERE b.plan_id = q.id) > 1) x
+  WHERE p.id = x.id AND p.amount <> x.t;
   INSERT INTO pap_entries (plan_id, kind, on_date, period, amount)
-  SELECT p.id, 'charge', (g.m + (p.draw_day - 1))::date, g.m,
-         CASE WHEN p.kind = 'plan' AND p.months IS NOT NULL AND g.n = p.months
-              THEN greatest(coalesce(p.total, p.amount * p.months) - p.amount * (p.months - 1), 0.01) ELSE p.amount END
+  SELECT p.id, 'charge', (g.m + (p.draw_day - 1))::date, g.m, public._pap_charge_on(p, g.m)
   FROM pap_plans p
   CROSS JOIN LATERAL (
-    SELECT s::date AS m, (row_number() OVER (ORDER BY s))::int AS n
-    FROM generate_series(date_trunc('month', p.start_on)::timestamp,
-           least(date_trunc('month', public._pap_today())::timestamp,
-                 CASE WHEN p.status = 'ended' THEN date_trunc('month', coalesce(p.end_on, p.start_on - 1))::timestamp ELSE timestamp '9999-01-01' END,
+    SELECT s::date AS m
+    FROM generate_series(
+           greatest(date_trunc('month', p.start_on)::timestamp,
+                    coalesce((SELECT (max(e.period) + interval '1 month')::timestamp FROM pap_entries e WHERE e.plan_id = p.id AND e.kind = 'charge'), timestamp '0001-01-01')),
+           least(v_m::timestamp,
+                 CASE WHEN p.status = 'ended' THEN date_trunc('month', coalesce(p.expire_on, p.end_on, p.start_on - 1))::timestamp ELSE timestamp '9999-01-01' END,
+                 CASE WHEN p.expire_on IS NOT NULL THEN date_trunc('month', p.expire_on)::timestamp ELSE timestamp '9999-01-01' END,
                  CASE WHEN p.kind = 'plan' AND p.months IS NOT NULL THEN (date_trunc('month', p.start_on) + make_interval(months => p.months - 1))::timestamp ELSE timestamp '9999-01-01' END),
            interval '1 month') s) g
-  WHERE (g.m + (p.draw_day - 1))::date <= public._pap_today()
-  ON CONFLICT (plan_id, period) WHERE kind = 'charge' DO NOTHING $f$;
+  WHERE (g.m + (p.draw_day - 1))::date <= v_today
+    AND (p.expire_on IS NULL OR (g.m + (p.draw_day - 1))::date <= p.expire_on)
+  ON CONFLICT (plan_id, period) WHERE kind = 'charge' DO NOTHING;
+END $f$;
 
 CREATE OR REPLACE FUNCTION public._pap_cust(p_id bigint) RETURNS bigint LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT coalesce((SELECT coalesce(c.merged_into_id, c.id) FROM customers c WHERE c.id = p_id), p_id) $f$;
@@ -232,7 +330,8 @@ BEGIN
   byref AS MATERIALIZED (
     SELECT k.i, (array_agg(p.id ORDER BY (p.amount = k.amt) DESC, (p.status = 'active') DESC, p.id))[1] AS plan_id,
            count(*) AS n, count(*) FILTER (WHERE p.amount = k.amt) AS n_amt
-    FROM k JOIN pap_plans p ON public._pap_ref(p.reference) = public._pap_ref(k.ref) AND p.status <> 'ended'
+    FROM k JOIN pap_plans p ON public._pap_ref(p.reference) = public._pap_ref(k.ref)
+           AND (p.status <> 'ended' OR k.pdate <= coalesce(p.expire_on, (p.end_on + interval '1 month - 1 day')::date))
     WHERE public._pap_ref(k.ref) IS NOT NULL GROUP BY k.i),
   -- 2) the rest: by the customer the row matches (customer number, address code, name), when that customer has one plan
   need AS (SELECT k.i, k.ref, k.who FROM k LEFT JOIN byref b ON b.i = k.i WHERE b.i IS NULL OR (b.n > 1 AND b.n_amt <> 1)),
@@ -241,7 +340,8 @@ BEGIN
   bycust AS MATERIALIZED (
     SELECT k.i, m.customer_id, (array_agg(p.id ORDER BY (p.amount = k.amt) DESC, (p.status = 'active') DESC, p.id))[1] AS plan_id,
            count(p.id) AS n, count(p.id) FILTER (WHERE p.amount = k.amt) AS n_amt
-    FROM k JOIN m ON m.i = k.i LEFT JOIN pap_plans p ON public._pap_cust(p.customer_id) = m.customer_id AND p.status <> 'ended'
+    FROM k JOIN m ON m.i = k.i LEFT JOIN pap_plans p ON public._pap_cust(p.customer_id) = m.customer_id
+           AND (p.status <> 'ended' OR k.pdate <= coalesce(p.expire_on, (p.end_on + interval '1 month - 1 day')::date))
     GROUP BY k.i, m.customer_id),
   j AS (
     SELECT k.*,
@@ -270,7 +370,7 @@ CREATE OR REPLACE FUNCTION public._pap_post_row(p_plan bigint, p_kind text, p_tx
                                                p_ref text, p_who text, p_resp text, p_inbox bigint, p_pay bigint, p_by text)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
 DECLARE pl pap_plans; v_fee numeric; v_per date := date_trunc('month', p_pdate)::date; v_day date := coalesce(p_rdate, p_pdate);
-        v_why text := nullif(btrim(coalesce(p_resp, '')), ''); v_cust bigint;
+        v_why text := nullif(btrim(coalesce(p_resp, '')), ''); v_cust bigint; v_bill numeric;
 BEGIN
   SELECT * INTO pl FROM pap_plans WHERE id = p_plan;
   IF pl.id IS NULL THEN RETURN 'no plan'; END IF;
@@ -280,11 +380,11 @@ BEGIN
     VALUES (pl.id, 'payment', p_pdate, v_per, p_amt, p_txn, p_inbox, 'EFT payment received', p_by)
     ON CONFLICT (txn_id, kind) WHERE txn_id IS NOT NULL DO NOTHING;
     IF NOT FOUND THEN RETURN 'already'; END IF;
-    IF p_amt <> pl.amount AND NOT (pl.kind = 'plan' AND pl.months IS NOT NULL
-         AND p_amt = greatest(coalesce(pl.total, pl.amount * pl.months) - pl.amount * (pl.months - 1), 0.01)) THEN
+    v_bill := public._pap_charge_on(pl, v_per);
+    IF p_amt <> v_bill THEN
       INSERT INTO pap_flags (kind, row_kind, plan_id, customer_id, inbox_id, txn_id, on_date, amount, reason, who, ref)
       VALUES ('amount', 'paid', pl.id, v_cust, p_inbox, p_txn, p_pdate, p_amt,
-              'The payment was ' || to_char(p_amt, 'FM$999,999,990.00') || '. The plan says ' || to_char(pl.amount, 'FM$999,999,990.00') || ' a month.', p_who, p_ref)
+              'The payment was ' || to_char(p_amt, 'FM$999,999,990.00') || '. The bill says ' || to_char(v_bill, 'FM$999,999,990.00') || ' for ' || to_char(v_per, 'FMMonth YYYY') || '.', p_who, p_ref)
       ON CONFLICT (txn_id, kind) WHERE txn_id IS NOT NULL DO NOTHING;
     END IF;
     RETURN 'payment';
@@ -333,6 +433,9 @@ BEGIN
         'id', p.id, 'customer_id', cu.id, 'name', cu.display_name, 'number', cu.customer_number, 'kind', p.kind, 'label', p.label, 'brand', p.brand,
         'amount', p.amount, 'day', p.draw_day, 'ref', p.reference, 'start', p.start_on, 'months', p.months, 'total', p.total, 'status', p.status,
         'pause_why', p.pause_why, 'end', p.end_on, 'nsf_auto', coalesce(pc.nsf_auto, false),
+        'expire', p.expire_on, 'cancel_on', p.cancel_on, 'cancel_mail_at', p.cancel_mail_at,
+        'next_bill', (SELECT jsonb_build_object('from', b.from_month, 'total', b.total) FROM pap_bills b
+                       WHERE b.plan_id = p.id AND b.from_month > date_trunc('month', v_today)::date ORDER BY b.from_month LIMIT 1),
         'owed', t.owed, 'wait', t.wait, 'paid', t.paid, 'paid_year', t.paid_year, 'last_paid', t.last_paid, 'n_paid', t.n_paid, 'flags', t.flags)
         ORDER BY lower(cu.display_name), p.id)
       FROM pap_plans p
@@ -376,7 +479,7 @@ BEGIN
     -- only once a newer file has been posted (so files still waiting to be posted do not look like missed payments)
     'missing', coalesce((SELECT jsonb_agg(jsonb_build_object('plan_id', p.id, 'customer_id', cu.id, 'name', cu.display_name, 'number', cu.customer_number,
           'label', p.label, 'amount', c.amount, 'on', c.on_date, 'period', c.period, 'ref', p.reference) ORDER BY c.on_date DESC, lower(cu.display_name))
-      FROM pap_entries c JOIN pap_plans p ON p.id = c.plan_id AND p.status = 'active'
+      FROM pap_entries c JOIN pap_plans p ON p.id = c.plan_id AND (p.status = 'active' OR p.expire_on IS NOT NULL)
       LEFT JOIN customers cu ON cu.id = public._pap_cust(p.customer_id)
       WHERE c.kind = 'charge' AND c.on_date + 10 <= v_today AND v_seen IS NOT NULL AND c.on_date <= v_seen
         AND c.on_date >= (SELECT min(e.on_date) FROM pap_entries e WHERE e.kind = 'payment' AND e.inbox_id IS NOT NULL)
@@ -398,7 +501,12 @@ BEGIN
     'seen', (SELECT max(on_date) FROM pap_entries WHERE kind = 'payment' AND inbox_id IS NOT NULL),
     'plan', jsonb_build_object('id', p.id, 'customer_id', cu.id, 'kind', p.kind, 'label', p.label, 'brand', p.brand, 'amount', p.amount, 'day', p.draw_day,
         'ref', p.reference, 'start', p.start_on, 'months', p.months, 'total', p.total, 'invoice_no', p.invoice_no, 'tax_in', p.tax_in, 'status', p.status,
-        'pause_why', p.pause_why, 'end', p.end_on, 'note', p.note, 'created_by', p.created_by, 'created_at', p.created_at),
+        'pause_why', p.pause_why, 'end', p.end_on, 'note', p.note, 'created_by', p.created_by, 'created_at', p.created_at,
+        'expire', p.expire_on, 'cancel_on', p.cancel_on, 'cancel_by', p.cancel_by, 'cancel_note', p.cancel_note,
+        'cancel_mail_at', p.cancel_mail_at, 'cancel_mail_to', p.cancel_mail_to),
+    'hst_no', (SELECT nullif(btrim(coalesce(to_jsonb(cs) ->> 'hst_number', '')), '') FROM company_settings cs LIMIT 1),
+    'bills', coalesce((SELECT jsonb_agg(jsonb_build_object('id', b.id, 'from', b.from_month, 'items', b.items, 'total', b.total, 'note', b.note,
+        'by', b.by_name, 'at', b.created_at) ORDER BY b.from_month) FROM pap_bills b WHERE b.plan_id = p.id), '[]'::jsonb),
     'customer', jsonb_build_object('id', cu.id, 'name', cu.display_name, 'number', cu.customer_number,
         'nsf_auto', coalesce((SELECT nsf_auto FROM pap_cust WHERE customer_id = cu.id), false),
         'email', (SELECT k.value FROM customer_contacts k WHERE k.customer_id = cu.id AND k.kind = 'email' ORDER BY k.is_primary DESC, k.id LIMIT 1),
@@ -414,23 +522,36 @@ BEGIN
   RETURN v;
 END $f$;
 
--- make a plan, or change one. p: {id?, customer_id, kind, label, brand, amount, day, ref, start (any day of the first month), months, total, invoice_no, tax_in, note}
+-- make a plan, or change one. p: {id?, customer_id, kind, label, brand, day, ref, start (any day of the first month), months, total, invoice_no, note,
+--   items: the lines of its bill [{d, a, tax}] (a new plan; or amount + tax_in for one line)}. Changing a plan does not change its bill: see pap_bill_save.
 CREATE OR REPLACE FUNCTION public.pap_plan_save(p jsonb) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
 DECLARE v_id bigint := nullif(p ->> 'id', '')::bigint; v_cust bigint := nullif(p ->> 'customer_id', '')::bigint;
         v_kind text := coalesce(nullif(p ->> 'kind', ''), 'service'); v_amt numeric := round(nullif(p ->> 'amount', '')::numeric, 2);
         v_day int := coalesce(nullif(p ->> 'day', '')::int, 7); v_start date := date_trunc('month', coalesce(nullif(p ->> 'start', '')::date, public._pap_today()))::date;
         v_months int := nullif(p ->> 'months', '')::int; v_total numeric := round(nullif(p ->> 'total', '')::numeric, 2);
         v_label text := nullif(btrim(coalesce(p ->> 'label', '')), ''); v_ref text := nullif(btrim(coalesce(p ->> 'ref', '')), ''); o pap_plans;
+        v_items jsonb; v_tax boolean := coalesce((p ->> 'tax_in')::boolean, true); v_bills int := 0;
 BEGIN
   IF NOT coalesce(public._sec_ok(), false) THEN RAISE EXCEPTION 'The Security page is not turned on for you'; END IF;
   IF v_label IS NULL THEN RAISE EXCEPTION 'Say what the plan is for'; END IF;
   IF v_kind NOT IN ('service', 'plan') THEN RAISE EXCEPTION 'Pick the kind of plan'; END IF;
-  IF coalesce(v_amt, 0) <= 0 THEN RAISE EXCEPTION 'Type the monthly payment'; END IF;
   IF v_day NOT IN (7, 17) THEN RAISE EXCEPTION 'The draw day is the 7th or the 17th'; END IF;
+  IF v_id IS NOT NULL THEN
+    SELECT * INTO o FROM pap_plans WHERE id = v_id;
+    IF o.id IS NULL THEN RAISE EXCEPTION 'That plan is gone'; END IF;
+    v_amt := o.amount; SELECT count(*) INTO v_bills FROM pap_bills WHERE plan_id = v_id;
+  ELSIF jsonb_typeof(p -> 'items') = 'array' AND jsonb_array_length(p -> 'items') > 0 THEN
+    v_items := public._pap_items(p -> 'items');
+    SELECT sum((x ->> 'a')::numeric), bool_or((x ->> 'tax')::boolean) INTO v_amt, v_tax FROM jsonb_array_elements(v_items) x;
+  ELSE
+    IF coalesce(v_amt, 0) <= 0 THEN RAISE EXCEPTION 'Type the monthly payment'; END IF;
+    v_items := jsonb_build_array(jsonb_build_object('d', v_label, 'a', v_amt, 'tax', v_tax));
+  END IF;
+  IF coalesce(v_amt, 0) <= 0 THEN RAISE EXCEPTION 'Type the monthly payment'; END IF;
   IF v_kind = 'plan' THEN
     IF coalesce(v_months, 0) < 1 THEN RAISE EXCEPTION 'Type how many months the payment plan runs'; END IF;
     v_total := coalesce(v_total, v_amt * v_months);
-    IF v_total <= v_amt * (v_months - 1) OR v_total > v_amt * v_months + 0.005 THEN
+    IF v_bills <= 1 AND (v_total <= v_amt * (v_months - 1) OR v_total > v_amt * v_months + 0.005) THEN
       RAISE EXCEPTION 'The total does not fit: % payments of % come to %', v_months, to_char(v_amt, 'FM$999,999,990.00'), to_char(v_amt * v_months, 'FM$999,999,990.00'); END IF;
   ELSE v_months := NULL; v_total := NULL; END IF;
   IF v_id IS NULL THEN
@@ -439,38 +560,142 @@ BEGIN
     IF v_ref IS NULL THEN SELECT nullif(btrim(customer_number), '') INTO v_ref FROM customers WHERE id = v_cust; END IF;
     INSERT INTO pap_plans (customer_id, kind, label, brand, amount, draw_day, reference, start_on, months, total, invoice_no, tax_in, note, created_by)
     VALUES (v_cust, v_kind, v_label, coalesce(nullif(p ->> 'brand', ''), 'reid'), v_amt, v_day, v_ref, v_start, v_months, v_total,
-            nullif(btrim(coalesce(p ->> 'invoice_no', '')), ''), coalesce((p ->> 'tax_in')::boolean, true), nullif(btrim(coalesce(p ->> 'note', '')), ''), public._pap_me())
+            nullif(btrim(coalesce(p ->> 'invoice_no', '')), ''), v_tax, nullif(btrim(coalesce(p ->> 'note', '')), ''), public._pap_me())
     RETURNING id INTO v_id;
+    INSERT INTO pap_bills (plan_id, from_month, items, total, by_name) VALUES (v_id, v_start, v_items, v_amt, public._pap_me());
     INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
-    VALUES ('pap_plans', v_id, 'insert', public.current_app_user_id(), jsonb_build_object('change', 'PAP plan made', 'customer_id', v_cust, 'label', v_label, 'amount', v_amt, 'day', v_day));
+    VALUES ('pap_plans', v_id, 'insert', public.current_app_user_id(), jsonb_build_object('change', 'PAP plan made', 'customer_id', v_cust, 'label', v_label, 'amount', v_amt, 'day', v_day, 'bill', v_items));
   ELSE
-    SELECT * INTO o FROM pap_plans WHERE id = v_id;
-    IF o.id IS NULL THEN RAISE EXCEPTION 'That plan is gone'; END IF;
     -- the first month and the kind can only change while nothing has been received on the plan
     IF (v_start <> o.start_on OR v_kind <> o.kind) AND EXISTS (SELECT 1 FROM pap_entries WHERE plan_id = v_id AND kind <> 'charge') THEN
       RAISE EXCEPTION 'This plan already has payments on it, so its first month and its kind stay as they are'; END IF;
-    UPDATE pap_plans SET kind = v_kind, label = v_label, brand = coalesce(nullif(p ->> 'brand', ''), brand), amount = v_amt, draw_day = v_day, reference = v_ref,
+    UPDATE pap_plans SET kind = v_kind, label = v_label, brand = coalesce(nullif(p ->> 'brand', ''), brand), draw_day = v_day, reference = v_ref,
            start_on = v_start, months = v_months, total = v_total, invoice_no = nullif(btrim(coalesce(p ->> 'invoice_no', '')), ''),
-           tax_in = coalesce((p ->> 'tax_in')::boolean, tax_in), note = nullif(btrim(coalesce(p ->> 'note', '')), ''), updated_at = now()
+           note = nullif(btrim(coalesce(p ->> 'note', '')), ''), updated_at = now()
     WHERE id = v_id;
     IF v_start <> o.start_on OR v_kind <> o.kind THEN DELETE FROM pap_entries WHERE plan_id = v_id AND kind = 'charge'; END IF;   -- they fill in again from the new first month
+    IF v_day <> o.draw_day THEN   -- the charges not paid yet move to the new draw day
+      UPDATE pap_entries e SET on_date = (e.period + (v_day - 1))::date
+      WHERE e.plan_id = v_id AND e.kind = 'charge' AND e.on_date > public._pap_today(); END IF;
     INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values, new_values)
-    VALUES ('pap_plans', v_id, 'update', public.current_app_user_id(), jsonb_build_object('amount', o.amount, 'day', o.draw_day, 'ref', o.reference, 'label', o.label),
-            jsonb_build_object('change', 'PAP plan changed', 'amount', v_amt, 'day', v_day, 'ref', v_ref, 'label', v_label));
+    VALUES ('pap_plans', v_id, 'update', public.current_app_user_id(), jsonb_build_object('day', o.draw_day, 'ref', o.reference, 'label', o.label),
+            jsonb_build_object('change', 'PAP plan changed', 'day', v_day, 'ref', v_ref, 'label', v_label));
   END IF;
   PERFORM public._pap_fill();
+  PERFORM public._pap_resync(v_id);
   RETURN v_id;
 END $f$;
 
--- active / paused (with why) / ended (no more monthly charges after this month)
+-- the next draw day after a day
+CREATE OR REPLACE FUNCTION public._pap_next_draw(p_day int, p_after date) RETURNS date LANGUAGE sql IMMUTABLE AS $f$
+  SELECT CASE WHEN extract(day FROM p_after)::int < p_day THEN (date_trunc('month', p_after)::date + (p_day - 1))
+              ELSE ((date_trunc('month', p_after) + interval '1 month')::date + (p_day - 1)) END $f$;
+
+-- a new bill from a month on ("duplicate and adjust"), or a bill fixed in place.
+-- p: {plan_id, id? (the bill to fix), from (any day of the first month of a new bill), items [{d, a, tax}], note}
+-- The monthly charge of every month a bill covers follows it, months already charged too.
+CREATE OR REPLACE FUNCTION public.pap_bill_save(p jsonb) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE v_plan bigint := nullif(p ->> 'plan_id', '')::bigint; v_id bigint := nullif(p ->> 'id', '')::bigint; pl pap_plans; o pap_bills;
+        v_from date := date_trunc('month', nullif(p ->> 'from', '')::date)::date; v_items jsonb := public._pap_items(p -> 'items'); v_total numeric;
+        v_note text := nullif(btrim(coalesce(p ->> 'note', '')), '');
+BEGIN
+  IF NOT coalesce(public._sec_ok(), false) THEN RAISE EXCEPTION 'The Security page is not turned on for you'; END IF;
+  SELECT * INTO pl FROM pap_plans WHERE id = v_plan;
+  IF pl.id IS NULL THEN RAISE EXCEPTION 'That plan is gone'; END IF;
+  PERFORM public._pap_bill_ensure();
+  SELECT sum((x ->> 'a')::numeric) INTO v_total FROM jsonb_array_elements(v_items) x;
+  IF v_id IS NOT NULL THEN
+    SELECT * INTO o FROM pap_bills WHERE id = v_id AND plan_id = v_plan;
+    IF o.id IS NULL THEN RAISE EXCEPTION 'That bill is gone'; END IF;
+    UPDATE pap_bills SET items = v_items, total = v_total, note = v_note, updated_at = now() WHERE id = v_id;
+    INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values, new_values)
+    VALUES ('pap_bills', v_id, 'update', public.current_app_user_id(), jsonb_build_object('items', o.items, 'total', o.total),
+            jsonb_build_object('change', 'PAP bill fixed', 'plan', v_plan, 'items', v_items, 'total', v_total));
+  ELSE
+    IF v_from IS NULL THEN RAISE EXCEPTION 'Pick the first month of the new bill'; END IF;
+    IF v_from <= (SELECT min(from_month) FROM pap_bills WHERE plan_id = v_plan) THEN
+      RAISE EXCEPTION 'The new bill has to start after the first bill (%). To change the first bill itself, fix it.', to_char((SELECT min(from_month) FROM pap_bills WHERE plan_id = v_plan), 'FMMonth YYYY'); END IF;
+    IF EXISTS (SELECT 1 FROM pap_bills WHERE plan_id = v_plan AND from_month = v_from) THEN
+      RAISE EXCEPTION 'A bill already starts in %. Fix that bill, or pick another month.', to_char(v_from, 'FMMonth YYYY'); END IF;
+    INSERT INTO pap_bills (plan_id, from_month, items, total, note, by_name) VALUES (v_plan, v_from, v_items, v_total, v_note, public._pap_me()) RETURNING id INTO v_id;
+    INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+    VALUES ('pap_bills', v_id, 'insert', public.current_app_user_id(), jsonb_build_object('change', 'New PAP bill', 'plan', v_plan, 'from', v_from, 'items', v_items, 'total', v_total));
+  END IF;
+  PERFORM public._pap_resync(v_plan);
+  RETURN v_id;
+END $f$;
+
+-- take a bill off (owners): the bill before it carries on. The first bill stays.
+CREATE OR REPLACE FUNCTION public.pap_bill_delete(p_id bigint) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE o pap_bills;
+BEGIN
+  IF NOT public._pap_owner() THEN RAISE EXCEPTION 'Only owners can take a bill off'; END IF;
+  SELECT * INTO o FROM pap_bills WHERE id = p_id;
+  IF o.id IS NULL THEN RETURN; END IF;
+  IF o.from_month = (SELECT min(from_month) FROM pap_bills WHERE plan_id = o.plan_id) THEN RAISE EXCEPTION 'This is the plan''s first bill. Fix it instead.'; END IF;
+  DELETE FROM pap_bills WHERE id = p_id;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values)
+  VALUES ('pap_bills', p_id, 'delete', public.current_app_user_id(), to_jsonb(o));
+  PERFORM public._pap_resync(o.plan_id);
+END $f$;
+
+-- cancelling. p_expire: the last day of the account (no draw after it). NULL = take the expiry date off (the account carries on).
+-- On the expiry date the plan is ended (a draw on that day still counts). Charges put on for draws after the expiry date come off when nothing was received for them.
+CREATE OR REPLACE FUNCTION public.pap_plan_cancel(p_id bigint, p_expire date, p_asked date DEFAULT NULL, p_note text DEFAULT NULL) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE o pap_plans; v_today date := public._pap_today();
+BEGIN
+  IF NOT coalesce(public._sec_ok(), false) THEN RAISE EXCEPTION 'The Security page is not turned on for you'; END IF;
+  SELECT * INTO o FROM pap_plans WHERE id = p_id;
+  IF o.id IS NULL THEN RAISE EXCEPTION 'That plan is gone'; END IF;
+  IF p_expire IS NULL THEN
+    -- an account that ended a while ago is not started again: the draw days in between would all be charged
+    IF o.status = 'ended' AND public._pap_next_draw(o.draw_day, coalesce(o.expire_on, (o.end_on + interval '1 month - 1 day')::date, v_today)) <= v_today THEN
+      RAISE EXCEPTION 'A draw day has passed since this account ended. Set up a new plan for the customer, so the time in between is not charged.'; END IF;
+    UPDATE pap_plans SET expire_on = NULL, cancel_on = NULL, cancel_by = NULL, cancel_note = NULL, cancel_mail_at = NULL, cancel_mail_to = NULL,
+           status = CASE WHEN status = 'ended' THEN 'active' ELSE status END, end_on = NULL, updated_at = now() WHERE id = p_id;
+    INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values, new_values)
+    VALUES ('pap_plans', p_id, 'update', public.current_app_user_id(), jsonb_build_object('expire_on', o.expire_on), jsonb_build_object('change', 'PAP expiry date taken off'));
+  ELSE
+    IF p_expire < o.start_on THEN RAISE EXCEPTION 'The expiry date is before the plan''s first month'; END IF;
+    IF p_expire > v_today + 1100 THEN RAISE EXCEPTION 'Check the expiry date: it is more than three years away'; END IF;
+    UPDATE pap_plans SET expire_on = p_expire, cancel_on = coalesce(p_asked, cancel_on, v_today), cancel_by = public._pap_me(),
+           cancel_note = nullif(btrim(coalesce(p_note, '')), ''),
+           cancel_mail_at = CASE WHEN expire_on IS DISTINCT FROM p_expire THEN NULL ELSE cancel_mail_at END,
+           cancel_mail_to = CASE WHEN expire_on IS DISTINCT FROM p_expire THEN NULL ELSE cancel_mail_to END,
+           status = CASE WHEN p_expire <= v_today THEN 'ended' WHEN status = 'ended' THEN 'active' ELSE status END,
+           end_on = CASE WHEN p_expire <= v_today THEN date_trunc('month', p_expire)::date END,
+           pause_why = CASE WHEN p_expire <= v_today THEN NULL ELSE pause_why END, updated_at = now()
+    WHERE id = p_id;
+    DELETE FROM pap_entries e WHERE e.plan_id = p_id AND e.kind = 'charge' AND e.on_date > p_expire
+      AND NOT EXISTS (SELECT 1 FROM pap_entries y WHERE y.plan_id = p_id AND y.kind <> 'charge' AND y.period = e.period)
+      AND NOT EXISTS (SELECT 1 FROM pap_flags g WHERE g.plan_id = p_id AND date_trunc('month', g.on_date)::date = e.period);
+    INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values, new_values)
+    VALUES ('pap_plans', p_id, 'update', public.current_app_user_id(), jsonb_build_object('expire_on', o.expire_on),
+            jsonb_build_object('change', 'PAP account cancelled', 'expire_on', p_expire, 'asked', coalesce(p_asked, v_today), 'note', p_note));
+  END IF;
+  PERFORM public._pap_fill();
+END $f$;
+
+-- the cancellation email went out
+CREATE OR REPLACE FUNCTION public.pap_plan_cancel_mailed(p_id bigint, p_to text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+BEGIN
+  IF NOT coalesce(public._sec_ok(), false) THEN RAISE EXCEPTION 'The Security page is not turned on for you'; END IF;
+  UPDATE pap_plans SET cancel_mail_at = now(), cancel_mail_to = nullif(btrim(coalesce(p_to, '')), ''), updated_at = now() WHERE id = p_id;
+END $f$;
+
+-- active / paused (with why). Ending is cancelling with today as the expiry date; starting an ended plan again takes the expiry date off.
 CREATE OR REPLACE FUNCTION public.pap_plan_status(p_id bigint, p_status text, p_why text DEFAULT NULL) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE o pap_plans;
 BEGIN
   IF NOT coalesce(public._sec_ok(), false) THEN RAISE EXCEPTION 'The Security page is not turned on for you'; END IF;
   IF p_status NOT IN ('active', 'paused', 'ended') THEN RAISE EXCEPTION 'Unknown status'; END IF;
+  SELECT * INTO o FROM pap_plans WHERE id = p_id;
+  IF o.id IS NULL THEN RAISE EXCEPTION 'That plan is gone'; END IF;
+  IF p_status = 'ended' THEN PERFORM public.pap_plan_cancel(p_id, coalesce(o.expire_on, public._pap_today()), NULL, p_why); RETURN; END IF;
+  IF o.status = 'ended' THEN PERFORM public.pap_plan_cancel(p_id, NULL); END IF;
   UPDATE pap_plans SET status = p_status, pause_why = CASE WHEN p_status = 'paused' THEN nullif(btrim(coalesce(p_why, '')), '') END,
-         paused_inbox = NULL, end_on = CASE WHEN p_status = 'ended' THEN date_trunc('month', public._pap_today())::date END, updated_at = now()
+         paused_inbox = NULL, updated_at = now()
   WHERE id = p_id;
-  IF NOT FOUND THEN RAISE EXCEPTION 'That plan is gone'; END IF;
   INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
   VALUES ('pap_plans', p_id, 'update', public.current_app_user_id(), jsonb_build_object('change', 'PAP plan ' || p_status, 'why', p_why));
 END $f$;
@@ -531,7 +756,8 @@ BEGIN
       'fee', (SELECT pap_nsf_fee FROM company_settings LIMIT 1),
       'rows', coalesce(jsonb_agg(jsonb_build_object('i', r.i, 'txn', r.txn, 'on', r.pdate, 'ret', r.rdate, 'type', r.typ, 'resp', r.resp, 'settled', r.setl,
           'amount', r.amt, 'ref', r.ref, 'who', r.who, 'kind', r.kind, 'read', r.read_kind, 'plan_id', r.plan_id, 'how', r.how,
-          'customer_id', r.customer_id, 'name', cu.display_name, 'number', cu.customer_number, 'label', p.label, 'plan_amount', p.amount,
+          'customer_id', r.customer_id, 'name', cu.display_name, 'number', cu.customer_number, 'label', p.label,
+          'plan_amount', CASE WHEN p.id IS NOT NULL THEN public._pap_charge_on(p, date_trunc('month', r.pdate)::date) END,   -- the bill of that month
           'already', r.already, 'counted', r.pay_entry IS NOT NULL) ORDER BY r.i), '[]'::jsonb))
   INTO v
   FROM public._pap_settle_rows(p_inbox, coalesce(p_kinds, s.kinds)) r
@@ -686,13 +912,16 @@ BEGIN
     END IF;
   END LOOP;
   IF NOT p_dry AND n > 0 THEN
-    PERFORM public._pap_fill();
+    PERFORM public._pap_fill();   -- each new plan gets its bill (one line) and its charges
     INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
     VALUES ('pap_plans', 0, 'insert', public.current_app_user_id(), jsonb_build_object('change', 'PAP plans made from a settlement file', 'file', p_inbox, 'plans', n, 'label', v_label));
   END IF;
   RETURN jsonb_build_object('plans', n, 'left', n_skip);
 END $f$;
 
+REVOKE EXECUTE ON FUNCTION public._pap_bill_ensure(), public._pap_bill_on(bigint, date), public._pap_charge_on(public.pap_plans, date), public._pap_resync(bigint) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.pap_bill_save(jsonb), public.pap_bill_delete(bigint), public.pap_plan_cancel(bigint, date, date, text), public.pap_plan_cancel_mailed(bigint, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.pap_bill_save(jsonb), public.pap_bill_delete(bigint), public.pap_plan_cancel(bigint, date, date, text), public.pap_plan_cancel_mailed(bigint, text) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public._pap_owner(), public._pap_me(), public._pap_fill(), public._pap_cust(bigint), public._pap_settle_rows(bigint, jsonb),
   public._pap_post_row(bigint, text, text, date, date, numeric, text, text, text, bigint, bigint, text) FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.pap_pay_home(), public.pap_plan_get(bigint), public.pap_plan_save(jsonb), public.pap_plan_status(bigint, text, text),
