@@ -26169,7 +26169,7 @@ function remoteSyncStart() {
       .on("broadcast", { event: "r" }, m => remoteGot((m && m.payload) || {}))
       .subscribe(st => { if (st === "SUBSCRIBED" && REMOTE.owner) remoteSend("hello"); });
   } catch (e) { REMOTE.ch = null; return; }
-  if (REMOTE.owner) { setInterval(() => remoteSend("hello"), 20000); setInterval(() => db.rpc("remote_ping", { p_k: REMOTE.k }), 60000); remoteBar(); }
+  if (REMOTE.owner) { setInterval(() => { remoteSend("hello"); setTimeout(() => remoteViewSend(true), 400); }, 20000); setInterval(() => db.rpc("remote_ping", { p_k: REMOTE.k }), 60000); remoteBar(); }
   else setInterval(() => { if (REMOTE.k && Date.now() - REMOTE.seen > 70000) remoteEnd(); }, 15000);   // the owner left without saying so
 }
 function remoteSend(t, x) { try { if (REMOTE.ch && REMOTE.k) REMOTE.ch.send({ type: "broadcast", event: "r", payload: Object.assign({ t, k: REMOTE.k, h: location.hash || "", c: clientId() }, REMOTE.owner ? { l: REMOTE.lock ? 1 : 0 } : {}, x || {}) }); } catch (e) {} }
@@ -26188,8 +26188,39 @@ async function remoteGot(m) {
   if (m.t === "hello") { if (fresh) remoteSend("nav"); else if (REMOTE.lock) remoteApply(m.h); }   // tell them the page I am on right now; locked: stay on the owner's page
   else if (m.t === "nav" || m.t === "lock") { if (m.t === "nav" || REMOTE.lock) remoteApply(m.h); }
   else if (m.t === "scr") remoteScrollTo(m.y);
+  else if (m.t === "view") { if (!m.re || REMOTE.lock) remoteViewApply(m.v); }
   else if (m.t === "end") remoteEnd();
 }
+// What is open INSIDE a page has no address, so it is sent on its own (Carlo, Nov 17: "when i try to open a call it works on my end but
+// does not change his"). Only what is looked at is sent (which call is open, which of its sections), never a button's press, so nothing
+// is saved twice. Tech Calls for now: add a page here when he names one.
+function remoteViewNow() {
+  try {
+    if ((location.hash || "").replace(/^#/, "").split("=")[0] === "mycalls" && document.querySelector(".mycalls"))
+      return { p: "mc", d: MC.date, o: MC.open == null ? null : MC.open, s: [...(MC.secOpen || [])].sort() };
+  } catch (e) {}
+  return null;
+}
+function remoteViewSend(re) {
+  if (!REMOTE.owner || !REMOTE.k) return;
+  const v = remoteViewNow(); if (!v) { REMOTE.viewJs = ""; return; }
+  const js = JSON.stringify(v); if (!re && js === REMOTE.viewJs) return;
+  REMOTE.viewJs = js; remoteSend("view", re ? { v, re: 1 } : { v });
+}
+function remoteViewApply(v) {
+  if (REMOTE.owner || !v) return;
+  try {
+    if (v.p === "mc" && (location.hash || "").replace(/^#/, "").split("=")[0] === "mycalls") {
+      const same = MC.date === v.d && (MC.open == null ? null : MC.open) === v.o && JSON.stringify([...(MC.secOpen || [])].sort()) === JSON.stringify(v.s || []);
+      if (same) return;
+      const day = MC.date !== v.d;
+      MC.date = v.d; MC.open = v.o; MC.secOpen = new Set(v.s || []);
+      if (day) loadMyCalls(); else if (document.querySelector(".mycalls")) renderMyCalls();
+      if (v.o != null) setTimeout(() => { try { document.querySelector(`.mc[data-visit="${v.o}"]`)?.scrollIntoView({ block: "nearest" }); } catch (e) {} }, 120);
+    }
+  } catch (e) {}
+}
+document.addEventListener("click", () => { if (REMOTE.owner && REMOTE.k) setTimeout(() => remoteViewSend(false), 80); });
 // Carlo, Nov 17: "let me have the option to let him or not remotely when I am connected". The owner's bar has one button:
 // lock the person's screen (they only watch: no tap, no typing, their page follows the owner's page and scrolling) or let them use it.
 function remoteWho() { let real = null; try { real = JSON.parse(localStorage.getItem("reid.realSession") || "null"); } catch {} return String((real && real.as) || "them").split(" ")[0] || "them"; }
