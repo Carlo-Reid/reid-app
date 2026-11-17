@@ -8,6 +8,7 @@
 CREATE TABLE IF NOT EXISTS public.payroll_day_ok (
   user_id bigint NOT NULL, day date NOT NULL, hours numeric(6,2) NOT NULL CHECK (hours >= 0 AND hours <= 24),
   by_name text, at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (user_id, day));
+ALTER TABLE public.payroll_day_ok ADD COLUMN IF NOT EXISTS ot_hours numeric(6,2) NOT NULL DEFAULT 0;   -- the part of hours that is on-call overtime (1.5 times), Nov 17, 2026
 -- for each person and pay: banked hours to use on it, and a banked advance given on it (hours paid now, repaid a set number of hours each pay after)
 CREATE TABLE IF NOT EXISTS public.payroll_pay_plan (
   user_id bigint NOT NULL, pay_date date NOT NULL, bank_use numeric(8,2) NOT NULL DEFAULT 0, adv_h numeric(8,2) NOT NULL DEFAULT 0,
@@ -49,7 +50,7 @@ CREATE OR REPLACE FUNCTION public._adv_owing(p_staff bigint) RETURNS jsonb LANGU
 -- everything the owner's Approve for payroll box needs for one person and one pay period
 CREATE OR REPLACE FUNCTION public.payroll_approvals(p_user bigint, p_from date, p_to date, p_pay date) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT CASE WHEN NOT public._src_owner() THEN NULL ELSE jsonb_build_object(
-    'days', coalesce((SELECT jsonb_agg(jsonb_build_object('day', d.day, 'hours', d.hours, 'by', d.by_name, 'at', d.at) ORDER BY d.day)
+    'days', coalesce((SELECT jsonb_agg(jsonb_build_object('day', d.day, 'hours', d.hours, 'ot', d.ot_hours, 'by', d.by_name, 'at', d.at) ORDER BY d.day)
       FROM payroll_day_ok d WHERE d.user_id = p_user AND d.day BETWEEN p_from AND p_to), '[]'::jsonb),
     'plan', (SELECT to_jsonb(p) - 'user_id' FROM payroll_pay_plan p WHERE p.user_id = p_user AND p.pay_date = p_pay),
     'staff', (SELECT id FROM payroll_staff WHERE app_user_id = p_user),
@@ -61,8 +62,9 @@ CREATE OR REPLACE FUNCTION public.payroll_approvals(p_user bigint, p_from date, 
       FROM (SELECT b.* FROM payroll_bank b JOIN payroll_staff ps ON ps.id = b.staff_id WHERE ps.app_user_id = p_user ORDER BY b.day DESC, b.id DESC LIMIT 8) b), '[]'::jsonb),
     'closed', public._pay_closed_run(p_user, p_pay)) END $f$;
 
--- approve (p_on) or take back days; p_hours goes with p_days, one for each
-CREATE OR REPLACE FUNCTION public.payroll_day_approve(p_user bigint, p_pay date, p_days date[], p_hours numeric[], p_on boolean) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+-- approve (p_on) or take back days; p_hours goes with p_days, one for each. p_ot (Carlo, Nov 17, 2026): the part of those hours that is on-call overtime, paid at 1.5 times.
+DROP FUNCTION IF EXISTS public.payroll_day_approve(bigint, date, date[], numeric[], boolean);
+CREATE OR REPLACE FUNCTION public.payroll_day_approve(p_user bigint, p_pay date, p_days date[], p_hours numeric[], p_on boolean, p_ot numeric[] DEFAULT NULL) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
 DECLARE i int; who text := public._staff_name(public.current_app_user_id());
 BEGIN
   IF NOT public._src_owner() THEN RAISE EXCEPTION 'Only owners can approve payroll'; END IF;
@@ -70,8 +72,9 @@ BEGIN
   IF p_days IS NULL OR array_length(p_days, 1) IS NULL THEN RETURN; END IF;
   FOR i IN 1 .. array_length(p_days, 1) LOOP
     IF p_on THEN
-      INSERT INTO payroll_day_ok (user_id, day, hours, by_name) VALUES (p_user, p_days[i], round(greatest(0, least(24, coalesce(p_hours[i], 0))), 2), who)
-        ON CONFLICT (user_id, day) DO UPDATE SET hours = EXCLUDED.hours, by_name = EXCLUDED.by_name, at = now();
+      INSERT INTO payroll_day_ok (user_id, day, hours, ot_hours, by_name) VALUES (p_user, p_days[i], round(greatest(0, least(24, coalesce(p_hours[i], 0))), 2),
+          round(greatest(0, least(24, coalesce(p_hours[i], 0), coalesce(p_ot[i], 0))), 2), who)
+        ON CONFLICT (user_id, day) DO UPDATE SET hours = EXCLUDED.hours, ot_hours = EXCLUDED.ot_hours, by_name = EXCLUDED.by_name, at = now();
     ELSE DELETE FROM payroll_day_ok WHERE user_id = p_user AND day = p_days[i]; END IF;
   END LOOP;
 END $f$;
@@ -95,7 +98,7 @@ END $f$;
 -- for Run payroll: each person's approved days in the period, their plan for the pay, and their advance still owed
 CREATE OR REPLACE FUNCTION public.payroll_period_ok(p_from date, p_to date, p_pay date) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT CASE WHEN NOT public._src_owner() THEN NULL ELSE jsonb_build_object(
-    'days', coalesce((SELECT jsonb_agg(jsonb_build_object('user', d.user_id, 'day', d.day, 'hours', d.hours)) FROM payroll_day_ok d WHERE d.day BETWEEN p_from AND p_to), '[]'::jsonb),
+    'days', coalesce((SELECT jsonb_agg(jsonb_build_object('user', d.user_id, 'day', d.day, 'hours', d.hours, 'ot', d.ot_hours)) FROM payroll_day_ok d WHERE d.day BETWEEN p_from AND p_to), '[]'::jsonb),
     'plans', coalesce((SELECT jsonb_agg(to_jsonb(p)) FROM payroll_pay_plan p WHERE p.pay_date = p_pay), '[]'::jsonb),
     'caps', coalesce((SELECT jsonb_agg(jsonb_build_object('staff', id, 'user', app_user_id, 'cap', bank_cap)) FROM payroll_staff WHERE bank_cap IS NOT NULL), '[]'::jsonb),
     'adv', coalesce((SELECT jsonb_agg(public._adv_owing(t.staff_id) || jsonb_build_object('staff', t.staff_id))
@@ -155,7 +158,7 @@ CREATE TRIGGER trg_payroll_adv_slip AFTER INSERT OR DELETE ON public.payroll_sli
 REVOKE EXECUTE ON FUNCTION public._payroll_adv_slip(), public._pay_closed_run(bigint, date), public._adv_owing(bigint) FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.payroll_bank_cap_set(bigint, numeric), public.payroll_my_bank(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.payroll_bank_cap_set(bigint, numeric), public.payroll_my_bank(bigint) TO authenticated;
-REVOKE EXECUTE ON FUNCTION public.payroll_approvals(bigint, date, date, date), public.payroll_day_approve(bigint, date, date[], numeric[], boolean),
+REVOKE EXECUTE ON FUNCTION public.payroll_approvals(bigint, date, date, date), public.payroll_day_approve(bigint, date, date[], numeric[], boolean, numeric[]),
   public.payroll_plan_set(bigint, date, jsonb), public.payroll_period_ok(date, date, date), public.payroll_run_reopen(bigint, text) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.payroll_approvals(bigint, date, date, date), public.payroll_day_approve(bigint, date, date[], numeric[], boolean),
+GRANT EXECUTE ON FUNCTION public.payroll_approvals(bigint, date, date, date), public.payroll_day_approve(bigint, date, date[], numeric[], boolean, numeric[]),
   public.payroll_plan_set(bigint, date, jsonb), public.payroll_period_ok(date, date, date), public.payroll_run_reopen(bigint, text) TO authenticated;

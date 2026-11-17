@@ -2322,6 +2322,7 @@
   .pr-pu .btn { padding: 1px 8px; font-size: 11px; min-height: 0; } .pr-pu .btn.done { color: #166534; border-color: #86d6a4; }
   .pr-ln-nj { background: #e0f2fe; border-color: #7dd3fc; color: #0c4a6e; white-space: normal !important; flex-wrap: wrap !important; } .pr-ln-nj > span { color: #075985; text-transform: none; font-size: 10.5px; letter-spacing: 0; }
   label.staff-truck { display: flex !important; flex-direction: row !important; gap: 8px; align-items: flex-start; max-width: 520px; line-height: 1.35; } label.staff-truck > input { width: 18px !important; height: 18px; flex: none; margin: 2px 0 0; }
+  .pr-payrule.pr-payrule-oc { background: #ffe3c7; border-color: #e8590c; } .pr-ln.pr-ln-oc { background: #ffe3c7; border-left: 4px solid #e8590c; font-weight: 700; } .pr-oc-tag { display: inline-block; padding: 0 5px; border-radius: 4px; background: #e8590c; color: #fff; font-size: 10px; font-weight: 800; white-space: nowrap; } .pr-dt-oc { color: #b34700; font-weight: 700; }
   .pr-jb.pr-jb-auto { animation: prAutoFlash 4s ease-in-out infinite; border-color: #d39a00 !important; } .pr-jb-autosay { display: block; flex-basis: 100%; width: 100%; grid-column: 1 / -1; margin-top: 3px; font-size: 10.5px; font-weight: 700; line-height: 1.25; color: #7a4b00; white-space: normal; text-align: left; }
   @keyframes prAutoFlash { 0%, 100% { background-color: #fff7cf; box-shadow: 0 0 0 0 rgba(224, 160, 0, 0); } 50% { background-color: #ffd24a; box-shadow: 0 0 0 3px rgba(224, 160, 0, .45); } }
   @media (prefers-reduced-motion: reduce) { .pr-jb.pr-jb-auto { animation: none; background-color: #ffe9a0; } }
@@ -37739,12 +37740,12 @@ const prRunPeople = () => (PR.people || []).filter(x => x.block !== "past");
 function prRunInfoFor(pp) { const S = PRUN.info?.staff || []; return S.find(s => pp.user ? Number(s.user) === Number(pp.user) : Number(s.staff) === Number(pp.staff)) || S.find(s => pp.staff && Number(s.staff) === Number(pp.staff)) || null; }
 // the hours of one pay period from the app: techs from their calls, office from time in and out; each week's hours for overtime (Ontario: over 44 a week)
 async function prHoursFor(pp, p) {
-  const isOff = OFFICE_ROLES.includes(pp.role) && !pp.tech, wk = [0, 0, 0], dl = [];
+  const isOff = OFFICE_ROLES.includes(pp.role) && !pp.tech, wk = [0, 0, 0], dl = []; let ocH = 0;   // ocH: on-call overtime hours (paid at 1.5 times, not counted in the week's 44)
   const wOf = d => Math.min(2, Math.floor((Date.parse(d + "T12:00:00Z") - Date.parse(p.from + "T12:00:00Z")) / 864e5 / 7));
   if (!pp.user) return null;
   if (!isOff && (pp.tech || pp.block === "tech")) {
     const { days } = await prTechCalc(pp.user, p); if (!days) return null;
-    for (const z of days) if (z.x && z.x.span) { wk[wOf(z.d)] += z.x.span / 36e5; dl.push(z.d); }
+    for (const z of days) if (z.x && z.x.span) { const o = (z.x.oc?.ms || 0) / 36e5; ocH += o; wk[wOf(z.d)] += z.x.span / 36e5 - o; dl.push(z.d); }
   } else if (isOff) {
     const { data } = await db.rpc("office_period", { p_user: pp.user, p_from: p.from, p_to: p.to }); if (!data) return null;
     const wdOf = d => { const w = new Date(d + "T12:00:00Z").getUTCDay(); return w === 0 ? 7 : w; };
@@ -37755,7 +37756,7 @@ async function prHoursFor(pp, p) {
       wk[wOf(d)] += (s ? Math.max(0, Math.min(b, mins(s.ends) + 15) - Math.max(a, mins(s.starts) - 15)) : Math.max(0, b - a)) / 60; }
   } else return null;
   const r = h => Math.round(h * 100) / 100;
-  return { hours: r(wk.reduce((t, h) => t + Math.min(h, 44), 0)), ot: r(wk.reduce((t, h) => t + Math.max(0, h - 44), 0)), days: dl };
+  return { hours: r(wk.reduce((t, h) => t + Math.min(h, 44), 0)), ot: r(wk.reduce((t, h) => t + Math.max(0, h - 44), 0) + ocH), oc: r(ocH), days: dl };
 }
 // one line worked out from what is typed: pay, deductions, net, and the slip lines (earn, dfg, adj) the pay slip keeps
 function prRunCalc(L) {
@@ -37970,19 +37971,19 @@ async function prRunNew(p, blocks) {
     const apD = pp.user ? (PRUN.ok.days || []).filter(x => Number(x.user) === Number(pp.user)) : [], apSet = new Set(apD.map(x => String(x.day).slice(0, 10)));
     const unappr = h && h.days ? h.days.filter(d => !apSet.has(d)).length : 0;
     if (!sal && apD.length) { const wk = [0, 0, 0], wOf = d => Math.min(2, Math.floor((Date.parse(d + "T12:00:00Z") - Date.parse(p.from + "T12:00:00Z")) / 864e5 / 7));
-      apD.forEach(x => wk[wOf(String(x.day).slice(0, 10))] += Number(x.hours || 0)); const r = v => Math.round(v * 100) / 100;
+      let oc = 0; apD.forEach(x => { const o = Math.min(Number(x.ot || 0), Number(x.hours || 0)); oc += o; wk[wOf(String(x.day).slice(0, 10))] += Number(x.hours || 0) - o; }); const r = v => Math.round(v * 100) / 100;
       // a weekly limit (George, Nov 15: "some staff only want to be paid to a certain amount of hours, say 40 per week, and the rest auto banked"):
       // paid up to the limit; regular hours over it bank 1 for 1, overtime (over 44) over it banks at 1.5
       const cap = Number(((PRUN.ok.caps || []).find(x => Number(x.user) === Number(pp.user)) || {}).cap || 0);
-      if (cap) h = { hours: r(wk.reduce((t, v) => t + Math.min(v, cap, 44), 0)), ot: r(wk.reduce((t, v) => t + Math.max(0, Math.min(v, cap) - 44) + Math.max(0, v - Math.max(cap, 44)), 0)),
+      if (cap) h = { hours: r(wk.reduce((t, v) => t + Math.min(v, cap, 44), 0)), ot: r(wk.reduce((t, v) => t + Math.max(0, Math.min(v, cap) - 44) + Math.max(0, v - Math.max(cap, 44)), 0) + oc), oc: r(oc),
           bank_ot: r(wk.reduce((t, v) => t + Math.max(0, v - Math.max(cap, 44)), 0)), bank_reg: r(wk.reduce((t, v) => t + Math.max(0, Math.min(v, 44) - cap), 0)), cap, approved: apD.length };
-      else h = { hours: r(wk.reduce((t, v) => t + Math.min(v, 44), 0)), ot: r(wk.reduce((t, v) => t + Math.max(0, v - 44), 0)), approved: apD.length }; }
+      else h = { hours: r(wk.reduce((t, v) => t + Math.min(v, 44), 0)), ot: r(wk.reduce((t, v) => t + Math.max(0, v - 44), 0) + oc), oc: r(oc), approved: apD.length }; }
     const pl = pp.user ? (PRUN.ok.plans || []).find(x => Number(x.user_id) === Number(pp.user)) || {} : {};
     const av = (PRUN.ok.adv || []).find(x => Number(x.staff) === Number(inf?.staff || pp.staff)) || null, owing = av ? Number(av.owing || 0) : 0;
     const J = IL && pp.emp_ids ? prComJobs(IL, pp.emp_ids).filter(r => r.onPay === p.pay || (near(r.payDay))) : [];
     const L = { staff: inf?.staff || pp.staff || null, user: pp.user || null, name: pp.name, block: pp.block, inf, kind: sal ? "salary" : "hourly",
       rate: sal ? 0 : Number(pp.rate?.amount || last.rate || 0), per_pay: sal ? Math.round(Number(pp.rate?.amount || 0) / 26 * 100) / 100 || Number(last.per_pay || last.gross || 0) : 0,
-      hours: sal ? Number(last.hours || 80) : (h ? h.hours : Number(last.hours || 0)), ot_h: h ? h.ot : 0, src: sal ? "salary" : h?.approved ? `the approved days (${h.approved})` : h ? "the app (not approved yet)" : last.hours ? "their last pay slip" : "nowhere: type them",
+      hours: sal ? Number(last.hours || 80) : (h ? h.hours : Number(last.hours || 0)), ot_h: h ? h.ot : 0, src: sal ? "salary" : h?.approved ? `the approved days (${h.approved})` + (h.oc ? ` · ${h.oc} h of the overtime is on-call pay` : "") : (h ? "the app (not approved yet)" : last.hours ? "their last pay slip" : "nowhere: type them") + (h?.oc ? ` · ${h.oc} h of the overtime is on-call pay` : ""),
       unappr, bank_used: Number(pl.bank_use || 0), bank_ot: h?.bank_ot || 0, bank_reg: h?.bank_reg || 0, bank_cap: h?.cap || 0, adv_h: Number(pl.adv_h || 0), adv_amt: pl.adv_amt != null ? Number(pl.adv_amt) : null, adv_per_pay: pl.adv_per_pay ?? null,
       adv_per_amt: pl.adv_per_amt ?? null, adv_note: pl.adv_note || "",
       adv_owing: owing, adv_back_amt: owing > 0 ? Math.round(Math.min(owing, Number(av.per_amt || owing)) * 100) / 100 : 0,
@@ -39357,6 +39358,49 @@ async function prOfficeDrive(la, lo) {
   const dy = (la - IE_OFFICE.lat) * 110.57, dx = (lo - IE_OFFICE.lng) * 111.32 * Math.cos(IE_OFFICE.lat * Math.PI / 180);
   return { min: Math.max(1, Math.round(Math.hypot(dx, dy) * 1.3 / 40 * 60)), road: false };
 }
+// Carlo, Nov 17, 2026, 5:55 p.m. and 6:00 p.m.: the on-call pay rules. Only for the tech who is on call (1st or 2nd) that day; anyone else is paid normal time.
+//  - Monday to Friday after 6 PM (the night ends at 4 AM): a call that starts an hour or more after his last call ended is overtime (1.5 times).
+//    A call less than an hour after his last one is still regular time: it is not overtime until the tech has ended his day and gone home.
+//  - Saturday in the day (before 6 PM): calls within one hour of each other are regular time; a call on its own is overtime. After 6 PM: the weekday rule.
+//  - Sunday and holidays: every call is overtime.
+//  - An overtime trip is paid 30 minutes of drive time (whatever the distance, in place of the real drive) and then from Arrived to Done, all at 1.5 times.
+//    The next overtime call 30 minutes or less after the last one ended is the same trip (paid by the hour straight through, no new drive time);
+//    more than 30 minutes after, it is a new trip with its own 30 minutes.
+const PR_OC = { from: 18, to: 4, home: 60, again: 30, drive: 30, sat: 60 };
+function prHoliday(d) {   // Ontario's public holidays
+  const y = Number(d.slice(0, 4)), iso = (m, n) => `${y}-${String(m).padStart(2, "0")}-${String(n).padStart(2, "0")}`, wd = (m, n) => new Date(Date.UTC(y, m - 1, n)).getUTCDay();
+  const nth = (m, w, k) => { let n = 1; while (wd(m, n) !== w) n++; return iso(m, n + 7 * (k - 1)); };
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, dd = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3), h = (19 * a + b - dd - g + 15) % 30,
+    i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451), em = Math.floor((h + l - 7 * m + 114) / 31), ed = (h + l - 7 * m + 114) % 31 + 1;
+  const gf = new Date(Date.UTC(y, em - 1, ed - 2)).toISOString().slice(0, 10); let v = 24; while (wd(5, v) !== 1) v--;
+  return ({ [iso(1, 1)]: "New Year's Day", [nth(2, 1, 3)]: "Family Day", [gf]: "Good Friday", [iso(5, v)]: "Victoria Day", [iso(7, 1)]: "Canada Day", [nth(9, 1, 1)]: "Labour Day",
+    [nth(10, 1, 2)]: "Thanksgiving", [iso(12, 25)]: "Christmas Day", [iso(12, 26)]: "Boxing Day" })[d] || "";
+}
+// marks each on-call overtime call (c.ot, c.otWhy) and returns the overtime trips: [{ day, from, a, to, n }]
+function prOnCallMark(calls, onDuty) {
+  const ts = v => v ? Date.parse(v) : null, M = 60000;
+  const loc = t => { const q = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(new Date(t)).reduce((o, x) => (o[x.type] = x.value, o), {});
+    return { d: `${q.year}-${q.month}-${q.day}`, h: Number(q.hour) % 24 + Number(q.minute) / 60 }; };
+  const Q = (calls || []).filter(c => !(c.canceled && !c.arrived)).map(c => ({ c, s: ts(c.on_way) ?? ts(c.arrived), a: ts(c.arrived) ?? ts(c.on_way), e: ts(c.done) })).filter(q => q.s != null).sort((x, y) => x.s - y.s);
+  let prevEnd = null, mode = false, night = null;
+  for (const q of Q) { const L = loc(q.s), wd = new Date(L.d + "T12:00:00Z").getUTCDay(), isNight = L.h >= PR_OC.from || L.h < PR_OC.to, nk = isNight ? (L.h < PR_OC.to ? cvAddDays(L.d, -1) : L.d) : null;
+    if (nk !== night) { night = nk; mode = false; }
+    const hol = prHoliday(L.d), gap = prevEnd == null ? Infinity : q.s - prevEnd; q.d = L.d; q.ot = false;
+    if (onDuty(L.h < 7 ? cvAddDays(L.d, -1) : L.d)) {
+      if (wd === 0 || hol) { q.ot = true; q.why = hol ? "a holiday (" + hol + ")" : "a Sunday"; }
+      else if (isNight) { if (mode || gap >= PR_OC.home * M) { q.ot = true; mode = true; q.why = "after 6 PM, an hour or more after the last call"; } else q.c.otNo = "Less than an hour after the last call, so it is regular time."; }
+      else if (wd === 6) q.sat = true; }
+    prevEnd = Math.max(prevEnd ?? 0, q.e ?? q.a); }
+  const S = Q.filter(q => q.sat);   // Saturday in the day: a call with no other call within an hour of it is overtime
+  for (const q of S) { const near = S.some(r => r !== q && r.d === q.d && (r.s >= q.s ? r.s - (q.e ?? q.a) : q.s - (r.e ?? r.a)) <= PR_OC.sat * M);
+    if (near) q.c.otNo = "Saturday: another call within an hour of it, so it is regular time."; else { q.ot = true; q.why = "a Saturday call on its own"; } }
+  const segs = []; let cur = null;
+  for (const q of Q.filter(q => q.ot)) { q.c.ot = true; q.c.otWhy = q.why; if (q.e == null || q.e <= q.a) { cur = null; continue; }
+    if (cur && q.a - cur.to <= PR_OC.again * M) { cur.to = Math.max(cur.to, q.e); cur.n++; q.c.otJoin = true; }
+    else { cur = { day: q.c.day, from: q.a - PR_OC.drive * M, a: q.a, to: q.e, n: 1 }; segs.push(cur); q.c.otFirst = true; }
+    q.c.otSeg = cur; }
+  return segs;
+}
 async function prTechCalc(user, p) {
   const { data, error } = await db.rpc("payroll_tech_period", { p_user: user, p_from: p.from, p_to: p.to });
   if (error || !data) return { data, error };
@@ -39369,9 +39413,18 @@ async function prTechCalc(user, p) {
   // once the tech closes it the real time shows. c.auto = the hours given.
   { const t0 = salesToday(); for (const c of data.calls || []) if (c.arrived && !c.done && !c.canceled && String(c.day).slice(0, 10) < t0) {
       c.auto = /install/i.test(c.kind || "") ? 5 : 1; c.done = new Date(Date.parse(c.arrived) + c.auto * 3600000).toISOString(); } }
+  // the on-call pay rules: which calls are overtime trips for the tech who is on call (see PR_OC)
+  let OCS = [];
+  try { const oc = await db.rpc("on_call_range", { p_from: cvAddDays(p.from, -1), p_to: p.to }), by = new Map((oc.error ? [] : oc.data || []).map(o => [String(o.day).slice(0, 10), o]));
+    const full = String(data.name || "").trim().toLowerCase(), fn = full.split(/\s+/)[0], me = n => { n = String(n || "").trim().toLowerCase(); return !!n && !!fn && (n === fn || n === full || full.startsWith(n + " ")); };
+    if (by.size && fn) OCS = prOnCallMark(data.calls, d => { const o = by.get(d); return !!o && (me(o.first) || me(o.second)); }); } catch { }
   const byDay = new Map(); for (let d = p.from; d <= p.to; d = cvAddDays(d, 1)) byDay.set(d, []);
   for (const c of data.calls || []) if (byDay.has(c.day)) byDay.get(c.day).push(c);
-  const days = [...byDay].map(([d, cs]) => ({ d, cs, x: cs.length ? prDay(cs) : null }));
+  const days = [...byDay].map(([d, cs]) => { if (!cs.length) return { d, cs, x: null };
+    const x = prDay(cs), reg = cs.filter(c => !c.ot);   // the regular day is worked out without the on-call overtime calls; they are added at the end (x.oc)
+    if (reg.length !== cs.length) { const y = reg.length ? prDay(reg) : { start: null, end: null, firstArrived: null, span: null, onCall: 0, offCall: null };
+      Object.assign(x, { start: y.start, end: y.end, firstArrived: y.firstArrived, span: y.span, onCall: y.onCall, offCall: y.offCall }); }
+    x.regN = reg.filter(c => !(c.canceled && !c.arrived)).length; return { d, cs, x }; });
   // a day that starts with an install: time to pick up the equipment at the office first (30 minutes unless an owner changed it), before the first drive
   // Carlo, Nov 17, 2026: a tech who picks his truck up at the office in the morning (Staff page tick) is paid 30 minutes before his first call, whatever kind it is
   // Carlo, Nov 17, 2026, 3:14 p.m.: that 30 minutes for the truck is replaced by the office rule below (every tech, every day that does not start with an install)
@@ -39400,7 +39453,7 @@ async function prTechCalc(user, p) {
   // Carlo, Nov 17, 2026, 3:14 p.m.: the office rule. On a day that does not start with an install, pay starts 15 minutes plus the drive from the office to the
   // first call, before the tech arrives there (arrives 8:15, a 15 minute drive: paid from 7:45). An install day keeps its own rule (30 minutes before On my way),
   // and so does a day whose pick-up minutes were set by hand. No arrival time, or an address that is not on the map: the old start (On my way) stays, and x.officeNo says why.
-  const tsv = v => v ? Date.parse(v) : null, firstOf = x => x.rows.filter(c => !(c.canceled && !c.arrived)).sort((a, b) => (tsv(a.on_way) ?? tsv(a.arrived) ?? Infinity) - (tsv(b.on_way) ?? tsv(b.arrived) ?? Infinity))[0];
+  const tsv = v => v ? Date.parse(v) : null, firstOf = x => x.rows.filter(c => !c.ot && !(c.canceled && !c.arrived)).sort((a, b) => (tsv(a.on_way) ?? tsv(a.arrived) ?? Infinity) - (tsv(b.on_way) ?? tsv(b.arrived) ?? Infinity))[0];
   { const want = days.filter(z => z.x && z.x.n && z.x.start != null && !EX.get(z.d)).map(z => ({ z, f: firstOf(z.x) })).filter(q => q.f && !/install/i.test(q.f.kind || ""));
     const jobs = [...new Set(want.filter(q => q.f.arrived && q.f.job).map(q => Number(q.f.job)))], at = new Map();
     if (jobs.length) { try { const r = await db.from("jobs").select("id, locations(latitude, longitude)").in("id", jobs);
@@ -39415,12 +39468,15 @@ async function prTechCalc(user, p) {
       x.office = { drive: d.min, lead: PR_LEAD_MIN, min, road: d.road, from, arr };
       x.start = Math.min(from, ...paidB); if (x.end != null && x.end > x.start) { x.span = x.end - x.start; x.offCall = Math.max(0, x.span - (x.onCall || 0)); } } }
   for (const z of days) { const x = z.x; if (!x || !x.n || x.start == null) continue;
-    const ts = v => v ? Date.parse(v) : null, first = x.rows.filter(c => !(c.canceled && !c.arrived)).sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity))[0];
+    const ts = v => v ? Date.parse(v) : null, first = x.rows.filter(c => !c.ot && !(c.canceled && !c.arrived)).sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity))[0];
     x.firstKind = first?.kind || ""; const saved = EX.get(z.d), inst = /install/i.test(first?.kind || ""); if (!saved && !inst && !truck) continue;
     const min = saved ? Number(saved.minutes) : 30; // Carlo, Nov 17, 2026: the usual 30 minutes is approved by the rule itself (the first call is an install): no Approve button. Other minutes still need an owner.
     const rule = !saved?.approved && min === 30;
     x.pickup = { min, approved: !!saved?.approved || rule, rule, saved: !!saved, by: saved?.set_by || "", why: saved?.reason || "", truck: truck && !inst, inst };
     x.start -= min * 60000; if (x.span != null) x.span += min * 60000; x.onCall = (x.onCall || 0) + min * 60000; }
+  // the on-call overtime trips of each day, on top of the regular day: x.oc.ms is paid at 1.5 times; x.span is all the paid time of the day (regular + on call)
+  for (const z of days) { const sg = OCS.filter(q => q.day === z.d); if (!sg.length || !z.x) continue; const x = z.x, ms = sg.reduce((t, q) => t + (q.to - q.from), 0);
+    x.oc = { ms, segs: sg }; x.span = (x.span || 0) + ms; if (x.start == null) x.start = sg[0].from; if (x.end == null) x.end = Math.max(...sg.map(q => q.to)); }
   return { data, error, days };
 }
 // ===== Approve for payroll (George, Nov 15): on a tech's payroll page, owners approve each day, a week or the 2 weeks; pick the banked hours to use and a
@@ -39436,12 +39492,12 @@ async function prApprDraw(user, p, days, name) {
   if (!document.getElementById("pr-appr")) return;
   if (error || !A) { box.innerHTML = `<p class="error">Couldn't load Approve for payroll: ${esc(rpcErr(error || {}))}</p>`; return; }
   const r2 = h => Math.round(h * 100) / 100, ok = new Map((A.days || []).map(x => [String(x.day).slice(0, 10), x])), closed = !!A.closed;
-  const hOf = z => r2((z.x?.span || 0) / 36e5), worked = days.filter(z => z.x && z.x.span), wkOf = z => Math.floor(days.indexOf(z) / 7) + 1;
+  const hOf = z => r2((z.x?.span || 0) / 36e5), otOf = z => r2((z.x?.oc?.ms || 0) / 36e5), worked = days.filter(z => z.x && z.x.span), wkOf = z => Math.floor(days.indexOf(z) / 7) + 1;
   const pick = w => worked.filter(z => !w || wkOf(z) === w), cnt = w => { const ds = pick(w); return [ds.filter(z => ok.has(z.d)).length, ds.length]; };
   const first = (name || "").split(" ")[0] || "them";
   document.querySelectorAll("[data-ap-chip]").forEach(c => { const d = c.dataset.apChip, z = days.find(q => q.d === d), a = ok.get(d);
-    if (a) c.innerHTML = `<button type="button" class="pr-ap-ok cg-only" data-ap-off="${d}"${closed ? " disabled" : ""} title="Approved by ${esc(a.by || "")}${closed ? "" : ". Click to take the approval back."}">✓ Approved ${r2(Number(a.hours))} h</button>`;
-    else c.innerHTML = z?.x?.span && !closed ? `<button type="button" class="btn pr-ap-btn cg-only" data-ap-on="${d}" title="${z.x.open ? "A call was never marked Done: check the hours first" : "Approve this day for payroll"}">${z.x.open ? "⚠ " : ""}✓ Approve ${hOf(z)} h</button>` : ""; });
+    if (a) c.innerHTML = `<button type="button" class="pr-ap-ok cg-only" data-ap-off="${d}"${closed ? " disabled" : ""} title="Approved by ${esc(a.by || "")}${closed ? "" : ". Click to take the approval back."}">✓ Approved ${r2(Number(a.hours))} h${Number(a.ot) ? ` (${r2(Number(a.ot))} h on call ×1.5)` : ""}</button>`;
+    else c.innerHTML = z?.x?.span && !closed ? `<button type="button" class="btn pr-ap-btn cg-only" data-ap-on="${d}" title="${z.x.open ? "A call was never marked Done: check the hours first" : "Approve this day for payroll"}">${z.x.open ? "⚠ " : ""}✓ Approve ${hOf(z)} h${otOf(z) ? ` (${otOf(z)} h on call ×1.5)` : ""}</button>` : ""; });
   const [a0, n0] = cnt(0), [a1, n1] = cnt(1), [a2, n2] = cnt(2), apH = r2([...ok.values()].reduce((t, x) => t + Number(x.hours || 0), 0));
   const pl = A.plan || {}, bank = r2(Number(A.bank || 0)), adv = A.adv || { owing: 0, rows: [] }, owing = r2(Number(adv.owing || 0)), rNow = prHrRate(A.rate);
   const advM = pl.adv_mode || (Number(pl.adv_amt) && !Number(pl.adv_h) ? "$" : rNow ? "h" : "$"), perM = pl.adv_per_mode || (pl.adv_per_amt != null && pl.adv_per_pay == null ? "$" : rNow ? "h" : "$");
@@ -39475,7 +39531,7 @@ async function prApprDraw(user, p, days, name) {
         <label class="pr-ap-why">Why <input data-ap-k="adv_note" value="${esc(pl.adv_note || "")}" placeholder="e.g. short week, family emergency"${closed ? " disabled" : ""}></label>
 </div></div>
     ${closed ? "" : `<div class="pr-ap-row"><button type="button" class="btn save-go" data-ap-save>Save</button> <span class="quiet" data-ap-msg>${pl.at ? `Saved by ${esc(pl.by_name || "")}` : ""}</span></div>`}`;
-  const go = async (ds, on) => { if (!ds.length) return; const { error: er } = await db.rpc("payroll_day_approve", { p_user: user, p_pay: p.pay, p_days: ds.map(z => z.d), p_hours: ds.map(hOf), p_on: on });
+  const go = async (ds, on) => { if (!ds.length) return; const { error: er } = await db.rpc("payroll_day_approve", { p_user: user, p_pay: p.pay, p_days: ds.map(z => z.d), p_hours: ds.map(hOf), p_on: on, p_ot: ds.map(otOf) });
     if (er) return alertMsg("Not saved: " + rpcErr(er)); prApprDraw(user, p, days, name); };
   document.querySelectorAll("[data-ap-on]").forEach(b => b.onclick = () => go(days.filter(z => z.d === b.dataset.apOn), true));
   document.querySelectorAll("[data-ap-off]").forEach(b => b.onclick = async () => { if (await askChoice("Take this approval back?", "The day goes back to not approved. It is not paid on the pay run until it is approved again.", [["y", "Yes, take it back"], ["", "No, keep it"]]) !== "y") return; go(days.filter(z => z.d === b.dataset.apOff), false); });
@@ -39602,13 +39658,17 @@ async function openPayrollPerson(user, day) {
     for (const c of rows) {
       const ct = ts(c.on_way) ?? ts(c.arrived); while (blocks.length && ct != null && blocks[0].a <= ct) out.push(njHtml(blocks.shift()));   // non-job time before this call
       if (c.canceled && !c.arrived) { out.push(`<div class="pr-ln pr-ln-cx"><span>Cancelled</span><b>${esc(c.customer || c.kind)}</b></div>`); continue; }
-      out.push(c.drive != null
+      if (c.ot) { const g = c.otSeg, iso = v => new Date(v).toISOString();
+        out.push(!g ? `<div class="pr-ln pr-ln-oc pr-ln-none"><span>On call ×1.5</span><b>when it is closed</b></div><div class="pr-pu-why">It is ${esc(c.otWhy || "an on-call call")}. The pay shows once the call is marked Done.</div>`
+          : c.otFirst ? `<div class="pr-ln pr-ln-oc" title="On-call pay at 1.5 times: 30 minutes of drive time, then from Arrived to Done."><span>On call ×1.5</span><b>${rng(iso(g.from), iso(g.to))}</b><i>${short(g.to - g.from)}</i></div><div class="pr-pu-why">It is ${esc(c.otWhy || "an on-call call")}. 30 min drive time + ${g.n === 1 ? "the call" : "the " + g.n + " calls, back to back"}.</div>`
+          : `<div class="pr-ln pr-ln-oc pr-ln-none"><span>On call ×1.5</span><b>same trip</b></div><div class="pr-pu-why">30 minutes or less after the last call: paid straight through, no new drive time.</div>`); }
+      else out.push(c.drive != null
         ? `<div class="pr-ln pr-ln-dr" title="Driving ${tm(c.on_way)} – ${tm(c.arrived)}, ${prHrs(c.drive)}"><span>Drive</span><b>${rng(c.on_way, c.arrived)}</b><i>${short(c.drive)}</i></div>${c.place ? `<div class="pr-ln pr-ln-place">${wayPlaceTag(c.place, "On my way pressed ")}</div>` : ""}`
         : `<div class="pr-ln pr-ln-dr pr-ln-none"><span>Drive</span><b>not recorded</b></div>`);
       const notClosed = !c.done && !c.canceled && c.arrived && (d !== today || Date.now() - Date.parse(c.arrived) > 10 * 3600000);
       const o = c.auto ? tm(c.done) + " (auto)" : c.done ? tm(c.done) : notClosed ? "⚠️ not closed" : (d === today ? "still there" : "not marked Done");
       out.push(`<button type="button" class="pr-jb ${kindCls(c.kind)}${notClosed ? " pr-jb-open" : ""}${c.auto ? " pr-jb-auto" : ""}" data-pr-open="${d}" title="${esc(c.kind)}${c.job_number ? " · Job " + esc(c.job_number) : ""}${c.address ? " · " + esc(c.address) : ""}">
-        <span class="pr-jb-who"><span class="pr-kind ${kindCls(c.kind)}">${esc(c.kind)}</span> ${esc(c.customer || "")}</span>
+        <span class="pr-jb-who"><span class="pr-kind ${kindCls(c.kind)}">${esc(c.kind)}</span>${c.ot ? ` <span class="pr-oc-tag">ON CALL ×1.5</span>` : ""} ${esc(c.customer || "")}</span>
         ${c.address ? `<span class="pr-jb-addr">${esc(c.address)}</span>` : ""}
         <span class="pr-jb-io"><span>Time in</span><b>${c.arrived ? tm(c.arrived) : "—"}</b></span>
         <span class="pr-jb-io"><span>Time out</span><b class="${c.done && !c.auto ? "" : "pr-jb-miss"}">${o}</b></span>${c.auto ? `<span class="pr-jb-autosay">⚠ Not closed. Auto pay rule: ${c.auto} hour${c.auto === 1 ? "" : "s"}.</span>` : ""}</button>`);
@@ -39625,7 +39685,7 @@ async function openPayrollPerson(user, day) {
     return `<div class="pr-payrule pr-closerule${n ? " pr-closerule-on" : ""}"><b class="pr-payrule-h">Close your calls</b>${n ? `<span><b>⚠ ${n === 1 ? "1 call" : n + " calls"} on this day ${n === 1 ? "was" : "were"} not closed.</b> The flashing call above is paid by the auto pay rule for now.</span>` : ""}<span>If you have not closed your call by <b>midnight</b> of that day, it closes itself and the <b>auto pay rule</b> applies:</span><span>An install: <b>5 hours</b>.</span><span>A service or maintenance call: <b>1 hour</b>.</span><span>Once you close your call, your proper pay will appear.</span></div>`; };
   // Carlo, Nov 17, 2026: a yellow box under each day's square that says how that day is paid (first call an install, or a maintenance / other call)
   const payRule = ({ d, x }) => {
-    if (!x || !x.n || x.start == null) return "";
+    if (!x || !x.n || x.start == null || x.regN === 0) return "";
     const k = (x.firstKind || "").trim(), inst = /install/i.test(k), an = /^[aeiou]/i.test(k) ? "an" : "a", pu = x.pickup;
     const first = inst ? "Your first call is an install." : k ? `Your first call is ${an} ${esc(k)} call.` : "Your first call is not an install.";
     const start = pu ? (pu.truck ? `You pick up your truck at the office in the morning. Pay starts <b>${pu.min} minutes before</b> you press On my way to your first call.`
@@ -39636,6 +39696,9 @@ async function openPayrollPerson(user, day) {
     return `<div class="pr-payrule${inst || pu ? " pr-payrule-i" : ""}"><b class="pr-payrule-h">How this day is paid</b><span>${first}</span><span>${start}</span>${office}<span>Pay ends when your last call is marked Done.</span></div>`;
   };
   // notes on the tech's schedule on the dispatch board that are not work (off sick, day off, has the phone…): a grey box under the day's square (Carlo, Nov 17, 2026)
+  // Carlo, Nov 17, 2026: a yellow box that says how the on-call calls of this day are paid (1.5 times)
+  const ocRule = ({ x }) => { if (!x || !x.oc) return ""; const n = x.oc.segs.length;
+    return `<div class="pr-payrule pr-payrule-oc"><b class="pr-payrule-h">On call pay: 1.5 times</b><span><b>${n === 1 ? "1 on-call trip" : n + " on-call trips"} on this day: ${prHrs(x.oc.ms)} at 1.5 times.</b></span><span>Each trip is paid <b>30 minutes of drive time</b>, whatever the distance, and then from Arrived to Done.</span><span>A call <b>30 minutes or less</b> after the last one is the same trip: paid straight through, with no new drive time.</span><span>After 6 PM on a weekday it is on-call pay only when your last call ended <b>an hour or more</b> before.</span></div>`; };
   const dayNote = ({ x }) => { const notes = (x?.blocks || []).filter(b => b.note), nt = v => prTime(new Date(v).toISOString()).replace(/\s*a\.m\./, " am").replace(/\s*p\.m\./, " pm");
     return notes.map(b => `<div class="pr-dt-note" title="A note on this tech's schedule on the dispatch board. It is not paid time."><b>📝 ${esc(b.name.trim())}</b><i>${b.allDay ? "All day" : nt(b.a) + " to " + nt(b.b)}</i><i>Note from the dispatch board. Not paid time.</i></div>`).join(""); };
   const dayTile = ({ d, x }) => {
@@ -39646,7 +39709,7 @@ async function openPayrollPerson(user, day) {
     return `<button type="button" class="pr-dt${PR.day === d ? " on" : ""}${d === today ? " pr-dt-today" : ""}" data-pr-day="${d}" aria-pressed="${PR.day === d}" title="Open the day hour by hour">
       <span class="pr-dt-top"><span class="pr-dt-wd">${wd}</span><span class="pr-dt-md">${md}</span>${x.open || x.rows.some(c => c.auto) ? `<span class="pr-open-ic" title="${x.open && d === today ? "Still on a call" : "A call was not closed. The auto pay rule applies until it is closed."}">⚠</span>` : ""}<b class="pr-dt-len">${prHrs(x.span)}</b></span>
       <span class="pr-dt-bar" title="On calls ${prHrs(x.onCall)} · Off calls ${prHrs(x.offCall)}"><i style="width:${pin}%"></i></span>
-      <span class="pr-dt-sum"><span class="pr-in">Start Time <b>${x.start ? tm(new Date(x.start).toISOString()) : "—"}</b></span><span class="pr-in">End Time <b>${x.end && !x.open ? tm(new Date(x.end).toISOString()) : x.open ? (d === today ? "on a call" : "not done") : "—"}</b></span><span class="pr-out">Total Driving <b>${prHrs(x.rows.filter(c => !(c.canceled && !c.arrived)).reduce((t, c) => t + (c.drive || 0), 0))}</b></span><span>Total Calls <b>${x.n}</b></span></span>
+      <span class="pr-dt-sum"><span class="pr-in">Start Time <b>${x.start ? tm(new Date(x.start).toISOString()) : "—"}</b></span><span class="pr-in">End Time <b>${x.end && !x.open ? tm(new Date(x.end).toISOString()) : x.open ? (d === today ? "on a call" : "not done") : "—"}</b></span><span class="pr-out">Total Driving <b>${prHrs(x.rows.filter(c => !(c.canceled && !c.arrived)).reduce((t, c) => t + (c.drive || 0), 0))}</b></span><span>Total Calls <b>${x.n}</b></span>${x.oc ? `<span class="pr-dt-oc">On call ×1.5 <b>${prHrs(x.oc.ms)}</b></span>` : ""}</span>
 </button>`;
   };
   // the day, hour by hour: driving, on each call, and the time between calls, in order
@@ -39710,7 +39773,7 @@ async function openPayrollPerson(user, day) {
     ${ME.role === "owner" ? `<section class="pr-appr" id="pr-appr" data-ap-u="${user}" data-ap-from="${p.from}" hidden></section>` : ""}
     ${[0, 1].map(w => { const wd = days.slice(w * 7, w * 7 + 7); return `<section class="pr-week" data-w="${w + 1}"><h3 class="pr-wkh">Week ${w + 1} <span>${fmtDate(wd[0].d)} – ${fmtDate(wd[wd.length - 1].d)}</span></h3>
       <div class="pr-week-in"><div class="pr-wk"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
-      <div class="pr-dts">${wd.map(z => `<div class="pr-col" data-d="${z.d}">${dayTile(z)}${dayNote(z)}${payRule(z)}<div class="pr-ap-chip" data-ap-chip="${z.d}"></div>${dayJobs(z)}${closeRule(z)}${z.d <= today ? `<button type="button" class="btn pr-ev-add" data-ev-add="${z.d}">+ Add an event</button>` : ""}</div>`).join("")}</div></div></section>`; }).join("")}
+      <div class="pr-dts">${wd.map(z => `<div class="pr-col" data-d="${z.d}">${dayTile(z)}${dayNote(z)}${payRule(z)}${ocRule(z)}<div class="pr-ap-chip" data-ap-chip="${z.d}"></div>${dayJobs(z)}${closeRule(z)}${z.d <= today ? `<button type="button" class="btn pr-ev-add" data-ev-add="${z.d}">+ Add an event</button>` : ""}</div>`).join("")}</div></div></section>`; }).join("")}
     <div id="pr-dv-box">${PR.day && days.some(z => z.d === PR.day) ? dayView(PR.day) : ""}</div>
     <p class="muted pr-note">First call start is when he went <i>On the way</i> to his first call (or arrived, if that wasn't pressed). Last call end is when he pressed <i>Done</i> on his last call. Click a day to see it hour by hour.</p>
   </article>`;
