@@ -2336,6 +2336,12 @@
   .pr-ap-card { background: #fff; border: 1px solid #d3dbe4; border-radius: 10px; padding: 10px 12px; } .pr-ap-card h3 { margin: 0 0 6px; font-size: 15px; color: #23415f; }
   .pr-ap-why-l, .pr-run-why, .prq-why { font-size: 12.5px; color: #6a4a00; background: #fff6df; border-left: 3px solid #e0a800; padding: 4px 8px; border-radius: 4px; } .pr-ap-calc { font-size: 13px; color: #1b6b36; font-weight: 600; margin: 2px 0; min-height: 1em; } .pr-ap-card select { font-size: 14px; padding: 2px 4px; } td.od-ap { white-space: nowrap; }
   .pr-ap-card label { display: flex; align-items: center; gap: 6px; margin: 4px 0; flex-wrap: wrap; } .pr-ap-why input { flex: 1; min-width: 160px; }
+  .pr-xp-pop { position: fixed; inset: 0; z-index: 9000; background: rgba(16,35,61,.45); display: grid; place-items: center; padding: 14px; }
+  .pr-xp-box { background: linear-gradient(180deg, #fff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.25); padding: 18px 20px; width: min(680px, 100%); max-height: 92vh; display: flex; flex-direction: column; gap: 10px; color: #10233d; }
+  .pr-xp-box h2 { margin: 0; font-size: 22px; color: #23415f; } .pr-xp-say { font-size: 15px; color: #10233d; } .pr-xp-scroll { overflow: auto; border: 1px solid #d3dbe4; border-radius: 8px; background: #fff; }
+  .pr-xp-t { border-collapse: collapse; width: 100%; font-size: 14px; } .pr-xp-t th, .pr-xp-t td { padding: 4px 9px; border-bottom: 1px solid #e6ecf2; text-align: left; white-space: nowrap; } .pr-xp-t th { background: #eef4fa; color: #23415f; } .pr-xp-t td:nth-child(6), .pr-xp-t tfoot td { font-weight: 700; }
+  .pr-xp-msg { min-height: 20px; font-weight: 700; color: #14803c; } .pr-xp-msg.err { color: #b42318; } .pr-xp-acts { display: flex; gap: 10px; flex-wrap: wrap; }
+  .pr-payrule { display: grid; gap: 3px; padding: 6px 7px; border: 1.5px solid #e0c14a; border-radius: 8px; background: #fff7cf; color: #3d3200; font-size: 11.5px; line-height: 1.3; overflow-wrap: anywhere; } .pr-payrule-h { font-size: 12px; color: #5c4a00; }
   .pr-ap-chip { min-height: 0; } .pr-ap-chip .btn, .pr-ap-ok { width: 100%; font-size: 11.5px; padding: 3px 6px; min-height: 0; }
   .pr-ap-ok { background: #e9f6ed; color: #1b6b36; border: 1.5px solid #a9d6b7; border-radius: 8px; font-weight: 700; cursor: pointer; }
   .pr-ap-ok:disabled { cursor: default; }
@@ -39151,7 +39157,7 @@ async function prTechCalc(user, p) {
   const EX = new Map((ex.data || []).filter(e => e.kind === "pickup").map(e => [String(e.day).slice(0, 10), e]));
   for (const z of days) { const x = z.x; if (!x || !x.n || x.start == null) continue;
     const ts = v => v ? Date.parse(v) : null, first = x.rows.filter(c => !(c.canceled && !c.arrived)).sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity))[0];
-    const saved = EX.get(z.d); if (!saved && !/install/i.test(first?.kind || "")) continue;
+    x.firstKind = first?.kind || ""; const saved = EX.get(z.d); if (!saved && !/install/i.test(first?.kind || "")) continue;
     const min = saved ? Number(saved.minutes) : 30; // Carlo, Nov 17, 2026: the usual 30 minutes is approved by the rule itself (the first call is an install): no Approve button. Other minutes still need an owner.
     const rule = !saved?.approved && min === 30;
     x.pickup = { min, approved: !!saved?.approved || rule, rule, saved: !!saved, by: saved?.set_by || "", why: saved?.reason || "" };
@@ -39348,6 +39354,15 @@ async function openPayrollPerson(user, day) {
     out.push(`<div class="pr-ln pr-ln-end"><span>End time</span><b class="${lastDone ? "" : "pr-jb-miss"}">${lastDone ? tm(new Date(lastDone).toISOString()) : x.end ? tm(new Date(x.end).toISOString()) + "?" : "—"}</b></div>`);
     return `<div class="pr-jobs">${out.join("")}</div>`;
   };
+  // Carlo, Nov 17, 2026: a yellow box under each day's square that says how that day is paid (first call an install, or a maintenance / other call)
+  const payRule = ({ d, x }) => {
+    if (!x || !x.n || x.start == null) return "";
+    const k = (x.firstKind || "").trim(), inst = /install/i.test(k), an = /^[aeiou]/i.test(k) ? "an" : "a", pu = x.pickup;
+    const first = inst ? "Your first call is an install." : k ? `Your first call is ${an} ${esc(k)} call.` : "Your first call is not an install.";
+    const start = pu ? `Pay starts <b>${pu.min} minutes before</b> you press On my way. That time is to pick up the equipment at the office.${inst ? "" : " It was added by hand for this day."}`
+      : "Pay starts <b>when you press On my way</b> to that call. No pick up time is paid.";
+    return `<div class="pr-payrule${inst || pu ? " pr-payrule-i" : ""}"><b class="pr-payrule-h">How this day is paid</b><span>${first}</span><span>${start}</span><span>Pay ends when your last call is marked Done.</span></div>`;
+  };
   const dayTile = ({ d, x }) => {
     const wd = new Date(d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short" }), md = new Date(d + "T12:00:00").toLocaleDateString("en-CA", { month: "short", day: "numeric" });
     if (!x || !(x.n || x.blocks?.length)) return `<div class="pr-dt pr-dt-none${d === today ? " pr-dt-today" : ""}"><span class="pr-dt-wd">${wd}</span><span class="pr-dt-md">${md}</span><span class="pr-dt-no">${d > today ? "" : "No calls"}</span></div>`;
@@ -39408,7 +39423,7 @@ async function openPayrollPerson(user, day) {
     <div class="pr-period"><button type="button" class="btn" data-pr-go="${prev}">← Previous</button>
       <div><b>${fmtDate(p.from)} – ${fmtDate(p.to)}</b><div class="muted">Paid on ${fmtDate(p.pay)}${p.from <= today && today <= p.to ? " · this period" : ""}</div></div>
       <button type="button" class="btn" data-pr-go="${next}"${p.from > today ? " disabled" : ""}>Next →</button>
-      ${p.from <= today && today <= p.to ? "" : `<button type="button" class="link" data-pr-go="${today}">This period</button>`}<button type="button" class="btn pr-print" onclick="window.print()">🖨 Print</button><button type="button" class="btn pr-dl" id="pr-dl">⬇ Excel (to print)</button></div>
+      ${p.from <= today && today <= p.to ? "" : `<button type="button" class="link" data-pr-go="${today}">This period</button>`}<button type="button" class="btn pr-print" onclick="window.print()">🖨 Print</button><button type="button" class="btn pr-dl" id="pr-dl">⬇ Excel (to print)</button><button type="button" class="btn pr-dl" id="pr-xp">📋 Export to Payroll</button></div>
     <div class="pr-tiles">
       <div class="pr-tile"><span>Days worked</span><b>${worked.length}</b></div>
       <div class="pr-tile"><span>Calls</span><b>${worked.reduce((t, x) => t + x.x.n, 0)}</b><small>${Object.entries(kinds).map(([k, n]) => `${n} ${esc(k)}`).join(" · ")}</small></div>
@@ -39420,7 +39435,7 @@ async function openPayrollPerson(user, day) {
     ${ME.role === "owner" ? `<section class="pr-appr" id="pr-appr" data-ap-u="${user}" data-ap-from="${p.from}" hidden></section>` : ""}
     ${[0, 1].map(w => { const wd = days.slice(w * 7, w * 7 + 7); return `<section class="pr-week" data-w="${w + 1}"><h3 class="pr-wkh">Week ${w + 1} <span>${fmtDate(wd[0].d)} – ${fmtDate(wd[wd.length - 1].d)}</span></h3>
       <div class="pr-week-in"><div class="pr-wk"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
-      <div class="pr-dts">${wd.map(z => `<div class="pr-col" data-d="${z.d}">${dayTile(z)}<div class="pr-ap-chip" data-ap-chip="${z.d}"></div>${dayJobs(z)}${z.d <= today ? `<button type="button" class="btn pr-ev-add" data-ev-add="${z.d}">+ Add an event</button>` : ""}</div>`).join("")}</div></div></section>`; }).join("")}
+      <div class="pr-dts">${wd.map(z => `<div class="pr-col" data-d="${z.d}">${dayTile(z)}${payRule(z)}<div class="pr-ap-chip" data-ap-chip="${z.d}"></div>${dayJobs(z)}${z.d <= today ? `<button type="button" class="btn pr-ev-add" data-ev-add="${z.d}">+ Add an event</button>` : ""}</div>`).join("")}</div></div></section>`; }).join("")}
     <div id="pr-dv-box">${PR.day && days.some(z => z.d === PR.day) ? dayView(PR.day) : ""}</div>
     <p class="muted pr-note">First call start is when he went <i>On the way</i> to his first call (or arrived, if that wasn't pressed). Last call end is when he pressed <i>Done</i> on his last call. Click a day to see it hour by hour.</p>
   </article>`;
@@ -39465,6 +39480,26 @@ async function openPayrollPerson(user, day) {
     box.querySelectorAll("[data-pr-rg]").forEach(b => b.addEventListener("click", () => side(b.dataset.prRg))); };
   side(PR.range || "90");
   // the time sheet as an Excel file set up to print: landscape, fit to the page width, a block per day with its total, week totals, the period's total
+  // Carlo, Nov 17, 2026: Export to Payroll. The 14 days laid out like his payroll sheet (date, day, start, end, an empty column, hours, an empty column), to copy and paste there.
+  $("#pr-xp")?.addEventListener("click", () => {
+    const T = v => v == null ? "" : prTime(new Date(v).toISOString()).replace(/\s*a\.m\./, " AM").replace(/\s*p\.m\./, " PM");
+    const rows = days.map(z => { const x = z.x, dt = new Date(z.d + "T12:00:00"), on = x && x.start != null && (x.n || x.paidN);
+      return [`${dt.toLocaleDateString("en-US", { weekday: "short" })} ${dt.toLocaleDateString("en-US", { month: "short" })} ${dt.getDate()} ${dt.getFullYear()}`, dt.toLocaleDateString("en-US", { weekday: "short" }),
+        on ? T(x.start) : "", on && x.end != null && !x.open ? T(x.end) : "", "", (on && x.span > 0 ? x.span / 3600000 : 0).toFixed(2), ""]; });
+    const tsv = rows.map(r => r.join("\t")).join("\n"), tot = rows.reduce((t, r) => t + Number(r[5]), 0);
+    document.getElementById("pr-xp-pop")?.remove();
+    const pop = document.createElement("div"); pop.id = "pr-xp-pop"; pop.className = "pr-xp-pop"; pop.setAttribute("role", "dialog"); pop.setAttribute("aria-modal", "true");
+    pop.innerHTML = `<div class="pr-xp-box"><h2>Export to Payroll</h2><div class="pr-xp-say">These are the 14 days, laid out like your payroll page. Press <b>Copy</b>, click the first date box on your payroll page, then paste (Ctrl+V).</div>
+      <div class="pr-xp-scroll"><table class="pr-xp-t"><thead><tr><th>Date</th><th>Day</th><th>Start</th><th>End</th><th></th><th>Hours</th><th></th></tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody>
+      <tfoot><tr><td colspan="5">Total (not copied)</td><td>${tot.toFixed(2)}</td><td></td></tr></tfoot></table></div>
+      <div class="pr-xp-msg" aria-live="polite"></div><div class="pr-xp-acts"><button type="button" class="btn save-go" data-xp-copy>📋 Copy</button><button type="button" class="btn" data-xp-x>✕ Close</button></div></div>`;
+    document.body.appendChild(pop);
+    const shut = () => { pop.remove(); document.removeEventListener("keydown", esc2); }, esc2 = ev => { if (ev.key === "Escape") shut(); };
+    document.addEventListener("keydown", esc2); pop.addEventListener("click", ev => { if (ev.target === pop || ev.target.closest("[data-xp-x]")) shut(); });
+    pop.querySelector("[data-xp-copy]").addEventListener("click", async () => { const msg = pop.querySelector(".pr-xp-msg"); let ok = false;
+      try { await navigator.clipboard.writeText(tsv); ok = true; } catch (_) { const ta = document.createElement("textarea"); ta.value = tsv; pop.appendChild(ta); ta.select(); try { ok = document.execCommand("copy"); } catch (_) {} ta.remove(); }
+      msg.textContent = ok ? "✓ Copied. Now click the first date box on your payroll page and paste." : "I could not copy it. Select the lines above with the mouse and press Ctrl+C."; msg.classList.toggle("err", !ok); });
+  });
   $("#pr-dl")?.addEventListener("click", async e => { const btn = e.currentTarget; btn.disabled = true; const was = btn.textContent; btn.textContent = "Making the Excel file…";
     try {
       await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js");
