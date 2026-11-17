@@ -2388,6 +2388,10 @@
   .pr-ln { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 4px; padding: 2px 6px; border-radius: 6px; font-size: 11px; line-height: 1.3; border: 1px solid var(--line, #d0d7de); }
   .pr-ln > span { color: var(--muted, #667); font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; } .pr-ln b { white-space: nowrap; } .pr-ln i { font-style: normal; font-weight: 700; margin-left: auto; }
   .pr-ln-start, .pr-ln-end { background: color-mix(in srgb, #2563eb 8%, var(--card, #fff)); border-color: color-mix(in srgb, #2563eb 35%, var(--line, #d0d7de)); }
+  .way-place { display: inline-block; padding: 3px 9px; border: 1.5px solid #bcd0e3; border-radius: 8px; background: linear-gradient(180deg, #ffffff, #eef4fa); color: #23415f; font-weight: 700; font-size: 12.5px; text-decoration: none; white-space: normal; }
+  .way-place:hover { border-color: #23415f; background: #e3eefa; }
+  .pr-ln.pr-ln-place, .pr-tech .pr-ln.pr-ln-place { display: block; background: none; border: 0; padding: 0 0 2px; white-space: normal; }
+  .pr-ln-place .way-place { font-size: 11px; padding: 1px 6px; }
   .pr-ln-dr { background: #fdf0d9; border-color: #f0c27a; color: #7c2d12; } .pr-ln-dr > span { color: #9a4a12; }
   .pr-ln-none { background: transparent; border-style: dashed; color: var(--muted, #889); } .pr-ln-cx { opacity: .55; border-style: dashed; }
   .pr-tech .pr-jb { min-height: 0; padding: 3px 6px 4px; gap: 0 8px; border-radius: 7px; border-left-width: 3px; box-shadow: none; flex-direction: row; flex-wrap: wrap; align-items: baseline; }
@@ -17143,6 +17147,8 @@ async function loadDispatch() {
   { const b = await db.rpc("install_holds_list", { p_from: d, p_to: d }); DSP.holds = b.error ? [] : b.data || []; if (DSP.date !== d) return; }
   { const b = await db.rpc("on_call_range", { p_from: d, p_to: d }); DSP.oncall = b.error ? null : (b.data || [])[0] || null; if (DSP.date !== d) return; }
   { const b = await db.rpc("on_way_texts_for", { p_date: d }); DSP.way = new Map((b.error ? [] : b.data || []).map(x => [Number(x.visit_id), x])); if (DSP.date !== d) return; }
+  { const ids = (DSP.rows || []).map(r => Number(r.visit_id)).filter(Boolean); let b = { data: [] }; if (ids.length) { try { b = await db.rpc("on_way_places_for", { p_visits: ids }); } catch { } }
+    DSP.place = new Map((b.error ? [] : b.data || []).map(x => [Number(x.visit_id), x])); if (DSP.date !== d) return; }
   { const b = await db.rpc("dispatch_parts_held", { p_date: d }); DSP.parts = new Map((b.error ? [] : b.data || []).map(x => [x.visit_id + ":" + x.employee_id, x.what])); if (DSP.date !== d) return; }
   DSP.sig = JSON.stringify([DSP.rows, DSP.waiting]);
   renderDispatch();
@@ -17588,8 +17594,8 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && document.q
 // a tech checks in ("I'm here" on My calls): the card shows they're working and when they arrived; late = red
 const dspTm = t => new Date(t).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\./g, "").replace(" ", " ");
 // the customer got the "on my way" text: say so on the board, with about when the tech should be there
-const dspWayWords = r => { const w = DSP.way?.get(Number(r.visit_id)); if (!w || !w.at) return "";
-  return " · customer texted" + (w.minutes ? ", there about " + dspTm(new Date(new Date(w.at).getTime() + w.minutes * 60e3)) : "") + (w.test ? " (test)" : ""); };
+const dspWayWords = r => { const w = DSP.way?.get(Number(r.visit_id)), pl = wayPlace(DSP.place?.get(Number(r.visit_id))), at = pl ? " · 📍 pressed " + pl.words : ""; if (!w || !w.at) return at;
+  return at + " · customer texted" + (w.minutes ? ", there about " + dspTm(new Date(new Date(w.at).getTime() + w.minutes * 60e3)) : "") + (w.test ? " (test)" : ""); };
 function dspArrive(r) {
   const end = r.arrival_end ? new Date(r.arrival_end) : null, today = r.scheduled_date === ymd(new Date()), past = end && today && Date.now() > end.getTime() + 60e3;
   if (r.status === "on_site" && r.arrived_at) { const late = end && new Date(r.arrived_at) > new Date(end.getTime() + 60e3);
@@ -18258,7 +18264,7 @@ const mcWhere = () => new Promise(res => {
   let done = false; const fin = v => { if (!done) { done = true; res(v); } };
   if (!navigator.geolocation) return fin(null);
   setTimeout(() => fin(null), 7000);
-  try { navigator.geolocation.getCurrentPosition(p => fin({ lat: p.coords.latitude, lng: p.coords.longitude }), () => fin(null), { enableHighAccuracy: false, timeout: 6000, maximumAge: 120000 }); } catch { fin(null); }
+  try { navigator.geolocation.getCurrentPosition(p => fin({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }), () => fin(null), { enableHighAccuracy: false, timeout: 6000, maximumAge: 120000 }); } catch { fin(null); }
 });
 // the picture that goes with the text: the tech's Staff page picture with a dark blue side bar: "Years with REID" and "<name> is a Lead Technician" (Carlo, Nov 13)
 function mcWayCardDraw(img, c) {
@@ -18283,14 +18289,24 @@ function mcWayCardDraw(img, c) {
   else if (!hasY) { fit(name, 72, 800); g.fillText(name, cx, y); fit("Your technician", 42, 700); g.fillText("Your technician", cx, y + 70); g.fillText("from REID", cx, y + 124); }
   return cv.toDataURL("image/jpeg", .86).split(",")[1];
 }
+// where the tech was when On my way was pressed (Carlo, Nov 17, 2026): the words and a map link for a saved spot
+function wayPlace(p) {
+  if (!p || p.lat == null || p.lng == null) return null;
+  const R = 6371, r = x => x * Math.PI / 180, dLa = r(p.lat - IE_OFFICE.lat), dLo = r(p.lng - IE_OFFICE.lng),
+    a = Math.sin(dLa / 2) ** 2 + Math.cos(r(IE_OFFICE.lat)) * Math.cos(r(p.lat)) * Math.sin(dLo / 2) ** 2, km = 2 * R * Math.asin(Math.sqrt(a));
+  const words = km <= 0.3 ? "at the office" : km < 1 ? Math.round(km * 1000 / 50) * 50 + " m from the office" : (km < 10 ? km.toFixed(1) : Math.round(km)) + " km from the office";
+  return { km, words, url: `https://www.google.com/maps?q=${Number(p.lat).toFixed(6)},${Number(p.lng).toFixed(6)}`, rough: p.acc != null && Number(p.acc) > 500 };
+}
+const wayPlaceTag = (p, lead) => { const w = wayPlace(p); if (!w) return "";
+  return `<a class="way-place" href="${w.url}" target="_blank" rel="noopener" title="Where the phone was when On my way was pressed${p.by ? " by " + esc(p.by) : ""}${w.rough ? ". The phone only knew its place roughly." : ""}. Click to see it on the map.">📍 ${lead || ""}${w.words}${w.rough ? " (rough)" : ""} · map ›</a>`; };
 async function mcWayCard(id) {
   try { const { data: c } = await db.rpc("on_way_card_info", { p_visit: id }); if (!c?.image) return null;
     const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = `data:${c.mime || "image/jpeg"};base64,${c.image}`; });
     return mcWayCardDraw(img, c); } catch { return null; }
 }
-async function mcOnWayText(id) {
+async function mcOnWayText(id, where) {
   let d = null;
-  try { const [at, card] = await Promise.all([mcWhere(), mcWayCard(id)]); const r = await db.functions.invoke("on-way-text", { body: { visit_id: id, lat: at?.lat ?? null, lng: at?.lng ?? null, card } }); d = r.error ? null : r.data; } catch { }
+  try { const [at, card] = await Promise.all([where === undefined ? mcWhere() : where, mcWayCard(id)]); const r = await db.functions.invoke("on-way-text", { body: { visit_id: id, lat: at?.lat ?? null, lng: at?.lng ?? null, card } }); d = r.error ? null : r.data; } catch { }
   if (!d) return "The customer was not texted: I could not reach the texting service. Please call them.";
   if (d.already) return "";
   if (d.sent && d.again) return `✓ I texted the customer: “OK, I am back on my way to you now${d.minutes ? " and should be there in about " + d.minutes + " minutes" : ""}. Sorry for the delay.”`
@@ -18325,7 +18341,9 @@ async function mcDelayed(card, id) {
 async function mcSet(card, id, status, note) {
   const m = card.querySelector(".mc-msg"); m.className = "mc-msg"; m.textContent = "Saving…";
   card.querySelectorAll("button").forEach(b => b.disabled = true);
-  if (status === "en_route") { m.textContent = "Telling the customer you are on the way…"; MC.said = await mcOnWayText(id); m.textContent = "Saving…"; }
+  if (status === "en_route") { m.textContent = "Telling the customer you are on the way…"; const at = await mcWhere();   // the spot is kept, so the office can see where On my way was pressed
+    if (at) { try { await db.rpc("on_way_place_set", { p_visit: id, p_lat: at.lat, p_lng: at.lng, p_acc: at.acc != null ? Math.round(at.acc) : null }); } catch { } }
+    MC.said = await mcOnWayText(id, at); if (!at) MC.said = (MC.said ? MC.said + " " : "") + "This phone did not say where it is, so the place where you pressed On my way was not saved."; m.textContent = "Saving…"; }
   const { error } = await db.rpc("set_call_status", { p_visit_id: id, p_status: status, p_note: note });
   if (error) { card.querySelectorAll("button").forEach(b => b.disabled = false); m.className = "mc-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
   if (status === "completed" || status === "needs_return") MC.open = null;
@@ -39111,6 +39129,8 @@ const prBest = name => /^\s*mina\b/i.test(name || "") ? ` <span class="pr-best">
 async function prTechCalc(user, p) {
   const { data, error } = await db.rpc("payroll_tech_period", { p_user: user, p_from: p.from, p_to: p.to });
   if (error || !data) return { data, error };
+  { const ids = [...new Set((data.calls || []).map(c => Number(c.visit)).filter(Boolean))];   // where On my way was pressed, for the calls pressed in our app
+    if (ids.length) { try { const pl = await db.rpc("on_way_places_for", { p_visits: ids }); const m = new Map((pl.error ? [] : pl.data || []).map(x => [Number(x.visit_id), x])); for (const c of data.calls) if (m.has(Number(c.visit))) c.place = m.get(Number(c.visit)); } catch { } } }
   const byDay = new Map(); for (let d = p.from; d <= p.to; d = cvAddDays(d, 1)) byDay.set(d, []);
   for (const c of data.calls || []) if (byDay.has(c.day)) byDay.get(c.day).push(c);
   const days = [...byDay].map(([d, cs]) => ({ d, cs, x: cs.length ? prDay(cs) : null }));
@@ -39314,7 +39334,7 @@ async function openPayrollPerson(user, day) {
       const ct = ts(c.on_way) ?? ts(c.arrived); while (blocks.length && ct != null && blocks[0].a <= ct) out.push(njHtml(blocks.shift()));   // non-job time before this call
       if (c.canceled && !c.arrived) { out.push(`<div class="pr-ln pr-ln-cx"><span>Cancelled</span><b>${esc(c.customer || c.kind)}</b></div>`); continue; }
       out.push(c.drive != null
-        ? `<div class="pr-ln pr-ln-dr" title="Driving ${tm(c.on_way)} – ${tm(c.arrived)}, ${prHrs(c.drive)}"><span>Drive</span><b>${rng(c.on_way, c.arrived)}</b><i>${short(c.drive)}</i></div>`
+        ? `<div class="pr-ln pr-ln-dr" title="Driving ${tm(c.on_way)} – ${tm(c.arrived)}, ${prHrs(c.drive)}"><span>Drive</span><b>${rng(c.on_way, c.arrived)}</b><i>${short(c.drive)}</i></div>${c.place ? `<div class="pr-ln pr-ln-place">${wayPlaceTag(c.place, "On my way pressed ")}</div>` : ""}`
         : `<div class="pr-ln pr-ln-dr pr-ln-none"><span>Drive</span><b>not recorded</b></div>`);
       const notClosed = !c.done && !c.canceled && c.arrived && (d !== today || Date.now() - Date.parse(c.arrived) > 10 * 3600000);
       const o = c.done ? tm(c.done) : notClosed ? "⚠️ not closed" : (d === today ? "still there" : "not marked Done");
