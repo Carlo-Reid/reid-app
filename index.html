@@ -7977,6 +7977,7 @@ html body #main article.ie .btn:not(.ie-danger):hover:not(:disabled) { backgroun
 html body #main article.ie .btn.save-go:not(:disabled) { background: #e9f6ed !important; background-image: none !important; border-color: #a9d6b7 !important; color: #1b6b36 !important; }
 html body #main article.ie .seg > button[aria-pressed="true"] { background: #dcebf8 !important; color: #23415f !important; border-color: #23415f !important; }
 .ie .ie-tankpo { border: 0; padding: 0; margin: 0; background: none; } .ie .ie-tankpo > h3 { display: none; }
+.ie .ie-ppo-list { margin: 4px 0 10px; padding-left: 20px; font-size: 14.5px; line-height: 1.5; } .ie .ie-ppo-list i { color: #5a6f84; } .ie .ie-doc.ie-doc-off { opacity: .6; }
 .ie .ie-docs { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0; }
 .ie .ie-doc { font: inherit; cursor: pointer; width: 200px; min-height: 214px; box-sizing: border-box; padding: 0 12px 12px; display: grid; justify-items: center; align-content: start; gap: 5px; text-align: center; color: #23415f; position: relative; overflow: hidden;
   background: #fff; border: 1.5px solid #bcd0e3; border-radius: 10px; box-shadow: 0 3px 10px rgba(35,65,95,.14); }
@@ -28373,6 +28374,9 @@ async function openInvoiceEditor(id, msg) {
   if (data) { data.cost = cost.error ? null : cost.data; data.bill = bill.error || !bill.data ? null : { ...bill.data, invoice_id: id }; data.prule = prule.error ? null : prule.data; }
   if (data) { data.tankpo = null;   // a Vista tank job: the tank's P.O. (and credit order) at the bottom of the invoice
     if (["reid", "partner"].includes(data.prule?.tank)) { const [t, ts] = await Promise.all([db.rpc("tank_order_for", { p_invoice: id }), db.rpc("tank_suppliers_for", { p_invoice: id }), loadSuppliers()]); data.tankpo = t.error ? null : t.data; data.tanksups = ts.error ? null : ts.data; } }
+  if (data) { data.partspo = null;   // the other parts and materials on the invoice: a second P.O. on the job, with no Credit Order (Carlo, Nov 17)
+    if (data.job_id && ME.role !== "technician") { const r = await db.rpc("parts_po_for", { p_invoice: id }); data.partspo = r.error ? null : r.data;
+      if (data.partspo && (data.partspo.lines || []).length) await loadSuppliers().catch(() => {}); } }
   if (error || !data) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't open the invoice</h2>${esc(error ? rpcErr(error) : "It no longer exists")}</div></div>`; return; }
   if (ME.role === "sales" && (data.looks || []).length) {   // a sales person only sees the partners they're allowed to sell for (Staff page, "Sales call for")
     const sp = await db.rpc("sales_people"), me = (sp.data || []).find(x => x.me), allowed = me && Array.isArray(me.sales_for) ? me.sales_for.map(Number) : null;
@@ -28907,6 +28911,7 @@ function renderInvoiceEditor(msg) {
       </table></div>`}</section>
       ${notesOn && !inRow ? `<section class="ie-card ie-post-in" data-ie-card="notes">${H("Add notes", "Type a note in a box if you have one. If there is nothing to say, go to the next step.", NO.notes)}<div class="ie-notes2">${notesIn}</div></section>` : ""}
       ${tankH ? card("tank", "", tankH) : ""}
+      ${(pp => pp ? card("partspo", H("A P.O. for the other parts", "The parts, materials and supplies on this invoice can go on their own P.O. on this job. No Credit Order is made for it."), pp) : "")(iePartsPoHtml(I))}
       ${(lookH + billH + ruleH).trim() ? card("partner", H(billH || ruleH ? `What ${pnm} needs` : "How the invoice looks", billH || ruleH ? `Fill in ${pnm}'s numbers when you have them.` : "", NO.partner), lookH + billH + ruleH) : ""}
       <section class="ie-card ie-card-end" data-ie-card="finish">${edit && !I.st_edit ? H("Finish", "Press the green button when everything is on the invoice.", NO.finish) : ""}
       ${edit ? `${!I.st_edit ? "" : `<label class="ie-notes">Note on the invoice <span class="quiet">(optional, the customer sees it)</span><textarea id="ie-notes" rows="2">${esc(I.notes || "")}</textarea></label>`}
@@ -29124,6 +29129,7 @@ const IE_HELP = { root: "article.ie", list: [
   ['[data-ie-card="lines"]', "Step 2. Everything that is on the invoice. To change how many or the price, type in its box. The × at the end of a line takes it off."],
   ['.ie-rx', "A rental only. Once the monthly rate is picked, two more lines are offered here. Add Dealer Promo: type the promo's name and the amount we get paid, then press Add it to the invoice. Add Drive Time: press Yes and I measure the drive from the office to the call. Only a call over 50 km gets it: $1 for each kilometre, there and back. Press No when there is none."],
   [".ie-totals", "The totals: before tax, the HST, and the total the customer or the partner pays."],
+  ['[data-ie-card="partspo"]', "The other parts, materials and supplies on this invoice can go on their own P.O. on this job. Pick the supplier, then press the green box. No Credit Order is made for this P.O."],
   ['[data-ie-card="tank"]', "The P.O. for the tank. Pick the tank line and the supplier, then press the green button to make the P.O."],
   ['[data-ie-card="partner"]', "The partner's numbers, like the account number and the approval number. Fill them in when you have them."],
   ['[data-ie-card="book"]', "Book a tech. Press the Book a tech box. I show you the techs who are free, with the best one first. Pick one, then press the book button."],
@@ -29177,7 +29183,7 @@ function ieTankPoHtml(I) {
           : `<div class="ie-tpo-l"><b>⏳ Credit Order ${esc(o.credit_number)}: waiting for the credit from ${esc(o.supplier || "the supplier")}.</b><br><span>${nm} pays for the tank, so ${esc(o.supplier || "the supplier")} has to credit us${o.credit_amount != null ? " " + m(o.credit_amount) : ""}. When their credit paper comes in with P.O. ${esc(o.po_number || "")} on it, I mark this by myself.</span></div>
             ${T.office ? `<button class="btn save-go" type="button" data-ie-tco="${o.id}" data-step="received" data-amt="${o.credit_amount != null ? Number(o.credit_amount).toFixed(2) : ""}">✓ The credit came back</button>` : ""}`}
       </div></div>`).join("")}` : "";
-  const form = !open || !I.can_edit ? "" : O.length && L.length && !IE.tpoMore ? `<button class="link ie-tpo-more" type="button" data-ie-tpo-more>＋ Make a P.O. for another tank on this invoice</button>` : !L.length ? (O.length ? "" : `<p class="ie-tpo-wait">I can not make the P.O. yet. First add the tank to this invoice from the price book (the search box above).</p>`)
+  const form = !open || !I.can_edit ? "" : O.length && L.length && !IE.tpoMore ? !L.some(x => x.tankish) ? "" : `<button class="link ie-tpo-more" type="button" data-ie-tpo-more>＋ Make a P.O. for another tank on this invoice</button>` : !L.length ? (O.length ? "" : `<p class="ie-tpo-wait">I can not make the P.O. yet. First add the tank to this invoice from the price book (the search box above).</p>`)
     : `<form class="ie-tpo-f" id="ie-tpo-f">
         ${oneTank ? `<input type="hidden" name="line" value="${pick}">` : `<div class="ie-tpo-q"><b>Which line is the tank?</b></div>`}
         ${oneTank ? "" : `<div class="ie-tpo-lines">${L.map(x => `<label><input type="radio" name="line" value="${x.id}" ${x.id === pick ? "checked" : ""}> ${(it => it ? `<span class="ie-tpo-pic" data-ie-pic="${it}"><span class="ie-picked-pic">${PB.thumbs?.get(it) ? `<img alt="" src="${PB.thumbs.get(it)}">` : "📦"}</span></span>` : "")(Number(x.item_id || (I.lines || []).find(l => Number(l.id) === Number(x.id))?.item_id) || 0)}<span>${esc(pbName(x.description || ""))}${x.sku ? ` <i>${esc(x.sku)}</i>` : ""} · ${Number(x.quantity)}${x.unit_cost != null ? " × " + m(x.unit_cost) : ""}</span></label>`).join("")}</div>`}
@@ -29216,6 +29222,36 @@ function ieTankPoHtml(I) {
         <p class="quiet">The allowance comes from Vista's rate table for the monthly rate on this tank. What we pay ${sup} is the tank's cost on the P.O., before HST.</p></div>`; }
   }
   return `<section class="ie-tankpo">${made}${form}${split}</section>`;
+}
+// A second P.O. on the job for the other parts, materials and supplies on the invoice. It is a plain P.O.: no Credit Order (Carlo, Nov 17, 2026:
+// "have the ability to add all the items added to a second P.O. attached to the Job but do not make a credit note for this one").
+function iePartsPoHtml(I) {
+  const P = I.partspo; if (!P || ME.role === "technician" || I.status === "void") return "";
+  const L = P.lines || [], O = P.orders || []; if (!L.length && !O.length) return "";
+  const S = SUPPLIERS || [], m = v => v != null ? money(v) : "";
+  const made = O.length ? `<div class="ie-docs">${O.map(o => { const x = String(o.status || "") === "cancelled";
+    return `<button class="ie-doc ${x ? "ie-doc-off" : ""}" type="button" data-ie-ppo-open="${o.po_id}" title="Open this P.O."><span class="ie-doc-ic" aria-hidden="true">📦</span><span class="ie-doc-k">P.O. for parts</span><b>${esc(o.po_number || "")}</b><small>Bought from ${esc(o.supplier || "the supplier")}</small><small>${Number(o.n)} ${Number(o.n) === 1 ? "item" : "items"}${o.amount != null ? " · " + m(o.amount) : ""}${x ? " · Cancelled" : ""}</small><small>No Credit Order</small><span class="ie-doc-go">Click to open</span></button>`; }).join("")}</div>` : "";
+  const form = !L.length ? "" : !I.can_edit ? `<p class="ie-tpo-wait">${L.length} ${L.length === 1 ? "item is" : "items are"} not on a P.O. yet.</p>` : `<form class="ie-tpo-f" id="ie-ppo-f">
+      <div class="ie-tpo-q"><b>${O.length ? "Added after the last P.O. These are not on a P.O. yet:" : "These go on the P.O.:"}</b></div>
+      <ul class="ie-ppo-list">${L.map(x => `<li>${esc(pbName(x.description || ""))}${x.sku ? ` <i>${esc(x.sku)}</i>` : ""} · ${Number(x.quantity)}${x.unit_cost != null ? " × " + m(x.unit_cost) : ""}</li>`).join("")}</ul>
+      <div class="ie-tpo-q"><b>Which supplier did we buy them from?</b></div>
+      <select name="supplier" required><option value="">Pick the supplier…</option>${S.map(x => `<option value="${x.id}" ${IE.ppoSup === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}<option value="other">Someone else…</option></select>
+      <input name="other" class="hidden" placeholder="Type the supplier's name" maxlength="120">
+      <button class="ie-sq ie-sq-go ie-tpo-go" type="submit"><span class="ie-sq-ic" aria-hidden="true">📦</span><b>Create the P.O. for ${L.length === 1 ? "this item" : `these ${L.length} items`}</b></button><span class="ie-tpo-msg" role="status"></span>
+      <p class="quiet">All of them go on one P.O. on this job. No Credit Order is made.</p></form>`;
+  return `<section class="ie-tankpo ie-partspo">${made}${form}</section>`;
+}
+function iePartsPoWire(I) {
+  document.querySelectorAll("[data-ie-ppo-open]").forEach(b => b.addEventListener("click", () => openPOPage(Number(b.dataset.iePpoOpen))));
+  const f = document.getElementById("ie-ppo-f"); if (!f) return;
+  f.supplier.addEventListener("change", () => { IE.ppoSup = f.supplier.value; f.other.classList.toggle("hidden", f.supplier.value !== "other"); if (f.supplier.value === "other") f.other.focus(); });
+  f.addEventListener("submit", async e => { e.preventDefault(); const msg = f.querySelector(".ie-tpo-msg"), other = f.supplier.value === "other", btn = f.querySelector("button[type=submit]");
+    if (!f.supplier.value || (other && !f.other.value.trim())) { msg.className = "ie-tpo-msg alert"; msg.textContent = "Pick the supplier first."; return; }
+    btn.disabled = true; msg.className = "ie-tpo-msg"; msg.textContent = "Making the P.O.…";
+    const { data, error } = await db.rpc("parts_po_make", { p_invoice: I.id, p_supplier: other ? null : Number(f.supplier.value), p_supplier_name: other ? f.other.value.trim() : null });
+    if (error) { btn.disabled = false; msg.className = "ie-tpo-msg alert"; msg.textContent = "Not made: " + rpcErr(error); return; }
+    IE.ppoSup = null;
+    openInvoiceEditor(I.id, `✓ P.O. ${data?.po_number || ""} is made for ${data?.lines || ""} ${Number(data?.lines) === 1 ? "item" : "items"}, from ${data?.supplier || "the supplier"}. No Credit Order was made for it.`); });
 }
 // the side bar's "Pick the supplier" line follows the drop-down at once, with no reload
 function ieTodoSync() {
@@ -29740,7 +29776,7 @@ function wireInvoiceEditor() {
   ieDiscWire = root => root.querySelectorAll("[data-ie-adddisc]").forEach(b => b.addEventListener("click", () => { b.disabled = true; ieAddWithDisc(I.id, b.dataset.ieAdddisc, reload); }));
   ieDiscWire(document.querySelector(".ie-mydisc") || document.createElement("div"));
   $("#ie-pbook")?.addEventListener("click", () => openPrintPicks(0, { id: I.id, number: I.number || "" }));
-  ieTankPoWire(I, reload);
+  ieTankPoWire(I, reload); iePartsPoWire(I);
   $("#ie-prates")?.addEventListener("click", async e => { e.currentTarget.disabled = true; reload(await ieApplyPartnerRates()); });
   document.querySelectorAll("[data-ie-tpick]").forEach(b => b.addEventListener("click", async () => {
     const { error } = await db.rpc("set_job_tank_payer", { p_job: I.job_id, p_who: b.dataset.ieTpick }); reload(error ? "Not saved: " + rpcErr(error) : "Saved: " + b.textContent + "."); }));
