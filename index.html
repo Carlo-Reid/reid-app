@@ -37622,7 +37622,8 @@ async function prPrintSheets(pers, blocks, people) {
           const calls = (x.rows || z.cs || []).filter(c => !(c.canceled && !c.arrived)).map(c => `<div class="pr-prt-c"><b>${esc(c.customer || "")}</b> · ${esc(c.address || "")}${c.job_number ? ` · job ${esc(c.job_number)}` : ""}${c.kind ? ` · ${esc(c.kind)}` : ""}
               <span class="quiet">on the way ${t(c.on_way)} · arrived ${t(c.arrived)} · done ${t(c.done)}</span></div>`).join("")
             + (x.blocks || []).filter(b => b.paid).map(b => `<div class="pr-prt-c"><b>${esc(b.name)}</b> <span class="quiet">${tm(b.a)} to ${tm(b.b)}</span></div>`).join("")
-            + (x.pickup ? `<div class="pr-prt-c quiet">Picking up the equipment first: ${x.pickup.min} min</div>` : "");
+            + (x.pickup ? `<div class="pr-prt-c quiet">Picking up the equipment first: ${x.pickup.min} min</div>` : "")
+            + (x.office ? `<div class="pr-prt-c quiet">Office to first call: ${x.office.lead} min + ${x.office.drive} min drive from the office</div>` : "");
           const long = (x.span || 0) > 14 * 3600e3;   // a call left open (done the next morning) makes a day look 20 hours long
           return `<tr${long ? ' class="pr-prt-long"' : ""}><td><b>${esc(longDate(z.d))}</b></td><td>${tm(x.start)}</td><td>${tm(x.end)}</td><td class="num"><b>${prHrs(x.span)}</b>${long ? `<br><span class="pr-prt-warn">⚠ Check: a call was not closed until the next day</span>` : ""}</td><td>${calls}</td></tr>`; }).join("");
         hrs = tot; work = `<table class="pr-prt-t"><thead><tr><th>Day</th><th>Start of the day</th><th>End of the day</th><th>Hours</th><th>Calls (time on the way, arrived, done)</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -39324,6 +39325,22 @@ function prDay(calls) {
 const prBest = name => /^\s*mina\b/i.test(name || "") ? ` <span class="pr-best">You are the Best <img class="eco-man pr-best-eco" data-eco-place="dance" alt="Eco Man dancing" src="${esc(ECO_3D("dance"))}"></span>` : "";
 // a tech's days for one pay period, worked out the same way his payroll page shows them (start, end, calls, pick-up time, non-job time):
 // used by his page and by the pay period print (George, Nov 14)
+// Carlo, Nov 17, 2026: the drive from the office (36 Capital Drive) to a call, in minutes, by road (the same route service as the dispatch map). Road answers are
+// kept on this computer by the address's spot, so a day reads the same each time; when the route service does not answer it is a rough guess (straight line
+// plus 30%, at 40 km an hour) and is not kept.
+const PR_LEAD_MIN = 15;
+async function prOfficeDrive(la, lo) {
+  const k = la.toFixed(4) + "," + lo.toFixed(4); let C = {}; try { C = JSON.parse(localStorage.getItem("reid.pr.drive") || "{}") || {}; } catch { }
+  if (C[k] > 0) return { min: C[k], road: true };
+  try { const ac = new AbortController(), t = setTimeout(() => ac.abort(), 6000);
+    const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${IE_OFFICE.lng.toFixed(5)},${IE_OFFICE.lat.toFixed(5)};${lo.toFixed(5)},${la.toFixed(5)}?overview=false`, { signal: ac.signal });
+    const j = await res.json(); clearTimeout(t);
+    if (j.code === "Ok" && j.routes?.[0]) { const min = Math.max(1, Math.round(j.routes[0].duration / 60));
+      try { const C2 = JSON.parse(localStorage.getItem("reid.pr.drive") || "{}") || {}; C2[k] = min; localStorage.setItem("reid.pr.drive", JSON.stringify(C2)); } catch { }
+      return { min, road: true }; } } catch { }
+  const dy = (la - IE_OFFICE.lat) * 110.57, dx = (lo - IE_OFFICE.lng) * 111.32 * Math.cos(IE_OFFICE.lat * Math.PI / 180);
+  return { min: Math.max(1, Math.round(Math.hypot(dx, dy) * 1.3 / 40 * 60)), road: false };
+}
 async function prTechCalc(user, p) {
   const { data, error } = await db.rpc("payroll_tech_period", { p_user: user, p_from: p.from, p_to: p.to });
   if (error || !data) return { data, error };
@@ -39339,7 +39356,8 @@ async function prTechCalc(user, p) {
   const days = [...byDay].map(([d, cs]) => ({ d, cs, x: cs.length ? prDay(cs) : null }));
   // a day that starts with an install: time to pick up the equipment at the office first (30 minutes unless an owner changed it), before the first drive
   // Carlo, Nov 17, 2026: a tech who picks his truck up at the office in the morning (Staff page tick) is paid 30 minutes before his first call, whatever kind it is
-  let truck = false; try { const t = await db.rpc("staff_truck_office_is", { p_user: user }); truck = !t.error && t.data === true; } catch { }
+  // Carlo, Nov 17, 2026, 3:14 p.m.: that 30 minutes for the truck is replaced by the office rule below (every tech, every day that does not start with an install)
+  const truck = false;
   let ex = { data: [] }, nj = { data: [] }, ev = { data: [] }; try { [ex, nj, ev] = await Promise.all([db.rpc("payroll_extras", { p_user: user, p_from: p.from, p_to: p.to }), db.rpc("payroll_nonjob", { p_user: user, p_from: p.from, p_to: p.to }), db.rpc("payroll_events_list", { p_user: user, p_from: p.from, p_to: p.to })]); } catch { }
   // events added by hand (not on the schedule): their day's local start and end
   const atLocal = (d, hm) => { const g = new Date(d + "T12:00:00Z"), off = new Date(g.toLocaleString("en-US", { timeZone: "America/Toronto" })) - new Date(g.toLocaleString("en-US", { timeZone: "UTC" })); return Date.parse(d + "T" + hm + ":00Z") - off; };
@@ -39358,6 +39376,23 @@ async function prTechCalc(user, p) {
     if (!paid) continue;   // not paid until it's added (from the schedule) or approved (added by hand)
     x.paidN = (x.paidN || 0) + 1; x.onCall = (x.onCall || 0) + (a1 - a0); x.start = x.start == null ? a0 : Math.min(x.start, a0); x.end = x.end == null ? a1 : Math.max(x.end, a1); x.span = x.end - x.start; }
   const EX = new Map((ex.data || []).filter(e => e.kind === "pickup").map(e => [String(e.day).slice(0, 10), e]));
+  // Carlo, Nov 17, 2026, 3:14 p.m.: the office rule. On a day that does not start with an install, pay starts 15 minutes plus the drive from the office to the
+  // first call, before the tech arrives there (arrives 8:15, a 15 minute drive: paid from 7:45). An install day keeps its own rule (30 minutes before On my way),
+  // and so does a day whose pick-up minutes were set by hand. No arrival time, or an address that is not on the map: the old start (On my way) stays, and x.officeNo says why.
+  const tsv = v => v ? Date.parse(v) : null, firstOf = x => x.rows.filter(c => !(c.canceled && !c.arrived)).sort((a, b) => (tsv(a.on_way) ?? tsv(a.arrived) ?? Infinity) - (tsv(b.on_way) ?? tsv(b.arrived) ?? Infinity))[0];
+  { const want = days.filter(z => z.x && z.x.n && z.x.start != null && !EX.get(z.d)).map(z => ({ z, f: firstOf(z.x) })).filter(q => q.f && !/install/i.test(q.f.kind || ""));
+    const jobs = [...new Set(want.filter(q => q.f.arrived && q.f.job).map(q => Number(q.f.job)))], at = new Map();
+    if (jobs.length) { try { const r = await db.from("jobs").select("id, locations(latitude, longitude)").in("id", jobs);
+      for (const j of r.data || []) { const L = j.locations, la = Number(L?.latitude), lo = Number(L?.longitude); if (L && L.latitude != null && L.longitude != null && isFinite(la) && isFinite(lo)) at.set(Number(j.id), [la, lo]); } } catch { } }
+    const spots = new Map(); for (const [, v] of at) spots.set(v[0].toFixed(4) + "," + v[1].toFixed(4), v);
+    const dr = new Map(), todo = [...spots]; await Promise.all([0, 1, 2].map(async () => { while (todo.length) { const [k, v] = todo.shift(); dr.set(k, await prOfficeDrive(v[0], v[1])); } }));
+    for (const { z, f } of want) { const x = z.x, arr = tsv(f.arrived), sp = at.get(Number(f.job));
+      if (arr == null) { x.officeNo = "the first call has no arrival time"; continue; }
+      if (!sp) { x.officeNo = "the first call's address is not on the map"; continue; }
+      const d = dr.get(sp[0].toFixed(4) + "," + sp[1].toFixed(4)); if (!d) { x.officeNo = "the drive could not be measured"; continue; }
+      const min = d.min + PR_LEAD_MIN, from = arr - min * 60000, paidB = (x.blocks || []).filter(b => b.paid).map(b => b.a);
+      x.office = { drive: d.min, lead: PR_LEAD_MIN, min, road: d.road, from, arr };
+      x.start = Math.min(from, ...paidB); if (x.end != null && x.end > x.start) { x.span = x.end - x.start; x.offCall = Math.max(0, x.span - (x.onCall || 0)); } } }
   for (const z of days) { const x = z.x; if (!x || !x.n || x.start == null) continue;
     const ts = v => v ? Date.parse(v) : null, first = x.rows.filter(c => !(c.canceled && !c.arrived)).sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity))[0];
     x.firstKind = first?.kind || ""; const saved = EX.get(z.d), inst = /install/i.test(first?.kind || ""); if (!saved && !inst && !truck) continue;
@@ -39540,6 +39575,9 @@ async function openPayrollPerson(user, day) {
           ${pu.rule ? `<button type="button" class="btn pr-pu-go pu-rule hidden" data-pu-save>Save</button><span class="pr-pu-st ok">✓ Approved by the rule</span>`
             : ME.role === "owner" ? `<button type="button" class="btn pr-pu-go own-only${pu.approved ? " done" : ""}" data-pu-save>${pu.approved ? "✓ Approved" : "Approve"}</button>`
             : `<button type="button" class="btn pr-pu-go hidden" data-pu-save>Save</button><span class="pr-pu-st">${pu.approved ? "✓ Approved" : pu.saved ? "Waiting for approval" : ""}</span>`}</div>`); }
+    if (x.office) { const o = x.office;
+      out.push(`<div class="pr-ln pr-ln-pu ok" title="Added by the rule: ${o.lead} minutes plus the drive from the office (36 Capital Drive) to the first call, before the arrival there."><span>Office to first call</span><b>${rng(new Date(o.from).toISOString(), new Date(o.arr).toISOString())}</b><i>${short(o.min * 60000)}</i></div>
+        <div class="pr-pu-why">${o.lead} min + ${o.drive} min drive from the office${o.road ? "" : " (rough: the map did not answer)"}</div>`); }
     for (const c of rows) {
       const ct = ts(c.on_way) ?? ts(c.arrived); while (blocks.length && ct != null && blocks[0].a <= ct) out.push(njHtml(blocks.shift()));   // non-job time before this call
       if (c.canceled && !c.arrived) { out.push(`<div class="pr-ln pr-ln-cx"><span>Cancelled</span><b>${esc(c.customer || c.kind)}</b></div>`); continue; }
@@ -39568,8 +39606,9 @@ async function openPayrollPerson(user, day) {
     const first = inst ? "Your first call is an install." : k ? `Your first call is ${an} ${esc(k)} call.` : "Your first call is not an install.";
     const start = pu ? (pu.truck ? `You pick up your truck at the office in the morning. Pay starts <b>${pu.min} minutes before</b> you press On my way to your first call.`
       : `Pay starts <b>${pu.min} minutes before</b> you press On my way. That time is to pick up the equipment at the office.${inst ? "" : " It was added by hand for this day."}`)
-      : "Pay starts <b>when you press On my way</b> to that call.";
-    const office = pu ? "" : `<span class="pr-payrule-off">If you had to come to the office before your call, have the office add a note, or use the <b>+ Add an event</b> button below to add a note for approval.</span>`;
+      : x.office ? `Pay starts <b>${x.office.lead} minutes plus the drive from the office</b> before you arrive at that call. The drive from the office (36 Capital Drive) is <b>${x.office.drive} minutes</b>${x.office.road ? "" : " (a rough guess: the map did not answer)"}. You arrived at ${prTime(new Date(x.office.arr).toISOString())}, so pay starts at <b>${prTime(new Date(x.office.from).toISOString())}</b>.`
+      : "Pay starts <b>when you press On my way</b> to that call" + (x.officeNo ? `, because ${x.officeNo}, so I can not work out the drive from the office.` : ".");
+    const office = pu || x.office ? "" : `<span class="pr-payrule-off">If you had to come to the office before your call, have the office add a note, or use the <b>+ Add an event</b> button below to add a note for approval.</span>`;
     return `<div class="pr-payrule${inst || pu ? " pr-payrule-i" : ""}"><b class="pr-payrule-h">How this day is paid</b><span>${first}</span><span>${start}</span>${office}<span>Pay ends when your last call is marked Done.</span></div>`;
   };
   // notes on the tech's schedule on the dispatch board that are not work (off sick, day off, has the phone…): a grey box under the day's square (Carlo, Nov 17, 2026)
@@ -39735,6 +39774,7 @@ async function openPayrollPerson(user, day) {
         for (const z of wd) { const x = z.x, day = new Date(z.d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
           if (!x || !(x.n || x.blocks?.length)) { add([day, "No calls", "", "", "", "", "", null], "none"); continue; }
           const items = [];
+          if (x.office) items.push([x.office.from, ["Office to first call (by the rule)", x.office.lead + " min + " + x.office.drive + " min drive from the office", "", "", T(x.office.from), T(x.office.arr), H(x.office.min * 60000)], "pick"]);
           if (x.pickup) items.push([x.start, [(x.pickup.truck ? "Pick up the truck at the office" : "Pick up equipment") + (x.pickup.approved ? " (approved)" : ""), x.pickup.why || "", "", "", T(x.start), T(x.start + x.pickup.min * 60000), H(x.pickup.min * 60000)], "pick"]);
           for (const c of x.rows) { if (c.canceled && !c.arrived) { items.push([ts(c.on_way) ?? Infinity, ["Cancelled", c.customer || "", c.address || "", c.job_number || "", "", "", null], "cx"]); continue; }
             if (c.drive != null) items.push([ts(c.on_way), ["Drive", c.customer || "", c.address || "", c.job_number || "", T(c.on_way), T(c.arrived), H(c.drive)], "drive"]);
@@ -39967,7 +40007,7 @@ function renderStaff(users, perms, note) {
                   ${BOOK.techs.map(t => `<option value="${t.id}" ${t.id === u.employee_id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>` : ""}
                 <label title="Used for the HSG Pro messages, and for Years with REID on the picture a customer gets by text when this tech is on the way">Started working here<input type="date" data-staff-started value="${esc(STAFF_STARTED.get(u.id) || "")}" max="${ymd(new Date())}" ${highLocked ? "disabled" : ""}></label>
                 <label title="It is written beside the tech's picture in the text a customer gets when the tech is on the way">On the customer's text, this person is a<select data-staff-title ${highLocked ? "disabled" : ""}><option value="">Not shown</option>${["Lead Technician", "Service Technician"].map(t => `<option ${STAFF_TITLE.get(u.id) === t ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-                <label class="staff-truck" title="Ticked: he picks his truck up at the office in the morning, so his pay starts 30 minutes before his first call, every day. Not ticked: he takes his truck home, so pay starts when he presses On my way."><input type="checkbox" data-staff-truck ${STAFF_TRUCK.has(u.id) ? "checked" : ""} ${highLocked ? "disabled" : ""}> Picks up his truck at the office in the morning (paid 30 minutes before his first call). Not ticked = he takes his truck home.</label>
+                <label class="staff-truck" title="A record of who picks up his truck at the office and who takes it home. It does not change pay any more: from Nov 17, 2026 every tech is paid 15 minutes plus the drive from the office before his first call."><input type="checkbox" data-staff-truck ${STAFF_TRUCK.has(u.id) ? "checked" : ""} ${highLocked ? "disabled" : ""}> Picks up his truck at the office in the morning. Not ticked = he takes his truck home. (A record only: it does not change pay.)</label>
                 ${(PB.books || []).length ? `<label>Price book<select data-staff-book><option value="">Normal</option>${PB.books.map(b => `<option value="${b.id}" ${STAFF_BOOK.get(u.id) === b.id ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>` : ""}
                 <div><span class="cl-label">Price book categories</span><div>${u.role === "owner" ? `<span class="quiet">All</span>` : `<button class="link" type="button" data-pbcats="${u.id}">${(STAFF_PBCATS.get(u.id) || []).length ? `${STAFF_PBCATS.get(u.id).length} picked` : "All"}</button>`}</div></div>
                 ${u.role === "sales" ? `<div class="st-sf-wrap"><span class="cl-label">Sales call for</span><div class="st-sf" data-sf-user="${u.id}">Loading…</div></div>` : ""}
