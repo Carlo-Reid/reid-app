@@ -11,7 +11,7 @@ ALTER TABLE public.supplier_invoice_stock ENABLE ROW LEVEL SECURITY;
 CREATE OR REPLACE FUNCTION public.supplier_invoice_to_stock(p_id bigint, p_place bigint DEFAULT NULL, p_dry boolean DEFAULT true)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $$
 DECLARE inv supplier_invoices%ROWTYPE; v_sup text; r record; v_item bigint; v_name text; v_qty numeric; v_res jsonb; v_note text;
-  v_add jsonb := '[]'; v_miss jsonb := '[]'; v_done jsonb; v_seen text[] := '{}'; v_key text;
+  v_add jsonb := '[]'; v_miss jsonb := '[]'; v_done jsonb; v_seen text[] := '{}'; v_key text; v_ret boolean;
 BEGIN
   IF public.current_staff_role() IS NULL THEN RAISE EXCEPTION 'Please sign in'; END IF;
   SELECT * INTO inv FROM supplier_invoices WHERE id = p_id;
@@ -48,16 +48,28 @@ BEGIN
       SELECT p.id INTO v_item FROM pricebook_items p WHERE lower(btrim(p.sku)) = lower(r.code) AND p.active IS NOT FALSE
         ORDER BY p.track_inventory DESC NULLS LAST, (p.item_type = 'material') DESC, p.id LIMIT 1;
     END IF;
+    v_ret := false;
+    -- a retired part that is bought again (Nov 17, 2026): found too, and brought back when it is put in stock
+    IF v_item IS NULL THEN
+      SELECT si.item_id INTO v_item FROM supplier_items si JOIN pricebook_items p ON p.id = si.item_id AND p.active IS FALSE AND NOT coalesce(p.pending_new, false)
+        WHERE si.supplier_id = inv.supplier_id AND lower(btrim(si.supplier_sku)) = lower(r.code) ORDER BY si.is_preferred DESC NULLS LAST, si.id LIMIT 1;
+      IF v_item IS NULL THEN
+        SELECT p.id INTO v_item FROM pricebook_items p WHERE lower(btrim(p.sku)) = lower(r.code) AND p.active IS FALSE AND NOT coalesce(p.pending_new, false)
+          ORDER BY p.track_inventory DESC NULLS LAST, (p.item_type = 'material') DESC, p.id DESC LIMIT 1;
+      END IF;
+      v_ret := v_item IS NOT NULL;
+    END IF;
     IF v_item IS NULL THEN
       v_miss := v_miss || jsonb_build_object('code', r.code, 'description', r.descr, 'qty', r.qty); CONTINUE;
     END IF;
     SELECT name INTO v_name FROM pricebook_items WHERE id = v_item;
     IF NOT p_dry THEN
+      IF v_ret THEN PERFORM public._pb_bring_back(v_item, 'Bought again: put in stock from ' || v_note); END IF;
       v_res := public.stock_move(jsonb_build_object('item', v_item, 'kind', 'in', 'place', p_place, 'qty', r.qty, 'note', v_note));
       INSERT INTO supplier_invoice_stock (supplier_invoice_id, line_no, item_id, quantity, txn_id, location_id, added_by)
       VALUES (p_id, r.n, v_item, r.qty, (v_res ->> 'txn')::bigint, p_place, public.current_app_user_id());
     END IF;
-    v_add := v_add || jsonb_build_object('code', r.code, 'description', r.descr, 'qty', r.qty, 'item_id', v_item, 'item', v_name);
+    v_add := v_add || jsonb_build_object('code', r.code, 'description', r.descr, 'qty', r.qty, 'item_id', v_item, 'item', v_name, 'retired', v_ret);
   END LOOP;
   IF NOT p_dry AND jsonb_array_length(v_add) = 0 THEN RAISE EXCEPTION 'None of these parts are in our price list, so nothing was added'; END IF;
   RETURN jsonb_build_object('done', NULL, 'add', v_add, 'miss', v_miss, 'added', NOT p_dry,
