@@ -8195,6 +8195,16 @@ article.ie .ie-post .ie-booked { margin: 6px 0 0; padding: 10px 12px; border: 1.
   #remote-bar { position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 3500; max-width: 92vw; padding: 7px 16px; border-radius: 0 0 10px 10px;
     background: linear-gradient(180deg, #1c1c1e, #3a3a3d); color: #fff; font-size: 13.5px; font-weight: 700; text-align: center; box-shadow: 0 3px 10px rgba(0,0,0,.3); }
   @media print { #remote-bar { display: none; } }
+  /* Carlo, Nov 17: while an owner is remoted in he can lock the person's screen (they only watch) or let them use it */
+  #remote-bar.rm-locked { z-index: 2147483050; background: linear-gradient(180deg, #7a1f5c, #5c1746); font-size: 15px; padding: 9px 18px; }
+  #remote-bar.rm-flash { animation: rmFlash .5s ease 2; }
+  @keyframes rmFlash { 50% { background: #ff7a00; color: #1f1200; } }
+  #remote-lock { position: fixed; inset: 0; z-index: 2147483000; background: rgba(28, 28, 30, .05); cursor: not-allowed; touch-action: none; box-shadow: inset 0 0 0 5px #7a1f5c; }
+  #viewas-bar #rm-lock { background: #ff7a00 !important; color: #1f1200 !important; border: 0 !important; white-space: nowrap; font-weight: 800; }
+  #viewas-bar #rm-lock::after { content: none !important; }
+  #viewas-bar #rm-lock small { display: block; font-size: 10px; font-weight: 800; letter-spacing: .04em; }
+  @media (max-width: 760px) { #viewas-bar { flex-wrap: wrap; border-radius: 16px; justify-content: center; } }
+  @media print { #remote-lock { display: none; } }
   #second-loc:empty { display: none; }
   #second-loc { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; }
   .sl2-u { display: flex; flex-direction: column; gap: 5px; padding: 8px; border: 1.5px solid #e0a23a; border-radius: 10px; background: #fff7e8; color: #5a3b00; }
@@ -8813,7 +8823,7 @@ async function loginAsStart(uid, name, o) {   // o.direct = no question first (a
 async function loginAsBack() {
   let real = null; try { real = JSON.parse(localStorage.getItem("reid.realSession") || "null"); } catch {}
   try { localStorage.removeItem("reid.realSession"); } catch {}
-  try { if (typeof REMOTE !== "undefined" && REMOTE.owner && REMOTE.k) { remoteSend("end"); await db.rpc("remote_stop", { p_k: REMOTE.k }); } sessionStorage.removeItem("reid.remoteK"); } catch {}
+  try { if (typeof REMOTE !== "undefined" && REMOTE.owner && REMOTE.k) { remoteSend("end"); await db.rpc("remote_stop", { p_k: REMOTE.k }); } sessionStorage.removeItem("reid.remoteK"); sessionStorage.removeItem("reid.remoteLock"); } catch {}
   const r = real ? await db.auth.setSession({ access_token: real.access_token, refresh_token: real.refresh_token }) : { error: true };
   if (r.error) { await db.auth.signOut({ scope: "local" }).catch(() => {}); }
   location.hash = "#staff"; location.reload();
@@ -26149,11 +26159,11 @@ async function onlineRemote(uid, name) {
 // Carlo, Nov 14, 2:43 p.m.: "if he changes pages i want my view to change and if i change pages i want his to change as well".
 // Both screens are the same login, so both listen on that login's live channel ("remote-u<id>"). A page change is sent with the
 // session's token; a screen only obeys a token the database says is a live remote session for its login (remote_mine).
-let REMOTE = { k: "", owner: false, ch: null, applied: null, seen: 0, by: "" };
+let REMOTE = { k: "", owner: false, ch: null, applied: null, seen: 0, by: "", lock: false };
 function remoteSyncStart() {
   if (REMOTE.ch || !ME.id) return;
   let real = null, k = ""; try { real = localStorage.getItem("reid.realSession"); k = sessionStorage.getItem("reid.remoteK") || ""; } catch {}
-  if (real && k) { REMOTE.k = k; REMOTE.owner = true; }
+  if (real && k) { REMOTE.k = k; REMOTE.owner = true; try { REMOTE.lock = sessionStorage.getItem("reid.remoteLock") === k; } catch {} }
   try {
     REMOTE.ch = db.channel("remote-u" + ME.id, { config: { broadcast: { self: false } } })
       .on("broadcast", { event: "r" }, m => remoteGot((m && m.payload) || {}))
@@ -26162,10 +26172,10 @@ function remoteSyncStart() {
   if (REMOTE.owner) { setInterval(() => remoteSend("hello"), 20000); setInterval(() => db.rpc("remote_ping", { p_k: REMOTE.k }), 60000); remoteBar(); }
   else setInterval(() => { if (REMOTE.k && Date.now() - REMOTE.seen > 70000) remoteEnd(); }, 15000);   // the owner left without saying so
 }
-function remoteSend(t) { try { if (REMOTE.ch && REMOTE.k) REMOTE.ch.send({ type: "broadcast", event: "r", payload: { t, k: REMOTE.k, h: location.hash || "", c: clientId() } }); } catch (e) {} }
+function remoteSend(t, x) { try { if (REMOTE.ch && REMOTE.k) REMOTE.ch.send({ type: "broadcast", event: "r", payload: Object.assign({ t, k: REMOTE.k, h: location.hash || "", c: clientId() }, REMOTE.owner ? { l: REMOTE.lock ? 1 : 0 } : {}, x || {}) }); } catch (e) {} }
 async function remoteGot(m) {
   if (!m.k) return;
-  if (REMOTE.owner) { if (m.k === REMOTE.k && m.t === "nav") remoteApply(m.h); return; }
+  if (REMOTE.owner) { if (m.k === REMOTE.k && m.t === "nav" && !REMOTE.lock) remoteApply(m.h); return; }   // their screen is locked: the owner drives, their page does not move his
   let fresh = false;
   if (m.k !== REMOTE.k) {
     if (m.t === "end" || REMOTE.asking) return;
@@ -26174,10 +26184,61 @@ async function remoteGot(m) {
     REMOTE.k = m.k; REMOTE.by = r.data.by || "An owner"; fresh = true; remoteBar();
   }
   REMOTE.seen = Date.now();
-  if (m.t === "hello") { if (fresh) remoteSend("nav"); }   // tell them the page I am on right now
-  else if (m.t === "nav") remoteApply(m.h);
+  if (m.t !== "end" && (m.l === 0 || m.l === 1)) remoteLockSet(m.l === 1);   // the owner says: watch only, or use your screen
+  if (m.t === "hello") { if (fresh) remoteSend("nav"); else if (REMOTE.lock) remoteApply(m.h); }   // tell them the page I am on right now; locked: stay on the owner's page
+  else if (m.t === "nav" || m.t === "lock") { if (m.t === "nav" || REMOTE.lock) remoteApply(m.h); }
+  else if (m.t === "scr") remoteScrollTo(m.y);
   else if (m.t === "end") remoteEnd();
 }
+// Carlo, Nov 17: "let me have the option to let him or not remotely when I am connected". The owner's bar has one button:
+// lock the person's screen (they only watch: no tap, no typing, their page follows the owner's page and scrolling) or let them use it.
+function remoteWho() { let real = null; try { real = JSON.parse(localStorage.getItem("reid.realSession") || "null"); } catch {} return String((real && real.as) || "them").split(" ")[0] || "them"; }
+function remoteLockBtn() {
+  const bar = document.getElementById("viewas-bar"); if (!bar || !REMOTE.owner) return;
+  let b = document.getElementById("rm-lock");
+  if (!b) {
+    b = document.createElement("button"); b.type = "button"; b.id = "rm-lock"; b.className = "btn own-only";
+    bar.insertBefore(b, bar.querySelector("#viewas-back"));
+    b.addEventListener("click", () => {
+      REMOTE.lock = !REMOTE.lock;
+      try { REMOTE.lock ? sessionStorage.setItem("reid.remoteLock", REMOTE.k) : sessionStorage.removeItem("reid.remoteLock"); } catch {}
+      remoteSend("lock"); remoteLockBtn();
+    });
+  }
+  const who = remoteWho();
+  b.innerHTML = (REMOTE.lock ? `🔓 Let ${esc(who)} use the screen` : `🔒 Lock ${esc(who)}'s screen`) + `<small>OWNERS ONLY</small>`;
+  b.setAttribute("aria-pressed", REMOTE.lock ? "true" : "false");
+  b.title = REMOTE.lock ? `${who} can only watch right now. Press to let ${who} tap and type again.` : `${who} can tap and type right now. Press so ${who} can only watch while you use the screen.`;
+  const w = bar.querySelector(".rm-both");
+  if (w) w.textContent = REMOTE.lock ? `🔒 ${who}'s screen is locked. ${who} only watches. Their screen follows your page.` : `📡 Your page and theirs move together. ${who} can use the screen.`;
+}
+function remoteLockSet(on) {   // the person's own screen
+  if (REMOTE.owner) return;
+  on = !!on; const was = REMOTE.lock; REMOTE.lock = on;
+  let o = document.getElementById("remote-lock");
+  if (on && !o) {
+    o = document.createElement("div"); o.id = "remote-lock"; o.setAttribute("aria-hidden", "true"); document.body.appendChild(o);
+    const no = e => { e.preventDefault(); e.stopPropagation(); };
+    ["wheel", "touchmove", "contextmenu"].forEach(t => o.addEventListener(t, no, { passive: false }));
+    ["pointerdown", "click"].forEach(t => o.addEventListener(t, e => { no(e); const b = document.getElementById("remote-bar"); if (b) { b.classList.remove("rm-flash"); void b.offsetWidth; b.classList.add("rm-flash"); } }));
+    try { if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); } catch {}
+  }
+  if (!on && o) o.remove();
+  if (on !== was) remoteBar();
+}
+window.addEventListener("keydown", e => { if (REMOTE.lock && !REMOTE.owner && REMOTE.k) { e.preventDefault(); e.stopPropagation(); } }, true);
+window.addEventListener("focusin", e => { if (REMOTE.lock && !REMOTE.owner && REMOTE.k) { try { e.target.blur(); } catch {} } }, true);
+// the owner's scrolling moves the locked screen too (by how far down the page, since the two screens are not the same size)
+function remoteScrollBox() { const m = document.getElementById("main"); return (m && m.offsetParent !== null && m.scrollHeight > m.clientHeight + 2) ? m : (document.scrollingElement || document.documentElement); }
+function remoteScrollTo(y) {
+  if (REMOTE.owner || !REMOTE.lock || !(y >= 0)) return;
+  const b = remoteScrollBox(); b.scrollTop = Math.round(Math.min(1, y) * Math.max(0, b.scrollHeight - b.clientHeight));
+}
+document.addEventListener("scroll", e => {
+  if (!REMOTE.owner || !REMOTE.lock || !REMOTE.k || REMOTE.scrT) return;
+  const t = e.target, m = document.getElementById("main"); if (t !== document && t !== m && t !== document.scrollingElement) return;
+  REMOTE.scrT = setTimeout(() => { REMOTE.scrT = 0; const b = remoteScrollBox(), d = b.scrollHeight - b.clientHeight; remoteSend("scr", { y: d > 0 ? +(b.scrollTop / d).toFixed(4) : 0 }); }, 150);
+}, true);
 function remoteApply(h) {   // the Customers page has no address of its own (""), so it is opened by hand (Carlo, Nov 14: "customer does not work when either side tries")
   h = h || ""; if (h === (location.hash || "")) return;
   REMOTE.applied = h; if (h) location.hash = h; else routeTo(""); }
@@ -26187,12 +26248,15 @@ function remotePageChanged() {
   REMOTE.applied = null; remoteSend("nav");
 }
 function remoteBar() {
-  if (REMOTE.owner) { const sp = document.querySelector("#viewas-bar > span"); if (sp && !sp.querySelector(".rm-both")) sp.insertAdjacentHTML("beforeend", ` <b class="rm-both">📡 Your page and theirs move together.</b>`); return; }
+  if (REMOTE.owner) { const sp = document.querySelector("#viewas-bar > span"); if (sp && !sp.querySelector(".rm-both")) sp.insertAdjacentHTML("beforeend", ` <b class="rm-both">📡 Your page and theirs move together.</b>`); remoteLockBtn(); return; }
   let b = document.getElementById("remote-bar");
   if (!b) { b = document.createElement("div"); b.id = "remote-bar"; b.setAttribute("role", "status"); document.body.appendChild(b); }
-  b.textContent = `📡 ${(REMOTE.by || "An owner").split(" ")[0]} is remoted in with you. When one of you changes page, the other screen follows.`;
+  const by = (REMOTE.by || "An owner").split(" ")[0];
+  b.classList.toggle("rm-locked", !!REMOTE.lock);
+  b.textContent = REMOTE.lock ? `🔒 ${by} is using your screen. Please watch. You can not tap or type until ${by} gives it back.`
+    : `📡 ${by} is remoted in with you. When one of you changes page, the other screen follows.`;
 }
-function remoteEnd() { REMOTE.k = ""; REMOTE.applied = null; document.getElementById("remote-bar")?.remove(); }
+function remoteEnd() { REMOTE.k = ""; REMOTE.applied = null; REMOTE.lock = false; document.getElementById("remote-lock")?.remove(); document.getElementById("remote-bar")?.remove(); }
 window.addEventListener("hashchange", remotePageChanged);
 function secondLocDraw() {
   const box = $("#second-loc"); if (!box) return;
@@ -28192,7 +28256,7 @@ async function startInvoice(jobId) {
    dark part around it, and if it is still there it is taken off the screen. Left alone on purpose (POP_SKIP): things that go away by themselves
    (Working…, Eco Man thinking or dancing, messages), the dark layer behind Help, and "Let's start the day" (it is how office staff start their time). */
 const POP_OUT_RE = /close|cancel|✕|✖|×|\bexit\b|go back|\bback\b|←|⬅|\bstop\b|not now|not yet|never mind|put (him|it) away|^\s*no\b|\bdone\b|got it|^\s*ok\s*$/i;
-const POP_SKIP = ".work-clock, .ie-toast, .sl-toast, .rem-progress, .rem-done, .eco-think, .eco-dance, .eco-pop, .train-back, #atag-layer, #od-over, #call-pops, #creq-bar, #viewas-bar, #cpy-bar, #sec-verify-bar, #ua-side, #hsg-msg, .eco-live-box, .eco-find-bar, #login, #app";
+const POP_SKIP = ".work-clock, .ie-toast, .sl-toast, .rem-progress, .rem-done, .eco-think, .eco-dance, .eco-pop, .train-back, #atag-layer, #od-over, #call-pops, #creq-bar, #viewas-bar, #remote-lock, #remote-bar, #cpy-bar, #sec-verify-bar, #ua-side, #hsg-msg, .eco-live-box, .eco-find-bar, #login, #app";
 const POP_BASE = new Set(document.body.children);   // what the page itself is made of: never a pop-up
 function popShown(e) { if (!e.isConnected || e.hidden) return false; const c = getComputedStyle(e); if (c.display === "none" || c.visibility === "hidden" || Number(c.opacity) === 0) return false; const r = e.getBoundingClientRect(); return r.width > 40 && r.height > 40; }
 function popHasOut(e) {
