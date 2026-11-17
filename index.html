@@ -2321,6 +2321,7 @@
   .pr-pu { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; margin: -1px 0 1px; } .pr-pu input { width: 52px; padding: 1px 4px; font-size: 11.5px; }
   .pr-pu .btn { padding: 1px 8px; font-size: 11px; min-height: 0; } .pr-pu .btn.done { color: #166534; border-color: #86d6a4; }
   .pr-ln-nj { background: #e0f2fe; border-color: #7dd3fc; color: #0c4a6e; white-space: normal !important; flex-wrap: wrap !important; } .pr-ln-nj > span { color: #075985; text-transform: none; font-size: 10.5px; letter-spacing: 0; }
+  label.staff-truck { display: flex !important; flex-direction: row !important; gap: 8px; align-items: flex-start; max-width: 520px; line-height: 1.35; } label.staff-truck > input { width: 18px !important; height: 18px; flex: none; margin: 2px 0 0; }
   .pr-jb.pr-jb-auto { animation: prAutoFlash 4s ease-in-out infinite; border-color: #d39a00 !important; } .pr-jb-autosay { display: block; flex-basis: 100%; width: 100%; grid-column: 1 / -1; margin-top: 3px; font-size: 10.5px; font-weight: 700; line-height: 1.25; color: #7a4b00; white-space: normal; text-align: left; }
   @keyframes prAutoFlash { 0%, 100% { background-color: #fff7cf; box-shadow: 0 0 0 0 rgba(224, 160, 0, 0); } 50% { background-color: #ffd24a; box-shadow: 0 0 0 3px rgba(224, 160, 0, .45); } }
   @media (prefers-reduced-motion: reduce) { .pr-jb.pr-jb-auto { animation: none; background-color: #ffe9a0; } }
@@ -36427,6 +36428,7 @@ async function openStaff() {
   if (!PB.cats) await loadPbCats().catch(() => {});
   { const st = await db.rpc("staff_started_list"); STAFF_STARTED = new Map((st.data || []).map(x => [Number(x.user), String(x.started).slice(0, 10)])); }
   { const st = await db.rpc("staff_text_title_list"); STAFF_TITLE = new Map((st.data || []).map(x => [Number(x.user), x.title])); }
+  { const tk = await db.rpc("staff_truck_list"); STAFF_TRUCK = new Set((tk.error ? [] : tk.data || []).map(Number)); }
   if (ME.role === "owner") { const tr = await db.rpc("staff_training_list"); STAFF_TRAIN = new Map((tr.data || []).map(x => [x.user, x])); }
   await loadPbBooks().catch(() => {}); STAFF_BOOK = new Map(); for (const b of PB.books || []) for (const u of b.people) STAFF_BOOK.set(u.id, b.id);
   STAFF_RESETS = resets.error ? [] : resets.data || [];
@@ -39151,6 +39153,8 @@ async function prTechCalc(user, p) {
   for (const c of data.calls || []) if (byDay.has(c.day)) byDay.get(c.day).push(c);
   const days = [...byDay].map(([d, cs]) => ({ d, cs, x: cs.length ? prDay(cs) : null }));
   // a day that starts with an install: time to pick up the equipment at the office first (30 minutes unless an owner changed it), before the first drive
+  // Carlo, Nov 17, 2026: a tech who picks his truck up at the office in the morning (Staff page tick) is paid 30 minutes before his first call, whatever kind it is
+  let truck = false; try { const t = await db.rpc("staff_truck_office_is", { p_user: user }); truck = !t.error && t.data === true; } catch { }
   let ex = { data: [] }, nj = { data: [] }, ev = { data: [] }; try { [ex, nj, ev] = await Promise.all([db.rpc("payroll_extras", { p_user: user, p_from: p.from, p_to: p.to }), db.rpc("payroll_nonjob", { p_user: user, p_from: p.from, p_to: p.to }), db.rpc("payroll_events_list", { p_user: user, p_from: p.from, p_to: p.to })]); } catch { }
   // events added by hand (not on the schedule): their day's local start and end
   const atLocal = (d, hm) => { const g = new Date(d + "T12:00:00Z"), off = new Date(g.toLocaleString("en-US", { timeZone: "America/Toronto" })) - new Date(g.toLocaleString("en-US", { timeZone: "UTC" })); return Date.parse(d + "T" + hm + ":00Z") - off; };
@@ -39171,10 +39175,10 @@ async function prTechCalc(user, p) {
   const EX = new Map((ex.data || []).filter(e => e.kind === "pickup").map(e => [String(e.day).slice(0, 10), e]));
   for (const z of days) { const x = z.x; if (!x || !x.n || x.start == null) continue;
     const ts = v => v ? Date.parse(v) : null, first = x.rows.filter(c => !(c.canceled && !c.arrived)).sort((a, b) => (ts(a.on_way) ?? ts(a.arrived) ?? Infinity) - (ts(b.on_way) ?? ts(b.arrived) ?? Infinity))[0];
-    x.firstKind = first?.kind || ""; const saved = EX.get(z.d); if (!saved && !/install/i.test(first?.kind || "")) continue;
+    x.firstKind = first?.kind || ""; const saved = EX.get(z.d), inst = /install/i.test(first?.kind || ""); if (!saved && !inst && !truck) continue;
     const min = saved ? Number(saved.minutes) : 30; // Carlo, Nov 17, 2026: the usual 30 minutes is approved by the rule itself (the first call is an install): no Approve button. Other minutes still need an owner.
     const rule = !saved?.approved && min === 30;
-    x.pickup = { min, approved: !!saved?.approved || rule, rule, saved: !!saved, by: saved?.set_by || "", why: saved?.reason || "" };
+    x.pickup = { min, approved: !!saved?.approved || rule, rule, saved: !!saved, by: saved?.set_by || "", why: saved?.reason || "", truck: truck && !inst, inst };
     x.start -= min * 60000; if (x.span != null) x.span += min * 60000; x.onCall = (x.onCall || 0) + min * 60000; }
   return { data, error, days };
 }
@@ -39346,7 +39350,7 @@ async function openPayrollPerson(user, day) {
     const blocks = (x.blocks || []).slice().sort((a, b) => a.a - b.a), njHtml = b => b.note ? "" : `<div class="pr-ln pr-ln-nj${b.ev ? " pr-ln-ev" + (b.ev.approved ? " ok" : "") : ""}${b.paid ? "" : " pr-ln-unpaid"}" title="${esc(b.summary || b.name)} · paid time, not a job"><span>${esc(b.name)}</span><b>${rng(new Date(b.a).toISOString(), new Date(b.b).toISOString())}</b><i>${short(b.b - b.a)}</i></div>${b.nj ? `<div class="pr-ev-ctl" data-nj="${b.nj}">${b.wait ? `<span class="pr-pu-st wait">⏳ Waiting for approval</span>${ME.role === "owner" ? `<button type="button" class="btn pr-pay-go own-only" data-nj-ok="1">✓ Approve</button>` : ""}<button type="button" class="link danger" data-nj-pay="0">Not paid</button>` : b.paid ? `<span class="pr-pu-st ok">✓ Paid</span><button type="button" class="link danger" data-nj-pay="0">Not paid</button>` : `<span class="pr-pu-st">Not paid</span><button type="button" class="btn pr-pay-go" data-nj-pay="1">＋ Add to pay</button>`}</div>` : ""}${b.ev ? `<div class="pr-ev-ctl" data-ev="${b.ev.id}">${b.ev.approved ? `<span class="pr-pu-st ok">✓ Approved</span>` : ME.role === "owner" ? `<button type="button" class="btn own-only" data-ev-ok>Approve</button>` : `<span class="pr-pu-st">Waiting for approval</span>`}${ME.role === "owner" || !b.ev.approved ? `<button type="button" class="link danger" data-ev-del title="Remove this event">✕ Remove</button>` : ""}</div>` : ""}`;
     const out = [`<div class="pr-ln pr-ln-start"><span>Start time</span><b>${x.start ? tm(new Date(x.start).toISOString()) : "—"}</b></div>`];
     if (x.pickup) { const pu = x.pickup, a0 = new Date(x.start).toISOString(), a1 = new Date(x.start + pu.min * 60000).toISOString();
-      out.push(`<div class="pr-ln pr-ln-pu${pu.approved ? " ok" : ""}" title="${pu.rule ? "Added and approved on its own: the first call is an install, so 30 minutes to pick up the equipment. Change the minutes if it took more." : pu.approved ? "Approved" + (pu.by ? " by " + esc(pu.by) : "") : "The minutes were changed. An owner approves them."}"><span>Pick up equipment</span><b>${rng(a0, a1)}</b><i>${short(pu.min * 60000)}</i></div>
+      out.push(`<div class="pr-ln pr-ln-pu${pu.approved ? " ok" : ""}" title="${pu.rule ? (pu.truck ? "Added and approved on its own: he picks his truck up at the office in the morning, so 30 minutes before his first call. Change the minutes if it took more." : "Added and approved on its own: the first call is an install, so 30 minutes to pick up the equipment. Change the minutes if it took more.") : pu.approved ? "Approved" + (pu.by ? " by " + esc(pu.by) : "") : "The minutes were changed. An owner approves them."}"><span>${pu.truck ? "Pick up the truck" : "Pick up equipment"}</span><b>${rng(a0, a1)}</b><i>${short(pu.min * 60000)}</i></div>
         ${pu.why ? `<div class="pr-pu-why">Why: ${esc(pu.why)}</div>` : ""}<div class="pr-pu" data-pu-day="${d}" data-pu-why="${esc(pu.why)}"><input type="number" min="0" max="600" step="5" value="${pu.min}" aria-label="Minutes to pick up equipment"> min
           ${pu.rule ? `<button type="button" class="btn pr-pu-go pu-rule hidden" data-pu-save>Save</button><span class="pr-pu-st ok">✓ Approved by the rule</span>`
             : ME.role === "owner" ? `<button type="button" class="btn pr-pu-go own-only${pu.approved ? " done" : ""}" data-pu-save>${pu.approved ? "✓ Approved" : "Approve"}</button>`
@@ -39377,7 +39381,8 @@ async function openPayrollPerson(user, day) {
     if (!x || !x.n || x.start == null) return "";
     const k = (x.firstKind || "").trim(), inst = /install/i.test(k), an = /^[aeiou]/i.test(k) ? "an" : "a", pu = x.pickup;
     const first = inst ? "Your first call is an install." : k ? `Your first call is ${an} ${esc(k)} call.` : "Your first call is not an install.";
-    const start = pu ? `Pay starts <b>${pu.min} minutes before</b> you press On my way. That time is to pick up the equipment at the office.${inst ? "" : " It was added by hand for this day."}`
+    const start = pu ? (pu.truck ? `You pick up your truck at the office in the morning. Pay starts <b>${pu.min} minutes before</b> you press On my way to your first call.`
+      : `Pay starts <b>${pu.min} minutes before</b> you press On my way. That time is to pick up the equipment at the office.${inst ? "" : " It was added by hand for this day."}`)
       : "Pay starts <b>when you press On my way</b> to that call.";
     const office = pu ? "" : `<span class="pr-payrule-off">If you had to come to the office before your call, have the office add a note, or use the <b>+ Add an event</b> button below to add a note for approval.</span>`;
     return `<div class="pr-payrule${inst || pu ? " pr-payrule-i" : ""}"><b class="pr-payrule-h">How this day is paid</b><span>${first}</span><span>${start}</span>${office}<span>Pay ends when your last call is marked Done.</span></div>`;
@@ -39545,7 +39550,7 @@ async function openPayrollPerson(user, day) {
         for (const z of wd) { const x = z.x, day = new Date(z.d + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
           if (!x || !(x.n || x.blocks?.length)) { add([day, "No calls", "", "", "", "", "", null], "none"); continue; }
           const items = [];
-          if (x.pickup) items.push([x.start, ["Pick up equipment" + (x.pickup.approved ? " (approved)" : ""), x.pickup.why || "", "", "", T(x.start), T(x.start + x.pickup.min * 60000), H(x.pickup.min * 60000)], "pick"]);
+          if (x.pickup) items.push([x.start, [(x.pickup.truck ? "Pick up the truck at the office" : "Pick up equipment") + (x.pickup.approved ? " (approved)" : ""), x.pickup.why || "", "", "", T(x.start), T(x.start + x.pickup.min * 60000), H(x.pickup.min * 60000)], "pick"]);
           for (const c of x.rows) { if (c.canceled && !c.arrived) { items.push([ts(c.on_way) ?? Infinity, ["Cancelled", c.customer || "", c.address || "", c.job_number || "", "", "", null], "cx"]); continue; }
             if (c.drive != null) items.push([ts(c.on_way), ["Drive", c.customer || "", c.address || "", c.job_number || "", T(c.on_way), T(c.arrived), H(c.drive)], "drive"]);
             items.push([ts(c.arrived) ?? ts(c.on_way), [(c.kind || "Call") + (c.auto ? " (not closed: auto pay rule, " + c.auto + " h)" : ""), c.customer || "", c.address || "", c.job_number || "", T(c.arrived), c.done ? T(c.done) : "not marked Done", H(c.onCall)], "call"]); }
@@ -39609,7 +39614,7 @@ async function loadEmpPhotos(force) {
   return EMP_PHOTOS;
 }
 const empPhoto = (id, cls) => id && EMP_PHOTOS?.get(Number(id)) ? `<img class="${cls || "emp-photo"}" alt="" src="${EMP_PHOTOS.get(Number(id))}">` : "";
-let STAFF_STARTED = new Map(), STAFF_TITLE = new Map();
+let STAFF_STARTED = new Map(), STAFF_TITLE = new Map(), STAFF_TRUCK = new Set();   // STAFF_TRUCK: people who pick their truck up at the office in the morning
 let STAFF_PENDING = [], STAFF_RESETS = [], STAFF_LOGINS = null, STAFF_PBCATS = new Map(), STAFF_BOOK = new Map(), STAFF_POS = null, STAFF_POSCOL = true;
 const STAFF_OPEN = new Set(); let STAFF_POS_EDIT = null;
 // Staff page: limit a person's price book to the categories ticked (none ticked = all)
@@ -39777,6 +39782,7 @@ function renderStaff(users, perms, note) {
                   ${BOOK.techs.map(t => `<option value="${t.id}" ${t.id === u.employee_id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>` : ""}
                 <label title="Used for the HSG Pro messages, and for Years with REID on the picture a customer gets by text when this tech is on the way">Started working here<input type="date" data-staff-started value="${esc(STAFF_STARTED.get(u.id) || "")}" max="${ymd(new Date())}" ${highLocked ? "disabled" : ""}></label>
                 <label title="It is written beside the tech's picture in the text a customer gets when the tech is on the way">On the customer's text, this person is a<select data-staff-title ${highLocked ? "disabled" : ""}><option value="">Not shown</option>${["Lead Technician", "Service Technician"].map(t => `<option ${STAFF_TITLE.get(u.id) === t ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+                <label class="staff-truck" title="Ticked: he picks his truck up at the office in the morning, so his pay starts 30 minutes before his first call, every day. Not ticked: he takes his truck home, so pay starts when he presses On my way."><input type="checkbox" data-staff-truck ${STAFF_TRUCK.has(u.id) ? "checked" : ""} ${highLocked ? "disabled" : ""}> Picks up his truck at the office in the morning (paid 30 minutes before his first call). Not ticked = he takes his truck home.</label>
                 ${(PB.books || []).length ? `<label>Price book<select data-staff-book><option value="">Normal</option>${PB.books.map(b => `<option value="${b.id}" ${STAFF_BOOK.get(u.id) === b.id ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>` : ""}
                 <div><span class="cl-label">Price book categories</span><div>${u.role === "owner" ? `<span class="quiet">All</span>` : `<button class="link" type="button" data-pbcats="${u.id}">${(STAFF_PBCATS.get(u.id) || []).length ? `${STAFF_PBCATS.get(u.id).length} picked` : "All"}</button>`}</div></div>
                 ${u.role === "sales" ? `<div class="st-sf-wrap"><span class="cl-label">Sales call for</span><div class="st-sf" data-sf-user="${u.id}">Loading…</div></div>` : ""}
@@ -39895,6 +39901,12 @@ function renderStaff(users, perms, note) {
       if (error) { m.textContent = "Not saved: " + rpcErr(error); e.target.value = STAFF_TITLE.get(id) || ""; return; }
       if (v) STAFF_TITLE.set(id, v); else STAFF_TITLE.delete(id);
       m.textContent = v ? `Saved: the customer's text will say ${tr.dataset.first || tr.dataset.email} is a ${v}.` : "Saved: no title on the customer's text."; });
+    tr.querySelector("[data-staff-truck]")?.addEventListener("change", async e => {
+      const on = e.target.checked, { error } = await db.rpc("staff_truck_set", { p_user: id, p_office: on });
+      const m = $("#staff-msg"); m.className = "staff-msg " + (error ? "err" : "ok"), who = tr.dataset.first || tr.dataset.email;
+      if (error) { m.textContent = "Not saved: " + rpcErr(error); e.target.checked = !on; return; }
+      if (on) STAFF_TRUCK.add(id); else STAFF_TRUCK.delete(id);
+      m.textContent = on ? `Saved: ${who} picks up his truck at the office. His pay starts 30 minutes before his first call each day.` : `Saved: ${who} takes his truck home. No pick up time is added.`; });
     tr.querySelector("[data-staff-book]")?.addEventListener("change", async e => {
       const v = e.target.value, { error } = await db.rpc("set_user_price_book", { p_user: id, p_book: v ? Number(v) : null });
       const m = $("#staff-msg"); m.className = "staff-msg " + (error ? "err" : "ok");
