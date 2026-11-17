@@ -2402,6 +2402,7 @@
   .pr-ln-start, .pr-ln-end { background: color-mix(in srgb, #2563eb 8%, var(--card, #fff)); border-color: color-mix(in srgb, #2563eb 35%, var(--line, #d0d7de)); }
   .way-place { display: inline-block; padding: 3px 9px; border: 1.5px solid #bcd0e3; border-radius: 8px; background: linear-gradient(180deg, #ffffff, #eef4fa); color: #23415f; font-weight: 700; font-size: 12.5px; text-decoration: none; white-space: normal; }
   .way-place:hover { border-color: #23415f; background: #e3eefa; }
+  .way-place.way-far { border-color: #e0a45a; background: #fff4e3; color: #8a4b00; }   /* a start or end stamp that is not at the customer's address */
   .pr-ln.pr-ln-place, .pr-tech .pr-ln.pr-ln-place { display: block; background: none; border: 0; padding: 0 0 2px; white-space: normal; }
   .pr-ln-place .way-place { font-size: 11px; padding: 1px 6px; }
   .pr-ln-dr { background: #fdf0d9; border-color: #f0c27a; color: #7c2d12; } .pr-ln-dr > span { color: #9a4a12; }
@@ -18315,15 +18316,19 @@ function mcWayCardDraw(img, c) {
   return cv.toDataURL("image/jpeg", .86).split(",")[1];
 }
 // where the tech was when On my way was pressed (Carlo, Nov 17, 2026): the words and a map link for a saved spot
-function wayPlace(p) {
+// Carlo, Nov 17, 2026, 4:11 p.m.: the stamps for the start and the end of a call are measured from the call's own address (to = { lat, lng }); On my way from the office
+function wayPlace(p, to) {
   if (!p || p.lat == null || p.lng == null) return null;
-  const R = 6371, r = x => x * Math.PI / 180, dLa = r(p.lat - IE_OFFICE.lat), dLo = r(p.lng - IE_OFFICE.lng),
-    a = Math.sin(dLa / 2) ** 2 + Math.cos(r(IE_OFFICE.lat)) * Math.cos(r(p.lat)) * Math.sin(dLo / 2) ** 2, km = 2 * R * Math.asin(Math.sqrt(a));
-  const words = km <= 0.3 ? "at the office" : km < 1 ? Math.round(km * 1000 / 50) * 50 + " m from the office" : (km < 10 ? km.toFixed(1) : Math.round(km)) + " km from the office";
-  return { km, words, url: `https://www.google.com/maps?q=${Number(p.lat).toFixed(6)},${Number(p.lng).toFixed(6)}`, rough: p.acc != null && Number(p.acc) > 500 };
+  const cust = !!(to && to.lat != null && to.lng != null && isFinite(Number(to.lat)) && isFinite(Number(to.lng))), O = cust ? { lat: Number(to.lat), lng: Number(to.lng) } : IE_OFFICE, nm = cust ? "the customer's address" : "the office";
+  const R = 6371, r = x => x * Math.PI / 180, dLa = r(p.lat - O.lat), dLo = r(p.lng - O.lng),
+    a = Math.sin(dLa / 2) ** 2 + Math.cos(r(O.lat)) * Math.cos(r(p.lat)) * Math.sin(dLo / 2) ** 2, km = 2 * R * Math.asin(Math.sqrt(a));
+  const words = km <= 0.3 ? "at " + nm : km < 1 ? Math.round(km * 1000 / 50) * 50 + " m from " + nm : (km < 10 ? km.toFixed(1) : Math.round(km)) + " km from " + nm;
+  return { km, words, cust, far: cust && km > 0.5, url: `https://www.google.com/maps?q=${Number(p.lat).toFixed(6)},${Number(p.lng).toFixed(6)}`, rough: p.acc != null && Number(p.acc) > 500 };
 }
-const wayPlaceTag = (p, lead) => { const w = wayPlace(p); if (!w) return "";
-  return `<a class="way-place" href="${w.url}" target="_blank" rel="noopener" title="Where the phone was when On my way was pressed${p.by ? " by " + esc(p.by) : ""}${w.rough ? ". The phone only knew its place roughly." : ""}. Click to see it on the map.">📍 ${lead || ""}${w.words}${w.rough ? " (rough)" : ""} · map ›</a>`; };
+const wayPlaceTag = (p, lead, to, what) => { const w = wayPlace(p, to); if (!w) return "";
+  return `<a class="way-place${w.far ? " way-far" : ""}" href="${w.url}" target="_blank" rel="noopener" title="Where the phone was when ${what || "On my way was pressed"}${p.by ? " by " + esc(p.by) : ""}${w.far ? ". That is not at the customer's address." : ""}${w.rough ? ". The phone only knew its place roughly." : ""}. Click to see it on the map.">📍 ${lead || ""}${w.words}${w.rough ? " (rough)" : ""} · map ›</a>`; };
+// a location stamp for the start (I'm here) or the end (Done, Needs another visit, walk completed) of a call. It is saved behind the button, so the tech does not wait for it.
+function mcStamp(id, kind) { try { mcWhere().then(at => { if (at) return db.rpc("call_place_set", { p_visit: id, p_kind: kind, p_lat: at.lat, p_lng: at.lng, p_acc: at.acc != null ? Math.round(at.acc) : null }); }).catch(() => {}); } catch { } }
 async function mcWayCard(id) {
   try { const { data: c } = await db.rpc("on_way_card_info", { p_visit: id }); if (!c?.image) return null;
     const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = `data:${c.mime || "image/jpeg"};base64,${c.image}`; });
@@ -18369,6 +18374,7 @@ async function mcSet(card, id, status, note) {
   if (status === "en_route") { m.textContent = "Telling the customer you are on the way…"; const at = await mcWhere();   // the spot is kept, so the office can see where On my way was pressed
     if (at) { try { await db.rpc("on_way_place_set", { p_visit: id, p_lat: at.lat, p_lng: at.lng, p_acc: at.acc != null ? Math.round(at.acc) : null }); } catch { } }
     MC.said = await mcOnWayText(id, at); if (!at) MC.said = (MC.said ? MC.said + " " : "") + "This phone did not say where it is, so the place where you pressed On my way was not saved."; m.textContent = "Saving…"; }
+  if (status === "on_site") mcStamp(id, "start"); else if (status === "completed" || status === "needs_return") mcStamp(id, "end");
   const { error } = await db.rpc("set_call_status", { p_visit_id: id, p_status: status, p_note: note });
   if (error) { card.querySelectorAll("button").forEach(b => b.disabled = false); m.className = "mc-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
   if (status === "completed" || status === "needs_return") MC.open = null;
@@ -29665,6 +29671,7 @@ function ieWalkWire() {
   if (pad) sigPad(pad, png => { W.png = png; W.signer = $("#ie-walk-signer")?.value || W.signer; renderInvoiceEditor(); });
   $("#ie-walk-finish")?.addEventListener("click", async e => {
     const b = e.currentTarget, m = $("#ie-walk-msg"); b.disabled = true; m.className = "ie-walk-msg"; m.textContent = "Saving…";
+    if (!W.remote) mcStamp(W.visit, "end");   // the end stamp of the call (not when the office is remoted in: that would be the office's own place)
     const { error } = await db.rpc("walk_complete", { p_visit_id: W.visit, p_notes: (W.notes || "").trim() || null, p_signer: W.signer || null, p_png: W.png || null });
     if (error) { b.disabled = false; m.className = "ie-walk-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
     WALK = null; MC.open = null; MC.sig = null; MC.said = "✓ The walk is done. The office will book the install date.";
@@ -39345,7 +39352,9 @@ async function prTechCalc(user, p) {
   const { data, error } = await db.rpc("payroll_tech_period", { p_user: user, p_from: p.from, p_to: p.to });
   if (error || !data) return { data, error };
   { const ids = [...new Set((data.calls || []).map(c => Number(c.visit)).filter(Boolean))];   // where On my way was pressed, for the calls pressed in our app
-    if (ids.length) { try { const pl = await db.rpc("on_way_places_for", { p_visits: ids }); const m = new Map((pl.error ? [] : pl.data || []).map(x => [Number(x.visit_id), x])); for (const c of data.calls) if (m.has(Number(c.visit))) c.place = m.get(Number(c.visit)); } catch { } } }
+    if (ids.length) { try { let pl = await db.rpc("call_places_for", { p_visits: ids }); if (pl.error) pl = await db.rpc("on_way_places_for", { p_visits: ids });
+      const m = new Map(); for (const x of (pl.error ? [] : pl.data || [])) m.set(Number(x.visit_id) + ":" + (x.kind || "way"), x);
+      for (const c of data.calls) { const v = Number(c.visit), g = k => m.get(v + ":" + k); if (g("way")) c.place = g("way"); if (g("start")) c.placeStart = g("start"); if (g("end")) c.placeEnd = g("end"); } } catch { } } }
   // Carlo, Nov 17, 2026: the auto pay rule. A call the tech arrived at and did not close (Done) by midnight of its day closes itself for pay:
   // an install is paid 5 hours from Arrived, any other call (service, maintenance…) 1 hour. Only the pay math: the call itself stays open, and
   // once the tech closes it the real time shows. c.auto = the hours given.
@@ -39591,6 +39600,9 @@ async function openPayrollPerson(user, day) {
         ${c.address ? `<span class="pr-jb-addr">${esc(c.address)}</span>` : ""}
         <span class="pr-jb-io"><span>Time in</span><b>${c.arrived ? tm(c.arrived) : "—"}</b></span>
         <span class="pr-jb-io"><span>Time out</span><b class="${c.done && !c.auto ? "" : "pr-jb-miss"}">${o}</b></span>${c.auto ? `<span class="pr-jb-autosay">⚠ Not closed. Auto pay rule: ${c.auto} hour${c.auto === 1 ? "" : "s"}.</span>` : ""}</button>`);
+      { const toOf = p => ({ lat: p.to_lat, lng: p.to_lng });   // Carlo, Nov 17, 2026: a location stamp for the start and the end of the call
+        if (c.placeStart) out.push(`<div class="pr-ln pr-ln-place">${wayPlaceTag(c.placeStart, "Start: ", toOf(c.placeStart), "I'm here was pressed")}</div>`);
+        if (c.placeEnd) out.push(`<div class="pr-ln pr-ln-place">${wayPlaceTag(c.placeEnd, "End: ", toOf(c.placeEnd), "the call was closed")}</div>`); }
     }
     while (blocks.length) out.push(njHtml(blocks.shift()));
     out.push(`<div class="pr-ln pr-ln-end"><span>End time</span><b class="${lastDone ? "" : "pr-jb-miss"}">${lastDone ? tm(new Date(lastDone).toISOString()) : x.end ? tm(new Date(x.end).toISOString()) + "?" : "—"}</b></div>`);

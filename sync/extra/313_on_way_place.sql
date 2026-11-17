@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS public.on_way_places (
 CREATE INDEX IF NOT EXISTS on_way_places_visit ON public.on_way_places (visit_id, at DESC);
 ALTER TABLE public.on_way_places ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.on_way_places FROM PUBLIC, anon, authenticated;
+-- Nov 17, 2026, 4:11 p.m.: the same table also keeps where the call was started (I'm here) and ended (Done): kind = way | start | end (316_call_place_stamps.sql)
+ALTER TABLE public.on_way_places ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'way';
 
 -- save the spot: the tech on the call, or the office / dispatch / an owner pressing it for him
 CREATE OR REPLACE FUNCTION public.on_way_place_set(p_visit bigint, p_lat double precision, p_lng double precision, p_acc numeric DEFAULT NULL) RETURNS jsonb
@@ -29,7 +31,7 @@ CREATE OR REPLACE FUNCTION public.on_way_places_for(p_visits bigint[]) RETURNS j
  LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
   SELECT CASE WHEN public.current_staff_role() IS NULL THEN '[]'::jsonb ELSE coalesce((SELECT jsonb_agg(jsonb_build_object(
       'visit_id', x.visit_id, 'lat', x.lat, 'lng', x.lng, 'acc', x.acc, 'at', x.at, 'by', x.by_name)) FROM (
-    SELECT DISTINCT ON (p.visit_id) p.* FROM on_way_places p WHERE p.visit_id = ANY (p_visits)
+    SELECT DISTINCT ON (p.visit_id) p.* FROM on_way_places p WHERE p.visit_id = ANY (p_visits) AND p.kind = 'way'
        AND (public.current_staff_role() = 'owner' OR public.has_permission('calls.dispatch') OR p.by_user = public.current_app_user_id())
      ORDER BY p.visit_id, p.at DESC, p.id DESC) x), '[]'::jsonb) END $f$;
 
