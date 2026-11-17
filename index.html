@@ -2321,6 +2321,10 @@
   .pr-pu { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; margin: -1px 0 1px; } .pr-pu input { width: 52px; padding: 1px 4px; font-size: 11.5px; }
   .pr-pu .btn { padding: 1px 8px; font-size: 11px; min-height: 0; } .pr-pu .btn.done { color: #166534; border-color: #86d6a4; }
   .pr-ln-nj { background: #e0f2fe; border-color: #7dd3fc; color: #0c4a6e; white-space: normal !important; flex-wrap: wrap !important; } .pr-ln-nj > span { color: #075985; text-transform: none; font-size: 10.5px; letter-spacing: 0; }
+  .pr-jb.pr-jb-auto { animation: prAutoFlash 4s ease-in-out infinite; border-color: #d39a00 !important; } .pr-jb-autosay { display: block; flex-basis: 100%; width: 100%; grid-column: 1 / -1; margin-top: 3px; font-size: 10.5px; font-weight: 700; line-height: 1.25; color: #7a4b00; white-space: normal; text-align: left; }
+  @keyframes prAutoFlash { 0%, 100% { background-color: #fff7cf; box-shadow: 0 0 0 0 rgba(224, 160, 0, 0); } 50% { background-color: #ffd24a; box-shadow: 0 0 0 3px rgba(224, 160, 0, .45); } }
+  @media (prefers-reduced-motion: reduce) { .pr-jb.pr-jb-auto { animation: none; background-color: #ffe9a0; } }
+  .pr-closerule { margin-top: 6px; } .pr-closerule-on { border-width: 2px; }
   .pr-dt-note { display: block; margin: 4px 0 0; padding: 4px 6px; border: 1px solid #b6bfc9; border-radius: 5px; background: #eef1f4; color: #26323f; font-size: 11.5px; line-height: 1.25; text-align: left; white-space: normal; overflow-wrap: anywhere; } .pr-dt-note > b { display: block; } .pr-dt-note > i { display: block; font-style: normal; font-size: 10px; color: #4a5663; }
   .pr-ln-ev { background: #fef9c3; border-color: #facc15; color: #713f12; } .pr-ln-ev > span { color: #854d0e; } .pr-ln-ev.ok { background: #dcfce7; border-color: #86d6a4; color: #14532d; } .pr-ln-ev.ok > span { color: #166534; }
   .pr-ev-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; margin: -1px 0 1px; } .pr-ev-ctl .btn { padding: 1px 8px; font-size: 11px; min-height: 0; } .pr-pu-st.ok { color: #166534; }
@@ -39138,6 +39142,11 @@ async function prTechCalc(user, p) {
   if (error || !data) return { data, error };
   { const ids = [...new Set((data.calls || []).map(c => Number(c.visit)).filter(Boolean))];   // where On my way was pressed, for the calls pressed in our app
     if (ids.length) { try { const pl = await db.rpc("on_way_places_for", { p_visits: ids }); const m = new Map((pl.error ? [] : pl.data || []).map(x => [Number(x.visit_id), x])); for (const c of data.calls) if (m.has(Number(c.visit))) c.place = m.get(Number(c.visit)); } catch { } } }
+  // Carlo, Nov 17, 2026: the auto pay rule. A call the tech arrived at and did not close (Done) by midnight of its day closes itself for pay:
+  // an install is paid 5 hours from Arrived, any other call (service, maintenance…) 1 hour. Only the pay math: the call itself stays open, and
+  // once the tech closes it the real time shows. c.auto = the hours given.
+  { const t0 = salesToday(); for (const c of data.calls || []) if (c.arrived && !c.done && !c.canceled && String(c.day).slice(0, 10) < t0) {
+      c.auto = /install/i.test(c.kind || "") ? 5 : 1; c.done = new Date(Date.parse(c.arrived) + c.auto * 3600000).toISOString(); } }
   const byDay = new Map(); for (let d = p.from; d <= p.to; d = cvAddDays(d, 1)) byDay.set(d, []);
   for (const c of data.calls || []) if (byDay.has(c.day)) byDay.get(c.day).push(c);
   const days = [...byDay].map(([d, cs]) => ({ d, cs, x: cs.length ? prDay(cs) : null }));
@@ -39349,17 +39358,20 @@ async function openPayrollPerson(user, day) {
         ? `<div class="pr-ln pr-ln-dr" title="Driving ${tm(c.on_way)} – ${tm(c.arrived)}, ${prHrs(c.drive)}"><span>Drive</span><b>${rng(c.on_way, c.arrived)}</b><i>${short(c.drive)}</i></div>${c.place ? `<div class="pr-ln pr-ln-place">${wayPlaceTag(c.place, "On my way pressed ")}</div>` : ""}`
         : `<div class="pr-ln pr-ln-dr pr-ln-none"><span>Drive</span><b>not recorded</b></div>`);
       const notClosed = !c.done && !c.canceled && c.arrived && (d !== today || Date.now() - Date.parse(c.arrived) > 10 * 3600000);
-      const o = c.done ? tm(c.done) : notClosed ? "⚠️ not closed" : (d === today ? "still there" : "not marked Done");
-      out.push(`<button type="button" class="pr-jb ${kindCls(c.kind)}${notClosed ? " pr-jb-open" : ""}" data-pr-open="${d}" title="${esc(c.kind)}${c.job_number ? " · Job " + esc(c.job_number) : ""}${c.address ? " · " + esc(c.address) : ""}">
+      const o = c.auto ? tm(c.done) + " (auto)" : c.done ? tm(c.done) : notClosed ? "⚠️ not closed" : (d === today ? "still there" : "not marked Done");
+      out.push(`<button type="button" class="pr-jb ${kindCls(c.kind)}${notClosed ? " pr-jb-open" : ""}${c.auto ? " pr-jb-auto" : ""}" data-pr-open="${d}" title="${esc(c.kind)}${c.job_number ? " · Job " + esc(c.job_number) : ""}${c.address ? " · " + esc(c.address) : ""}">
         <span class="pr-jb-who"><span class="pr-kind ${kindCls(c.kind)}">${esc(c.kind)}</span> ${esc(c.customer || "")}</span>
         ${c.address ? `<span class="pr-jb-addr">${esc(c.address)}</span>` : ""}
         <span class="pr-jb-io"><span>Time in</span><b>${c.arrived ? tm(c.arrived) : "—"}</b></span>
-        <span class="pr-jb-io"><span>Time out</span><b class="${c.done ? "" : "pr-jb-miss"}">${o}</b></span></button>`);
+        <span class="pr-jb-io"><span>Time out</span><b class="${c.done && !c.auto ? "" : "pr-jb-miss"}">${o}</b></span>${c.auto ? `<span class="pr-jb-autosay">⚠ Not closed. Auto pay rule: ${c.auto} hour${c.auto === 1 ? "" : "s"}.</span>` : ""}</button>`);
     }
     while (blocks.length) out.push(njHtml(blocks.shift()));
     out.push(`<div class="pr-ln pr-ln-end"><span>End time</span><b class="${lastDone ? "" : "pr-jb-miss"}">${lastDone ? tm(new Date(lastDone).toISOString()) : x.end ? tm(new Date(x.end).toISOString()) + "?" : "—"}</b></div>`);
     return `<div class="pr-jobs">${out.join("")}</div>`;
   };
+  // Carlo, Nov 17, 2026: a yellow box at the bottom of each day: close your calls, or the auto pay rule applies
+  const closeRule = ({ x }) => { if (!x || !x.n) return ""; const n = x.rows.filter(c => c.auto).length;
+    return `<div class="pr-payrule pr-closerule${n ? " pr-closerule-on" : ""}"><b class="pr-payrule-h">Close your calls</b>${n ? `<span><b>⚠ ${n === 1 ? "1 call" : n + " calls"} on this day ${n === 1 ? "was" : "were"} not closed.</b> The flashing call above is paid by the auto pay rule for now.</span>` : ""}<span>If you have not closed your call by <b>midnight</b> of that day, it closes itself and the <b>auto pay rule</b> applies:</span><span>An install: <b>5 hours</b>.</span><span>A service or maintenance call: <b>1 hour</b>.</span><span>Once you close your call, your proper pay will appear.</span></div>`; };
   // Carlo, Nov 17, 2026: a yellow box under each day's square that says how that day is paid (first call an install, or a maintenance / other call)
   const payRule = ({ d, x }) => {
     if (!x || !x.n || x.start == null) return "";
@@ -39379,7 +39391,7 @@ async function openPayrollPerson(user, day) {
     const tot = (x.onCall || 0) + (x.offCall || 0), pin = tot ? Math.round(100 * (x.onCall || 0) / tot) : 0;
     const tm = v => prTime(v).replace(/\s*a\.m\./, " am").replace(/\s*p\.m\./, " pm");
     return `<button type="button" class="pr-dt${PR.day === d ? " on" : ""}${d === today ? " pr-dt-today" : ""}" data-pr-day="${d}" aria-pressed="${PR.day === d}" title="Open the day hour by hour">
-      <span class="pr-dt-top"><span class="pr-dt-wd">${wd}</span><span class="pr-dt-md">${md}</span>${x.open ? `<span class="pr-open-ic" title="${d === today ? "Still on a call" : "A call was never marked Done"}">⚠</span>` : ""}<b class="pr-dt-len">${prHrs(x.span)}</b></span>
+      <span class="pr-dt-top"><span class="pr-dt-wd">${wd}</span><span class="pr-dt-md">${md}</span>${x.open || x.rows.some(c => c.auto) ? `<span class="pr-open-ic" title="${x.open && d === today ? "Still on a call" : "A call was not closed. The auto pay rule applies until it is closed."}">⚠</span>` : ""}<b class="pr-dt-len">${prHrs(x.span)}</b></span>
       <span class="pr-dt-bar" title="On calls ${prHrs(x.onCall)} · Off calls ${prHrs(x.offCall)}"><i style="width:${pin}%"></i></span>
       <span class="pr-dt-sum"><span class="pr-in">Start Time <b>${x.start ? tm(new Date(x.start).toISOString()) : "—"}</b></span><span class="pr-in">End Time <b>${x.end && !x.open ? tm(new Date(x.end).toISOString()) : x.open ? (d === today ? "on a call" : "not done") : "—"}</b></span><span class="pr-out">Total Driving <b>${prHrs(x.rows.filter(c => !(c.canceled && !c.arrived)).reduce((t, c) => t + (c.drive || 0), 0))}</b></span><span>Total Calls <b>${x.n}</b></span></span>
 </button>`;
@@ -39445,7 +39457,7 @@ async function openPayrollPerson(user, day) {
     ${ME.role === "owner" ? `<section class="pr-appr" id="pr-appr" data-ap-u="${user}" data-ap-from="${p.from}" hidden></section>` : ""}
     ${[0, 1].map(w => { const wd = days.slice(w * 7, w * 7 + 7); return `<section class="pr-week" data-w="${w + 1}"><h3 class="pr-wkh">Week ${w + 1} <span>${fmtDate(wd[0].d)} – ${fmtDate(wd[wd.length - 1].d)}</span></h3>
       <div class="pr-week-in"><div class="pr-wk"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
-      <div class="pr-dts">${wd.map(z => `<div class="pr-col" data-d="${z.d}">${dayTile(z)}${dayNote(z)}${payRule(z)}<div class="pr-ap-chip" data-ap-chip="${z.d}"></div>${dayJobs(z)}${z.d <= today ? `<button type="button" class="btn pr-ev-add" data-ev-add="${z.d}">+ Add an event</button>` : ""}</div>`).join("")}</div></div></section>`; }).join("")}
+      <div class="pr-dts">${wd.map(z => `<div class="pr-col" data-d="${z.d}">${dayTile(z)}${dayNote(z)}${payRule(z)}<div class="pr-ap-chip" data-ap-chip="${z.d}"></div>${dayJobs(z)}${closeRule(z)}${z.d <= today ? `<button type="button" class="btn pr-ev-add" data-ev-add="${z.d}">+ Add an event</button>` : ""}</div>`).join("")}</div></div></section>`; }).join("")}
     <div id="pr-dv-box">${PR.day && days.some(z => z.d === PR.day) ? dayView(PR.day) : ""}</div>
     <p class="muted pr-note">First call start is when he went <i>On the way</i> to his first call (or arrived, if that wasn't pressed). Last call end is when he pressed <i>Done</i> on his last call. Click a day to see it hour by hour.</p>
   </article>`;
@@ -39536,7 +39548,7 @@ async function openPayrollPerson(user, day) {
           if (x.pickup) items.push([x.start, ["Pick up equipment" + (x.pickup.approved ? " (approved)" : ""), x.pickup.why || "", "", "", T(x.start), T(x.start + x.pickup.min * 60000), H(x.pickup.min * 60000)], "pick"]);
           for (const c of x.rows) { if (c.canceled && !c.arrived) { items.push([ts(c.on_way) ?? Infinity, ["Cancelled", c.customer || "", c.address || "", c.job_number || "", "", "", null], "cx"]); continue; }
             if (c.drive != null) items.push([ts(c.on_way), ["Drive", c.customer || "", c.address || "", c.job_number || "", T(c.on_way), T(c.arrived), H(c.drive)], "drive"]);
-            items.push([ts(c.arrived) ?? ts(c.on_way), [c.kind || "Call", c.customer || "", c.address || "", c.job_number || "", T(c.arrived), c.done ? T(c.done) : "not marked Done", H(c.onCall)], "call"]); }
+            items.push([ts(c.arrived) ?? ts(c.on_way), [(c.kind || "Call") + (c.auto ? " (not closed: auto pay rule, " + c.auto + " h)" : ""), c.customer || "", c.address || "", c.job_number || "", T(c.arrived), c.done ? T(c.done) : "not marked Done", H(c.onCall)], "call"]); }
           for (const b of x.blocks || []) items.push([b.a, [(b.note ? "Note from the dispatch board (not paid time)" : b.ev ? "Event" + (b.ev.approved ? " (approved)" : " (waiting for approval, not paid)") : "Schedule event" + (b.paid ? " (paid)" : b.wait ? " (waiting for approval, not paid)" : " (not paid)")), b.name, "", "", T(b.a), T(b.b), b.paid ? H(b.b - b.a) : null], b.paid ? (b.ev ? "ev" : "nj") : "cx"]);
           items.sort((a, b) => a[0] - b[0]).forEach(([, r, k], n) => add([n === 0 ? day : "", ...r], k));
           const drive = x.rows.filter(c => !(c.canceled && !c.arrived)).reduce((t, c) => t + (c.drive || 0), 0);
