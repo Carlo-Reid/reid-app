@@ -127,11 +127,18 @@ Deno.serve(async (req) => {
     const fail = async (m: string) => { await admin.rpc("_acceptpay_note", { p: { env, error: m, ...(isCron ? { auto_ran: true } : {}) } }); return json({ error: "acceptpay", message: m }); };
     const up = await updates(env, token, since);
     if (up.error) return await fail(up.error);
+    // THE DATE CHECK (Carlo, Nov 18, 2026): AcceptPay's list of changes can name very old transactions (a 2015 return). One is only
+    // brought in when the bank's answer day (ResponseDate, else ProcessDate) is on or after the look-from day, less one day of slack.
+    const cut = iso(new Date(new Date(since + "T12:00:00Z").getTime() - 864e5)); let old = 0;
+    const isoDay = (v: unknown) => { const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(v ?? "")); return m ? m[1] : ""; };
+    const tooOld = (t: Rec) => { const d = isoDay(t.ResponseDate) || isoDay(t.ProcessDate); return !!d && d < cut; };
+    const oldSay = () => old ? ` ${old} old one${old === 1 ? " was" : "s were"} left out (the bank answered ${old === 1 ? "it" : "them"} before ${cut}).` : "";
+    const done = async (note: string) => { let r = await admin.rpc("_acceptpay_done", { p_since: today, p_note: note }); if (r.error) r = await admin.rpc("_acceptpay_done", { p_since: today, p_note: note }); return !r.error; };
     // only transactions the bank has answered (approved, NSF, closed...). Pending ones come later, when they are answered.
-    const answered = up.list.filter(x => x && x.Id != null && txt(x.Response) && txt(x.Response).toUpperCase() !== "PD");
+    const answered = up.list.filter(x => x && x.Id != null && txt(x.Response) && txt(x.Response).toUpperCase() !== "PD" && !(tooOld(x) && ++old));
     const fresh = ((await admin.rpc("_acceptpay_new", { p: answered.map(x => ({ Id: String(x.Id), Response: txt(x.Response), Status: txt(x.Status) })) })).data ?? []) as number[];
-    if (!fresh.length) { await admin.rpc("_acceptpay_done", { p_since: today, p_note: `Looked from ${since}: ${up.list.length} changes at AcceptPay, nothing new to bring in.` }); if (isCron) await admin.rpc("_acceptpay_note", { p: { auto_ran: true } });
-      return json({ ok: true, env, since, seen: up.list.length, added: 0, more: false }); }
+    if (!fresh.length) { await done(`Looked from ${since}: ${up.list.length} changes at AcceptPay, nothing new to bring in.` + oldSay()); if (isCron) await admin.rpc("_acceptpay_note", { p: { auto_ran: true } });
+      return json({ ok: true, env, since, seen: up.list.length, added: 0, more: false, old }); }
 
     // names (the report has First Name and Last Name; a transaction only has the customer's AcceptPay number) and the answers' words
     const [cu, en] = await Promise.all([get(env, token, "/eft/customers", 45000), get(env, token, "/eft/enumerations/response")]);
@@ -146,6 +153,7 @@ Deno.serve(async (req) => {
       if (!d.ok || !t || t.Id == null) { bad++; continue; }
       const code = txt(t.Response, 10), nm = names.get(String(t.CustomerId ?? "")) ?? ["", ""];
       if (!code || code.toUpperCase() === "PD") continue;
+      if (tooOld(t)) { old++; continue; }
       rows.push({ id, response: code, status: txt(t.Status, 10), row: [id, day(t.ProcessDate), day(t.ResponseDate), txt(t.TransactionType, 10), nm[0], nm[1],
         code.toUpperCase() === "AA" ? "Approved" : (words[code] ?? code), t.Amount == null ? "" : Number(t.Amount).toFixed(2), code.toUpperCase() === "AA" ? "AA" : "", txt(t.Reference, 100)] });
     } };
@@ -154,9 +162,9 @@ Deno.serve(async (req) => {
     if (rows.length) { const r = await admin.rpc("_acceptpay_file_in", { p_rows: rows, p_since: since }); if (r.error) return await fail("The rows were read but could not be saved."); added = Number((r.data as Rec)?.added) || 0; inbox = ((r.data as Rec)?.inbox_id as number) ?? null; }
     const left = fresh.length - i + bad, more = left > 0 && rows.length > 0;
     if (!rows.length && bad) return await fail("AcceptPay listed changes but would not give their details. Nothing was brought in.");
-    if (!more) await admin.rpc("_acceptpay_done", { p_since: today, p_note: `Looked from ${since}: ${added} transaction${added === 1 ? "" : "s"} brought in.` + (left > 0 ? ` ${left} could not be read; they are tried again next time.` : "") });
+    if (!more) await done(`Looked from ${since}: ${added} transaction${added === 1 ? "" : "s"} brought in.` + oldSay() + (left > 0 ? ` ${left} could not be read; they are tried again next time.` : ""));
     if (isCron) await admin.rpc("_acceptpay_note", { p: { auto_ran: true } });
-    return json({ ok: true, env, since, seen: up.list.length, added, more, left, inbox_id: inbox, no_names: !names.size });
+    return json({ ok: true, env, since, seen: up.list.length, added, more, left, old, inbox_id: inbox, no_names: !names.size });
   }
   return json({ error: "bad_request" }, 400);
 });
