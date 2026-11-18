@@ -45,23 +45,27 @@ Deno.serve(async (req) => {
   } else if (body.action !== "fetch" || !sec.auto) return json({ skipped: true });
   if (!sec.username || !sec.api_key) return json({ need_keys: true });
 
-  // sign in: AcceptPay gives a key that is good for 4 hours; one is asked for each time this runs
+  // sign in: AcceptPay gives a key that is good for 4 hours; one is asked for each time this runs. `token` is the whole Authorization value.
   const login = async (env: string): Promise<{ token?: string; error?: string; status?: number }> => {
     try {
       const r = await timed(HOSTS[env] + "/eft/User/Login", 20000, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
         body: new URLSearchParams({ Username: sec.username!, Password: sec.api_key! }).toString() });
       const j = await r.json().catch(() => ({})) as Rec;
-      if (r.ok && j.Success === true && j.Token) return { token: String(j.Token) };
-      return { status: r.status, error: r.ok ? "AcceptPay did not accept the username and key." : "AcceptPay said no (" + r.status + ")." };
+      if (r.ok && j.Success === true && j.Token) return { token: "Bearer " + String(j.Token) };
+      // the guide says the API also takes the username and key directly ("basic"): try that before giving up
+      const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(sec.username + ":" + sec.api_key)));
+      const b = await timed(HOSTS[env] + "/eft/Account", 20000, { headers: { Authorization: "Basic " + b64, Accept: "application/json" } });
+      if (b.ok) return { token: "Basic " + b64 };
+      return { status: r.status, error: "AcceptPay did not accept the username and key (sign-in answered " + r.status + ", the direct way answered " + b.status + ")." };
     } catch { return { error: "AcceptPay did not answer." }; }
   };
   const signIn = async (): Promise<{ env?: string; token?: string; error?: string; tried?: string[] }> => {
     const order = sec.env === "test" ? ["test", "live"] : ["live", "test"], tried: string[] = []; let last = "";
-    for (const env of order) { const t = await login(env); if (t.token) return { env, token: t.token }; tried.push(env + ": " + t.error); last = t.error ?? ""; }
+    for (const env of order) { const t = await login(env); if (t.token) return { env, token: t.token }; tried.push((env === "live" ? "live system" : "test system") + ": " + t.error); last = "AcceptPay did not accept the username and key."; }
     return { error: last || "AcceptPay did not answer.", tried };
   };
   const get = async (env: string, token: string, path: string, ms = 20000): Promise<{ ok: boolean; status: number; data: unknown }> => {
-    try { const r = await timed(HOSTS[env] + path, ms, { headers: { Authorization: "Bearer " + token, Accept: "application/json" } });
+    try { const r = await timed(HOSTS[env] + path, ms, { headers: { Authorization: token, Accept: "application/json" } });
       return { ok: r.ok, status: r.status, data: await r.json().catch(() => null) }; } catch { return { ok: false, status: 0, data: null }; }
   };
   const keysOf = (o: unknown) => o && typeof o === "object" ? Object.keys(o as Rec).slice(0, 40) : [];
