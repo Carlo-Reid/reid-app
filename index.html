@@ -8025,6 +8025,11 @@ html body #main article.ie .seg > button[aria-pressed="true"] { background: #dce
 .ie .ie-todo ol { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
 .ie .ie-todo li button { font: inherit; cursor: pointer; width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 4px 10px; align-items: center; text-align: left; padding: 10px 12px; color: #23415f; background: #fff; border: 1.5px solid #bcd0e3; border-radius: 12px; }
 .ie .ie-todo li button:hover { border-color: #23415f; }
+/* Show me where: under the line of the step to do next (Carlo, Nov 18, 2026: moved here from the dark blue bar) */
+.ie .ie-todo li.ie-todo-next > button:first-child { border: 2px solid #23415f; }
+.ie .ie-todo li button.ie-todo-go { display: block; width: 100%; margin-top: 6px; padding: 9px 12px; text-align: center; font-size: 14.5px; font-weight: 700; color: #23415f; background: #dbe8f4; border: 2px solid #23415f; border-radius: 10px; }
+.ie .ie-todo li button.ie-todo-go:hover { background: #c9dcee; }
+@media print { .ie .ie-todo-go { display: none; } }
 .ie .ie-todo-n { grid-row: 1 / 3; width: 30px; height: 30px; display: grid; place-items: center; font-weight: 800; color: #fff; background: #23415f; border-radius: 8px; }
 .ie .ie-todo-w { font-size: 14.5px; font-weight: 600; line-height: 1.3; } .ie .ie-todo-t { font-size: 13px; font-weight: 800; justify-self: start; padding: 2px 9px; border-radius: 8px; }
 .ie .ie-todo li.ok button { background: #f1f9f3; border-color: #a9d6b7; } .ie .ie-todo li.ok .ie-todo-n { background: #1f9d4a; } .ie .ie-todo li.ok .ie-todo-t { color: #1b6b36; background: #dff1e4; }
@@ -29583,8 +29588,18 @@ function ieNextHtml(I, o) {
   const rows = ieTodoRows(I, o), i = rows.findIndex(r => !r[0] && r[4] !== "notes" && !(r[4] === "tanksup" && IE.supOk));
   if (i < 0) return `<div class="ie-next ie-next-ok" role="status"><span class="ie-next-k">What to do next</span><b>Nothing. Everything is done. ✔</b><small>You can press Close.</small></div>`;
   const r = rows[i], wait = r[4] === "pay" && o.ppay, tip = (IE_NEXT_TIPS[r[4]] || (() => ""))(o);
-  return `<div class="ie-next ${wait ? "ie-next-ok" : ""}" role="status"><span class="ie-next-k">What to do next</span><b>${wait ? "" : `Step ${i + 1}: `}${esc(wait ? "Nothing. We are waiting for " + o.ppay + " to pay us." : r[1])}</b><small>${esc(tip)}</small>${wait ? "" : `<button type="button" data-ie-go="${r[2]}">Show me where ›</button>`}</div>`;
+  return `<div class="ie-next ${wait ? "ie-next-ok" : ""}" role="status"><span class="ie-next-k">What to do next</span><b>${wait ? "" : `Step ${i + 1}: `}${esc(wait ? "Nothing. We are waiting for " + o.ppay + " to pay us." : r[1])}</b><small>${esc(tip)}</small></div>`;
 }
+// Carlo, Nov 18, 2026, 4:36 p.m.: "move the show me where button that is in section IV4 to Section IV5": the button is no longer on the dark blue bar (the main column);
+// it is in the right side bar's list, under the line of the step to do next. -1 = no button (nothing to do next, or we are only waiting to be paid)
+function ieNextIdx(I, o, rows) {
+  if (I.status === "void" || ME.role === "technician" && WALK && WALK.inv === I.id) return -1;
+  if (INSTALL_BOOK && INSTALL_BOOK.inv === I.id && ME.role !== "technician") return -1;
+  if (!I.can_edit || I.st_edit || I.from_st) return -1;
+  const i = rows.findIndex(r => !r[0] && r[4] !== "notes" && !(r[4] === "tanksup" && IE.supOk));
+  return i < 0 || rows[i][4] === "pay" && o.ppay ? -1 : i;
+}
+const ieGoBtn = k => `<button type="button" class="ie-todo-go" data-ie-go="${k}">Show me where ›</button>`;
 // The right side bar's list of what is done and what is still needed on this invoice (Carlo, Nov 13: "a list of what is done and what is still needed for the call. example 1 Add item from price book. Marked Done or Incomplete")
 const IE_SIDE = { tab: (() => { try { return localStorage.getItem("reid.ie.side") || "todo"; } catch { return "todo"; } })() };
 function ieTodoRows(I, o) {
@@ -29642,10 +29657,10 @@ function ieTodoHtml(I, o) {
   const rows = ieTodoRows(I, o), voided = I.status === "void";
   // Carlo, Nov 17, 2026 ("its better now fix the entire page"): a note is not required, so it reads Optional and is not counted as still to do; "Incomplete" reads "Not done yet"
   const opt = r => !r[0] && r[4] === "notes";
-  const left = rows.filter(r => !r[0] && !opt(r)).length;
+  const left = rows.filter(r => !r[0] && !opt(r)).length, nx = ieNextIdx(I, o, rows);
   return `<div class="ie-todo"><h2>What is done</h2>
     <p class="ie-todo-sum ${voided ? "" : left ? "no" : "ok"}">${voided ? "This invoice was cancelled." : left ? `${left} ${left === 1 ? "thing" : "things"} still to do.` : "Everything is done. ✔"}</p>
-    <ol>${rows.map((r, n) => `<li class="${r[0] ? "ok" : opt(r) ? "ie-opt" : "no"}"${r[4] ? ` data-ie-todo="${r[4]}"` : ""}><button type="button" data-ie-go="${r[2]}"><span class="ie-todo-n">${n + 1}</span><span class="ie-todo-w">${esc(r[1])}</span><span class="ie-todo-t">${r[0] ? "✔ Done" : opt(r) ? "Optional" : r[3] || "Not done yet"}</span></button></li>`).join("")}</ol>
+    <ol>${rows.map((r, n) => `<li class="${r[0] ? "ok" : opt(r) ? "ie-opt" : "no"}${n === nx ? " ie-todo-next" : ""}"${r[4] ? ` data-ie-todo="${r[4]}"` : ""}><button type="button" data-ie-go="${r[2]}"><span class="ie-todo-n">${n + 1}</span><span class="ie-todo-w">${esc(r[1])}</span><span class="ie-todo-t">${r[0] ? "✔ Done" : opt(r) ? "Optional" : r[3] || "Not done yet"}</span></button>${n === nx ? ieGoBtn(r[2]) : ""}</li>`).join("")}</ol>
     <p class="quiet">Click a line to go to that part of the page.</p></div>`;
 }
 document.addEventListener("click", e => {
@@ -29766,7 +29781,7 @@ const IE_HELP = { root: "article.ie", list: [
   ["#ie-technote", "Notes for the techs. Type what only our techs should know. The customer does not see it. Then press Save the note for the techs."],
   ["#ie-finish", "When everything is on the invoice, press Finish the invoice. Then the customer can sign.", ".ie-actions"],
   [".ie-docs", "The P.O. and the Credit Order are two documents here. Click the P.O. to open it. Click the Credit Order to see where the supplier's credit is."],
-  [".ie-next", "This dark blue bar always says the one thing to do next on this invoice. Press Show me where and the page goes to that part."],
+  [".ie-next", "This dark blue bar always says the one thing to do next on this invoice. The Show me where button is in the list on the right side, under that step. Press it and the page goes to that part."],
   [".ie-side", "On the right: the list of what is done and what is still to do on this invoice. Done is green. Not done yet is orange. A note is optional. Click a line to go to that part. People who see costs also have a Job costs tab here."],
   [".ie-topbar", "At the top: close the page, see or print the invoice, or open the customer. Everything is saved as you go."], [".ie-foot", "At the bottom, once the invoice is finished: email the invoice, close the page, see or print the invoice, or open the customer."] ] };
 // a partner's job (Vista): their rates and the tank answer from booking
@@ -29890,10 +29905,15 @@ function iePartsPoWire(I) {
 function ieTodoSync() {
   const li = document.querySelector('.ie-todo li[data-ie-todo="tanksup"]'), f = document.getElementById("ie-tpo-f"); if (!li) return;
   if (f) { const v = f.supplier.value, ok = !!v && v !== "all" && (v !== "other" || !!f.other.value.trim());
-    li.className = ok ? "ok" : "no"; const t = li.querySelector(".ie-todo-t"); if (t) t.textContent = ok ? "✔ Done" : "Not done yet"; IE.supOk = ok; }
+    li.classList.toggle("ok", ok); li.classList.toggle("no", !ok); const t = li.querySelector(".ie-todo-t"); if (t) t.textContent = ok ? "✔ Done" : "Not done yet"; IE.supOk = ok; }
   const sum = document.querySelector(".ie-todo-sum"), left = document.querySelectorAll(".ie-todo li.no").length;
   if (sum && !/cancelled/.test(sum.textContent) && !document.querySelector(".ie-todo-now")) { sum.textContent = left ? `${left} ${left === 1 ? "thing" : "things"} still to do.` : "Everything is done. ✔"; sum.className = "ie-todo-sum " + (left ? "no" : "ok"); }
   const nx = document.querySelector("article.ie .ie-next"); if (nx && IE && IE.todoO) nx.outerHTML = ieNextHtml(IE, IE.todoO);
+  // the Show me where button follows the step to do next
+  const ol = document.querySelector("article.ie .ie-todo:not(.ie-todo-now) ol");
+  if (ol && IE && IE.todoO) { const rows = ieTodoRows(IE, IE.todoO), i = ieNextIdx(IE, IE.todoO, rows);
+    ol.querySelectorAll(".ie-todo-go").forEach(b => b.remove()); ol.querySelectorAll("li.ie-todo-next").forEach(l => l.classList.remove("ie-todo-next"));
+    const l = i >= 0 ? ol.children[i] : null; if (l) { l.classList.add("ie-todo-next"); l.insertAdjacentHTML("beforeend", ieGoBtn(rows[i][2])); } }
 }
 function ieTankPoWire(I, reload) {
   const q = $("#ie-q"), T = I.tankpo;
