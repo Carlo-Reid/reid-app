@@ -8591,6 +8591,20 @@ article.ie .ie-grp .ie-notes2.ie-notes-in { margin-top: 12px; }
 @media (max-width: 700px) { .ppay-st-t { font-size: 11.5px; } .ppay-st-t :is(td, th) { padding: 5px 3px; overflow-wrap: anywhere; } .ppay-st-t th { font-size: 10.5px; } .ppay-st-t .num, .ppay-st-t .nw { white-space: normal; } .ppay-st-tot { min-width: 0; width: 100%; } }
 @media print { .ppay-st-bar { display: none; } }
 
+/* the connection to AcceptPay (Security page, PAP payments, Settings; Carlo, Nov 18) */
+#ppay-ap .ppay-ap-p { margin: 0 0 8px; padding: 0; font-size: 15.5px; line-height: 1.45; color: #1f2d3a; max-width: 860px; }
+:is(#ppay-ap, .ppay-ap-bar) .btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+.ppay-ap-in { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 4px 0 10px; }
+.ppay-ap-in label { display: grid; gap: 4px; font-weight: 700; color: #23415f; font-size: 15px; }
+.ppay-ap-in input { width: min(78vw, 340px); font-size: 16px; padding: 9px 10px; border: 1.5px solid #bcd0e3; border-radius: 8px; box-sizing: border-box; }
+.ppay-ap-hide { -webkit-text-security: disc; }
+.ppay-ap-btns { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin: 6px 0 10px; }
+.ppay-ap-since { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 14.5px; color: #23415f; font-weight: 650; }
+.ppay-ap-since input { font-size: 15px; padding: 6px 8px; border: 1.5px solid #bcd0e3; border-radius: 8px; }
+.ppay-ap-tick { display: flex; gap: 8px; align-items: flex-start; font-size: 15px; margin: 4px 0 8px; cursor: pointer; }
+.ppay-ap-tick input { width: 20px; height: 20px; margin: 1px 0 0; flex: none; }
+.ppay-ap-bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 0 0 12px; padding: 10px 12px; border-top: 2.5px solid #2563eb; }
+#ppay-ap .ppay-msg { margin: 0 0 10px; }
 /* copy buttons an owner put on a page (Carlo, Nov 12) */
 .cpy-pasted { outline: 3px solid #1f9d4a !important; outline-offset: 1px; transition: outline-color .3s; }
 /* Supplier invoices: the Rules box of a supplier (Carlo, Nov 18, 2026): what to pick up and where it is on their page */
@@ -27246,6 +27260,47 @@ async function ppayLoad() {
   const { data, error } = await db.rpc("pap_pay_home");
   if (error) { PPAY.off = /PGRST202|could not find|schema cache/i.test(error.message || "") ? "soon" : rpcErr(error); PPAY.data = null; return; }
   PPAY.off = null; PPAY.data = data || { plans: [], files: [], flags: [], missing: [] };
+  try { const a = await db.rpc("acceptpay_state"); PPAY.ap = a.error ? null : a.data; } catch { PPAY.ap = null; }   // null: the database part is not there yet, or no Security page
+}
+// ---- the connection to AcceptPay (read only; sync/extra/320_acceptpay.sql, Edge Function acceptpay) ----
+const ppayApWhen = t => { if (!t) return ""; const d = new Date(t); return isNaN(d) ? "" : d.toLocaleString("en-CA", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); };
+function ppayApHtml() {
+  const A = PPAY.ap; if (!A || !A.owner) return "";
+  const acc = A.account || {}, exp = acc.key_expires && Number(String(acc.key_expires).slice(0, 4)) < 2100 ? fmtDate(String(acc.key_expires).slice(0, 10)) : "";
+  const form = `<p class="ppay-ap-p">AcceptPay gave you a <b>username</b> and a <b>key</b> for their API. Type them here one time. They are kept in the app's locked vault. They are never shown again, and never put in an email, a chat or a file.</p>
+      <div class="ppay-ap-in"><label>Username <input type="text" id="ppay-ap-user" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <label>Key <input type="text" id="ppay-ap-key" class="ppay-ap-hide" autocomplete="off" autocapitalize="off" spellcheck="false"></label></div>
+      <div class="ppay-ap-btns"><button type="button" class="btn" id="ppay-ap-save">Save the username and key</button>${A.has_keys ? `<button type="button" class="btn quiet-btn" id="ppay-ap-noedit">Cancel</button>` : ""}</div>`;
+  const test = A.test_ok == null ? `<b class="ppay-wait">Not tested yet.</b> Press Test it.`
+    : A.test_ok ? `<span class="ppay-ok">✓ Connected to AcceptPay${A.env === "test" ? "'s TEST system" : " (the live system)"}${acc.currency ? " · " + esc(acc.currency) : ""}${exp ? " · the key is good until " + esc(exp) : ""}</span> <span class="quiet">Tested ${esc(ppayApWhen(A.tested_at))}</span>`
+    : `<b class="ppay-bad">Not connected.</b> ${esc(A.test_note || "")}`;
+  const warn = A.test_ok && A.env === "test" ? `<div class="ppay-msg bad">This username and key open AcceptPay's <b>TEST</b> system, not the live one. The payments there are not your real payments. Ask AcceptPay for the username and key of the live system, then press Change the username and key.</div>` : "";
+  const since = A.last_since ? "" : new Date(Date.now() - 14 * 864e5).toLocaleDateString("en-CA");
+  const body = !A.has_keys || PPAY.apEdit ? form : `<p class="ppay-ap-p"><span class="ppay-ok">✓ The username and key are saved</span> (username ${esc(A.user_hint || "")}${A.keys_at ? ", saved " + esc(ppayApWhen(A.keys_at)) : ""}).</p>
+      <p class="ppay-ap-p">${test}</p>${warn}
+      <div class="ppay-ap-btns"><button type="button" class="btn" id="ppay-ap-test">Test it</button>
+        <button type="button" class="btn" id="ppay-ap-get"${A.test_ok ? "" : " disabled"}>Get the newest payments now</button>
+        <label class="ppay-ap-since">Look from <input type="date" id="ppay-ap-since" value="${esc(since)}" aria-label="Look from this day"> <span class="quiet">${A.last_since ? "Empty = from the last look." : "The first look: pick the day to start from."}</span></label></div>
+      <p class="ppay-ap-p">${A.last_fetch ? `Last look: ${esc(ppayApWhen(A.last_fetch))} · ${esc(A.last_note || "")}` : "No payments have been brought in yet."}${A.last_error ? `<br><b class="ppay-bad">The last try did not work${A.last_error_at ? " (" + esc(ppayApWhen(A.last_error_at)) + ")" : ""}:</b> ${esc(A.last_error)}` : ""}</p>
+      <label class="ppay-ap-tick"><input type="checkbox" id="ppay-ap-auto"${A.auto ? " checked" : ""}> Look by itself two times a day (about 6:30 in the morning and 4:30 in the afternoon)</label>
+      <div class="ppay-ap-btns"><button type="button" class="btn quiet-btn" id="ppay-ap-edit">Change the username and key</button><button type="button" class="btn quiet-btn" id="ppay-ap-off">Take the connection off</button></div>`;
+  return `<div class="ppay-frow own-zone" id="ppay-ap"><span class="ppay-fl">Connection to AcceptPay</span><div>${body}
+      <div class="quiet">The app only reads from AcceptPay. It can not start, change or stop a payment there. What it brings in goes to Settlement files, like an emailed file, and nothing is posted until an owner presses Post.</div></div></div>`;
+}
+// bring in the newest payments: the function reads up to 400 at a time, so it is asked again while there are more
+async function ppayApGet(since) {
+  let added = 0, d = null;
+  for (let k = 0; k < 12; k++) {
+    ppaySay(`Working… asking AcceptPay${added ? " (" + added + " brought in so far)" : ""}. This can take a minute or two. Please wait.`); ppayDraw();
+    try { const r = await db.functions.invoke("acceptpay", { body: { action: "fetch", ...(since ? { since } : {}) } }); d = r.error ? null : r.data; } catch { d = null; }
+    if (!d || !d.ok) break; added += Number(d.added) || 0; if (!d.more) break;
+  }
+  if (!d) return ppayFresh("AcceptPay could not be asked. The connection's function did not answer. Try again in a few minutes." + (added ? " " + added + " were brought in before it stopped." : ""), true);
+  if (d.need_keys) return ppayFresh("Type the username and key first (Settings).", true);
+  if (d.error) return ppayFresh(d.error === "not_allowed" ? "Only an owner can do this." : "AcceptPay: " + (d.message || "it did not work.") + (added ? " " + added + " were brought in before it stopped." : ""), true);
+  if (added) { PPAY.tab = "files"; PPAY.fileId = null; PPAY.file = null; }
+  return ppayFresh(added ? `✓ ${added} transaction${added === 1 ? "" : "s"} brought in from AcceptPay. ${added === 1 ? "It is" : "They are"} in Settlement files, in the file named From AcceptPay. Open it, check it, then press Post.${d.more ? " There are more: press Get the newest payments again." : ""}${d.no_names ? " AcceptPay did not give the customers' names this time; the rows go by their reference." : ""}`
+    : `✓ Nothing new at AcceptPay since ${fmtDate(d.since)}. (${d.seen} change${d.seen === 1 ? "" : "s"} there, all already brought in or not answered by the bank yet.)`);
 }
 const ppaySay = (m, bad) => { PPAY.msg = m ? { m, bad: !!bad } : null; };
 function ppayDraw() { const el = document.getElementById("ppay"); if (!el) return; const top = $("#main").scrollTop; el.outerHTML = ppayHtml(); $("#main").scrollTop = top; ppayWire(); }
@@ -27622,7 +27677,10 @@ function ppayFilesHtml() {
   const files = PPAY.data.files || [], when = d => d ? esc(fmtDate(d)) : "";
   const cnt = c => c ? [`${c.payments} payment${c.payments === 1 ? "" : "s"} ${money(c.paid)}`, c.nsf ? c.nsf + " NSF" : "", c.chargebacks ? c.chargebacks + " chargeback" + (c.chargebacks === 1 ? "" : "s") : "", c.other ? c.other + " other" : "", c.no_plan ? c.no_plan + " with no plan" : ""].filter(Boolean).join(" · ") : "";
   return `<div class="ppay-panel">${pgNow(["Settlement files", files.length + " file" + (files.length === 1 ? "" : "s"), files.filter(f => !f.posted_at).length + " not posted yet"])}
-    <p class="ppay-hint">These are the files emailed to eftupload@hsginc.ca. Open one to see how each row was read. Nothing is posted until an owner presses Post.</p>
+    <p class="ppay-hint">These are the files emailed to eftupload@hsginc.ca${PPAY.ap?.has_keys ? ", and the files named From AcceptPay that the connection brings in" : ""}. Open one to see how each row was read. Nothing is posted until an owner presses Post.</p>
+    ${PPAY.ap?.owner ? (PPAY.ap.has_keys ? `<div class="ppay-ap-bar own-zone"><button type="button" class="btn" id="ppay-ap-get2"${PPAY.ap.test_ok ? "" : " disabled"}>Get the newest payments from AcceptPay</button>
+      <span class="quiet">${PPAY.ap.test_ok ? (PPAY.ap.last_fetch ? "Last look: " + esc(ppayApWhen(PPAY.ap.last_fetch)) + " ·" : "No look yet.") + (PPAY.ap.auto ? " It also looks by itself two times a day." : "") : "Open Settings and press Test it first."}</span></div>`
+      : `<div class="ppay-ap-bar own-zone"><span class="quiet">AcceptPay can also be asked directly, with no email.</span> <button type="button" class="btn quiet-btn" data-ppay-tab="set">Set up the connection in Settings</button></div>`) : ""}
     ${files.length ? `<div class="staff-wrap"><table class="calls-table ppay-t"><thead><tr><th>Received</th><th>File</th><th class="num">Rows</th><th>Where it stands</th><th></th></tr></thead><tbody>${files.map(f => `<tr class="ppay-go" data-ppay-file="${f.id}"><td>${when(f.received)}</td><td>${esc(f.file || "")}</td><td class="num">${f.rows}</td>
       <td>${f.posted_at ? `<span class="ppay-ok">✓ Posted ${when(f.posted_at)}${f.posted_by ? " by " + esc(f.posted_by) : ""}</span><div class="quiet">${esc(cnt(f.counts))}</div>` : `<b class="ppay-wait">Not posted yet</b>`}</td>
       <td><button type="button" class="btn${f.posted_at ? " quiet-btn" : ""}" data-ppay-file="${f.id}">${f.posted_at ? "Look at it" : "Check it"}</button></td></tr>`).join("")}</tbody></table></div>`
@@ -27715,6 +27773,7 @@ function ppayFlagsHtml() {
 function ppaySetHtml() {
   const D = PPAY.data, owner = ME.role === "owner";
   return `<div class="ppay-panel"><div class="ppay-ph"><h3>Settings</h3></div>
+    ${ppayApHtml()}
     <div class="ppay-frow${owner ? " own-zone" : ""}"><span class="ppay-fl">The NSF fee</span><div>${owner ? `<span class="ppay-dollar">$</span><input type="text" inputmode="decimal" id="ppay-fee" value="${D.fee != null ? esc(Number(D.fee).toFixed(2)) : ""}" class="ppay-amt" aria-label="NSF fee"> <button type="button" class="btn" id="ppay-fee-save">Save the NSF fee</button>` : `<b>${D.fee != null ? money(D.fee) : "Not set"}</b> <span class="quiet">An owner sets it.</span>`}
       <div class="quiet">It goes on a plan each time a payment comes back NSF on a settlement file that is posted. Empty = no fee is added. It does not change fees already added.</div></div></div>
     <details class="rules-box" open><summary>How PAP payments work here</summary><ul class="ppay-ul">
@@ -27728,6 +27787,7 @@ function ppaySetHtml() {
       <li><b>Chargeback</b>: the payment stays. A new charge says what came back and why. No fee. The office follows up.</li>
       <li><b>Anything else</b> (account closed, frozen, stop payment): it is listed with the reason and the plan is marked paused. Stop the draw in AcceptPay too.</li>
       <li><b>No payment seen</b>: a draw day passed more than 10 days ago, a newer file is posted, and that plan had nothing on any file.</li>
+      <li><b>The connection to AcceptPay</b> (owners set it up above): the app asks AcceptPay for the newest payments and puts them in Settlement files, in a file named From AcceptPay. It only reads. Nothing is posted by itself.</li>
       <li>No bank account details are read or kept here.</li></ul></details></div>`;
 }
 const PPAY_HELP = { root: "#ppay", list: [
@@ -27735,7 +27795,7 @@ const PPAY_HELP = { root: "#ppay", list: [
   ["[data-ppay-tab=plans]", "Plans: one for each customer who pays by pre-authorized payment. Open a plan to see its record, print its yearly invoice or its monthly statement."],
   ["[data-ppay-tab=files]", "Settlement files: the files AcceptPay emails. Open one, check how each row was read, then an owner presses Post."],
   ["[data-ppay-tab=flags]", "Follow up: every NSF, chargeback and other problem, until someone presses Looked after. A payment that is not the amount on the bill is here too: say if the amount changed (the bill is updated), if it is one time only, or if it is a mistake."],
-  ["[data-ppay-tab=set]", "Settings: the NSF fee, and how it all works."],
+  ["[data-ppay-tab=set]", "Settings: the connection to AcceptPay (owners), the NSF fee, and how it all works."],
   ["#ppay-pq", "Type a name, a customer number or a reference to find a plan."],
   ["[data-ppay-new]", "Set up a plan for one customer here. To set up many at once, open a settlement file and press Make a plan for each customer with no plan."],
   [".ppay-tiles", "What the file holds: payments, NSF, chargebacks, anything else, rows with no plan, and rows already posted."],
@@ -27932,6 +27992,27 @@ function ppayWire() {
   on("[data-ppay-missdone]", "click", async b => { const { error } = await db.rpc("pap_missing_done", { p_plan: Number(b.dataset.ppayMissdone), p_on: b.dataset.on, p_note: null }); await ppayFresh(error ? "Not saved: " + rpcErr(error) : "✓ Marked looked after.", !!error); });
   on("[data-ppay-resume]", "click", async b => { const { error } = await db.rpc("pap_plan_status", { p_id: Number(b.dataset.ppayResume), p_status: "active", p_why: null }); await ppayFresh(error ? "Not saved: " + rpcErr(error) : "✓ The plan is active again.", !!error); });
   on("[data-ppay-fplan]", "change", async b => { if (!b.value) return; const { error } = await db.rpc("pap_flag_post", { p_id: Number(b.dataset.ppayFplan), p_plan: Number(b.value) }); await ppayFresh(error ? "Not done: " + rpcErr(error) : "✓ It is on the plan.", !!error); });
+  // settings: the connection to AcceptPay
+  const q = id => root.querySelector(id);
+  q("#ppay-ap-save")?.addEventListener("click", async () => { const u = q("#ppay-ap-user").value.trim(), k = q("#ppay-ap-key").value.trim();
+    if (!u || !k) return ppayFresh("Type both the username and the key.", true);
+    const { error } = await db.rpc("acceptpay_set_keys", { p_user: u, p_key: k }); if (error) { ppaySay("Not saved: " + rpcErr(error), true); const msg = root.querySelector(".ppay-msg"); if (msg) msg.textContent = PPAY.msg.m; else ppayDraw(); return; }   // the boxes keep what was typed
+    PPAY.apEdit = false; await ppayFresh("✓ Saved in the vault. Now press Test it."); });
+  q("#ppay-ap-edit")?.addEventListener("click", () => { PPAY.apEdit = true; ppaySay(null); ppayDraw(); document.getElementById("ppay-ap-user")?.focus(); });
+  q("#ppay-ap-noedit")?.addEventListener("click", () => { PPAY.apEdit = false; ppayDraw(); });
+  q("#ppay-ap-test")?.addEventListener("click", async () => { ppaySay("Working… signing in to AcceptPay. Please wait."); ppayDraw();
+    let d = null; try { const r = await db.functions.invoke("acceptpay", { body: { action: "test" } }); d = r.error ? null : r.data; } catch { d = null; }
+    await ppayFresh(!d ? "The connection's function did not answer. Try again in a few minutes." : d.need_keys ? "Type the username and key first." : d.error === "not_allowed" ? "Only an owner can do this."
+      : d.error ? "AcceptPay did not let the app in: " + (d.message || "") + " Check the username and the key (press Change the username and key)."
+      : !d.ok ? "The app signed in, but: " + (d.message || "AcceptPay would not list the payments.")
+      : d.env === "test" ? "The app signed in, but to AcceptPay's TEST system, not the live one. Read the red note under it in Settings."
+      : `✓ It works. The app signed in to AcceptPay (${d.changes_7d} change${d.changes_7d === 1 ? "" : "s"} there in the last 7 days). Now press Get the newest payments now.`, !d || !d.ok || d.env === "test"); });
+  const apGet = () => { const v = (document.getElementById("ppay-ap-since")?.value || "").trim(); ppayApGet(/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : ""); };
+  q("#ppay-ap-get")?.addEventListener("click", apGet); q("#ppay-ap-get2")?.addEventListener("click", apGet);
+  q("#ppay-ap-auto")?.addEventListener("change", async e => { const { error } = await db.rpc("acceptpay_set_auto", { p_on: e.target.checked });
+    await ppayFresh(error ? "Not saved: " + rpcErr(error) : e.target.checked ? "✓ The app looks at AcceptPay by itself two times a day." : "✓ The app does not look by itself any more. Press Get the newest payments when you want them.", !!error); });
+  q("#ppay-ap-off")?.addEventListener("click", async () => { const a = await askChoice("Take the connection to AcceptPay off?", `<span class="ask-sq"></span>The username and key are erased from the vault. The files already brought in stay. The emailed files keep working. To connect again you type the username and key again.`, [["off", "✂|Yes, take it off|Erase the username and key"], ["", "No, keep it"]]);
+    if (a !== "off") return; const { error } = await db.rpc("acceptpay_set_keys", { p_user: "", p_key: "" }); PPAY.apEdit = false; await ppayFresh(error ? "Not done: " + rpcErr(error) : "✓ The connection is off. The username and key are erased.", !!error); });
   // settings
   root.querySelector("#ppay-fee-save")?.addEventListener("click", async () => { const raw = document.getElementById("ppay-fee").value.replace(/[$,\s]/g, ""), v = raw === "" ? null : Number(raw);
     if (v != null && (!isFinite(v) || v < 0)) return ppayFresh("Type the fee as a number, like 45.00.", true);
