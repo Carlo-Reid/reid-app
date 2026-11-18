@@ -51,17 +51,25 @@ Deno.serve(async (req) => {
       const r = await timed(HOSTS[env] + "/eft/User/Login", 20000, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
         body: new URLSearchParams({ Username: sec.username!, Password: sec.api_key! }).toString() });
       const j = await r.json().catch(() => ({})) as Rec;
-      if (r.ok && j.Success === true && j.Token) return { token: "Bearer " + String(j.Token) };
-      // the guide says the API also takes the username and key directly ("basic"): try that before giving up
-      const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(sec.username + ":" + sec.api_key)));
-      const b = await timed(HOSTS[env] + "/eft/Account", 20000, { headers: { Authorization: "Basic " + b64, Accept: "application/json" } });
-      if (b.ok) return { token: "Basic " + b64 };
-      return { status: r.status, error: "AcceptPay did not accept the username and key (sign-in answered " + r.status + ", the direct way answered " + b.status + ")." };
+      // AcceptPay's guide shows two ways to prove who we are on each call: the token from Login ("Bearer"), or the username and key
+      // themselves ("Basic"). Try each on a small harmless call and keep the first one AcceptPay accepts.
+      const enc = (t: string) => btoa(String.fromCharCode(...new TextEncoder().encode(t)));
+      const tok = r.ok && j.Success === true && j.Token ? String(j.Token) : "";
+      const ways: [string, string][] = [...(tok ? [["token", "Bearer " + tok]] as [string, string][] : []), ["key", "Basic " + enc(sec.username + ":" + sec.api_key)],
+        ...(tok ? [["token2", "Basic " + enc(sec.username + ":" + tok)], ["bare", tok]] as [string, string][] : [])];
+      const said: string[] = [];
+      for (const [name, val] of ways) {
+        const b = await timed(HOSTS[env] + "/eft/enumerations/serverinfo", 20000, { headers: { Authorization: val, Accept: "application/json" } });
+        if (b.ok) { way = name; return { token: val }; }
+        said.push(name + " " + b.status);
+      }
+      return { status: r.status, error: (tok ? "AcceptPay signed us in but then refused every call" : "AcceptPay did not accept the username and key") + " (sign-in answered " + r.status + "; " + said.join(", ") + ")." };
     } catch { return { error: "AcceptPay did not answer." }; }
   };
+  let way = "";   // which of the ways AcceptPay accepted (a word, never the key)
   const signIn = async (): Promise<{ env?: string; token?: string; error?: string; tried?: string[] }> => {
     const order = sec.env === "test" ? ["test", "live"] : ["live", "test"], tried: string[] = []; let last = "";
-    for (const env of order) { const t = await login(env); if (t.token) return { env, token: t.token }; tried.push((env === "live" ? "live system" : "test system") + ": " + t.error); last = "AcceptPay did not accept the username and key."; }
+    for (const env of order) { const t = await login(env); if (t.token) return { env, token: t.token }; tried.push((env === "live" ? "live system" : "test system") + ": " + t.error); last = /signed us in/.test(t.error ?? "") && !/signed us in/.test(last) ? "AcceptPay signed us in, but then refused the calls." : (last || "AcceptPay did not accept the username and key."); }
     return { error: last || "AcceptPay did not answer.", tried };
   };
   const get = async (env: string, token: string, path: string, ms = 20000): Promise<{ ok: boolean; status: number; data: unknown }> => {
@@ -98,7 +106,7 @@ Deno.serve(async (req) => {
     const account = { currency: txt(a.Currency, 10) || null, key_expires: txt(a.ApiKeyExpirationDate, 30) || null, mids: Array.isArray(a.MID) ? a.MID.length : (a.MID != null ? 1 : 0), version: txt(sv.Version, 40) || null, zone: txt(sv.TimeZone, 80) || null };
     const note = "Signed in to the " + (env === "live" ? "live" : "TEST") + " system." + (up.error ? " " + up.error : ` ${up.list.length}${up.list.length >= 300 ? " or more" : ""} changes in the last 7 days.`);
     await admin.rpc("_acceptpay_note", { p: { env, test_ok: !up.error, test_note: note, account, error: up.error ?? "",
-      probe: { at: new Date().toISOString(), env, account_status: acc.status, account_keys: keysOf(acc.data), server_status: srv.status, updates_pages: up.pages, updates_n: up.list.length, update_keys: keysOf(up.list[0]), detail_status: detailStatus, detail_keys: detailKeys } } });
+      probe: { at: new Date().toISOString(), env, way, account_status: acc.status, account_keys: keysOf(acc.data), server_status: srv.status, updates_pages: up.pages, updates_n: up.list.length, update_keys: keysOf(up.list[0]), detail_status: detailStatus, detail_keys: detailKeys } } });
     return json({ ok: !up.error, env, account, changes_7d: up.list.length, message: up.error ?? null });
   }
 
