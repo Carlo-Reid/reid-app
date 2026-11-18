@@ -7080,6 +7080,22 @@ a.htd-call { text-decoration: none; display: inline-flex; align-items: center; c
 .sec-inbox .sec-safe { margin: 0 0 10px; }
 .sec-file-table td { white-space: nowrap; } .sec-file-table tr.sec-frow { cursor: pointer; } .sec-file-table tr.sec-on td { background: rgba(253,230,138,.35); }
 .sec-file-table tr.sec-open-row > td { white-space: normal; padding: 0; }
+/* Emailed EFT lists: the file that is open below has its own colour (George, Nov 17) */
+.sec-inbox tr.sec-in-open > td { background: #dcebf8; border-top: 2px solid #23415f; border-bottom: 2px solid #23415f; }
+.sec-inbox tr.sec-in-open > td:first-child { box-shadow: inset 6px 0 0 #23415f; padding-left: 16px; color: #23415f; font-weight: 700; }
+.sec-open-tag { display: inline-block; margin-top: 3px; padding: 2px 9px; border-radius: 6px; background: #23415f; color: #fff; font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.sec-open-key { margin: 8px 0 0; font-size: 13.5px; color: #23415f; }
+.sec-inbox td.sec-in-acts > div { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; } .sec-backup { margin: 0 0 4px; }
+.sec-card-grid .cl-label { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 700; }
+.sec .pg-now.sec-now { font-size: 16.5px; padding: 9px 14px; margin: 10px 0 8px; overflow-wrap: anywhere; }
+.sec-rev-on { border-left: 6px solid #23415f; }
+.sec-wait-say { margin: 0 0 8px; padding: 8px 12px; border: 1.5px solid #e2b46a; border-radius: 10px; background: #fff6e5; color: #6b4300; font-size: 14px; }
+.sec-numrow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0 4px; }
+.sec-numsay { flex: 1 1 260px; min-width: 0; font-size: 14px; color: #23415f; } .sec-pmsg { margin-top: 6px; font-weight: 700; color: #1b6b36; }
+.sec-file-table td.sec-cnum { font-weight: 800; font-size: 15px; color: #23415f; }
+.sec-plan-ln { font-size: 12.5px; color: #23415f; } .sec-plan-ln.warn { display: inline-block; margin-top: 2px; padding: 1px 8px; border-radius: 6px; background: #fff0d6; color: #7a4a00; font-weight: 700; }
+.sec-card-why { margin-top: 10px; padding: 9px 12px; border: 1.5px solid #e2b46a; border-radius: 10px; background: #fff6e5; color: #6b4300; font-size: 14px; }
+@media print { .sec-numrow, .sec-open-key { display: none; } }
 .sec-panel { margin: 4px 0 10px; padding: 14px 16px; border: 1px solid rgba(127,127,127,.25); border-radius: 10px; background: rgba(127,127,127,.05); display: grid; gap: 14px; position: sticky; left: 0; max-width: min(1100px, 92vw); }
 .sec-card-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; } .sec-card-name { font-size: 16px; }
 .sec-card-acts { display: flex; gap: 12px; align-items: center; }
@@ -26475,6 +26491,70 @@ async function secFileLoad() {
   const { data, error } = await db.rpc("pap_file_view", { p_id: SEC.fv });
   SEC.view = error ? { id: SEC.fv, error: rpcErr(error) } : data;
   (SEC.view?.rows || []).forEach((r, k) => { r._k = k; });
+  secPlansLoad();
+}
+// the plans (memberships, from ServiceTitan) of the customers the file matched: shown beside this page's own PAP mark, which is a separate thing
+async function secPlansLoad() {
+  SEC.plans = SEC.plans || {};
+  const ids = [...new Set((SEC.view?.rows || []).map(r => Number(r.customer_id)).filter(id => id && !(id in SEC.plans)))];
+  if (!ids.length || SEC.plansOff) return;
+  for (let k = 0; k < ids.length; k += 1500) {
+    const part = ids.slice(k, k + 1500), { data, error } = await db.rpc("pap_cust_plans", { p_ids: part });
+    if (error || !data) { SEC.plansOff = true; return; }   // not there yet (before the database update): the page works as before
+    part.forEach(id => { SEC.plans[id] = data[id] || []; });
+  }
+  if (document.querySelector(".sec-people") && !document.activeElement?.closest?.(".sec input, .sec select, .sec textarea")) renderSecurity();
+}
+const secPlansOf = id => SEC.plans?.[Number(id)] || null;
+const secPlanOn = id => (secPlansOf(id) || []).filter(p => p.status === "active");
+const secPlanSec = id => secPlanOn(id).filter(p => /secur|monitor|alarm|\bsec\b|\bpap\b/i.test(p.name || ""));
+const secPlanBill = p => p.billing ? (p.billing === "monthly" ? "Billed monthly" : p.billing === "yearly" ? "Billed yearly" : "Pay per visit") : "Billing not set up";
+// the file that is open in each part of the page, in the same words everywhere
+function secFileWords(id) {
+  const f = (SEC.files || []).find(x => x.id === id), r = (SEC.inbox?.rows || []).find(x => x.id === id), d = f?.received || r?.received;
+  return [f?.file || r?.file || "File", d ? "received " + fmtDate(d) : "", (f?.count ?? r?.count) ? Number(f?.count ?? r?.count).toLocaleString() + " rows" : ""];
+}
+// go to a part of the page and stay there while it is drawn again (the match and the plans come in a moment later); it lets go when the person scrolls or types
+function secGo(sel) {
+  let stop = false; const quit = () => { stop = true; };
+  ["wheel", "touchmove", "keydown", "pointerdown"].forEach(t => window.addEventListener(t, quit, { once: true, passive: true }));
+  [0, 350, 900, 1700].forEach(ms => setTimeout(() => { if (!stop) document.querySelector(sel)?.scrollIntoView({ block: "start" }); }, ms));
+}
+function secShowFile(id, scroll) {
+  if (!(SEC.files || []).some(f => f.id === id)) return;
+  if (SEC.fv !== id) { SEC.fv = id; SEC.view = null; SEC.openRow = null; SEC.find = null; }
+  renderSecurity();
+  if (scroll) secGo(".sec-people");
+  secFileLoad().then(() => renderSecurity());
+}
+// the rows showing in EFT lists, with the customer each one matched: copy the customer numbers, or an Excel file
+function secShownRows() {
+  const V = SEC.view, all = V?.rows || [], show = SEC.pshow || "all", q = (SEC.pq || "").trim().toLowerCase();
+  return all.filter(r => secPOk(r, show) && (!q || `${(r.cells || []).join(" ")} ${r.customer_name || ""} ${r.customer_number || ""} ${r.address || ""}`.toLowerCase().includes(q)));
+}
+const secPOk = (r, k) => k === "all" || (k === "found" ? r.customer_id : k === "missing" ? !r.customer_id : k === "bad" ? secBad(r) : k === "planno" ? r.customer_id && !r.pap_list && secPlanSec(r.customer_id).length : r.customer_id && !r.pap_list);
+const SEC_HOW = { manual: "linked by hand", number: "by customer #", address: "by address", phone: "by phone", name: "by name" };
+async function secCopyNums() {
+  const nums = [...new Set(secShownRows().filter(r => r.customer_id && r.customer_number).map(r => String(r.customer_number)))];
+  if (!nums.length) return renderSecurity("No customer numbers to copy: none of the rows showing was found in the app.");
+  const ok = await copyText(nums.join("\n"));
+  SEC.pmsg = ok ? `✓ Copied ${nums.length.toLocaleString()} customer number${nums.length === 1 ? "" : "s"}. Now paste them.` : "Not copied. Use Export to Excel.";
+  renderSecurity();
+}
+async function secExportRows() {
+  const V = SEC.view, rows = secShownRows(); if (!V || !rows.length) return;
+  try { await loadXlsx(); } catch (e) { SEC.pmsg = "Not exported: " + (e.message || e); return renderSecurity(); }
+  const cols = V.cols || [];
+  const aoa = [[...cols.map(c => String(c)), "Customer # in the app", "Customer in the app", "Matched", "PAP list (marked on the Security page)", "Active plans (from ServiceTitan)"],
+    ...rows.map(r => [...cols.map((c, j) => String((r.cells || [])[j] ?? "")), r.customer_id ? String(r.customer_number || "") : "", r.customer_id ? (r.customer_name || "") : "Not found",
+      r.customer_id ? (SEC_HOW[r.how] || "") : "", r.customer_id ? (r.pap_list ? papName(r.pap_list) : "Not marked") : "",
+      r.customer_id && secPlansOf(r.customer_id) ? secPlanOn(r.customer_id).map(p => p.name).join("; ") : ""])];
+  const ws = XLSX.utils.aoa_to_sheet(aoa); ws["!cols"] = aoa[0].map((h, j) => ({ wch: Math.min(44, Math.max(12, String(h).length + 2, ...aoa.slice(1, 200).map(a => String(a[j] ?? "").length + 2))) }));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "EFT list");
+  const blob = new Blob([XLSX.write(wb, { type: "array", bookType: "xlsx" })], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const u = URL.createObjectURL(blob), a = document.createElement("a"); a.href = u; a.download = `EFT list ${String(V.file || "file").replace(/\.[a-z0-9]+$/i, "").replace(/[\\/:*?"<>|]/g, "-")} customer numbers.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000);
+  SEC.pmsg = `✓ The Excel file has ${rows.length.toLocaleString()} row${rows.length === 1 ? "" : "s"}, each with its customer number.`; renderSecurity();
 }
 // ---- the panel under an EFT row: the customer's details, or a search to find them by hand ----
 async function secCard(id) {
@@ -26588,11 +26668,14 @@ function secPanelHtml(r, span) {
       <div class="sec-card-head"><div><strong class="sec-card-name">${esc(C.name || "")}</strong> ${secBadges(C.flags ? { ...C.flags, pap_list: null } : null)} <span class="quiet">#${esc(C.number || "")}${C.status && C.status !== "active" ? " · " + esc(C.status) : ""}</span>
           <div class="quiet">Matched ${({ manual: "by hand", number: "by customer #", address: "by address", phone: "by phone", name: "by name" })[r.how] || ""}${r.how === "manual" ? ` · <button class="link" type="button" data-sec-unlink>Unlink</button>` : ""}</div></div>
         <div class="sec-card-acts"><button class="btn" type="button" data-sec-open="${C.id}">Open customer page</button>${!F ? `<button class="link" type="button" id="sec-find-start">Wrong customer?</button>` : ""}</div></div>
+      ${!C.pap_list && secPlanSec(C.id).length ? `<div class="sec-card-why">This customer has an active plan (<b>${esc(secPlanSec(C.id).map(p => p.name).join(", "))}</b>) and is not marked on a PAP list yet. The plan comes from ServiceTitan. The PAP mark is separate: it is only set on this page. If they are on PAP, press <b>Put on Monthly billing</b> below.</div>` : ""}
       <div class="sec-card-grid">
         <div><div class="cl-label">Phone &amp; email</div>${(C.contacts || []).filter((k, n, a) => a.findIndex(x => x.kind === k.kind && String(x.value).replace(/\W/g, "").toLowerCase() === String(k.value).replace(/\W/g, "").toLowerCase()) === n).map(k => `<div>${esc(kinds[k.kind] || k.kind)}: ${esc(/phone|mobile|fax/.test(k.kind) ? phoneFmt(k.value) : k.value)}${k.primary ? ' <span class="quiet">(main)</span>' : ""}</div>`).join("") || `<div class="quiet">None on file</div>`}</div>
         <div><div class="cl-label">Address</div>${(C.locations || []).map(l => `<div>${esc([l.street, l.city, l.postal].filter(Boolean).join(", "))}${l.active === false ? ' <span class="quiet">(old)</span>' : ""}</div>`).join("") || `<div class="quiet">None on file</div>`}</div>
-        <div><div class="cl-label">PAP</div><div>${C.pap_list ? esc(papName(C.pap_list)) + (C.pap_set_at ? ` <span class="quiet">since ${esc(fmtDate(C.pap_set_at))}</span>` : "") : `<span class="quiet">Not on PAP</span>`}</div>
+        <div><div class="cl-label">PAP list (marked on this page)</div><div>${C.pap_list ? `<b>${esc(papName(C.pap_list))}</b>` + (C.pap_set_at ? ` <span class="quiet">since ${esc(fmtDate(C.pap_set_at))}</span>` : "") : `<b>Not marked yet</b>`}</div>
+          ${C.pap_list ? "" : `<div class="quiet">A customer is marked when a list is reviewed and Mark is pressed, or with a button here.</div>`}
           <div class="sec-card-pap">${PAP_LISTS.filter(([x]) => x !== C.pap_list).map(([x, t]) => `<button class="chip small" type="button" data-sec-setpap="${x}">Put on ${esc(t)}</button>`).join("")}${C.pap_list ? `<button class="chip small" type="button" data-sec-setpap="">Take off PAP</button>` : ""}</div></div>
+        ${secCardPlans(C)}
         <div><div class="cl-label">Owing</div><div><strong>${money0(C.owing)}</strong></div>
           ${(C.invoices || []).length ? `<div class="cl-label" style="margin-top:6px">Last invoices</div>${C.invoices.map(v => `<div><button class="link" type="button" data-sec-inv="${v.id}">${esc(v.number || "#" + v.id)}</button> <span class="quiet">${esc(fmtDate(v.date))} · ${money0(v.total)}${Number(v.balance) > 0.004 ? " · owes " + money0(v.balance) : ""}</span></div>`).join("")}` : ""}</div>
       </div></div>`;
@@ -26600,15 +26683,25 @@ function secPanelHtml(r, span) {
   return `<tr class="sec-open-row"><td colspan="${span}"><div class="sec-panel">${card}${find}</div></td></tr>`;
 }
 
-const SEC_PSHOW = [["all", "Everyone"], ["found", "Found"], ["missing", "Not found"], ["bad", "Not approved"], ["nopap", "Found, not on PAP"]];
+// the customer's plans (memberships) and their PAP payments plan, on the card under an EFT row
+function secCardPlans(C) {
+  const P = secPlansOf(C.id), pp = (PPAY?.data?.plans || []).filter(p => Number(p.customer_id) === Number(C.id));
+  const st = k => k === "active" ? "Active" : k ? String(k).charAt(0).toUpperCase() + String(k).slice(1) : "";
+  return `${P ? `<div><div class="cl-label">Plans (from ServiceTitan)</div>${P.length ? P.slice(0, 6).map(p => `<div class="${p.status === "active" ? "" : "quiet"}"><b>${esc(p.name || "Plan")}</b> · ${esc(st(p.status))} · ${esc(secPlanBill(p))}${p.since ? ` <span class="quiet">since ${esc(fmtDate(p.since))}${p.ends ? ", ends " + esc(fmtDate(p.ends)) : ""}</span>` : ""}</div>`).join("") : `<div class="quiet">No plans.</div>`}</div>` : ""}
+    <div><div class="cl-label">PAP payments plan</div>${pp.length ? pp.map(p => `<div><b>${esc(p.label || "Plan")}</b> · ${esc(st(p.status))} · ${money(Number(p.amount || 0))} a month</div>`).join("") : `<div class="quiet">None set up yet. Plans are set up in PAP payments, at the top of this page.</div>`}</div>`;
+}
+const SEC_PSHOW = [["all", "Everyone"], ["found", "Found"], ["missing", "Not found"], ["bad", "Not approved"], ["nopap", "Found, not marked PAP"], ["planno", "Has a security plan, not marked PAP"]];
 const secBad = r => r.response && !/^\s*approved\s*$/i.test(r.response);
 function secPeopleHtml() {
   const F = SEC.files; if (!F) return "";
-  const V = SEC.view, all = V?.rows || [], show = SEC.pshow || "all", q = (SEC.pq || "").trim().toLowerCase();
-  const ok = (r, k) => k === "all" || (k === "found" ? r.customer_id : k === "missing" ? !r.customer_id : k === "bad" ? secBad(r) : r.customer_id && !r.pap_list);
-  const rows = all.filter(r => ok(r, show) && (!q || `${(r.cells || []).join(" ")} ${r.customer_name || ""} ${r.customer_number || ""} ${r.address || ""}`.toLowerCase().includes(q)));
+  const V = SEC.view, all = V?.rows || [];
+  if (SEC.pshow === "planno" && !all.some(r => secPOk(r, "planno"))) SEC.pshow = "all";
+  const show = SEC.pshow || "all", ok = secPOk, rows = secShownRows();
+  const nNums = new Set(rows.filter(r => r.customer_id && r.customer_number).map(r => String(r.customer_number))).size;
+  const pmsg = SEC.pmsg; SEC.pmsg = null;
+  const fw = secFileWords(SEC.fv), waiting = V?.status === "waiting" || (SEC.files || []).find(f => f.id === SEC.fv)?.status === "waiting";
   const cols = V?.cols || [], nameCol = cols.map(c => /name|payor|payer|customer/i.test(String(c))), respCol = cols.map(c => /response|status|result/i.test(String(c)));
-  const how = { manual: "linked by hand", number: "by customer #", address: "by address", phone: "by phone", name: "by name" };
+  const how = SEC_HOW;
   const when = d => d ? esc(fmtDate(d)) : "";
   const cellHtml = (r, v, j) => { v = String(v ?? "");
     if (nameCol[j] && v) return `<button class="link" type="button" data-sec-row="${r._k}" aria-expanded="${SEC.openRow === r._k}"><strong>${esc(v)}</strong></button>`;
@@ -26616,7 +26709,9 @@ function secPeopleHtml() {
     return esc(v); };
   return `<section class="cl-tools sec-up sec-people"><h2>EFT lists</h2>
     ${F.length ? `<div class="cl-row"><label class="cl-group"><span class="cl-label">File</span><select id="sec-fv" aria-label="Which EFT file">${F.map(f => `<option value="${f.id}" ${f.id === SEC.fv ? "selected" : ""}>${esc(f.file || "File")} · ${when(f.received)} · ${f.count.toLocaleString()} rows${f.upload ? " · uploaded" : f.status === "waiting" ? " · waiting for review" : ""}</option>`).join("")}</select></label>
-      ${V?.mail_id ? `<button class="link" type="button" data-sec-mail="${V.mail_id}">See the email</button>` : ""}</div>` : ""}
+      ${V?.mail_id ? `<button class="link" type="button" data-sec-mail="${V.mail_id}">See the email</button>` : ""}</div>
+      <div class="pg-now sec-now">You are looking at: <b>${esc(fw[0])}</b>${fw.slice(1).filter(Boolean).map(x => " · " + esc(x)).join("")}${waiting ? " · waiting for review" : ""}</div>
+      ${waiting ? `<p class="sec-wait-say">This file is waiting for review, so nobody on it has been marked PAP from it yet. To mark them, press <b>Review</b> on its line in Emailed EFT lists above, then <b>Mark</b>.</p>` : ""}` : ""}
     ${!F.length ? `<div class="quiet">No EFT lists yet. Email the bank's file to eftupload@hsginc.ca, or upload it below and click Mark.</div>`
       : !V ? `<div class="quiet">Loading…</div>` : V.error ? `<div class="staff-msg err" role="status">${esc(V.error)}</div>` : `
     <div class="cl-stats sec-stats">
@@ -26624,15 +26719,21 @@ function secPeopleHtml() {
       <div class="cl-stat s-done"><span>Found in the app</span><strong>${all.filter(r => r.customer_id).length.toLocaleString()}</strong></div>
       <div class="cl-stat s-cx"><span>Not found</span><strong>${all.filter(r => !r.customer_id).length.toLocaleString()}</strong></div>
       ${all.some(secBad) ? `<div class="cl-stat s-booked"><span>Not approved</span><strong>${all.filter(secBad).length.toLocaleString()}</strong><em>NSF, account closed…</em></div>` : ""}</div>
-    <div class="cl-row"><div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${SEC_PSHOW.filter(([k]) => k !== "bad" || all.some(secBad)).map(([k, x]) => `<button type="button" aria-pressed="${show === k}" data-sec-pshow="${k}">${x} <span class="quiet">${all.filter(r => ok(r, k)).length.toLocaleString()}</span></button>`).join("")}</div></div>
+    <div class="cl-row"><div class="cl-group"><span class="cl-label">Show</span><div class="seg" role="group">${SEC_PSHOW.filter(([k]) => (k !== "bad" || all.some(secBad)) && (k !== "planno" || all.some(r => ok(r, "planno")))).map(([k, x]) => `<button type="button" aria-pressed="${show === k}" data-sec-pshow="${k}">${x} <span class="quiet">${all.filter(r => ok(r, k)).length.toLocaleString()}</span></button>`).join("")}</div></div>
       <label class="cl-group"><span class="cl-label">Find</span><input type="search" id="sec-pq" value="${esc(SEC.pq || "")}" placeholder="Name, reference, amount…" aria-label="Find in this EFT list"></label></div>
-    ${rows.length ? `<div class="staff-wrap"><table class="calls-table sec-file-table"><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}<th>Customer in the app</th></tr></thead><tbody>
+    ${rows.length ? `<div class="sec-numrow"><button class="ppay-sq sm" type="button" id="sec-copynums" ${nNums ? "" : "disabled"}><span class="ppay-sqi">📋</span><b>Copy the customer numbers</b></button>
+      <button class="ppay-sq sm" type="button" id="sec-xlrows"><span class="ppay-sqi">📊</span><b>Export to Excel</b></button>
+      <div class="sec-numsay"><b>${nNums.toLocaleString()} customer number${nNums === 1 ? "" : "s"}</b> for the ${rows.length.toLocaleString()} row${rows.length === 1 ? "" : "s"} showing. They are in the <b>Customer #</b> column. Copy puts them one under the other. The Excel file has every row showing with its customer number beside it.
+        ${pmsg ? `<div class="sec-pmsg" role="status">${esc(pmsg)}</div>` : ""}</div></div>` : ""}
+    ${rows.length ? `<div class="staff-wrap"><table class="calls-table sec-file-table"><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}<th>Customer #</th><th>Customer in the app</th></tr></thead><tbody>
       ${rows.slice(0, 2000).map(r => `<tr class="sec-frow${r.customer_id ? "" : " sec-nf"}${SEC.openRow === r._k ? " sec-on" : ""}" data-sec-rowclick="${r._k}">${cols.map((c, j) => `<td>${cellHtml(r, (r.cells || [])[j], j)}</td>`).join("")}
-        <td>${r.customer_id ? `<button class="link" type="button" data-sec-row="${r._k}">${esc(r.customer_name || "")}</button><div class="quiet">#${esc(r.customer_number || "")} · ${how[r.how] || ""}${r.pap_list ? " · PAP " + esc(papName(r.pap_list)) : " · not on PAP"}</div>`
-          : `<button class="ow-tag odd sec-nf-btn" type="button" data-sec-row="${r._k}">Not found · find them</button>`}</td></tr>${SEC.openRow === r._k ? secPanelHtml(r, cols.length + 1) : ""}`).join("")}
+        <td class="sec-cnum">${r.customer_id ? esc(r.customer_number || "") : ""}</td>
+        <td>${r.customer_id ? `<button class="link" type="button" data-sec-row="${r._k}">${esc(r.customer_name || "")}</button><div class="quiet">Matched ${how[r.how] || ""}${r.pap_list ? " · marked PAP " + esc(papName(r.pap_list)) : " · not marked PAP yet"}</div>${secPlanOn(r.customer_id).length ? `<div class="sec-plan-ln${!r.pap_list && secPlanSec(r.customer_id).length ? " warn" : ""}">Plan: ${esc(secPlanOn(r.customer_id).map(p => p.name).join(", "))}</div>` : ""}`
+          : `<button class="ow-tag odd sec-nf-btn" type="button" data-sec-row="${r._k}">Not found · find them</button>`}</td></tr>${SEC.openRow === r._k ? secPanelHtml(r, cols.length + 2) : ""}`).join("")}
       </tbody></table>${rows.length > 2000 ? `<p class="quiet">Showing the first 2,000. Use Find to narrow it down.</p>` : ""}</div>`
       : `<div class="quiet">Nobody matches.</div>`}
-    <p class="quiet">Click a name (or a row) to see the customer's details. For a row that wasn't found, search for the customer and click This is them. Bank account details are never kept.</p>`}
+    <p class="quiet">Click a name (or a row) to see the customer's details. For a row that wasn't found, search for the customer and click This is them. Bank account details are never kept.</p>
+    <p class="quiet"><b>Marked PAP</b> is this page's own list. It is set when a list is reviewed and Mark is pressed. <b>Plan</b> is the customer's plan from ServiceTitan. One does not set the other.</p>`}
   </section>`;
 }
 // ---- every email sent to eftupload@hsginc.ca, kept with its attachments (owners only; opening a file goes in History) ----
@@ -26696,26 +26797,30 @@ async function secReview(id) {
   SEC.file = { name: data.file || "Emailed list", head, rows: data.rows || [], inbox: id };
   SEC.col = { num: h[0] ? 0 : -1, name: h[1] ? 1 : -1, last: -1, phone: h[2] ? 2 : -1, amount: h[3] ? 3 : -1, resp: h[4] ? 4 : -1 };
   SEC.list = data.list === "other" ? "other" : "monthly"; SEC.match = null; SEC.replace = false;
+  if ((SEC.files || []).some(f => f.id === id) && SEC.fv !== id) { SEC.fv = id; SEC.view = null; SEC.openRow = null; SEC.find = null; secFileLoad().then(() => { if (!document.activeElement?.closest?.(".sec input, .sec select")) renderSecurity(); }); }
   renderSecurity(); secMatch();
-  document.querySelector(".sec-up")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  secGo("#sec-review");
 }
 function secInboxHtml() {
   const I = SEC.inbox; if (!I) return "";
   const rows = I.rows || [], wait = rows.filter(r => r.status === "waiting" || r.status === "unreadable"), old = rows.filter(r => !wait.includes(r));
   const when = d => d ? esc(fmtDate(d)) + " " + esc(new Date(d).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) : "";
-  const line = r => `<tr><td class="quiet">${when(r.received)}</td><td>${esc(r.from || "")}<div class="quiet">${esc(r.subject || "")}</div></td>
-      <td>${esc(r.file || "")}${r.note ? `<div class="quiet">${esc(r.note)}</div>` : ""}${r.mail_id ? `<div><button class="link" type="button" data-sec-mail="${r.mail_id}">See the email</button></div>` : ""}</td><td>${esc(papName(r.list))}</td><td>${r.count ? r.count.toLocaleString() : ""}</td>
-      <td style="white-space:nowrap">${SEC.file?.inbox === r.id ? `<button class="btn" type="button" disabled>Reviewing below</button> `
+  const inRev = r => SEC.file?.inbox === r.id, inList = r => SEC.fv === r.id && (SEC.files || []).some(f => f.id === r.id), canShow = r => (SEC.files || []).some(f => f.id === r.id);
+  const line = r => `<tr class="${inRev(r) || inList(r) ? "sec-in-open" : ""}"><td class="quiet">${when(r.received)}</td><td>${esc(r.from || "")}<div class="quiet">${esc(r.subject || "")}</div></td>
+      <td>${inRev(r) || inList(r) ? `<b>${esc(r.file || "")}</b><div><span class="sec-open-tag">▼ Open below: ${inRev(r) && inList(r) ? "in EFT lists and in Review" : inRev(r) ? "in Review the emailed list" : "in EFT lists"}</span></div>` : esc(r.file || "")}${r.note ? `<div class="quiet">${esc(r.note)}</div>` : ""}${r.mail_id ? `<div><button class="link" type="button" data-sec-mail="${r.mail_id}">See the email</button></div>` : ""}</td><td>${esc(papName(r.list))}</td><td>${r.count ? r.count.toLocaleString() : ""}</td>
+      <td class="sec-in-acts"><div>${SEC.file?.inbox === r.id ? `<button class="btn" type="button" data-sec-gorev>▼ Go to the review</button> `
           : r.status === "waiting" ? `<button class="btn" type="button" data-sec-review="${r.id}">Review</button> ${r.file_id ? `<button class="link" type="button" data-sec-ofile="${r.file_id}" data-inbox="${r.id}">Pick the columns</button> ` : ""}`
           : r.status === "unreadable" && r.file_id ? `<button class="btn" type="button" data-sec-ofile="${r.file_id}" data-inbox="${r.id}">Open and pick the columns</button> ` : ""}
-        ${wait.includes(r) ? `<button class="link" type="button" data-sec-ignore="${r.id}">Ignore</button>` : `<span class="quiet">${r.upload ? "Uploaded and marked" : r.status === "done" ? "Marked" : "Ignored"}${r.done_by ? " by " + esc(r.done_by) : ""} ${r.done_at ? esc(fmtDate(r.done_at)) : ""}</span>`}</td></tr>`;
+        ${canShow(r) && !inList(r) ? `<button class="link" type="button" data-sec-showfile="${r.id}">Show its rows</button> ` : ""}
+        ${wait.includes(r) ? `<button class="link" type="button" data-sec-ignore="${r.id}">Ignore</button>` : `<span class="quiet">${r.upload ? "Uploaded and marked" : r.status === "done" ? "Marked" : "Ignored"}${r.done_by ? " by " + esc(r.done_by) : ""} ${r.done_at ? esc(fmtDate(r.done_at)) : ""}</span>`}</div></td></tr>`;
   const head = `<thead><tr><th>Received</th><th>From</th><th>File</th><th>List</th><th>Rows</th><th></th></tr></thead>`;
   return `<section class="cl-tools sec-up sec-inbox"><h2>Emailed EFT lists${wait.length ? ` <span class="sec-badge">${wait.length}</span>` : ""}</h2>
     <p class="quiet sec-safe">Email the Excel file to <b>eftupload@hsginc.ca</b>. It goes on the Monthly billing list, unless the subject says <b>Other</b>. Nothing changes until you review it and click Mark. Every email and its file are kept under All EFT emails.
       ${I.last_check ? `Mailbox last checked ${when(I.last_check)}.` : "The mailbox hasn't been checked yet."}</p>
     ${I.last_error ? `<div class="staff-msg err" role="status">${esc(I.last_error)}</div>` : ""}
     ${wait.length ? `<div class="staff-wrap"><table class="calls-table">${head}<tbody>${wait.map(line).join("")}</tbody></table></div>` : `<div class="quiet">No emailed lists waiting.</div>`}
-    ${old.length ? `<details class="sec-miss"><summary>Done lately (${old.length})</summary><div class="staff-wrap"><table class="calls-table">${head}<tbody>${old.map(line).join("")}</tbody></table></div></details>` : ""}
+    ${wait.some(r => inRev(r) || inList(r)) || old.some(r => inRev(r) || inList(r)) ? `<p class="sec-open-key"><span class="sec-open-tag">▼ Open below</span> The blue line is the file that is open in the sections under this one.</p>` : ""}
+    ${old.length ? `<details class="sec-miss" ${old.some(r => inRev(r) || inList(r)) ? "open" : ""}><summary>Done lately (${old.length})</summary><div class="staff-wrap"><table class="calls-table">${head}<tbody>${old.map(line).join("")}</tbody></table></div></details>` : ""}
   </section>`;
 }
 function secGuess(lc, tests, skip = []) { for (const t of tests) { const i = lc.findIndex((h, j) => !skip.includes(j) && t.test(h)); if (i >= 0) return i; } return -1; }
@@ -26754,7 +26859,7 @@ async function secOpenFile(fileId, inboxId) {
   const bin = atob(data.b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const row = (SEC.inbox?.rows || []).find(r => r.id === inboxId); if (row) SEC.list = row.list === "other" ? "other" : "monthly";
   await secRead({ name: data.name || "Emailed file", arrayBuffer: async () => bytes.buffer }, inboxId);
-  document.querySelector(".sec-up:not(.sec-inbox):not(.sec-mail):not(.sec-people)")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  secGo("#sec-review");
 }
 async function secMatch() {
   const F = SEC.file, c = SEC.col; if (!F) return;
@@ -27542,7 +27647,8 @@ function renderSecurity(msg) {
     ${secInboxHtml()}
     ${secPeopleHtml()}
     ${secMailHtml()}
-    <section class="cl-tools sec-up"><h2>${SEC.file?.inbox ? "Review the emailed list" : "Upload a PAP list"}</h2>
+    <section class="cl-tools sec-up${SEC.file?.inbox ? " sec-rev-on" : ""}" id="sec-review"><h2>${SEC.file?.inbox ? "Review the emailed list" : "Upload a PAP list"}</h2>
+      ${SEC.file?.inbox ? `<p class="sec-backup"><button class="link" type="button" data-sec-goinbox>▲ Back up to Emailed EFT lists</button></p><div class="pg-now sec-now">You are looking at: <b>${esc(SEC.file.name || secFileWords(SEC.file.inbox)[0])}</b>${secFileWords(SEC.file.inbox).slice(1).filter(Boolean).map(x => " · " + esc(x)).join("")} · it goes on ${esc(papName(SEC.list))}</div>` : ""}
       <div class="cl-row"><div class="cl-group"><span class="cl-label">Which list is this file?</span>${seg(PAP_LISTS, SEC.list, "data-sec-list")}</div>
         <label class="btn quiet-btn">Choose the Excel file<input type="file" id="sec-file" accept=".xlsx,.xls,.csv" hidden></label></div>
       <p class="quiet sec-safe">The file is read right here on your computer. Only the customer number, name and phone columns are sent and kept (they make up People in the EFT files). Bank details or anything else in the file are never sent or saved.</p>
@@ -27596,7 +27702,7 @@ function wireSecurity() {
   document.querySelectorAll("[data-sec-off]").forEach(b => b.addEventListener("click", async () => {
     const { error } = await db.rpc("pap_set", { p_ids: [Number(b.dataset.secOff)], p_list: null, p_replace: false });
     say(error ? "Not saved: " + rpcErr(error) : "Taken off PAP."); }));
-  $("#sec-fv")?.addEventListener("change", async e => { SEC.fv = Number(e.target.value); SEC.view = null; SEC.openRow = null; SEC.find = null; renderSecurity(); await secFileLoad(); renderSecurity(); });
+  $("#sec-fv")?.addEventListener("change", async e => { SEC.fv = Number(e.target.value); SEC.view = null; SEC.openRow = null; SEC.find = null; renderSecurity(); await secFileLoad(); renderSecurity(); $("#sec-fv")?.focus(); });
   document.querySelectorAll("[data-sec-row]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); secToggleRow(Number(b.dataset.secRow)); }));
   document.querySelectorAll("[data-sec-rowclick]").forEach(tr => tr.addEventListener("click", e => { if (e.target.closest("button, a, input, select")) return; secToggleRow(Number(tr.dataset.secRowclick)); }));
   $("#sec-find-form")?.addEventListener("submit", e => { e.preventDefault(); secFindType($("#sec-find-q").value); });
@@ -27622,6 +27728,11 @@ function wireSecurity() {
     mqT = setTimeout(async () => { await secMailLoad(); const pos = e.target.selectionStart; renderSecurity(); const n = $("#sec-mq"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 350); });
   document.querySelectorAll("[data-sec-ofile]").forEach(b => b.addEventListener("click", () => secOpenFile(Number(b.dataset.secOfile), Number(b.dataset.inbox))));
   document.querySelectorAll("[data-sec-review]").forEach(b => b.addEventListener("click", () => secReview(Number(b.dataset.secReview))));
+  document.querySelectorAll("[data-sec-gorev]").forEach(b => b.addEventListener("click", () => secGo("#sec-review")));
+  $("[data-sec-goinbox]")?.addEventListener("click", () => secGo(".sec-inbox"));
+  document.querySelectorAll("[data-sec-showfile]").forEach(b => b.addEventListener("click", () => secShowFile(Number(b.dataset.secShowfile), true)));
+  $("#sec-copynums")?.addEventListener("click", secCopyNums);
+  $("#sec-xlrows")?.addEventListener("click", secExportRows);
   document.querySelectorAll("[data-sec-ignore]").forEach(b => b.addEventListener("click", async () => {
     const id = Number(b.dataset.secIgnore), { error } = await db.rpc("pap_inbox_set", { p_id: id, p_status: "ignored" });
     if (!error && SEC.file?.inbox === id) { SEC.file = null; SEC.match = null; }
