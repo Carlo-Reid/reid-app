@@ -4,6 +4,7 @@
 //   { action: "test" }                  → signs in to AcceptPay and says which system answered (live or test), the currency, when the key expires
 //   { action: "fetch", since? }         → brings in the transactions whose bank answer is new since that day (default: a few days before the last look)
 // It only ever uses GET (and the Login POST). It never creates, changes, voids or stops anything at AcceptPay.
+// THE LOCK (Security page): every call to AcceptPay goes through ap() below. A call that is not a read is refused while the lock is on.
 // The username and key live in the database vault and are never sent to the browser. See sync/extra/320_acceptpay.sql.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
@@ -45,10 +46,18 @@ Deno.serve(async (req) => {
   } else if (body.action !== "fetch" || !sec.auto) return json({ skipped: true });
   if (!sec.username || !sec.api_key) return json({ need_keys: true });
 
+  // THE ONE DOOR to AcceptPay. A read (GET) and the sign-in always pass. Anything else (a POST, PUT, PATCH or DELETE: a charge, a change,
+  // a void, a stop) is only sent when the lock on the Security page is OFF, asked from the database at that moment. No clear "not locked"
+  // answer = locked. Never call fetch() or timed() on an AcceptPay address anywhere else in this file.
+  const ap = async (u: string, ms: number, init: RequestInit = {}) => {
+    const m = String(init.method ?? "GET").toUpperCase(), isLogin = m === "POST" && new URL(u).pathname.toLowerCase() === "/eft/user/login";
+    if (m !== "GET" && !isLogin) { const l = await admin.rpc("_acceptpay_locked"); if (l.error || l.data !== false) throw new Error("acceptpay_locked"); }
+    return await timed(u, ms, init);
+  };
   // sign in: AcceptPay gives a key that is good for 4 hours; one is asked for each time this runs. `token` is the whole Authorization value.
   const login = async (env: string): Promise<{ token?: string; error?: string; status?: number }> => {
     try {
-      const r = await timed(HOSTS[env] + "/eft/User/Login", 20000, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      const r = await ap(HOSTS[env] + "/eft/User/Login", 20000, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
         body: new URLSearchParams({ Username: sec.username!, Password: sec.api_key! }).toString() });
       const j = await r.json().catch(() => ({})) as Rec;
       // AcceptPay's guide shows two ways to prove who we are on each call: the token from Login ("Bearer"), or the username and key
@@ -59,7 +68,7 @@ Deno.serve(async (req) => {
         ...(tok ? [["token2", "Basic " + enc(sec.username + ":" + tok)], ["bare", tok]] as [string, string][] : [])];
       const said: string[] = [];
       for (const [name, val] of ways) {
-        const b = await timed(HOSTS[env] + "/eft/enumerations/serverinfo", 20000, { headers: { Authorization: val, Accept: "application/json" } });
+        const b = await ap(HOSTS[env] + "/eft/enumerations/serverinfo", 20000, { headers: { Authorization: val, Accept: "application/json" } });
         if (b.ok) { way = name; return { token: val }; }
         said.push(name + " " + b.status);
       }
@@ -73,7 +82,7 @@ Deno.serve(async (req) => {
     return { error: last || "AcceptPay did not answer.", tried };
   };
   const get = async (env: string, token: string, path: string, ms = 20000): Promise<{ ok: boolean; status: number; data: unknown }> => {
-    try { const r = await timed(HOSTS[env] + path, ms, { headers: { Authorization: token, Accept: "application/json" } });
+    try { const r = await ap(HOSTS[env] + path, ms, { headers: { Authorization: token, Accept: "application/json" } });
       return { ok: r.ok, status: r.status, data: await r.json().catch(() => null) }; } catch { return { ok: false, status: 0, data: null }; }
   };
   const keysOf = (o: unknown) => o && typeof o === "object" ? Object.keys(o as Rec).slice(0, 40) : [];

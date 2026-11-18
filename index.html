@@ -8592,6 +8592,14 @@ article.ie .ie-grp .ie-notes2.ie-notes-in { margin-top: 12px; }
 @media print { .ppay-st-bar { display: none; } }
 
 /* the connection to AcceptPay (Security page, PAP payments, Settings; Carlo, Nov 18) */
+.ppay-lock { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; border: 2px solid #a9d6b7; background: #e9f6ed; color: #1b6b36; }
+.ppay-lock.is-off { border-color: #d9534f; background: #fdecea; color: #8a1f1b; }
+.ppay-lock-i { font-size: 26px; line-height: 1; flex: none; }
+.ppay-lock-w { flex: 1 1 260px; min-width: 0; display: grid; gap: 2px; font-size: 15px; line-height: 1.4; }
+.ppay-lock-w b { font-size: 17px; }
+.ppay-lock-who { font-size: 13px; opacity: .85; }
+.ppay-lock-b { flex: none; }
+@media print { .ppay-lock { display: none; } }
 #ppay-ap .ppay-ap-p { margin: 0 0 8px; padding: 0; font-size: 15.5px; line-height: 1.45; color: #1f2d3a; max-width: 860px; }
 :is(#ppay-ap, .ppay-ap-bar) .btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
 .ppay-ap-in { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 4px 0 10px; }
@@ -27287,6 +27295,15 @@ function ppayApHtml() {
   return `<div class="ppay-frow own-zone" id="ppay-ap"><span class="ppay-fl">Connection to AcceptPay</span><div>${body}
       <div class="quiet">The app only reads from AcceptPay. It can not start, change or stop a payment there. What it brings in goes to Settlement files, like an emailed file, and nothing is posted until an owner presses Post.</div></div></div>`;
 }
+// THE LOCK (Carlo, Nov 18, 2026): while it is on, the app can only read from AcceptPay. Everyone with the Security page sees it; owners turn it.
+function ppayLockHtml() {
+  const A = PPAY.ap; if (!A || A.locked == null) return "";
+  const on = A.locked !== false, who = A.locked_at ? ` <span class="ppay-lock-who">${on ? "Locked" : "Unlocked"} ${esc(ppayApWhen(A.locked_at))}${A.locked_by ? " by " + esc(A.locked_by) : ""}.</span>` : "";
+  return `<div class="ppay-lock ${on ? "is-on" : "is-off"}" id="ppay-lock" role="status"><span class="ppay-lock-i" aria-hidden="true">${on ? "🔒" : "🔓"}</span>
+      <div class="ppay-lock-w"><b>${on ? "AcceptPay is locked." : "AcceptPay is NOT locked."}</b>
+        <span>${on ? "The app can only read from AcceptPay. It can not charge a customer, and it can not change, void or stop anything there." : "The app is allowed to send changes to AcceptPay. Press Lock it to make it read only again."}</span>${who}</div>
+      ${A.owner ? `<button type="button" class="btn own-only ppay-lock-b" id="ppay-lock-btn" data-on="${on ? 1 : 0}">${on ? "🔓 Unlock" : "🔒 Lock it"}</button>` : ""}</div>`;
+}
 // bring in the newest payments: the function reads up to 400 at a time, so it is asked again while there are more
 async function ppayApGet(since) {
   let added = 0, d = null;
@@ -27344,6 +27361,7 @@ function ppayHtml() {
   const total = need.reduce((t, x) => t + x[2], 0), me = (typeof smMyFirst === "function" && smMyFirst()) || "";
   return `<section class="cl-tools ppay" id="ppay" data-atag-fixed="SC PAY"><h2>PAP payments</h2>
     <p class="ppay-lead">${total ? `${me ? esc(me) + ", " : ""}${total} thing${total === 1 ? "" : "s"} need${total === 1 ? "s" : ""} someone. Click a box to see them.` : "Nothing needs anyone right now."}</p>
+    ${ppayLockHtml()}
     ${PPAY.msg ? `<div class="ppay-msg${PPAY.msg.bad ? " bad" : ""}" role="status">${esc(PPAY.msg.m)}</div>` : ""}
     <div class="ppay-needs">${need.map(([k, name, n, ic]) => `<button type="button" class="ppay-need${n ? " has" : ""}" data-ppay-need="${k}"><span aria-hidden="true">${ic}</span><b>${n}</b><small>${name}</small></button>`).join("")}</div>
     <div class="ppay-sqs">${sq("plans", "📋", "Plans", (D.plans || []).length)}${sq("files", "📥", "Settlement files", files.length)}${sq("flags", "🚩", "Follow up", F.length)}${sq("set", "⚙", "Settings", null)}
@@ -28011,6 +28029,11 @@ function ppayWire() {
   q("#ppay-ap-get")?.addEventListener("click", apGet); q("#ppay-ap-get2")?.addEventListener("click", apGet);
   q("#ppay-ap-auto")?.addEventListener("change", async e => { const { error } = await db.rpc("acceptpay_set_auto", { p_on: e.target.checked });
     await ppayFresh(error ? "Not saved: " + rpcErr(error) : e.target.checked ? "✓ The app looks at AcceptPay by itself two times a day." : "✓ The app does not look by itself any more. Press Get the newest payments when you want them.", !!error); });
+  root.querySelector("#ppay-lock-btn")?.addEventListener("click", async e => { const on = e.currentTarget.dataset.on === "1";
+    if (on) { const a = await askChoice("Unlock AcceptPay?", `<span class="ask-sq"></span>While it is locked, the app can only read from AcceptPay. If you unlock it, the app is allowed to send changes to AcceptPay (a charge, a change, a stop). Today the app has no button that does that, so nothing changes until one is built.`, [["", "🔒|Keep it locked|The app only reads"], ["unlock", "🔓|Yes, unlock it|Allow changes"]]);
+      if (a !== "unlock") return; }
+    const { error } = await db.rpc("acceptpay_set_lock", { p_on: !on });
+    await ppayFresh(error ? "Not done: " + rpcErr(error) : on ? "AcceptPay is unlocked. The app is allowed to send changes to AcceptPay. Press Lock it when you are done." : "✓ AcceptPay is locked. The app can only read from it.", !!error || on); });
   q("#ppay-ap-off")?.addEventListener("click", async () => { const a = await askChoice("Take the connection to AcceptPay off?", `<span class="ask-sq"></span>The username and key are erased from the vault. The files already brought in stay. The emailed files keep working. To connect again you type the username and key again.`, [["off", "✂|Yes, take it off|Erase the username and key"], ["", "No, keep it"]]);
     if (a !== "off") return; const { error } = await db.rpc("acceptpay_set_keys", { p_user: "", p_key: "" }); PPAY.apEdit = false; await ppayFresh(error ? "Not done: " + rpcErr(error) : "✓ The connection is off. The username and key are erased.", !!error); });
   // settings

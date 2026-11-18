@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS public.acceptpay_conn (id int PRIMARY KEY DEFAULT 1 C
 INSERT INTO public.acceptpay_conn (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 ALTER TABLE public.acceptpay_conn ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.acceptpay_conn FROM PUBLIC, anon, authenticated;
+-- THE LOCK (Carlo, Nov 18, 2026): while it is on, the connection can only READ from AcceptPay. Nothing can be charged, changed,
+-- voided or stopped there. It starts ON. The Edge Function asks _acceptpay_locked() before any call that is not a read, and
+-- refuses when the answer is not a clear "no" (so a missing answer counts as locked).
+ALTER TABLE public.acceptpay_conn ADD COLUMN IF NOT EXISTS locked boolean NOT NULL DEFAULT true;
+ALTER TABLE public.acceptpay_conn ADD COLUMN IF NOT EXISTS locked_at timestamptz;
+ALTER TABLE public.acceptpay_conn ADD COLUMN IF NOT EXISTS locked_by bigint;
 
 -- one line for each AcceptPay transaction already brought in, with the bank's answer it had then
 CREATE TABLE IF NOT EXISTS public.acceptpay_txn (id bigint PRIMARY KEY, response text, status text, inbox_id bigint, times int NOT NULL DEFAULT 1,
@@ -46,7 +52,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'vault' AS $f$
   SELECT CASE WHEN NOT coalesce(public._sec_ok(), false) THEN NULL ELSE
     jsonb_build_object('owner', coalesce(public._is_owner(), false),
       'has_keys', (SELECT count(*) = 2 FROM vault.secrets WHERE name IN ('acceptpay_username', 'acceptpay_api_key')),
-      'last_fetch', c.last_fetch, 'last_since', c.last_since, 'last_note', c.last_note, 'auto', c.auto, 'test_ok', c.test_ok)
+      'last_fetch', c.last_fetch, 'last_since', c.last_since, 'last_note', c.last_note, 'auto', c.auto, 'test_ok', c.test_ok,
+      'locked', c.locked, 'locked_at', c.locked_at, 'locked_by', (SELECT coalesce(nullif(e.first_name, ''), split_part(u.login_email::text, '@', 1)) FROM app_users u LEFT JOIN employees e ON e.id = u.employee_id WHERE u.id = c.locked_by))
     || CASE WHEN coalesce(public._is_owner(), false) THEN jsonb_build_object('env', c.env, 'user_hint', c.user_hint, 'keys_at', c.keys_at,
          'tested_at', c.tested_at, 'test_note', c.test_note, 'account', c.account, 'last_error', c.last_error, 'last_error_at', c.last_error_at,
          'auto_at', c.auto_at, 'brought_in', (SELECT count(*) FROM acceptpay_txn)) ELSE '{}'::jsonb END END
@@ -81,7 +88,24 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'auto', coalesce(p_on, false));
 END $f$;
 
+-- the lock: on = read only. Owners only (by role). Each change is written in the history.
+CREATE OR REPLACE FUNCTION public.acceptpay_set_lock(p_on boolean) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE v_was boolean; v_on boolean := coalesce(p_on, true);
+BEGIN
+  IF NOT coalesce(public._is_owner(), false) THEN RAISE EXCEPTION 'Only an owner can do this'; END IF;
+  SELECT locked INTO v_was FROM acceptpay_conn WHERE id = 1;
+  UPDATE acceptpay_conn SET locked = v_on, locked_at = now(), locked_by = public.current_app_user_id() WHERE id = 1;
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, old_values, new_values)
+  VALUES ('acceptpay_conn', 1, 'update', public.current_app_user_id(), jsonb_build_object('locked', v_was), jsonb_build_object('locked', v_on));
+  RETURN jsonb_build_object('ok', true, 'locked', v_on);
+END $f$;
+
 -- ---- for the Edge Function only (service role) ----
+CREATE OR REPLACE FUNCTION public._acceptpay_locked() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
+  SELECT coalesce((SELECT locked FROM acceptpay_conn WHERE id = 1), true) $f$;
+
 CREATE OR REPLACE FUNCTION public._acceptpay_cron_key() RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'vault', 'extensions' AS $f$
 DECLARE v text;
@@ -184,10 +208,12 @@ END $f$;
 
 REVOKE EXECUTE ON FUNCTION public._acceptpay_secret_set(text, text), public._acceptpay_cron_key(), public._acceptpay_secrets(), public._acceptpay_note(jsonb),
   public._acceptpay_new(jsonb), public._acceptpay_file_in(jsonb, date), public._acceptpay_done(date, text), public._acceptpay_dispatch(),
-  public.acceptpay_allowed(), public.acceptpay_state(), public.acceptpay_set_keys(text, text), public.acceptpay_set_auto(boolean) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.acceptpay_allowed(), public.acceptpay_state(), public.acceptpay_set_keys(text, text), public.acceptpay_set_auto(boolean) TO authenticated;
+  public.acceptpay_allowed(), public.acceptpay_state(), public.acceptpay_set_keys(text, text), public.acceptpay_set_auto(boolean),
+  public.acceptpay_set_lock(boolean), public._acceptpay_locked() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.acceptpay_allowed(), public.acceptpay_state(), public.acceptpay_set_keys(text, text), public.acceptpay_set_auto(boolean),
+  public.acceptpay_set_lock(boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public._acceptpay_secrets(), public._acceptpay_note(jsonb), public._acceptpay_new(jsonb), public._acceptpay_file_in(jsonb, date),
-  public._acceptpay_done(date, text) TO service_role;
+  public._acceptpay_done(date, text), public._acceptpay_locked() TO service_role;
 
 -- twice a day (6:23 a.m. and 4:23 p.m. Ottawa winter time; an hour later in summer)
 SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname = 'acceptpay-check';
