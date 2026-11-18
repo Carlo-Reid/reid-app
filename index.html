@@ -32123,6 +32123,22 @@ function parseBooneSlip(lines) {
   const all = [...by.values()];
   return { docNo, lines: all.filter(x => x.cost != null), unread: all.filter(x => x.cost == null).map(x => x.code) };
 }
+// Auto update uses each supplier's own Rules too (Carlo, Nov 18, 2026: "i want the rules to apply to the Auto Update as well"):
+// the boxes drawn in Supplier invoices → Rules are read on the paper's first page. { vals, n (how many rules gave something), of, sid, fits }
+async function smRules(blob, name, sup, say) {
+  try { await loadSuppliers(); const sid = supIdOf(sup); if (!sid) return null;
+    await srLoad(); const RR = srRulesOf(sid).filter(r => r.w); if (!RR.length) return null;
+    if (!(/\.(pdf|png|jpe?g)$/i.test(name || "") || /pdf|^image\//i.test(blob.type || ""))) return null;
+    say?.("Reading it by " + srPos(sinvShort(sup)) + " rules…");
+    await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+    const f = new File([blob], name || "paper.pdf", { type: blob.type || "" }), c0 = await srFile(f); if (!c0) return null;
+    const cnt = z => Object.keys(z.vals || {}).length; let z = await srRead(c0, RR);
+    if (cnt(z) < 2) { const z2 = await srRead(smTurn(c0, 180), RR); if (cnt(z2) > cnt(z)) z = z2; }   // a page scanned upside down
+    const n = cnt(z), kinds = new Set(RR.map(r => r.f)).size;
+    return { vals: z.vals, n, of: kinds, sid, fits: n >= Math.max(2, Math.ceil(kinds / 2)) };
+  } catch { return null; } }
+const smRulesWords = (R, sup) => { const z = R && R.rules; if (!z) return ""; const b = ["number", "date", "po", "due", "subtotal", "hst", "total"].filter(f => z[f] != null).map(f => `${SR_SHORT[f]} ${srShow(f, z[f])}`);
+  return b.length ? `📏 By ${srPos(sinvShort(sup || "") || "the supplier")} rules I read: ${b.join(" · ")}` : ""; };
 async function supMailRead(row, supplierPick, opts) {
   const f = await db.rpc("supplier_mail_file", { p_id: row.id });
   if (f.error || !f.data) throw new Error(f.error ? rpcErr(f.error) : "the file is missing");
@@ -32143,8 +32159,12 @@ async function supMailRead(row, supplierPick, opts) {
   if (!sup) sup = supplierBySign(doc.lines.join(" "));
   if (!sup) { const g = await db.rpc("supplier_guess", { p_text: doc.lines.slice(0, 25).join(" ") }); sup = g.data || null; }
   if (!sup) return { status: "needs_supplier", result: { note: "Pick the supplier, then press Read it" } };
+  // this supplier's own Rules (the boxes drawn on their page): the P.O. number they read is looked for too, and on a page that fits the rules
+  // the order number and the purchase date they read are the ones used
+  const RZ = await smRules(blob, f.data.name, sup, opts?.say), rz = RZ?.vals || {}, RU = RZ && RZ.n ? { rules: { ...rz, n: RZ.n, of: RZ.of, fits: RZ.fits } } : {};
+  if (opts?.stopped?.()) throw new Error("stopped");
   // tie the file to the POs printed on it (a PO then shows it, and so does the supplier's invoice once it's matched to that PO)
-  let pos = []; try { const lp = await db.rpc("supplier_mail_link_pos", { p_id: row.id, p_text: doc.lines.join(" ").slice(0, 100000), p_supplier: sup }); pos = lp.data || []; } catch {}
+  let pos = []; try { const lp = await db.rpc("supplier_mail_link_pos", { p_id: row.id, p_text: ((rz.po ? "PO " + rz.po + " " : "") + doc.lines.join(" ")).slice(0, 100000), p_supplier: sup }); pos = lp.data || []; } catch {}
   const totals = {}, refs = []; let unread = [], unknown = [], refUsed = null, dateUsed = null;
   const add = (c) => { for (const [k, v] of Object.entries(c || {})) totals[k] = (totals[k] || 0) + v; };
   const boone = doc.kind === "pdf" ? parseSupplierLines(doc.lines) : { invoices: [] };
@@ -32162,6 +32182,7 @@ async function supMailRead(row, supplierPick, opts) {
     unread = boone.unread;
   } else {
     const g = await parseGenericInvoice(doc.rows, sup, doc.kind === "sheet" || doc.kind === "word"), rd = invoiceRefDate(doc.lines); unread = g.unread; unknown = g.unknown || [];
+    if (RZ?.fits) { if (rz.number) rd.ref = rz.number; if (rz.date) rd.date = rz.date; }
     const ref = rd.ref ? "invoice " + rd.ref : "email " + fmtDate(row.received || new Date().toISOString()) + " " + (row.file || "");
     refUsed = ref.slice(0, 80); dateUsed = rd.date || ymd(new Date(row.received || Date.now()));
     if (g.lines.length) {
@@ -32170,14 +32191,14 @@ async function supMailRead(row, supplierPick, opts) {
     }
   }
   const n = (totals["added"] || 0) + (totals["new item waiting"] || 0), any = Object.values(totals).reduce((a, b) => a + b, 0);
-  if (slipNote) return { supplier: sup, status: n ? "imported" : "nothing", result: { counts: totals, refs, unread: [], unknown: [], pos, note: slipNote + (pos.length ? "" : " No PO number on it was found in the app.") } };
-  if (!any && noPricesOn(doc.lines)) return { supplier: sup, status: "nothing", result: { counts: {}, refs: [], unread: [], unknown: [], pos,
+  if (slipNote) return { supplier: sup, status: n ? "imported" : "nothing", result: { ...RU, counts: totals, refs, unread: [], unknown: [], pos, note: slipNote + (pos.length ? "" : " No PO number on it was found in the app.") } };
+  if (!any && noPricesOn(doc.lines)) return { supplier: sup, status: "nothing", result: { ...RU, counts: {}, refs: [], unread: [], unknown: [], pos,
     note: `No prices on it: it's a ${/pick(ing)? (ticket|list)|cueillette/i.test(doc.lines.join(" ")) ? "picking ticket" : /packing list/i.test(doc.lines.join(" ")) ? "packing list" : "packing slip"}, so there are no costs to update. ${sup}'s invoice for this order will have the prices.${pos.length ? "" : " No PO number on it was found in the app."}` } };
   // "couldn't read" only when there's something left for a person to do: parts to match, or no PO. With its PO attached and
   // nothing to match, it's done (it files itself), and the note says no costs were checked (Carlo, Nov 9)
   const done = !n && !any && !unknown.length && pos.length;
   return { supplier: sup, status: n ? "imported" : any || done ? "nothing" : "unread",
-    result: { counts: totals, refs, unread: unread.slice(0, 30), unknown, ref: refUsed, date: dateUsed, pos,
+    result: { ...RU, counts: totals, refs, unread: unread.slice(0, 30), unknown, ref: refUsed, date: dateUsed, pos,
       note: any ? "" : done ? `Attached to its PO. No part number on it is in the price book, so no costs were checked.` : unknown.length ? `${unknown.length} line${unknown.length > 1 ? "s" : ""} with a part number this app doesn't know yet: match ${unknown.length > 1 ? "each" : "it"} to a price book item once (or add it as a new item), and next time it's automatic.` : "No lines with a part number we know were found" } };
 }
 // a paper that's done (read, and its PO attached) goes to its supplier's list by itself (Carlo, Nov 9); one put back by hand stays put
@@ -32241,7 +32262,7 @@ async function smReadAgain(id) {
   w.querySelector(".smb").classList.add(ok ? "smb-ok" : bad ? "smb-bad" : "smb-wait");
   w.querySelector(".smb-top").innerHTML = `<div class="smb-ic">${ok ? "✅" : bad ? "⚠️" : "🟡"}</div><h3>${ok ? `Found it and sent it to ${esc(sn)}` : bad ? "It couldn't be read" : pos.length ? "Found its PO, but it still needs something" : "No PO found on it"}</h3><div class="smb-file">${esc(row.file || row.subject || "")}</div><div class="smb-tries">${smTriesTxt(Number(R.tries) || 0)}</div>`;
   w.querySelector(".smb-mid").innerHTML = `${pos.length ? `<p><b>PO ${pos.map(esc).join(", ")}</b></p>` : ok ? "" : `<p>No number on the page matches a PO in the app. It stays on the list: make a PO for it, or attach one yourself.</p>`}
-    ${ok ? `<p>It's now on ${esc(sn)}'s list (📤 Sent to suppliers, and the supplier's page).</p>` : ""}${price ? `<p>${esc(price)}</p>` : ""}${R.note ? `<p class="quiet">${esc(R.note)}</p>` : ""}`;
+    ${ok ? `<p>It's now on ${esc(sn)}'s list (📤 Sent to suppliers, and the supplier's page).</p>` : ""}${price ? `<p>${esc(price)}</p>` : ""}${smRulesWords(R, sn) ? `<p>${esc(smRulesWords(R, sn))}</p>` : ""}${R.note ? `<p class="quiet">${esc(R.note)}</p>` : ""}`;
   w.querySelector(".smb-btns").innerHTML = `<button class="apb apb-green" type="button" data-smb-exit><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">OK</span></button>`;   // no "Let's do the next one" any more: Read it again reads this one paper only (Carlo, Nov 10)
   const close = () => { w.remove(); document.removeEventListener("keydown", esc1); }, esc1 = e => { if (e.key === "Escape") close(); };
   document.addEventListener("keydown", esc1);
@@ -33052,7 +33073,7 @@ function supMailHtml(msg) {
         <div class="smc-bar"><span class="smc-ico">${ico}</span><span class="smc-head"><span class="smc-docno">Document ${idx + 1} of ${rows.length}</span></span>${smTriesOf(r) ? `<span class="sm-tries" title="How many times this paper has been read">🔁 ${smTriesTxt(smTriesOf(r))}</span>` : ""}</div>
         <div class="smc-headline">${esc(head)}</div>
         <header class="smc-top eco-say smc-eco" data-eco-top="${r.id}">${ecoFace(!r.supplier || (r.status === "unread" && unk.length) ? "confused" : r.status === "error" ? "sad" : "happy")}<div class="eco-bubble"><div class="smc-title-t">${r.supplier ? `From what I can tell, <b>${esc(smMyFirst())}</b>, we got this paperwork from <b>${esc(r.supplier)}</b>` : `<b>${esc(smMyFirst())}</b>, I can not tell who sent this paperwork. We got it`}${when ? ` <span style="white-space:nowrap">on <b>${esc(when.replace(/\.$/, ""))}</b>.</span>` : "."}</div>
-          <div class="smc-meta">Sent by: <b>${scan ? "🖨 the office scanner" : esc(r.from || r.from_addr || "?")}</b>${r.file ? ` · File: ${esc(r.file)}` : ""}${r.subject && !/^message from/i.test(r.subject) ? ` · “${esc(r.subject)}”` : ""}</div>${r.status === "unread" && unk.length ? `<div class="smc-eco-more">${esc(smMyFirst())}, please help me! Some of these parts are not in our system yet.</div>` : ""}</div></header>
+          <div class="smc-meta">Sent by: <b>${scan ? "🖨 the office scanner" : esc(r.from || r.from_addr || "?")}</b>${r.file ? ` · File: ${esc(r.file)}` : ""}${r.subject && !/^message from/i.test(r.subject) ? ` · “${esc(r.subject)}”` : ""}</div>${smRulesWords(R, r.supplier) ? `<div class="smc-meta smc-rules">${esc(smRulesWords(R, r.supplier))}</div>` : ""}${r.status === "unread" && unk.length ? `<div class="smc-eco-more">${esc(smMyFirst())}, please help me! Some of these parts are not in our system yet.</div>` : ""}</div></header>
         ${r.status === "unread" && unk.length ? "" : sub ? `<div class="smc-sub smc-do-${tone}"><span class="smc-do-t">${tone === "wait" || tone === "off" ? "ℹ️ Good to know" : tone === "ok" ? "✅ Almost done" : "👉 What to do"}</span><span>${esc(sub)}</span></div>` : ""}
         ${r.file ? `<div class="smc-grid">
           <section class="smc-part ${need1 ? "smc-need" : ""}"><h4><span>1</span> Who is it from? ${tag(need1, !!r.supplier)}</h4>
