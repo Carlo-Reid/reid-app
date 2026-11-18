@@ -7,7 +7,7 @@ ALTER TABLE public.supplier_invoices ADD COLUMN IF NOT EXISTS due_date date;
 
 CREATE TABLE IF NOT EXISTS public.supplier_read_rules (
   supplier_id bigint PRIMARY KEY,
-  rules jsonb NOT NULL DEFAULT '[]'::jsonb,     -- [{id, f, x, y, w, h, fmt}]: f = date | number | po | due | subtotal | hst | total; x, y, w, h in percent of the page
+  rules jsonb NOT NULL DEFAULT '[]'::jsonb,     -- [{id, f, x, y, w, h, fmt, g?}]: f = date | number | po | due | subtotal | hst | total; x, y, w, h in percent of the page
   notes text,                                    -- plain words: anything else this supplier's papers should do
   updated_by bigint, updated_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE public.supplier_read_rules ENABLE ROW LEVEL SECURITY;
@@ -34,7 +34,9 @@ BEGIN
       RAISE EXCEPTION 'Rule %: draw its box on the page', n; END IF;
     v := v || jsonb_build_array(jsonb_build_object('id', coalesce(nullif(e->>'id', ''), 'r' || n), 'f', f,
       'x', round((e->>'x')::numeric, 2), 'y', round((e->>'y')::numeric, 2), 'w', round((e->>'w')::numeric, 2), 'h', round((e->>'h')::numeric, 2),
-      'fmt', CASE WHEN e->>'fmt' = 'dmy' THEN 'dmy' ELSE 'mdy' END));
+      'fmt', CASE WHEN e->>'fmt' = 'dmy' THEN 'dmy' ELSE 'mdy' END)
+      -- g = which kind of the supplier's papers the rule is for (empty or 'Invoice' = their invoice; Boone also has 'Packing slip / Sales order')
+      || CASE WHEN nullif(btrim(coalesce(e->>'g', '')), '') IS NULL OR btrim(e->>'g') = 'Invoice' THEN '{}'::jsonb ELSE jsonb_build_object('g', left(btrim(e->>'g'), 40)) END);
   END LOOP;
   INSERT INTO supplier_read_rules (supplier_id, rules, notes, updated_by, updated_at)
   VALUES (p_supplier, v, nullif(btrim(left(coalesce(p_notes, ''), 4000)), ''), public.current_app_user_id(), now())
@@ -76,3 +78,12 @@ SELECT s.id, '[
   {"id":"b7","f":"total","x":82,"y":89.6,"w":15,"h":3.6,"fmt":"mdy"}]'::jsonb, NULL
 FROM public.suppliers s WHERE s.id = 1 AND s.name ILIKE 'Boone%'
 ON CONFLICT (supplier_id) DO NOTHING;
+
+-- Boone's second kind of paper: its "Sales order / Packing slip" (Carlo, Nov 18, 2026; measured on packing slip C312797, both pages).
+-- Added once, only when Boone's rules have no packing slip rule yet, so what a person changes in the app stays.
+UPDATE public.supplier_read_rules r SET rules = r.rules || '[
+  {"id":"s1","f":"number","g":"Packing slip / Sales order","x":73,"y":15.8,"w":24,"h":2.3,"fmt":"mdy"},
+  {"id":"s2","f":"date","g":"Packing slip / Sales order","x":73,"y":17.3,"w":24,"h":2.3,"fmt":"mdy"},
+  {"id":"s3","f":"po","g":"Packing slip / Sales order","x":4,"y":31.3,"w":24,"h":3.2,"fmt":"mdy"}]'::jsonb, updated_at = now()
+WHERE r.supplier_id = 1 AND EXISTS (SELECT 1 FROM public.suppliers s WHERE s.id = 1 AND s.name ILIKE 'Boone%')
+  AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(r.rules) e WHERE coalesce(e->>'g', '') ~* 'slip' OR e->>'id' IN ('s1', 's2', 's3'));

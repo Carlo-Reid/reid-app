@@ -8627,6 +8627,11 @@ article.ie .ie-grp .ie-notes2.ie-notes-in { margin-top: 12px; }
 @media print { #sr-box { display: none !important; } }
 .sinv-due { white-space: nowrap; } .sinv-due.late { color: #b3261e; font-weight: 700; }
 .dropin-t .di-due { display: block; margin-top: 4px; font-size: 12.5px; color: #4a5a68; } .dropin-t .di-due input { font-size: 13px; }
+#sr-box .sr-forms { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; padding: 10px 12px; background: #f4f8fc; border: 1.5px solid #bcd0e3; border-radius: 12px; color: #23415f; font-size: 15px; }
+#sr-box .sr-forms .sr-form.on { background: #dbe9f6; border: 2px solid #23415f; font-weight: 800; }
+#sr-box .sr-formsay { flex: 1 1 100%; font-size: 13.5px; color: #3d566f; }
+#sr-box .sr-formed { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin: 0 0 10px; }
+#sr-box .sr-formed input { font: inherit; padding: 6px 8px; border: 1.5px solid #bcd0e3; border-radius: 8px; min-width: 0; width: 220px; max-width: 100%; }
 .cpy-btn { display: inline-grid; place-items: center; vertical-align: middle; width: 26px; height: 26px; margin: 0 0 0 6px; padding: 0; border: 1px solid #9fb6cc; border-radius: 5px; background: #fff; color: #23415f; font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 1px 2px rgba(35, 65, 95, .15); font-weight: 700; text-indent: 0; letter-spacing: 0; text-transform: none; }
 .cpy-btn:hover, .cpy-btn:focus-visible { background: #e6eff8; border-color: #23415f; } .cpy-btn.cpy-ok { background: #1f9d4a; border-color: #1f9d4a; color: #fff; } .cpy-btn.cpy-sure { width: auto; padding: 0 8px; background: #c0392b; border-color: #c0392b; color: #fff; }
 body.cpy-on #main, body.cpy-on #search-page { cursor: crosshair; } body.cpy-on #main *, body.cpy-on #search-page * { cursor: crosshair !important; } body.cpy-on .cpy-btn { cursor: pointer !important; outline: 2px solid #c0392b; }
@@ -21836,7 +21841,7 @@ async function dropInFill(x, text, C) {
   if (x.credit) { if (x.subtotal) x.subtotal = -Math.abs(x.subtotal); if (x.hst) x.hst = -Math.abs(x.hst); }
   // this supplier's own rules (Carlo, Nov 18, 2026): each rule's box on the first page is read by itself, and what it finds wins over the general reading
   { const sid = DROPIN.sup || x.sup || x.other; await srLoad(); const RR = sid ? srRulesOf(sid).filter(r => r.w) : [];
-    if (RR.length && C[0]) try { const z = (await srRead(C[0], RR)).vals, sg = x.credit ? -1 : 1; x.ruled = Object.keys(z);
+    if (RR.length && C[0]) try { const z = (await srReadBest(C[0], RR)).vals, sg = x.credit ? -1 : 1; x.ruled = Object.keys(z);
       if (z.number && !hit) x.number = z.number; if (z.date) x.date = z.date; if (z.po) x.po = z.po; if (z.due) x.due = z.due;
       if (z.subtotal != null) x.subtotal = sg * Math.abs(z.subtotal); if (z.hst != null) x.hst = sg * Math.abs(z.hst); if (z.total != null) x.total = sg * Math.abs(z.total); } catch { } }
   x.lines = sinvDedupLines(sinvParseLines(text, x.credit), x.subtotal ?? (x.total != null ? Math.round(x.total / 1.13 * 100) / 100 : null));
@@ -21901,6 +21906,13 @@ async function dropInFiles(files) {
           if (g.amount != null && y.total == null && !y.slip) y.total = g.amount;   // handwritten: the amount from the statement
           if (g.guess) y.guess = g.guess;
           y.busy = null; dropInMatch(y); }
+        // pages of one paper that the general reading split up, but this supplier's rules read the same number on each (Boone's 2-page packing slip): one paper again (Carlo, Nov 18, 2026)
+        { const mine = DROPIN.items.filter(z => z.file === x.file && z.f === x.f && !z.kind && !z.err && z.pages && z.number && (z.ruled || []).includes("number")), pgNo = z => { const m = String(z.T || "").match(/\bPAGE\s*(?:NO\.?|#|:)?\s*(\d{1,2})\b/); return m ? +m[1] : /CONTINU/.test(String(z.T || "")) ? 50 : 99; };
+          for (const a of mine) { if (a.gone) continue; const same = mine.filter(b => b !== a && !b.gone && b.number === a.number && !!b.slip === !!a.slip && (b.sup || b.other || 0) === (a.sup || a.other || 0)); if (!same.length) continue;
+            const all = [a, ...same].map((z, k) => ({ z, k })).sort((p, q) => pgNo(p.z) - pgNo(q.z) || p.k - q.k).map(o => o.z), first = all[0];
+            a.pages = all.flatMap(z => z.pages); a.lines = all.flatMap(z => z.lines || []); a.T = all.map(z => z.T || "").join("\n"); a.head = first.head || a.head;
+            for (const k of ["date", "po", "due", "subtotal", "hst", "total"]) if (a[k] == null || a[k] === "") a[k] = all.map(z => z[k]).find(v => v != null && v !== "") ?? a[k];
+            a.part = `${a.pages.length} pages of ${cv.length}, put together by their number`; same.forEach(b => { b.gone = true; const i = DROPIN.items.indexOf(b); if (i >= 0) DROPIN.items.splice(i, 1); }); dropInMatch(a); } }
         // a page without the supplier's name on it (a handwritten invoice) is the supplier's whose statement is in the same file
         const stIt = DROPIN.items.find(z => z.file === x.file && z.kind === "statement"), stSup = (stIt && (stIt.sup || (!stIt.unsure && DROPIN.sup)))
           || (() => { const sure = DROPIN.items.filter(z => z.file === x.file && !z.unsure).map(z => z.sup || DROPIN.sup).filter(Boolean); return new Set(sure).size === 1 ? sure[0] : null; })();   // or a page in the file that's plainly theirs
@@ -22103,7 +22115,7 @@ function srParse(f, text, fmt) {   // what a rule's box says, as the thing the r
     for (const m of T.matchAll(/(\d{1,2})\s*[\/\-.|]\s*(\d{1,2})\s*[\/\-.|]\s*(\d{4}|\d{2})(?!\d)/g)) { let a = +m[1], b = +m[2], y = +m[3]; if (y < 100) y += 2000; const mo = fmt === "dmy" ? b : a, d = fmt === "dmy" ? a : b;
       if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && y >= 2015 && y <= now + 2) return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
     return null; }
-  if (f === "number") { const U = T.toUpperCase(), a = [...U.matchAll(/\b([A-Z]{1,3}[- ]?\d{5,}(?:[-.]\d{1,3})?)\b/g)].map(m => m[1].replace(/[ ]/g, "")), b = [...U.matchAll(/\b(\d{5,}(?:[-.]\d{1,3})?)\b/g)].map(m => m[1]); return a[0] || b[0] || null; }
+  if (f === "number") { const U = T.toUpperCase().replace(/\(\s?0?(?=\d{6}(?!\d))/g, "C"), a = [...U.matchAll(/\b([A-Z]{1,3}[- ]?\d{5,}(?:[-.]\d{1,3})?)\b/g)].map(m => m[1].replace(/[ ]/g, "")), b = [...U.matchAll(/\b(\d{5,}(?:[-.]\d{1,3})?)\b/g)].map(m => m[1]); return a[0] || b[0] || null; }
   if (f === "po") { const m = T.match(/(?<![\d.,\/])(\d{6,12}(?:-\d{1,3})?)(?![\d\/])/); return m ? m[1] : null; }
   const am = [...T.matchAll(/(\d[\d, ]*[.,]\d{2})(?!\d)\s*(-)?/g)].map(m => (m[2] ? -1 : 1) * Number(m[1].replace(/[ ,](?=\d{3})/g, "").replace(/,(\d{2})$/, ".$1").replace(/[ ,]/g, "")));
   return am.length && isFinite(am[am.length - 1]) ? am[am.length - 1] : null;
@@ -22123,14 +22135,35 @@ async function srRead(c, rules) {   // every rule read off one page: { vals: { d
       if (near(r2((t - h) * .13), h)) set("subtotal", r2(t - h)); else if (near(r2(s * .13), h)) set("total", r2(s + h)); else if (near(r2(s * 1.13), t)) set("hst", r2(t - s)); } }
   return out;
 }
+// A supplier can have more than one kind of paper (Boone: its invoice, and its Sales order / Packing slip). Each rule belongs to one kind (r.g).
+// srReadBest reads a page with each kind's boxes, in order, and keeps the kind that fits the page best (Carlo, Nov 18, 2026).
+const SR_FORM0 = "Invoice";
+const srFormOf = r => String(r?.g || "").trim() || SR_FORM0;
+function srForms(rules) { const m = new Map(); for (const r of rules || []) { const g = srFormOf(r); if (!m.has(g)) m.set(g, []); m.get(g).push(r); } return [...m].map(([name, rules]) => ({ name, rules })); }
+async function srReadBest(c, rules) {
+  const F = srForms((rules || []).filter(r => r.w)); let best = null;
+  for (const f of F) { const z = await srRead(c, f.rules), n = Object.keys(z.vals).length, of = new Set(f.rules.map(r => r.f)).size, sc = of ? n / of : 0;
+    const cand = { ...z, form: f.name, n, of, sc }; if (!best || sc > best.sc + 1e-9 || (Math.abs(sc - best.sc) < 1e-9 && n > best.n)) best = cand;
+    if (n >= 2 && sc >= .75) break; }   // this kind fits: no need to try the others
+  return best || { vals: {}, by: {}, form: "", n: 0, of: 0, sc: 0 };
+}
 const srPos = n => /['’]s$/i.test(n) ? n : n + "'s";
 const srShow = (f, v) => v == null ? "" : f === "date" || f === "due" ? fmtDate(v) : f === "subtotal" || f === "hst" || f === "total" ? money(v) : String(v);
-const SR = { sup: null, name: "", rules: [], notes: "", url: "", from: "", canvas: null, pick: null, tried: null, dirty: false, busy: "", can: false };
-async function srSample(sup) {   // a page to draw the boxes on: the first page of this supplier's newest invoice that has a copy
-  const rows = (SINV.data?.rows || []).filter(r => Number(r.supplier_id) === Number(sup) && r.pages > 0 && r.doc_type === "invoice" && Number(r.total) > 0 && !/packing slip/i.test(r.read_notes || "")).sort((a, b) => String(b.invoice_date || "").localeCompare(String(a.invoice_date || "")));
+const SR = { sup: null, name: "", rules: [], notes: "", url: "", from: "", canvas: null, pick: null, tried: null, dirty: false, busy: "", can: false, form: SR_FORM0, forms: [SR_FORM0], pages: {} };
+const srSlipName = n => /slip|pick|packing|ticket/i.test(n || "");
+async function srSample(sup, slip) {   // a page to draw the boxes on: the first page of this supplier's newest invoice (or packing slip) that has a copy
+  const rows = (SINV.data?.rows || []).filter(r => Number(r.supplier_id) === Number(sup) && r.pages > 0 && (slip ? /packing slip/i.test(r.read_notes || "") : r.doc_type === "invoice" && Number(r.total) > 0 && !/packing slip/i.test(r.read_notes || ""))).sort((a, b) => String(b.invoice_date || "").localeCompare(String(a.invoice_date || "")));
   for (const r of rows.slice(0, 4)) { try { const g = await db.rpc("supplier_invoice_get", { p_id: r.id }), p = (g.data?.pages || []).slice().sort((a, b) => (a.page_no || 0) - (b.page_no || 0))[0]; if (!p) continue;
-    const d = await db.rpc("supplier_doc_page", { p_id: p.id }); if (d.data) return { url: "data:image/jpeg;base64," + d.data, from: "their invoice " + r.number }; } catch { } }
+    const d = await db.rpc("supplier_doc_page", { p_id: p.id }); if (d.data) return { url: "data:image/jpeg;base64," + d.data, from: (slip ? "their packing slip " : "their invoice ") + r.number }; } catch { } }
   return null;
+}
+async function srFormGo(name) {   // show another kind of paper: its own boxes, on its own page
+  if (name === SR.form) return; SR.pages[SR.form] = { url: SR.url, from: SR.from, canvas: SR.canvas };
+  const pg = SR.pages[name]; Object.assign(SR, { form: name, pick: null, tried: null, msg: "", url: pg?.url || "", from: pg?.from || "", canvas: pg?.canvas || null });
+  if (pg?.url) return srDraw();
+  const sup = SR.sup; SR.busy = "Looking for one of their papers to show you…"; srDraw();
+  const s = await srSample(sup, srSlipName(name)); if (SR.sup !== sup || SR.form !== name || !document.getElementById("sr-box")) return;
+  if (s) { SR.url = s.url; SR.from = s.from; try { SR.canvas = await srCanvas(s.url); } catch { } } SR.busy = ""; srDraw();
 }
 function srCanvas(url) { return new Promise((ok, no) => { const im = new Image(); im.onload = () => { const c = document.createElement("canvas"); c.width = im.naturalWidth; c.height = im.naturalHeight; const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0); ok(c); }; im.onerror = () => no(new Error("I could not open that picture")); im.src = url; }); }
 async function srFile(f) {   // another paper to draw on: a PDF's first page, or a picture
@@ -22142,9 +22175,10 @@ async function srFile(f) {   // another paper to draw on: a PDF's first page, or
 }
 async function openSupRules(sup) {
   sup = Number(sup); await srLoad(true); const cur = SRULES.by?.[String(sup)] || {};
-  Object.assign(SR, { sup, name: dropInSupName(sup) || "this supplier", rules: (cur.rules || []).map(r => ({ ...r })), notes: cur.notes || "", url: "", from: "", canvas: null, pick: null, tried: null, dirty: false, busy: "Looking for one of their invoices to show you…", can: SRULES.can, msg: "" });
+  Object.assign(SR, { sup, name: dropInSupName(sup) || "this supplier", rules: (cur.rules || []).map(r => ({ ...r, g: srFormOf(r) })), notes: cur.notes || "", url: "", from: "", canvas: null, pick: null, tried: null, dirty: false, busy: "Looking for one of their invoices to show you…", can: SRULES.can, msg: "", pages: {} });
+  SR.forms = srForms(SR.rules).map(f => f.name); if (!SR.forms.length) SR.forms = [SR_FORM0]; SR.form = SR.forms[0];
   srDraw();
-  const s = await srSample(sup); if (SR.sup !== sup || !document.getElementById("sr-box")) return;
+  const s = await srSample(sup, srSlipName(SR.form)); if (SR.sup !== sup || SR.form !== SR.forms[0] || !document.getElementById("sr-box")) return;
   if (s) { SR.url = s.url; SR.from = s.from; try { SR.canvas = await srCanvas(s.url); } catch { } } SR.busy = ""; srDraw();
 }
 function srClose() { document.getElementById("sr-box")?.remove(); document.removeEventListener("keydown", srKey, true); }
@@ -22152,7 +22186,7 @@ async function srAskClose() { if (SR.dirty && SR.can && (await askChoice("Close 
 function srKey(e) { if (e.key !== "Escape" || document.querySelector(".ask-wrap, #walk-cam")) return; e.stopPropagation(); if (SR.pick) { SR.pick = null; srDraw(); } else srAskClose(); }
 function srDraw() {
   let box = document.getElementById("sr-box"); if (!box) { box = document.createElement("div"); box.id = "sr-box"; box.setAttribute("role", "dialog"); box.setAttribute("aria-modal", "true"); box.setAttribute("aria-label", "Rules for reading this supplier's papers"); document.body.append(box); document.addEventListener("keydown", srKey, true); box.addEventListener("pointerdown", e => { if (e.target === box) srAskClose(); }); }
-  const keep = box.querySelector(".sr-in")?.scrollTop || 0, can = SR.can, pk = SR.pick && SR.rules.find(r => r.id === SR.pick);
+  const keep = box.querySelector(".sr-in")?.scrollTop || 0, can = SR.can, pk = SR.pick && SR.rules.find(r => r.id === SR.pick), FR = SR.rules.filter(r => srFormOf(r) === SR.form);
   const zone = (r, i) => r.w ? `<div class="sr-z${SR.pick === r.id ? " on" : ""}" style="left:${r.x}%;top:${r.y}%;width:${r.w}%;height:${r.h}%;--c:${SR_COL[i % SR_COL.length]}"><span>${i + 1} ${esc(SR_SHORT[r.f] || "")}</span></div>` : "";
   const li = (r, i) => { const t = SR.tried?.[r.id]; return `<li class="sr-rule${SR.pick === r.id ? " on" : ""}" style="--c:${SR_COL[i % SR_COL.length]}"><span class="sr-n">${i + 1}</span><div class="sr-rb">
       <label class="sr-what">What it picks up <select data-sr-f="${r.id}" ${can ? "" : "disabled"}>${Object.keys(SR_F).map(k => `<option value="${k}"${r.f === k ? " selected" : ""}>${esc(SR_F[k])}</option>`).join("")}</select></label>
@@ -22161,17 +22195,20 @@ function srDraw() {
       ${t ? `<div class="sr-got ${t.v == null ? "sr-bad" : "sr-ok"}">${t.v == null ? `I could not read it in this box.${t.raw ? ` I saw: “${esc(t.raw.replace(/\s+/g, " ").slice(0, 60))}”` : ""}` : `✔ I read: <b>${esc(srShow(r.f, t.v))}</b>${t.fix ? " (the box did not read clearly, so I worked it out from the other two amounts)" : ""}`}</div>` : ""}
       ${can ? `<div class="sr-rbtn"><button type="button" class="sr-b" data-sr-draw="${r.id}">${SR.pick === r.id ? "Drawing… (Esc to stop)" : r.w ? "✏ Draw its box again" : "✏ Draw its box"}</button><button type="button" class="sr-b sr-del" data-sr-del="${r.id}">✕ Remove</button></div>` : ""}</div></li>`; };
   box.innerHTML = `<div class="sr-in"><header class="sr-top"><h2>Rules for reading ${esc(srPos(SR.name))} papers</h2><button type="button" class="sr-x" data-sr-x>✕ Close</button></header>
-    <p class="sr-lead">Each rule tells me <b>what to pick up</b> and <b>where it is printed</b> on their page. The coloured boxes on the page show where I look. These rules are used each time one of their papers is dropped in or read again.</p>
+    <p class="sr-lead">Each rule tells me <b>what to pick up</b> and <b>where it is printed</b> on their page. The coloured boxes on the page show where I look. These rules are used each time one of their papers is dropped in, read again, or read on Auto update.</p>
+    <div class="sr-forms"><b>Which kind of paper?</b>${SR.forms.map(f => `<button type="button" class="sr-b sr-form${f === SR.form ? " on" : ""}" data-sr-form="${esc(f)}" aria-pressed="${f === SR.form}">${esc(f)} (${SR.rules.filter(r => srFormOf(r) === f).length})</button>`).join("")}${can ? `<button type="button" class="sr-b" data-sr-formadd>＋ Add another kind of paper</button>` : ""}
+      <span class="sr-formsay">${SR.forms.length > 1 ? "Each kind of paper has its own boxes. When a paper comes in I try each kind and use the one that fits the page." : "If this supplier sends another kind of paper (a packing slip, a credit), add it here with its own boxes."}</span></div>
     ${SR.msg ? `<div class="sr-msg">${SR.msg}</div>` : ""}
     <div class="sr-grid"><div class="sr-left">
-      ${pk ? `<div class="sr-drawing" style="--c:${SR_COL[SR.rules.indexOf(pk) % SR_COL.length]}">✏ Hold the mouse down on the page and drag a box around <b>${esc(SR_SHORT[pk.f])}</b>. Make it a little bigger than the words.</div>` : ""}
-      ${SR.url ? `<div class="sr-page${SR.pick ? " drawing" : ""}" data-sr-page><img alt="A page of this supplier" src="${SR.url}" draggable="false">${SR.rules.map(zone).join("")}<div class="sr-rub" hidden></div></div><p class="sr-from">This page is ${esc(SR.from)}.</p>`
-        : `<div class="sr-nopage">${SR.busy ? esc(SR.busy) : "I have no invoice of theirs with a copy to show. Pick one of their papers with the button below."}</div>`}
+      ${pk ? `<div class="sr-drawing" style="--c:${SR_COL[Math.max(0, FR.indexOf(pk)) % SR_COL.length]}">✏ Hold the mouse down on the page and drag a box around <b>${esc(SR_SHORT[pk.f])}</b>. Make it a little bigger than the words.</div>` : ""}
+      ${SR.url ? `<div class="sr-page${SR.pick ? " drawing" : ""}" data-sr-page><img alt="A page of this supplier" src="${SR.url}" draggable="false">${FR.map(zone).join("")}<div class="sr-rub" hidden></div></div><p class="sr-from">This page is ${esc(SR.from)}.</p>`
+        : `<div class="sr-nopage">${SR.busy ? esc(SR.busy) : `I have no ${esc(SR.form.toLowerCase())} of theirs with a copy to show. Pick one of their papers with the button below.`}</div>`}
       <div class="sr-pick"><button type="button" class="sr-b" data-sr-other>📄 Use another paper of theirs</button><input type="file" accept="application/pdf,image/*" hidden data-sr-file></div></div>
-    <div class="sr-right"><h3>The rules (${SR.rules.length})</h3>
-      <div class="sr-acts"><button type="button" class="sr-sq" data-sr-try ${SR.canvas && SR.rules.some(r => r.w) && !SR.busy ? "" : "disabled"}><span>🔎</span><b>${SR.busy && SR.canvas ? esc(SR.busy) : "Try the rules on this page"}</b></button>
+    <div class="sr-right"><h3>The rules for: ${esc(SR.form)} (${FR.length})</h3>
+      ${can ? `<div class="sr-formed"><label class="sr-what">Name of this kind of paper <input type="text" maxlength="40" data-sr-fname value="${esc(SR.form)}"></label>${SR.forms.length > 1 ? `<button type="button" class="sr-b sr-del" data-sr-formdel>✕ Remove this kind of paper</button>` : ""}</div>` : ""}
+      <div class="sr-acts"><button type="button" class="sr-sq" data-sr-try ${SR.canvas && FR.some(r => r.w) && !SR.busy ? "" : "disabled"}><span>🔎</span><b>${SR.busy && SR.canvas ? esc(SR.busy) : "Try the rules on this page"}</b></button>
         ${can ? `<button type="button" class="sr-sq sr-save" data-sr-save ${SR.dirty ? "" : "disabled"}><span>💾</span><b>Save the rules</b></button>` : ""}<button type="button" class="sr-sq" data-sr-x><span>✕</span><b>Close</b></button></div>
-      ${SR.rules.length ? `<ol class="sr-list">${SR.rules.map(li).join("")}</ol>` : `<p class="sr-none">No rules yet. Their papers are read the usual way.</p>`}
+      ${FR.length ? `<ol class="sr-list">${FR.map(li).join("")}</ol>` : `<p class="sr-none">No rules for this kind of paper yet. Press Add a rule. A kind of paper with no rules is not kept.</p>`}
       ${can ? `<button type="button" class="sr-b sr-add" data-sr-add>＋ Add a rule</button>` : ""}
       <div class="sr-lines"><b>The lines of the invoice</b> (part number, what it is, quantity, price, discount, net amount) are read by a layout built into the app. If the lines of this supplier read wrong, write it below and tell Claude.</div>
       <label class="sr-notes">Other rules for this supplier, in plain words<textarea data-sr-notes rows="4" ${can ? "" : "readonly"} placeholder="Example: their credit memos have CREDIT in the top right corner.">${esc(SR.notes)}</textarea><span>These words are kept here for people to read. The reader does not act on them by itself.</span></label>
@@ -22183,19 +22220,27 @@ function srDraw() {
   box.querySelectorAll("[data-sr-fmt]").forEach(s => s.addEventListener("change", () => { R(s.dataset.srFmt).fmt = s.value; SR.tried = null; touch(); srDraw(); }));
   box.querySelectorAll("[data-sr-draw]").forEach(b => b.addEventListener("click", () => { if (!SR.url) { SR.msg = "First pick a page to draw on: press Use another paper of theirs."; return srDraw(); } SR.pick = SR.pick === b.dataset.srDraw ? null : b.dataset.srDraw; srDraw(); if (SR.pick) box.querySelector("[data-sr-page]")?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }));
   box.querySelectorAll("[data-sr-del]").forEach(b => b.addEventListener("click", () => { SR.rules = SR.rules.filter(r => r.id !== b.dataset.srDel); if (SR.pick === b.dataset.srDel) SR.pick = null; touch(); srDraw(); }));
-  box.querySelector("[data-sr-add]")?.addEventListener("click", () => { const used = new Set(SR.rules.map(r => r.f)), f = Object.keys(SR_F).find(k => !used.has(k)) || "date", id = "r" + Date.now().toString(36); SR.rules.push({ id, f, x: 0, y: 0, w: 0, h: 0, fmt: "mdy" }); if (SR.url) SR.pick = id; touch(); srDraw(); });
+  box.querySelectorAll("[data-sr-form]").forEach(b => b.addEventListener("click", () => srFormGo(b.dataset.srForm)));
+  box.querySelector("[data-sr-formadd]")?.addEventListener("click", () => { let nm = SR.forms.some(srSlipName) ? "Another paper" : "Packing slip", k = 2; while (SR.forms.includes(nm)) nm = "Another paper " + k++; SR.forms.push(nm); touch(); srFormGo(nm); });
+  box.querySelector("[data-sr-fname]")?.addEventListener("change", e => { const nm = e.target.value.replace(/\s+/g, " ").trim().slice(0, 40), old = SR.form; if (!nm || nm === old) return void setTimeout(srDraw, 0);
+    if (SR.forms.includes(nm)) { SR.msg = `<span class="sr-bad">Another kind of paper is already named ${esc(nm)}.</span>`; return void setTimeout(srDraw, 0); }
+    SR.rules.forEach(r => { if (srFormOf(r) === old) r.g = nm; }); SR.forms = SR.forms.map(f => f === old ? nm : f); if (SR.pages[old]) { SR.pages[nm] = SR.pages[old]; delete SR.pages[old]; } SR.form = nm; touch(); setTimeout(srDraw, 0); });
+  box.querySelector("[data-sr-formdel]")?.addEventListener("click", async () => { const old = SR.form, n = FR.length;
+    if (n && (await askChoice(`Remove ${old}?`, `<span class="ask-sq"></span>Its ${n} rule${n > 1 ? "s" : ""} will be removed. Nothing changes until you press Save the rules.`, [["go", "🗑|Yes, remove it|This kind of paper and its rules"], ["", "↩|No, keep it|Go back", true]])) !== "go") return;
+    SR.rules = SR.rules.filter(r => srFormOf(r) !== old); SR.forms = SR.forms.filter(f => f !== old); delete SR.pages[old]; SR.form = ""; touch(); srFormGo(SR.forms[0]); });
+  box.querySelector("[data-sr-add]")?.addEventListener("click", () => { const used = new Set(FR.map(r => r.f)), f = Object.keys(SR_F).find(k => !used.has(k)) || "date", id = "r" + Date.now().toString(36); SR.rules.push({ id, f, g: SR.form, x: 0, y: 0, w: 0, h: 0, fmt: "mdy" }); if (SR.url) SR.pick = id; touch(); srDraw(); });
   const nt = box.querySelector("[data-sr-notes]"); nt?.addEventListener("input", () => { SR.notes = nt.value; if (!SR.dirty) { SR.dirty = true; const sv = box.querySelector("[data-sr-save]"); if (sv) sv.disabled = false; } });
   const fi = box.querySelector("[data-sr-file]"); box.querySelector("[data-sr-other]")?.addEventListener("click", () => fi.click());
   fi?.addEventListener("change", async () => { const f = fi.files[0]; if (!f) return; SR.busy = "Opening " + f.name + "…"; srDraw();
     try { const c = await srFile(f); SR.canvas = c; SR.url = c.toDataURL("image/jpeg", 0.85); SR.from = f.name + " (page 1)"; SR.tried = null; SR.msg = ""; } catch (er) { SR.msg = esc(er.message || String(er)); } SR.busy = ""; srDraw(); });
   box.querySelector("[data-sr-try]")?.addEventListener("click", async () => { SR.busy = "Reading…"; srDraw();
-    try { await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); const z = await srRead(SR.canvas, SR.rules.filter(r => r.w)); SR.tried = z.by; const n = Object.values(z.by).filter(t => t.v != null).length;
+    try { await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); const z = await srRead(SR.canvas, FR.filter(r => r.w)); SR.tried = z.by; const n = Object.values(z.by).filter(t => t.v != null).length;
       SR.msg = n === Object.keys(z.by).length ? `<span class="sr-ok">✔ Every rule read something on this page. Check each one is right.</span>` : `<span class="sr-bad">${Object.keys(z.by).length - n} of ${Object.keys(z.by).length} rules read nothing. Draw those boxes again, a little bigger.</span>`; }
     catch (er) { SR.msg = `<span class="sr-bad">I could not read the page: ${esc(er.message || String(er))}</span>`; } SR.busy = ""; srDraw(); });
-  box.querySelector("[data-sr-save]")?.addEventListener("click", async () => { const bad = SR.rules.find(r => !r.w); if (bad) { SR.msg = `<span class="sr-bad">Rule ${SR.rules.indexOf(bad) + 1} has no box yet. Press Draw its box, or Remove it.</span>`; return srDraw(); }
+  box.querySelector("[data-sr-save]")?.addEventListener("click", async () => { const bad = SR.rules.find(r => !r.w); if (bad) { const g = srFormOf(bad); SR.msg = `<span class="sr-bad">${esc(g)}: rule ${SR.rules.filter(r => srFormOf(r) === g).indexOf(bad) + 1} has no box yet. Press Draw its box, or Remove it.</span>`; if (g !== SR.form) return srFormGo(g); return srDraw(); }
     const { data, error } = await db.rpc("supplier_rules_set", { p_supplier: SR.sup, p_rules: SR.rules, p_notes: SR.notes });
     if (error) { SR.msg = `<span class="sr-bad">Not saved: ${esc(rpcErr(error))}</span>`; return srDraw(); }
-    SR.rules = (data?.rules || SR.rules).map(r => ({ ...r })); SRULES.by = SRULES.by || {}; SRULES.by[String(SR.sup)] = { rules: SR.rules.map(r => ({ ...r })), notes: SR.notes }; SR.dirty = false; SR.msg = `<span class="sr-ok">✔ Saved. ${esc(srPos(SR.name))} papers are read with these rules from now on.</span>`; srDraw(); });
+    SR.rules = (data?.rules || SR.rules).map(r => ({ ...r, g: srFormOf(r) })); SR.forms = SR.forms.filter(f => f === SR.form || SR.rules.some(r => srFormOf(r) === f)); SRULES.by = SRULES.by || {}; SRULES.by[String(SR.sup)] = { rules: SR.rules.map(r => ({ ...r })), notes: SR.notes }; SR.dirty = false; SR.msg = `<span class="sr-ok">✔ Saved. ${esc(srPos(SR.name))} papers are read with these rules from now on.</span>`; srDraw(); });
   const pg = box.querySelector("[data-sr-page]"); if (pg && SR.pick && can) { const rub = pg.querySelector(".sr-rub"); let a = null;
     const at = e => { const b = pg.getBoundingClientRect(); return [Math.max(0, Math.min(100, (e.clientX - b.left) / b.width * 100)), Math.max(0, Math.min(100, (e.clientY - b.top) / b.height * 100))]; };
     const box4 = e => { const [x, y] = at(e); return { x: Math.min(a[0], x), y: Math.min(a[1], y), w: Math.abs(x - a[0]), h: Math.abs(y - a[1]) }; };
@@ -23020,7 +23065,7 @@ function wireSupInv() {
         if (!c0) c0 = c; text += "\n" + await stReadBoxes(w, c, (await w.recognize(c)).data.text); }
       await w.terminate();
       // the supplier's own rules (Carlo, Nov 18): their boxes on the first page. The due date is saved right away; the P.O. number is used below when the invoice has none.
-      try { await srLoad(); const RR = srRulesOf(r.supplier_id).filter(z => z.w); if (RR.length && c0) { say("Reading this supplier's own boxes…"); rz = (await srRead(c0, RR)).vals;
+      try { await srLoad(); const RR = srRulesOf(r.supplier_id).filter(z => z.w); if (RR.length && c0) { say("Reading this supplier's own boxes…"); rz = (await srReadBest(c0, RR)).vals;
           if (rz.due && rz.due !== String(SINV.dues?.[id] || "").slice(0, 10)) { const q = await db.rpc("supplier_invoice_due_set", { p_id: id, p_due: rz.due }); if (!q.error) { SINV.dues = { ...(SINV.dues || {}), [id]: rz.due }; dueSay = ` The due date on it is ${fmtDate(rz.due)}: saved.`; } } } } catch { }
       const before = sinvBeforeOwn(r), old = (d.lines || []).filter(x => !x.by_hand); let L = sinvDedupLines(sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0), before);
       // no PO on it yet, and the plain reading does not show one: look again the way Auto update does (shading washed out, loose words), then keep a number only if it is a PO in the app
@@ -32132,13 +32177,12 @@ async function smRules(blob, name, sup, say) {
     say?.("Reading it by " + srPos(sinvShort(sup)) + " rules…");
     await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
     const f = new File([blob], name || "paper.pdf", { type: blob.type || "" }), c0 = await srFile(f); if (!c0) return null;
-    const cnt = z => Object.keys(z.vals || {}).length; let z = await srRead(c0, RR);
-    if (cnt(z) < 2) { const z2 = await srRead(smTurn(c0, 180), RR); if (cnt(z2) > cnt(z)) z = z2; }   // a page scanned upside down
-    const n = cnt(z), kinds = new Set(RR.map(r => r.f)).size;
-    return { vals: z.vals, n, of: kinds, sid, fits: n >= Math.max(2, Math.ceil(kinds / 2)) };
+    let z = await srReadBest(c0, RR);
+    if (z.n < 2) { const z2 = await srReadBest(smTurn(c0, 180), RR); if (z2.n > z.n) z = z2; }   // a page scanned upside down
+    return { vals: z.vals, n: z.n, of: z.of, form: z.form, sid, fits: z.n >= Math.max(2, Math.ceil(z.of / 2)) };
   } catch { return null; } }
 const smRulesWords = (R, sup) => { const z = R && R.rules; if (!z) return ""; const b = ["number", "date", "po", "due", "subtotal", "hst", "total"].filter(f => z[f] != null).map(f => `${SR_SHORT[f]} ${srShow(f, z[f])}`);
-  return b.length ? `📏 By ${srPos(sinvShort(sup || "") || "the supplier")} rules I read: ${b.join(" · ")}` : ""; };
+  return b.length ? `📏 By ${srPos(sinvShort(sup || "") || "the supplier")} rules${z.form ? ` (${z.form})` : ""} I read: ${b.join(" · ")}` : ""; };
 async function supMailRead(row, supplierPick, opts) {
   const f = await db.rpc("supplier_mail_file", { p_id: row.id });
   if (f.error || !f.data) throw new Error(f.error ? rpcErr(f.error) : "the file is missing");
@@ -32161,7 +32205,7 @@ async function supMailRead(row, supplierPick, opts) {
   if (!sup) return { status: "needs_supplier", result: { note: "Pick the supplier, then press Read it" } };
   // this supplier's own Rules (the boxes drawn on their page): the P.O. number they read is looked for too, and on a page that fits the rules
   // the order number and the purchase date they read are the ones used
-  const RZ = await smRules(blob, f.data.name, sup, opts?.say), rz = RZ?.vals || {}, RU = RZ && RZ.n ? { rules: { ...rz, n: RZ.n, of: RZ.of, fits: RZ.fits } } : {};
+  const RZ = await smRules(blob, f.data.name, sup, opts?.say), rz = RZ?.vals || {}, RU = RZ && RZ.n ? { rules: { ...rz, n: RZ.n, of: RZ.of, fits: RZ.fits, form: RZ.form } } : {};
   if (opts?.stopped?.()) throw new Error("stopped");
   // tie the file to the POs printed on it (a PO then shows it, and so does the supplier's invoice once it's matched to that PO)
   let pos = []; try { const lp = await db.rpc("supplier_mail_link_pos", { p_id: row.id, p_text: ((rz.po ? "PO " + rz.po + " " : "") + doc.lines.join(" ")).slice(0, 100000), p_supplier: sup }); pos = lp.data || []; } catch {}
@@ -32170,6 +32214,7 @@ async function supMailRead(row, supplierPick, opts) {
   const boone = doc.kind === "pdf" ? parseSupplierLines(doc.lines) : { invoices: [] };
   const slip = !boone.invoices.length && /^boone/i.test(sup) ? parseBooneSlip(doc.lines) : null; let slipNote = "";
   if (slip && (slip.lines.length || slip.unread.length)) {   // Boone packing slip / pick ticket: list price and discount on each line, no net amount
+    if (RZ?.fits && rz.number && !slip.docNo) slip.docNo = rz.number;
     const ref = ("packing slip " + (slip.docNo || fmtDate(row.received || new Date().toISOString()) + " " + (row.file || ""))).slice(0, 80);
     if (slip.lines.length) { const { data, error } = await db.rpc("import_supplier_lines", { p_supplier: sup, p_ref: ref, p_date: invoiceRefDate(doc.lines).date || ymd(new Date(row.received || Date.now())),
         p_lines: slip.lines.map(l => ({ code: l.code, description: l.description, cost: l.cost, new_ok: false })) });
