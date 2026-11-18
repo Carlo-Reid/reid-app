@@ -8355,6 +8355,10 @@ article.ie .ie-pickrow.ie-g .ie-picked { min-height: 0; } article.ie .ie-pickrow
 article.ie .ie-pickrow.ie-g .ie-picked b { font-size: 13px; -webkit-line-clamp: 3; }
 article.ie .ie-pickrow.ie-g .ie-start { border: 2px solid #1f9d4a; background: linear-gradient(180deg, #fff, #e9f6ed); } article.ie .ie-pickrow.ie-g:has(.ie-start) { padding-top: 12px; }
 article.ie .ie-start-tag { position: absolute; top: -12px; left: 50%; transform: translateX(-50%); font-style: normal; font-size: 12.5px; font-weight: 800; white-space: nowrap; padding: 2px 10px; border-radius: 6px; background: #1f9d4a; color: #fff; }
+/* Other things has its own colour, so it is easy to find (Carlo, Nov 18, 2026) */
+article.ie details.ie-grp-other { background: #fbf3e2; border: 2px solid #d9b97a; }
+article.ie details#ie-other.ie-grp-other > summary, article.ie details#ie-other.ie-grp-other > summary .ie-grp-hint { color: #5c4313; }
+.ie .ie-sup-same { margin: 6px 0 8px; padding: 7px 10px; font-size: 14px; line-height: 1.35; color: #23415f; background: #eef4fa; border: 1.5px solid #bcd0e3; border-radius: 10px; }
 article.ie details.ie-grp-other > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 17px; color: #23415f; list-style: none; }
 article.ie details.ie-grp-other > summary::-webkit-details-marker { display: none; }
 article.ie details.ie-grp-other > summary::before { content: "▸"; font-size: 15px; } article.ie details.ie-grp-other[open] > summary::before { content: "▾"; }
@@ -29873,26 +29877,37 @@ function ieTankPoHtml(I) {
 }
 // A second P.O. on the job for the other parts, materials and supplies on the invoice. It is a plain P.O.: no Credit Order (Carlo, Nov 17, 2026:
 // "have the ability to add all the items added to a second P.O. attached to the Job but do not make a credit note for this one").
+// The supplier of the last P.O. made on this invoice (the tank's or a parts one), so the next "which supplier?" starts on the same one
+// (Carlo, Nov 18, 2026, 4:41 p.m.: "have the drop down auto pick the same one as the last item on the page but still let the user change it")
+function ieLastSup(I) {
+  const all = [...((I.tankpo && I.tankpo.orders) || []), ...((I.partspo && I.partspo.orders) || [])].filter(o => o.po_id && o.supplier);
+  if (!all.length) return null;
+  const live = all.filter(o => String(o.status || "") !== "cancelled"), o = (live.length ? live : all).sort((a, b) => Number(b.po_id) - Number(a.po_id))[0];
+  const k = String(o.supplier).trim().toLowerCase(), x = (SUPPLIERS || []).find(z => String(z.name || "").trim().toLowerCase() === k);
+  return x ? { id: String(x.id), name: String(x.name).trim() } : null;
+}
 function iePartsPoHtml(I) {
   const P = I.partspo; if (!P || ME.role === "technician" || I.status === "void") return "";
   const L = P.lines || [], O = P.orders || []; if (!L.length && !O.length) return "";
   const S = SUPPLIERS || [], m = v => v != null ? money(v) : "";
+  const last = ieLastSup(I), auto = IE.ppoSup == null && !!last, selId = IE.ppoSup != null ? IE.ppoSup : last ? last.id : "";
   const made = O.length ? `<div class="ie-docs">${O.map(o => { const x = String(o.status || "") === "cancelled";
     return `<button class="ie-doc ${x ? "ie-doc-off" : ""}" type="button" data-ie-ppo-open="${o.po_id}" title="Open this P.O."><span class="ie-doc-ic" aria-hidden="true">📦</span><span class="ie-doc-k">P.O. for parts</span><b>${esc(o.po_number || "")}</b><small>Bought from ${esc(o.supplier || "the supplier")}</small><small>${Number(o.n)} ${Number(o.n) === 1 ? "item" : "items"}${o.amount != null ? " · " + m(o.amount) : ""}${x ? " · Cancelled" : ""}</small><small>No Credit Order</small><span class="ie-doc-go">Click to open</span></button>`; }).join("")}</div>` : "";
   const form = !L.length ? "" : !I.can_edit ? `<p class="ie-tpo-wait">${L.length} ${L.length === 1 ? "item is" : "items are"} not on a P.O. yet.</p>` : `<form class="ie-tpo-f" id="ie-ppo-f">
       <div class="ie-tpo-q"><b>${O.length ? "Added after the last P.O. These are not on a P.O. yet:" : "These go on the P.O.:"}</b></div>
       <ul class="ie-ppo-list">${L.map(x => `<li>${esc(pbName(x.description || ""))}${x.sku ? ` <i>${esc(x.sku)}</i>` : ""} · ${Number(x.quantity)}${x.unit_cost != null ? " × " + m(x.unit_cost) : ""}</li>`).join("")}</ul>
       <div class="ie-tpo-q"><b>Which supplier did we buy them from?</b></div>
-      <select name="supplier" required><option value="">Pick the supplier…</option>${S.map(x => `<option value="${x.id}" ${IE.ppoSup === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}<option value="other">Someone else…</option></select>
+      <select name="supplier" required><option value="">Pick the supplier…</option>${S.map(x => `<option value="${x.id}" ${selId === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}<option value="other">Someone else…</option></select>
       <input name="other" class="hidden" placeholder="Type the supplier's name" maxlength="120">
+      ${auto ? `<p class="ie-sup-same" data-ie-sup-same>I picked <b>${esc(last.name)}</b>: the last P.O. on this invoice is from them. If these are from another supplier, pick it in the box above.</p>` : ""}
       <button class="ie-sq ie-sq-go ie-tpo-go" type="submit"><span class="ie-sq-ic" aria-hidden="true">📦</span><b>Create the P.O. for ${L.length === 1 ? "this item" : `these ${L.length} items`}</b></button><span class="ie-tpo-msg" role="status"></span>
-      <p class="quiet">All of them go on one P.O. on this job. No Credit Order is made.</p></form>`;
+      <p class="quiet">All of them go on one P.O. on this job. No Credit Order is made.${last ? " It is a new P.O. with its own number, also when the supplier is the same as before." : ""}</p></form>`;
   return `<section class="ie-tankpo ie-partspo">${made}${form}</section>`;
 }
 function iePartsPoWire(I) {
   document.querySelectorAll("[data-ie-ppo-open]").forEach(b => b.addEventListener("click", () => openPOPage(Number(b.dataset.iePpoOpen))));
   const f = document.getElementById("ie-ppo-f"); if (!f) return;
-  f.supplier.addEventListener("change", () => { IE.ppoSup = f.supplier.value; f.other.classList.toggle("hidden", f.supplier.value !== "other"); if (f.supplier.value === "other") f.other.focus(); });
+  f.supplier.addEventListener("change", () => { IE.ppoSup = f.supplier.value; f.querySelector("[data-ie-sup-same]")?.remove(); f.other.classList.toggle("hidden", f.supplier.value !== "other"); if (f.supplier.value === "other") f.other.focus(); });
   f.addEventListener("submit", async e => { e.preventDefault(); const msg = f.querySelector(".ie-tpo-msg"), other = f.supplier.value === "other", btn = f.querySelector("button[type=submit]");
     if (!f.supplier.value || (other && !f.other.value.trim())) { msg.className = "ie-tpo-msg alert"; msg.textContent = "Pick the supplier first."; return; }
     btn.disabled = true; msg.className = "ie-tpo-msg"; msg.textContent = "Making the P.O.…";
@@ -29928,6 +29943,12 @@ function ieTankPoWire(I, reload) {
     if (IE.tpoSup && IE.tpoFor === I.id) {   // the supplier picked before the page was drawn again stays picked
       if (![...f.supplier.options].some(o => o.value === IE.tpoSup)) f.supplier.innerHTML = ieTankSupOpts(I, f.line.value, true);
       if ([...f.supplier.options].some(o => o.value === IE.tpoSup)) { f.supplier.value = IE.tpoSup; if (IE.tpoSup === "other") { f.other.classList.remove("hidden"); f.other.value = IE.tpoOther || ""; } } }
+    else { const last = ieLastSup(I);   // a P.O. for another tank starts on the supplier of the last P.O. (Carlo, Nov 18, 2026); it can be changed
+      if (last && ((I.tankpo && I.tankpo.orders) || []).length) {
+        if (![...f.supplier.options].some(o => o.value === last.id)) f.supplier.innerHTML = ieTankSupOpts(I, f.line.value, true);
+        if ([...f.supplier.options].some(o => o.value === last.id)) { f.supplier.value = last.id;
+          f.supplier.insertAdjacentHTML("afterend", `<p class="ie-sup-same" data-ie-sup-same>I picked <b>${esc(last.name)}</b>: the last P.O. on this invoice is from them. If this tank is from another supplier, pick it in the box above. It is a new P.O. with its own number either way.</p>`);
+          f.supplier.addEventListener("change", () => f.querySelector("[data-ie-sup-same]")?.remove(), { once: true }); } } }
     ieTodoSync();
     f.supplier.addEventListener("change", () => {
       if (f.supplier.value === "all") { f.supplier.innerHTML = ieTankSupOpts(I, f.line.value, true); f.supplier.focus(); }   // Another supplier…: the whole list
