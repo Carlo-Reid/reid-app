@@ -8551,6 +8551,7 @@ article.ie .ie-grp .ie-notes2.ie-notes-in { margin-top: 12px; }
 .ppay-card { margin: 8px 0; padding: 10px 14px; border: 1.5px solid #d3dfea; border-left: 6px solid #d9822b; border-radius: 10px; background: #fff; display: grid; gap: 5px; font-size: 15px; }
 .ppay-card:is(.ppay-c-nsf, .ppay-c-chargeback, .ppay-c-other) { border-left-color: #c0362c; } .ppay-card.done { border-left-color: #9fb2c4; opacity: .85; }
 .ppay-ctop { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; } .ppay-camt { margin-left: auto; font-size: 18px; font-weight: 800; color: #1c2b3a; }
+.ppay-cask { font-weight: 700; color: #23415f; }
 .ppay-cacts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 2px; } .ppay-cacts select { font-size: 15px; padding: 7px 8px; }
 .ppay-pop { position: fixed; inset: 0; z-index: 1300; background: rgba(15, 20, 25, .55); display: grid; place-items: center; padding: 16px; overflow: auto; }
 .ppay-pop-in { width: min(640px, 100%); background: linear-gradient(180deg, #ffffff, #f4f8fc); border: 1.5px solid #bcd0e3; border-radius: 16px; padding: 18px 20px; box-shadow: 0 12px 40px rgba(16, 35, 63, .3); display: grid; gap: 10px; }
@@ -26919,7 +26920,7 @@ function secUploadHtml() {
 const PPAY_BRANDS = [["accurate", "Accurate Security"], ["reid", "Reid Heating & Cooling"], ["hsg", "Home Service Group Inc."]];
 const ppayBrand = k => (PPAY_BRANDS.find(b => b[0] === k) || PPAY_BRANDS[1])[1];
 const PPAY_LABELS = ["Security monitoring", "HVAC maintenance plan", "HVAC payment plan"];
-const PPAY_FK = [["all", "All of them"], ["nsf", "NSF"], ["chargeback", "Chargebacks"], ["other", "Other problems"], ["noplan", "Payments with no plan"], ["missing", "No payment seen"]];
+const PPAY_FK = [["all", "All of them"], ["nsf", "NSF"], ["chargeback", "Chargebacks"], ["amount", "The amount is different"], ["other", "Other problems"], ["noplan", "Payments with no plan"], ["missing", "No payment seen"]];
 const PPAY_FNAME = { nsf: "NSF", chargeback: "Chargeback", other: "Not approved", amount: "The amount is different", noplan: "No plan for this payment", missing: "No payment seen" };
 const PPAY_RK = [["paid", "A payment received"], ["nsf", "NSF"], ["chargeback", "Chargeback"], ["other", "Something else"], ["skip", "Leave this row out"]];
 const PPAY_EW = { charge: "Monthly charge", payment: "Payment received", nsf: "NSF: the payment came back", chargeback: "Chargeback", returned: "The payment came back", fee: "NSF fee", adjust: "Change made by hand" };
@@ -26988,7 +26989,22 @@ function ppayFlags() {
   const D = PPAY.data || {};
   return (D.flags || []).concat((D.missing || []).map(m => ({ ...m, kind: "missing", status: "open", on: m.on, reason: "No payment was on a settlement file for the draw of " + fmtDate(m.on) + ".", miss: true })));
 }
-const ppayFlagIn = (f, k) => k === "all" || f.kind === k || (k === "other" && f.kind === "amount");
+const ppayFlagIn = (f, k) => k === "all" || f.kind === k;
+// a payment that is not the bill's amount: the two amounts, the difference, and a guess at why (an NSF or chargeback before it)
+function ppayAmtFacts(f) {
+  const D = PPAY.data || {}, m = /The bill says \$([\d,]+\.\d\d)/.exec(String(f.reason || "")), pay = ppayN(f.amount);
+  const bill = m ? Number(m[1].replace(/,/g, "")) : f.plan_amount != null ? ppayN(f.plan_amount) : null; if (bill == null) return null;
+  const diff = Math.round((pay - bill) * 100) / 100, fee = ppayN(D.fee), near = (a, b) => Math.abs(a - b) < 0.005;
+  const back = (D.flags || []).filter(g => f.plan_id && Number(g.plan_id) === Number(f.plan_id) && (g.kind === "nsf" || g.kind === "chargeback") && String(g.on) <= String(f.on))
+    .sort((a, b) => String(b.on).localeCompare(String(a.on)))[0];
+  let why = "";
+  if (back && diff > 0) { const what = back.kind === "nsf" ? "an NSF" : "a chargeback", day = fmtDate(back.on);
+    why = fee > 0 && near(diff, fee) ? `That is the same as the NSF fee, and this customer had ${what} on the draw of ${day}. It is most likely the fee being paid.`
+      : near(diff, ppayN(back.amount)) ? `That is the same as the payment that came back on the draw of ${day}. It is most likely that payment being paid again.`
+      : fee > 0 && near(diff, ppayN(back.amount) + fee) ? `That is the same as the payment that came back on the draw of ${day} plus the NSF fee. It is most likely both being paid.`
+      : `This customer had ${what} on the draw of ${day}. The extra may be for that.`; }
+  return { bill, pay, diff, why };
+}
 function ppayNoPlan() { const have = new Set((PPAY.data?.plans || []).filter(p => p.status !== "ended").map(p => Number(p.customer_id))); return (SEC.rows || []).filter(r => !have.has(Number(r.id))); }
 const ppayOwes = p => Math.round((ppayN(p.owed) - ppayN(p.paid) - ppayN(p.wait)) * 100) / 100;   // a draw still on its way is not owing yet
 const ppayOweHtml = v => v > 0.004 ? `<b class="ppay-bad">Owes ${money(v)}</b>` : v < -0.004 ? `<span class="ppay-ok">Credit of ${money(-v)}</span>` : `<span class="ppay-ok">✓ Up to date</span>`;
@@ -27001,7 +27017,7 @@ function ppayHtml() {
   if (PPAY.off) return `<section class="cl-tools ppay" id="ppay" data-atag-fixed="SC PAY"><h2>PAP payments</h2><p class="quiet">${PPAY.off === "soon" ? "This part turns on after the next database update. Wait a few minutes, then open the page again." : esc(PPAY.off)}</p></section>`;
   const D = PPAY.data; if (!D) return `<section class="cl-tools ppay" id="ppay" data-atag-fixed="SC PAY"></section>`;
   const F = ppayFlags().filter(f => f.status === "open"), c = k => F.filter(f => ppayFlagIn(f, k)).length, files = D.files || [], todo = files.filter(f => !f.posted_at).length, nop = ppayNoPlan().length, mail = (D.plans || []).filter(p => ppayMailDue(p, D.today)).length;
-  const need = [["files", "Settlement files to check", todo, "📥"], ["nsf", "NSF", c("nsf"), "⚠"], ["chargeback", "Chargebacks", c("chargeback"), "↩"], ["other", "Other problems", c("other"), "❗"],
+  const need = [["files", "Settlement files to check", todo, "📥"], ["nsf", "NSF", c("nsf"), "⚠"], ["chargeback", "Chargebacks", c("chargeback"), "↩"], ["amount", "The amount is different", c("amount"), "≠"], ["other", "Other problems", c("other"), "❗"],
     ["noplan", "Payments with no plan", c("noplan"), "❓"], ["missing", "No payment seen", c("missing"), "⏰"], ["mail", "Cancellation emails to send", mail, "✉"], ["cust", "PAP customers with no plan", nop, "👤"]];
   const sq = (k, ic, name, n) => `<button type="button" class="ppay-sq${PPAY.tab === k ? " on" : ""}" data-ppay-tab="${k}"><span class="ppay-sqi" aria-hidden="true">${ic}</span><b>${name}</b>${n != null ? `<small>${n}</small>` : ""}</button>`;
   const total = need.reduce((t, x) => t + x[2], 0), me = (typeof smMyFirst === "function" && smMyFirst()) || "";
@@ -27169,6 +27185,7 @@ function ppayBillsHtml(P) {
     return `<div class="ppay-billbox"><div class="ppay-ph"><h3>${fix ? "Fix this bill" : "A new bill: duplicate and adjust"}</h3><button type="button" class="btn quiet-btn" data-ppay-billback>✕ Cancel</button></div>
       <p class="ppay-hint">${fix ? `This changes the bill itself (${esc(span(B[i], i))}). <b>The charge of every month this bill covers changes with it, months already charged too.</b> Use it to fix a mistake. For a new price from a month on, press Cancel, then “Duplicate and adjust”.`
         : `These are the lines of the bill now. Change what is different. Pick the first month of the new bill. Then save. The months before keep the bill they had.`}</p>
+      ${E.flagId ? `<p class="ppay-hint ppay-cask">The payment that came in was ${money(E.flagPay)}. ${E.flagOne ? "I put that amount on the line below. Check it." : "Change the lines below so they add up to it."} ${fix ? "This bill starts in the month of that payment, so the bill itself is changed." : "The new bill starts in the month of that payment."} When you save, the follow-up is marked looked after.</p>` : ""}
       ${ppayItemsHtml(E.items)}
       ${fix ? "" : `<div class="ppay-brow"><label for="ppay-b-from" class="ppay-fl">The first month of the new bill</label> <input type="month" id="ppay-b-from" value="${esc(E.from)}"></div>`}
       <div class="ppay-brow"><input type="text" id="ppay-b-note" class="ppay-wide" maxlength="200" value="${esc(E.note || "")}" placeholder="Why it changed. Not printed. You can leave it empty." aria-label="Why it changed"></div>
@@ -27357,7 +27374,7 @@ function ppayWill(r, fee) {
   if (r.kind === "skip") return `<span class="quiet">Left out</span>`;
   if (r.already) return `<span class="ppay-ok">✓ Already posted</span>`;
   if (!r.plan_id) return `<span class="ppay-bad">${r.how === "several" ? "To follow up: this customer has more than one plan" : r.how === "no plan" ? "To follow up: this customer has no plan yet" : "To follow up: I could not find the customer"}</span>`;
-  if (r.kind === "paid") return `A payment of ${money(r.amount)} on the plan` + (Math.abs(ppayN(r.amount) - ppayN(r.plan_amount)) > 0.004 ? ` <span class="ppay-bad">· the bill says ${money(r.plan_amount)} for that month</span>` : "");
+  if (r.kind === "paid") return `A payment of ${money(r.amount)} on the plan` + (Math.abs(ppayN(r.amount) - ppayN(r.plan_amount)) > 0.004 ? ` <span class="ppay-bad">· the bill says ${money(r.plan_amount)} for that month. To follow up: did the amount change?</span>` : "");
   const back = r.counted ? `The payment stays as received. A new charge of ${money(r.amount)} goes on` : "No payment was counted for this draw, so no new charge";
   if (r.kind === "nsf") return `<span class="ppay-bad">NSF.</span> ${back}. ${fee > 0 ? "NSF fee of " + money(fee) + "." : `<b>No NSF fee is set</b> (Settings).`} To follow up.`;
   if (r.kind === "chargeback") return `<span class="ppay-bad">Chargeback.</span> ${back}. No fee. To follow up.`;
@@ -27405,11 +27422,12 @@ function ppayFileHtml() {
 function ppayFlagsHtml() {
   const all = ppayFlags(), open = all.filter(f => f.status === "open"), k = PPAY.fkind, list = open.filter(f => ppayFlagIn(f, k)), done = all.filter(f => f.status === "done" && ppayFlagIn(f, k)), owner = ME.role === "owner", plans = PPAY.data.plans || [];
   const card = f => { const cust = f.customer_id ? `<button type="button" class="link" data-ppay-cust="${f.customer_id}"><strong>${esc(f.name || "")}</strong></button> <span class="quiet">#${esc(f.number || "")}</span>` : `<strong>${esc(f.who || "Not found")}</strong>`;
-    const mine = plans.filter(p => Number(p.customer_id) === Number(f.customer_id) && p.status !== "ended"), isDone = f.status === "done";
+    const mine = plans.filter(p => Number(p.customer_id) === Number(f.customer_id) && p.status !== "ended"), isDone = f.status === "done", A = f.kind === "amount" ? ppayAmtFacts(f) : null;
     return `<div class="ppay-card ppay-c-${f.kind}${isDone ? " done" : ""}"><div class="ppay-ctop"><span class="ppay-tag ${f.kind === "noplan" || f.kind === "amount" || f.kind === "missing" ? "ppay-t-warn" : "ppay-t-bad"}">${esc(PPAY_FNAME[f.kind] || f.kind)}</span> ${cust}${f.label ? ` · ${esc(f.label)}` : ""}
         <span class="ppay-camt">${f.amount != null ? money(f.amount) : ""}</span></div>
       <div class="ppay-cwhy">${esc(String(f.reason || "").replace(/([^.!?])$/, "$1."))}${f.kind === "nsf" ? ` ${f.counted ? "The payment stays as received and a new charge went on." : "No payment was counted for this draw."} ${f.fee ? "NSF fee: " + money(f.fee) + "." : "No NSF fee was added (none is set)."}` : ""}
-        ${f.kind === "chargeback" ? (f.counted ? " The payment stays as received and a new charge went on. No fee." : " No payment was counted for this draw.") : ""}${f.kind === "other" && f.plan_status === "paused" ? " The plan is marked paused. Stop the draw in AcceptPay too." : ""}</div>
+        ${f.kind === "chargeback" ? (f.counted ? " The payment stays as received and a new charge went on. No fee." : " No payment was counted for this draw.") : ""}${f.kind === "other" && f.plan_status === "paused" ? " The plan is marked paused. Stop the draw in AcceptPay too." : ""}${f.kind === "amount" && A ? ` That is <b>${money(Math.abs(A.diff))} ${A.diff > 0 ? "more" : "less"}</b> than the bill. ${esc(A.why)}` : ""}</div>
+      ${f.kind === "amount" && !isDone ? `<div class="ppay-cask">Did we change this customer's amount? Pick one:</div>` : ""}
       <div class="quiet">Drawn ${esc(fmtDate(f.on))}${f.ret && f.ret !== f.on ? " · came back " + esc(fmtDate(f.ret)) : ""}${f.ref ? " · reference " + esc(f.ref) : ""}${f.who && f.who !== f.name ? " · on the file as " + esc(f.who) : ""}${f.file ? " · " + esc(f.file) : ""}
         ${f.notice_at ? ` · <span class="ppay-ok">notice sent ${esc(fmtDate(f.notice_at))}${f.notice_to ? " to " + esc(f.notice_to) : ""}${f.notice_by ? " by " + esc(f.notice_by) : ""}</span>` : ""}${isDone ? ` · looked after${f.done_by ? " by " + esc(f.done_by) : ""}${f.done_note ? ": " + esc(f.done_note) : ""}` : ""}</div>
       <div class="ppay-cacts">${isDone ? `<button type="button" class="link" data-ppay-reopen="${f.id}">Open it again</button>` : `
@@ -27418,8 +27436,11 @@ function ppayFlagsHtml() {
         ${f.kind === "other" && f.plan_status === "paused" ? `<button type="button" class="btn quiet-btn" data-ppay-resume="${f.plan_id}">▶ Put the plan back to active</button>` : ""}
         ${f.kind === "noplan" && owner ? (mine.length ? `<select data-ppay-fplan="${f.id}" aria-label="Which plan" class="own-only"><option value="">Put it on a plan…</option>${mine.map(p => `<option value="${p.id}">${esc(p.label)} · ${money(p.amount)}</option>`).join("")}</select>` : "")
           + (f.customer_id ? `<button type="button" class="btn quiet-btn" data-ppay-new="${f.customer_id}" data-name="${esc(f.name || "")}" data-num="${esc(f.ref || f.number || "")}" data-amt="${esc(f.amount ?? "")}" data-on="${esc(f.on || "")}">＋ Set up a plan for them</button>` : "") : ""}
+        ${f.kind === "amount" ? `${f.plan_id ? `<button type="button" class="btn ppay-send" data-ppay-amtyes="${f.id}">✓ Yes, the amount changed. Update the bill</button>` : ""}
+          <button type="button" class="btn quiet-btn" data-ppay-amtone="${f.id}">One time only (a fee or a catch-up)</button>
+          <button type="button" class="btn quiet-btn" data-ppay-amtbad="${f.id}">✗ No, it is a mistake</button>` : ""}
         ${f.plan_id ? `<button type="button" class="btn quiet-btn" data-ppay-plan="${f.plan_id}">Open the plan</button>` : ""}
-        <button type="button" class="btn quiet-btn" ${f.miss ? `data-ppay-missdone="${f.plan_id}" data-on="${esc(f.on)}"` : `data-ppay-done="${f.id}"`}>✓ Looked after</button>`}</div></div>`; };
+        ${f.kind === "amount" ? "" : `<button type="button" class="btn quiet-btn" ${f.miss ? `data-ppay-missdone="${f.plan_id}" data-on="${esc(f.on)}"` : `data-ppay-done="${f.id}"`}>✓ Looked after</button>`}`}</div></div>`; };
   return `<div class="ppay-panel">${pgNow(["Follow up", (PPAY_FK.find(x => x[0] === k) || PPAY_FK[0])[1], list.length + " open"])}
     <div class="ppay-bar"><div class="seg" role="group">${PPAY_FK.map(([v, t]) => `<button type="button" aria-pressed="${k === v}" data-ppay-fk="${v}">${t} (${open.filter(f => ppayFlagIn(f, v)).length})</button>`).join("")}</div></div>
     ${list.length ? list.slice(0, 200).map(card).join("") + (list.length > 200 ? `<p class="quiet">Showing the first 200.</p>` : "") : `<p class="ppay-ok">Nothing open here.</p>`}
@@ -27444,10 +27465,10 @@ function ppaySetHtml() {
       <li>No bank account details are read or kept here.</li></ul></details></div>`;
 }
 const PPAY_HELP = { root: "#ppay", list: [
-  [".ppay-needs", "These boxes count what needs someone: files to check, NSF, chargebacks, other problems, payments with no plan, no payment seen, cancellation emails to send, and PAP customers with no plan. Click a box to see its list."],
+  [".ppay-needs", "These boxes count what needs someone: files to check, NSF, chargebacks, a payment that is not the bill's amount, other problems, payments with no plan, no payment seen, cancellation emails to send, and PAP customers with no plan. Click a box to see its list."],
   ["[data-ppay-tab=plans]", "Plans: one for each customer who pays by pre-authorized payment. Open a plan to see its record, print its yearly invoice or its monthly statement."],
   ["[data-ppay-tab=files]", "Settlement files: the files AcceptPay emails. Open one, check how each row was read, then an owner presses Post."],
-  ["[data-ppay-tab=flags]", "Follow up: every NSF, chargeback and other problem, until someone presses Looked after."],
+  ["[data-ppay-tab=flags]", "Follow up: every NSF, chargeback and other problem, until someone presses Looked after. A payment that is not the amount on the bill is here too: say if the amount changed (the bill is updated), if it is one time only, or if it is a mistake."],
   ["[data-ppay-tab=set]", "Settings: the NSF fee, and how it all works."],
   ["#ppay-pq", "Type a name, a customer number or a reference to find a plan."],
   ["[data-ppay-new]", "Set up a plan for one customer here. To set up many at once, open a settlement file and press Make a plan for each customer with no plan."],
@@ -27545,7 +27566,11 @@ function ppayWire() {
     e.target.disabled = true;
     const { error } = await db.rpc("pap_bill_save", { p: { plan_id: P.plan.id, id: E.mode === "fix" ? E.id : null, from: E.mode === "new" ? E.from + "-01" : null, items: ppayItemsOut(E.items), note: E.note } });
     if (error) { e.target.disabled = false; return bad("Not saved: " + rpcErr(error)); }
-    PPAY.bill = { mode: "view" }; await ppayFresh(E.mode === "fix" ? `✓ The bill is fixed: ${money(X.total)} each month.` : `✓ The new bill is saved: ${money(X.total)} each month from ${ppayMon(E.from + "-01")}. Change the amount in AcceptPay too.`);
+    if (E.flagId) { const nt = "The amount changed. The bill is " + money(X.total) + " each month" + (E.mode === "new" ? " from " + ppayMon(E.from + "-01") : "");
+      // the same change seen on later files: those follow-ups are answered by this bill too
+      const also = (PPAY.data.flags || []).filter(g => g.kind === "amount" && g.status === "open" && Number(g.plan_id) === Number(P.plan.id) && (Number(g.id) === Number(E.flagId) || (String(g.on).slice(0, 7) >= E.from && Math.abs(ppayN(g.amount) - X.total) < 0.005)));
+      for (const g of also) await db.rpc("pap_flag_done", { p_id: g.id, p_note: nt, p_done: true }); }
+    PPAY.bill = { mode: "view" }; await ppayFresh(E.flagId ? `✓ The bill is ${money(X.total)} each month${E.mode === "new" ? " from " + ppayMon(E.from + "-01") : ""}. It matches what came in. The follow-up is marked looked after.` : E.mode === "fix" ? `✓ The bill is fixed: ${money(X.total)} each month.` : `✓ The new bill is saved: ${money(X.total)} each month from ${ppayMon(E.from + "-01")}. Change the amount in AcceptPay too.`);
   });
   // cancelling: the expiry date
   on("[data-ppay-cancel]", "click", () => { const P = PPAY.plan, pl = P.plan; PPAY.bill = null; PPAY.addLine = false;
@@ -27621,6 +27646,22 @@ function ppayWire() {
   on("[data-ppay-done]", "click", async b => { const f = flagOf(b.dataset.ppayDone); if (!f) return;
     const k = await askChoice("Looked after?", `<span class="ask-sq"></span>It comes off the open list. It stays under Looked after lately for 45 days.`, [["They paid another way", "💵|They paid|Another way"], ["Talked to the customer", "📞|We talked|To the customer"], ["Fixed", "✓|It is fixed|Nothing more to do"], ["", "Not yet"]]); if (!k) return;
     const { error } = await db.rpc("pap_flag_done", { p_id: f.id, p_note: k, p_done: true }); await ppayFresh(error ? "Not saved: " + rpcErr(error) : "✓ Marked looked after.", !!error); });
+  // the amount is different: yes it changed (a new bill from that month), one time only, or a mistake
+  on("[data-ppay-amtyes]", "click", async b => { const f = flagOf(b.dataset.ppayAmtyes); if (!f || !f.plan_id) return; const A = ppayAmtFacts(f);
+    openTab("plans"); await ppayPlanLoad(Number(f.plan_id)); const P = PPAY.plan; if (!P) { ppayDraw(); return; }
+    const B = P.bills || [], mon = String(f.on).slice(0, 7), same = B.find(x => String(x.from).slice(0, 7) === mon), src = same || ppayBillOn(P, mon) || B[B.length - 1], items = billCopy(src), one = items.length === 1;
+    if (one) items[0].a = ppayN(f.amount).toFixed(2);
+    // a bill that starts in the payment's own month is changed itself; else a new bill starts in that month
+    PPAY.bill = { mode: same ? "fix" : "new", id: same ? same.id : null, items, from: mon, note: `The payment of ${fmtDate(f.on)} came in at ${money(f.amount)}${A ? ". The bill said " + money(A.bill) : ""}.`, flagId: f.id, flagPay: ppayN(f.amount), flagOne: one };
+    ppayDraw(); document.querySelector("#ppay .ppay-billbox")?.scrollIntoView({ behavior: "smooth", block: "start" }); });
+  on("[data-ppay-amtone]", "click", async b => { const f = flagOf(b.dataset.ppayAmtone); if (!f) return; const A = ppayAmtFacts(f);
+    const { error } = await db.rpc("pap_flag_done", { p_id: f.id, p_note: "One time only (a fee or a catch-up payment)" + (A ? ". The bill stays " + money(A.bill) : ""), p_done: true });
+    await ppayFresh(error ? "Not saved: " + rpcErr(error) : `✓ Marked one time only.${A ? " The bill stays " + money(A.bill) + " each month." : ""}`, !!error); });
+  on("[data-ppay-amtbad]", "click", async b => { const f = flagOf(b.dataset.ppayAmtbad); if (!f) return; const A = ppayAmtFacts(f);
+    const k = await askChoice("The amount is a mistake", `<span class="ask-sq"></span>${A ? `The bill stays <b>${money(A.bill)}</b> each month. ` : ""}Fix the amount in AcceptPay, so the next draw is right. ${A && A.diff > 0 ? "The customer paid too much this time: give it back, or leave it as a credit on the plan." : A && A.diff < 0 ? "The customer paid too little this time: the rest stays owing on the plan." : ""}`,
+      [["fixed", "✓|It is fixed|In AcceptPay"], ["", "Not yet"]]); if (k !== "fixed") return;
+    const { error } = await db.rpc("pap_flag_done", { p_id: f.id, p_note: "A mistake. Fixed in AcceptPay" + (A ? ". The bill stays " + money(A.bill) : ""), p_done: true });
+    await ppayFresh(error ? "Not saved: " + rpcErr(error) : "✓ Marked: a mistake, fixed in AcceptPay.", !!error); });
   on("[data-ppay-reopen]", "click", async b => { const { error } = await db.rpc("pap_flag_done", { p_id: Number(b.dataset.ppayReopen), p_note: null, p_done: false }); await ppayFresh(error ? "Not saved: " + rpcErr(error) : "✓ It is open again.", !!error); });
   on("[data-ppay-missdone]", "click", async b => { const { error } = await db.rpc("pap_missing_done", { p_plan: Number(b.dataset.ppayMissdone), p_on: b.dataset.on, p_note: null }); await ppayFresh(error ? "Not saved: " + rpcErr(error) : "✓ Marked looked after.", !!error); });
   on("[data-ppay-resume]", "click", async b => { const { error } = await db.rpc("pap_plan_status", { p_id: Number(b.dataset.ppayResume), p_status: "active", p_why: null }); await ppayFresh(error ? "Not saved: " + rpcErr(error) : "✓ The plan is active again.", !!error); });
