@@ -21150,7 +21150,7 @@ function sinvPair(L, P, pairs) {
 }
 function sinvCompare(r, L, P, what, edit) {
   const rows = sinvPair(L, P, (SINV.det.get(r.id) || {}).pairs), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol, split = Number(r.po_other_invoices) > 0,
-    partial = r.subtotal == null && /continued/i.test(r.read_notes || "") && !/end of order/i.test(r.read_notes || "");
+    partial = r.subtotal == null && /continued/i.test(r.read_notes || "") && !/end of order/i.test(r.read_notes || "") && !(Number(r.pages) >= 2);   // two or more pages on file: the CONTINUED page's other page is here (Carlo, Nov 18, 2026, slip C312797)
   const issues = []; let ia = 0, pa = 0;
   // the P.O. is billed over more than one invoice: a P.O. line that is not on this invoice is looked for on the others, and shown with that invoice's own line
   const OTH = split ? ((SINV.oth && SINV.oth.get(r.id)) || []) : []; if (split && !(SINV.oth && SINV.oth.has(r.id))) sinvLoadOthers(r.id);
@@ -21385,6 +21385,27 @@ function sinvParseLines(text, credit) {
     const row = { code: c[2].toUpperCase(), description: desc, shipped: shipped || ordered, backorder: /^o$/i.test(c[6]) ? null : n(c[6]) || null, unit_price: n(c[7]), discount: c[8] && c[9] != null ? n(c[8]) : null, net_amount: null }, k = [row.code, row.shipped, row.unit_price].join("|");
     if (credit) row.unit_price = -Math.abs(row.unit_price);
     if (!seen.has(k)) { seen.add(k); out.push(row); } }
+  // The same slip, read more loosely (Carlo, Nov 18, 2026, C312797: only 8 of its 13 lines came out, so the compare with the P.O. looked like a slip was missing).
+  // A scan gives "0oz2| ospCLT …" for 002, a stray dot or letter between the words and the quantities, "[1" for a back order of 0, "B2" for a discount of 82,
+  // and "50000" for .50000. Each line is found by its line number and its 5-decimal price; the quantity is the one printed in the last column when it is there.
+  { const S = [], sk = new Set(), fix = t => t.replace(/[Oo]/g, "0").replace(/[Zz]/g, "2").replace(/[Il]/g, "1").replace(/B/g, "8").replace(/S/g, "5").replace(/G/g, "6");
+    for (let i = 0; i < L.length; i++) { const m = L[i].match(/^\s*[|\[\]_ ]*([0-9OoZz]{3,4})\s*[|\[\]]*\s*(\S.*)$/); if (!m) continue;
+      const no = Number(fix(m[1])); if (!(no >= 1 && no <= 300)) continue; let rest = m[2], price = null, at = -1, len = 0;
+      for (const pm of rest.matchAll(/(?<![\d.])(\d{0,5}\.\d{5})(?!\d)/g)) { price = Number(pm[1]); at = pm.index; len = pm[0].length; }
+      if (price == null) { const pm = rest.match(/\s\d{1,4}\s+\d{1,4}\s+\S{1,2}\s+(\d{5})(?!\d)/); if (pm) { price = Number("0." + pm[1]); at = rest.indexOf(pm[1], pm.index); len = 5; } }
+      if (price == null || !(price > 0)) continue;
+      const tk = rest.slice(0, at).trim().split(/\s+/), right = rest.slice(at + len), nums = [];
+      if (tk.length && !/^\d{1,4}$/.test(tk[tk.length - 1])) tk.pop();   // the back order box: 0, o, [1 …
+      else if (tk.length > 3 && /^\d{1,4}$/.test(tk[tk.length - 3])) tk.pop();
+      while (tk.length > 1 && nums.length < 2 && /^\d{1,4}$/.test(tk[tk.length - 1])) nums.unshift(Number(tk.pop()));
+      if (!nums.length) continue;
+      while (tk.length > 2 && /^(?:[^A-Za-z0-9]*|[|\[\]]*(?:UN|EA|FT|BX|PK|RL|PR|LB|CS|BG|ST|PC|J|[A-Za-z]{1,2})[|\[\]]*)$/.test(tk[tk.length - 1])) tk.pop();
+      const code = (tk.shift() || "").replace(/[|\[\]]/g, "").toUpperCase(); if (!/^[A-Z0-9][A-Z0-9\-\/.]{2,}$/.test(code)) continue;
+      const r = right.match(/^[\s|\[\]]*(?:([A-Za-z0-9]{1,2})\s+)?(\d{1,4})\s*(?:UN|EA|FT|BX|PK|RL|PR|LB|CS|BG|ST|PC)?\b/i), dq = r && r[1] ? Number(fix(r[1])) : null, netQ = r ? Number(r[2]) : null;
+      const row = { code, description: tk.join(" ").replace(/[|\[\]]/g, " ").replace(/\s+/g, " ").trim(), shipped: netQ > 0 ? netQ : nums[nums.length - 1], backorder: null, unit_price: credit ? -price : price, discount: dq >= 1 && dq <= 99 ? dq : null, net_amount: null }, k = [row.code, row.unit_price].join("|");
+      if (r && r[1] && row.discount == null) row.description += " (discount not read)";
+      if (!sk.has(k)) { sk.add(k); S.push(row); } }
+    if (S.length > out.length) return S; }
   if (out.length) return out;
   // Boone's invoice (Carlo, Nov 18, C399102): everything on one line, a 3-decimal price, then NET or the discount %, then the net amount:
   // "2) 0512M 1/2"X12' TYPE M HARD COP PIPE UN 6 38.900 | NET 233.40". The line number and the bars between the boxes come back as ) | ] or not at all,
