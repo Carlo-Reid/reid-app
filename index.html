@@ -3900,6 +3900,11 @@ button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 
   .mc-pics-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; } .mc-pics-top h2 { margin: 0; font-size: 22px; overflow-wrap: anywhere; }
   .mc-pics-x { width: 92px !important; min-height: 76px !important; flex: 0 0 auto; } .mc-pics-n { margin: 0 0 8px; font-weight: 600; }
   .mc-pics .files-job { margin-top: 12px; }
+  .mc-what .mc-ptn { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; } .mc-what .mc-ptn em { font-style: normal; font-weight: 800; font-size: calc(16px * var(--fs, 1)); }
+  .mc-what .mc-ptn img { height: 36px; max-width: 130px; object-fit: contain; background: #fff; border: 1px solid #bcd0e3; border-radius: 6px; padding: 2px 5px; }
+  .mc.mc-ro :is([data-mc-status], [data-mc-walk], [data-mc-inst], [data-po-open], [data-mc-invoice], [data-mc-costco], [data-po-cancel]) { display: none !important; }
+  .mc-ro-say { margin: 6px 0 10px; padding: 9px 12px; border: 1.5px solid #bcd0e3; border-radius: 10px; background: #eef4fa; color: #23415f; font-weight: 600; }
+  .staff-senior { font-weight: 600; }
   .mc-what { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; overflow-wrap: anywhere; } .mc-what b { font-size: calc(19px * var(--fs, 1)); font-weight: 800; line-height: 1.25; } .mc-what span { font-size: calc(15px * var(--fs, 1)); font-weight: 600; }
   .mc-name { grid-column: 1 / -1; font-weight: 700; font-size: calc(19px * var(--fs, 1)); }
   .mc-line { grid-column: 1 / -1; color: var(--steel); }
@@ -18497,10 +18502,21 @@ async function openMyCalls(date) {
   if (date) MC.date = date;
   setPage("mycalls", "mycalls", "Tech Calls");
   $("#main").innerHTML = `<div class="loading">Loading your calls…</div>`;
-  if (can("calls.dispatch") || can("calls.book")) await bookLists().catch(() => {});
+  if (ME.role === "technician" && MC.senior == null) { try { const r = await db.rpc("is_senior_tech"); MC.senior = !r.error && r.data === true; } catch { MC.senior = false; } }   // a senior tech (Staff page tick) may look at every tech's calls
+  if (can("calls.dispatch") || can("calls.book") || MC.senior) await bookLists().catch(() => {});
   await loadEmpPhotos().catch(() => {});
   startCallsLive();
   await loadMyCalls();
+}
+// a senior tech looking at another tech's calls (or at every tech's): he may look, not work on them
+function mcRo() { return !!MC.senior && ME.role === "technician" && !(can("calls.dispatch") || can("calls.book")) && !!(MC.all || (MC.emp && MC.emp !== ME.emp)); }
+// which partner each call's job is from (for "This is a Vista Customer" at the top of a call)
+async function mcPtnLoad(calls) {
+  MC.ptn = MC.ptn || {}; const ids = (calls || []).map(c => c.visit_id).filter(v => MC.ptn[v] === undefined); if (!ids.length) return;
+  try { const r = await db.rpc("call_partners", { p_visits: ids }); if (r.error) return; ids.forEach(v => MC.ptn[v] = null); (r.data || []).forEach(x => MC.ptn[x.visit_id] = { id: x.partner_id, name: x.name }); } catch {}
+}
+async function mcPtnFill() {
+  for (const e of [...document.querySelectorAll(".mycalls [data-mc-ptn]")].filter(e => !e.querySelector("img"))) { const u = await bkPLogo(e.dataset.mcPtn); if (u && e.isConnected && !e.querySelector("img")) e.insertAdjacentHTML("afterbegin", `<img alt="" src="${esc(u)}">`); }
 }
 async function loadMyCalls(quiet) {
   const d = MC.date;
@@ -18522,11 +18538,12 @@ async function loadMyCalls(quiet) {
   MC.ev = []; if (!MC.all && data?.employee_id && data.employee_id !== "all") { try { const e = await db.rpc("my_day_events", { p_date: d, p_employee_id: data.employee_id }); MC.ev = e.error ? [] : e.data || []; } catch { } }
   if (!MC.all) await mcItemsLoad((data?.calls || []).filter(c => c.status !== "cancelled").slice(0, 14));   // what is being installed, for the line at the top of each call
   await mcInstLoad(data?.calls);   // installs: the equipment on the invoice and what is already checked
+  await mcPtnLoad(data?.calls);
   if (MC.date !== d) return;
-  renderMyCalls(); mcInstAuto();
+  renderMyCalls(); if (!mcRo()) mcInstAuto();
 }
 function renderMyCalls() {
-  const D = MC.data, office = (can("calls.dispatch") || can("calls.book")) && BOOK;
+  const D = MC.data, office = (can("calls.dispatch") || can("calls.book") || MC.senior) && BOOK;
   const calls = D.calls || [], isToday = MC.date === ymd(new Date());
   const left = calls.filter(c => !["completed", "needs_return", "cancelled"].includes(c.status));
   if (MC.open != null && !calls.some(c => c.visit_id === MC.open)) MC.open = null;   // all closed until a call is clicked; one open at a time
@@ -18548,6 +18565,7 @@ function renderMyCalls() {
         <button type="button" class="sinv-app ${MC.all ? "on" : ""}" data-mc-emp="all" aria-pressed="${!!MC.all}"><span class="sa-ic">▦</span><span class="sa-tn">All techs</span></button>
         ${ME.emp ? `<button type="button" class="sinv-app ${!MC.all && (!MC.emp || MC.emp === ME.emp) ? "on" : ""}" data-mc-emp="" aria-pressed="${!MC.all && (!MC.emp || MC.emp === ME.emp)}">${empPhoto(ME.emp, "sa-photo") || `<span class="sa-ic">★</span>`}<span class="sa-tn">Me</span></button>` : ""}
         ${(BOOK.techs || []).filter(t => t.recent && t.id !== ME.emp).map(t => `<button type="button" class="sinv-app ${!MC.all && t.id === MC.emp ? "on" : ""}" data-mc-emp="${t.id}" aria-pressed="${!MC.all && t.id === MC.emp}">${empPhoto(t.id, "sa-photo")}<span class="sa-ic ${EMP_PHOTOS?.has(t.id) ? "hidden" : ""}">${esc(String(t.name).trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase())}</span><span class="sa-tn">${esc(t.name)}</span></button>`).join("")}</div>` : ""}
+    ${mcRo() ? `<p class="mc-ro-say">You are looking at ${MC.all ? "every tech's calls" : "another tech's calls"}. You can look, but you can not work on them here. To work on your own calls, press <b>Me</b>.</p>` : ""}
     ${MC.all ? (D.groups || []).map(g => `<h2 class="mc-tech-h">${empPhoto(g.id, "mc-photo")}${esc(g.name)} <span class="quiet">${g.calls.length ? callsWord(g.calls.length) : "no calls"}</span></h2>${g.calls.map(mcCard).join("")}`).join("") || `<div class="empty-small">No techs on the schedule.</div>`
       : !D.employee_id ? `<div class="empty-small">${office ? "Pick a tech to see their calls." : "Your login isn't linked to your name on the schedule yet. Ask Carlo or George to pick it for you on the Staff page."}</div>`
       : (MC.ev?.length ? `<section class="mc-ev"><h3>On ${MC.emp && MC.emp !== ME.emp ? "their" : "your"} schedule (not calls)</h3>${MC.ev.map(e => { const a = new Date(e.start), b = new Date(a.getTime() + Number(e.minutes || 0) * 60000), t = v => v.toLocaleTimeString("en-CA", { timeZone: "America/Toronto", hour: "numeric", minute: "2-digit" });
@@ -18557,6 +18575,7 @@ function renderMyCalls() {
          ${calls.map(mcCard).join("")}`)}
   </article>`;
   $("#main").scrollTop = top;
+  mcPtnFill();
   document.getElementById("mc-msg")?.addEventListener("click", () => openMsgPick());
   document.querySelectorAll("[data-mday]").forEach(b => b.addEventListener("click", () => { MC.date = ymd(addDays(new Date(MC.date + "T12:00:00"), Number(b.dataset.mday))); MC.open = null; loadMyCalls(); }));
   $("[data-mtoday]")?.addEventListener("click", () => { MC.date = ymd(new Date()); MC.open = null; loadMyCalls(); });
@@ -18879,7 +18898,8 @@ function mcCard(c) {
   const open = MC.open === c.visit_id, done = ["completed", "needs_return", "cancelled"].includes(c.status);
   const addr = [c.street, c.unit && "Unit " + c.unit, c.city].filter(Boolean).join(", ");
   const map = "https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent([c.street, c.city, c.postal_code, "ON"].filter(Boolean).join(", "));
-  const next = { scheduled: [["en_route", "On my way"], ["on_site", "I'm here"]], dispatched: [["en_route", "On my way"], ["on_site", "I'm here"]],
+  // Carlo, Nov 19, 2026: I'm here is not there until On my way was pressed
+  const next = { scheduled: [["en_route", "On my way"]], dispatched: [["en_route", "On my way"]],
                  en_route: [["on_site", "I'm here"]], on_site: [["completed", "Done"], ["needs_return", "Needs another visit"]],
                  completed: [], needs_return: [], cancelled: [] }[c.status] || [];
   const phones = (c.phones || []).filter(p => p.kind !== "email" && p.kind !== "fax"), emails = (c.phones || []).filter(p => p.kind === "email");
@@ -18888,11 +18908,13 @@ function mcCard(c) {
   const hasPo = (c.pos || []).length > 0, invDone = !!MC.invDone?.has(c.job_id);
   const sq = (ic, words, attrs, cls) => `<button class="mc-sq ${cls || ""}" type="button" ${attrs}><span class="mc-sq-ic" aria-hidden="true">${ic}</span><span class="mc-sq-tn">${words}</span></button>`;
   const stIc = { en_route: "🚚", on_site: "📍", completed: "✅", needs_return: "🔁" };
-  return `<section class="mc st-${c.status} ${open ? "open" : ""} ${done ? "done" : ""}" data-visit="${c.visit_id}">
+  return `<section class="mc st-${c.status} ${open ? "open" : ""} ${done ? "done" : ""} ${mcRo() ? "mc-ro" : ""}" data-visit="${c.visit_id}">
     <header class="mc-head" data-mc-toggle="${c.visit_id}" tabindex="0" aria-expanded="${open}">
       ${(() => { const w = mcWhatFor(c), it = mcItemsWords(c), isIn = mcIsWalk(c) || mcIsInstall(c);
         if (open && MC.items?.[c.visit_id] === undefined) mcItemsLoad([c]).then(ok => { if (ok && MC.open === c.visit_id && document.querySelector(".mycalls")) renderMyCalls(); });
-        return w || it ? `<div class="mc-what">${w ? `<b>${esc(w)}</b>` : ""}${it ? `<span>${isIn ? "Being installed" : "For this call"}: ${esc(it)}</span>` : ""}</div>` : ""; })()}
+        const pt = MC.ptn?.[c.visit_id], pl = pt && typeof BKW_PLOGO !== "undefined" && BKW_PLOGO ? BKW_PLOGO.get(pt.id) : "";
+        const ptH = pt ? `<span class="mc-ptn" data-mc-ptn="${pt.id}">${pl ? `<img alt="" src="${esc(pl)}">` : ""}<em>This is a ${esc(String(pt.name || "partner").replace(/\s+credit$/i, ""))} Customer</em></span>` : "";
+        return w || it || ptH ? `<div class="mc-what">${w ? `<b>${esc(w)}</b>` : ""}${ptH}${it ? `<span>${isIn ? "Being installed" : "For this call"}: ${esc(it)}</span>` : ""}</div>` : ""; })()}
       <div class="mc-time">${esc(winText(c.arrival_start, c.arrival_end))}</div>
       <span class="vstat ${c.status}">${esc(VISIT_STATUS[c.status] || c.status)}</span>
       <div class="mc-name">${esc(c.customer_name)}</div>
@@ -37793,6 +37815,7 @@ async function openStaff() {
   { const st = await db.rpc("staff_started_list"); STAFF_STARTED = new Map((st.data || []).map(x => [Number(x.user), String(x.started).slice(0, 10)])); }
   { const st = await db.rpc("staff_text_title_list"); STAFF_TITLE = new Map((st.data || []).map(x => [Number(x.user), x.title])); }
   { const tk = await db.rpc("staff_truck_list"); STAFF_TRUCK = new Set((tk.error ? [] : tk.data || []).map(Number)); }
+  { const sn = await db.rpc("staff_senior_list"); STAFF_SENIOR = new Set((sn.error ? [] : sn.data || []).map(Number)); }
   if (ME.role === "owner") { const tr = await db.rpc("staff_training_list"); STAFF_TRAIN = new Map((tr.data || []).map(x => [x.user, x])); }
   await loadPbBooks().catch(() => {}); STAFF_BOOK = new Map(); for (const b of PB.books || []) for (const u of b.people) STAFF_BOOK.set(u.id, b.id);
   STAFF_RESETS = resets.error ? [] : resets.data || [];
@@ -41088,7 +41111,7 @@ async function loadEmpPhotos(force) {
   return EMP_PHOTOS;
 }
 const empPhoto = (id, cls) => id && EMP_PHOTOS?.get(Number(id)) ? `<img class="${cls || "emp-photo"}" alt="" src="${EMP_PHOTOS.get(Number(id))}">` : "";
-let STAFF_STARTED = new Map(), STAFF_TITLE = new Map(), STAFF_TRUCK = new Set();   // STAFF_TRUCK: people who pick their truck up at the office in the morning
+let STAFF_STARTED = new Map(), STAFF_TITLE = new Map(), STAFF_TRUCK = new Set(), STAFF_SENIOR = new Set();   // STAFF_TRUCK: people who pick their truck up at the office in the morning
 let STAFF_PENDING = [], STAFF_RESETS = [], STAFF_LOGINS = null, STAFF_PBCATS = new Map(), STAFF_BOOK = new Map(), STAFF_POS = null, STAFF_POSCOL = true;
 const STAFF_OPEN = new Set(); let STAFF_POS_EDIT = null;
 // Staff page: limit a person's price book to the categories ticked (none ticked = all)
@@ -41257,6 +41280,7 @@ function renderStaff(users, perms, note) {
                 <label title="Used for the HSG Pro messages, and for Years with REID on the picture a customer gets by text when this tech is on the way">Started working here<input type="date" data-staff-started value="${esc(STAFF_STARTED.get(u.id) || "")}" max="${ymd(new Date())}" ${highLocked ? "disabled" : ""}></label>
                 <label title="It is written beside the tech's picture in the text a customer gets when the tech is on the way">On the customer's text, this person is a<select data-staff-title ${highLocked ? "disabled" : ""}><option value="">Not shown</option>${["Lead Technician", "Service Technician"].map(t => `<option ${STAFF_TITLE.get(u.id) === t ? "selected" : ""}>${t}</option>`).join("")}</select></label>
                 <label class="staff-truck" title="A record of who picks up his truck at the office and who takes it home. It does not change pay any more: from Nov 17, 2026 every tech is paid 15 minutes plus the drive from the office before his first call."><input type="checkbox" data-staff-truck ${STAFF_TRUCK.has(u.id) ? "checked" : ""} ${highLocked ? "disabled" : ""}> Picks up his truck at the office in the morning. Not ticked = he takes his truck home. (A record only: it does not change pay.)</label>
+                ${u.role === "technician" ? `<label class="staff-senior" title="A senior tech can look at every tech's calls on the Tech Calls page. He can look, not work on them. Owners and the office already see every tech."><input type="checkbox" data-staff-senior ${STAFF_SENIOR.has(u.id) ? "checked" : ""} ${highLocked ? "disabled" : ""}> Senior tech: can see every tech's calls on Tech Calls.</label>` : ""}
                 ${(PB.books || []).length ? `<label>Price book<select data-staff-book><option value="">Normal</option>${PB.books.map(b => `<option value="${b.id}" ${STAFF_BOOK.get(u.id) === b.id ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>` : ""}
                 <div><span class="cl-label">Price book categories</span><div>${u.role === "owner" ? `<span class="quiet">All</span>` : `<button class="link" type="button" data-pbcats="${u.id}">${(STAFF_PBCATS.get(u.id) || []).length ? `${STAFF_PBCATS.get(u.id).length} picked` : "All"}</button>`}</div></div>
                 ${u.role === "sales" ? `<div class="st-sf-wrap"><span class="cl-label">Sales call for</span><div class="st-sf" data-sf-user="${u.id}">Loading…</div></div>` : ""}
@@ -41381,6 +41405,12 @@ function renderStaff(users, perms, note) {
       if (error) { m.textContent = "Not saved: " + rpcErr(error); e.target.checked = !on; return; }
       if (on) STAFF_TRUCK.add(id); else STAFF_TRUCK.delete(id);
       m.textContent = on ? `Saved: ${who} picks up his truck at the office. His pay starts 30 minutes before his first call each day.` : `Saved: ${who} takes his truck home. No pick up time is added.`; });
+    tr.querySelector("[data-staff-senior]")?.addEventListener("change", async e => {
+      const on = e.target.checked, { error } = await db.rpc("staff_senior_set", { p_user: id, p_on: on });
+      const m = $("#staff-msg"); m.className = "staff-msg " + (error ? "err" : "ok"); const who = tr.dataset.first || tr.dataset.email;
+      if (error) { m.textContent = "Not saved: " + rpcErr(error); e.target.checked = !on; return; }
+      if (on) STAFF_SENIOR.add(id); else STAFF_SENIOR.delete(id);
+      m.textContent = on ? `Saved: ${who} is a senior tech. He can see every tech's calls on Tech Calls.` : `Saved: ${who} is not a senior tech. He sees only his own calls.`; });
     tr.querySelector("[data-staff-book]")?.addEventListener("change", async e => {
       const v = e.target.value, { error } = await db.rpc("set_user_price_book", { p_user: id, p_book: v ? Number(v) : null });
       const m = $("#staff-msg"); m.className = "staff-msg " + (error ? "err" : "ok");
