@@ -3891,6 +3891,7 @@ button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 
   .mc.open { opacity: 1; }
   .mc-head { padding: 12px 14px; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; }
   .mc-time { font-weight: 800; font-size: calc(17px * var(--fs, 1)); }
+  .mc-what { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; overflow-wrap: anywhere; } .mc-what b { font-size: calc(19px * var(--fs, 1)); font-weight: 800; line-height: 1.25; } .mc-what span { font-size: calc(15px * var(--fs, 1)); font-weight: 600; }
   .mc-name { grid-column: 1 / -1; font-weight: 700; font-size: calc(19px * var(--fs, 1)); }
   .mc-line { grid-column: 1 / -1; color: var(--steel); }
   .mc-body { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
@@ -18510,6 +18511,7 @@ async function loadMyCalls(quiet) {
     if (ids.length) { const r = await db.rpc("jobs_inv_done", { p_ids: ids }); if (!r.error) MC.invDone = new Set(r.data || []); } } catch {}
   // the events on their schedule that day (not calls): shown above the calls
   MC.ev = []; if (!MC.all && data?.employee_id && data.employee_id !== "all") { try { const e = await db.rpc("my_day_events", { p_date: d, p_employee_id: data.employee_id }); MC.ev = e.error ? [] : e.data || []; } catch { } }
+  if (!MC.all) await mcItemsLoad((data?.calls || []).filter(c => c.status !== "cancelled").slice(0, 14));   // what is being installed, for the line at the top of each call
   await mcInstLoad(data?.calls);   // installs: the equipment on the invoice and what is already checked
   if (MC.date !== d) return;
   renderMyCalls(); mcInstAuto();
@@ -18808,6 +18810,27 @@ function poShow(r) {   // big, easy to read out to the supplier
   d.querySelector("button").addEventListener("click", close); d.addEventListener("click", e => { if (e.target === d) close(); });
   document.addEventListener("keydown", k); document.body.appendChild(d); d.querySelector("button").focus();
 }
+// What the call is for, in plain words, and what is being installed (Carlo, Nov 19, 2026, 5:01 p.m.)
+function mcWhatFor(c) {
+  const jt = String(c.job_type || "").replace(/\s*x\s*\d+\s*$/i, "").trim(), ins = /install/i.test(jt) ? jt : (jt ? jt + " Install" : "Install");
+  if (mcIsWalk(c)) return "Walk site for " + ins;
+  if (mcIsInstall(c)) return ins;
+  return jt || String(c.visit_purpose || "").trim();
+}
+function mcItemsWords(c) {
+  const L = MC.items && MC.items[c.visit_id]; if (!L || !L.length) return "";
+  const eq = L.filter(i => i.type === "equipment"), use = eq.length ? eq : L, nm = i => { const m = String(i.model || i.sku || "").trim(), n = String(i.name || "").trim(), q = +i.qty || 1;
+    return (q !== 1 ? q + " × " : "") + n + (m && !n.toLowerCase().includes(m.toLowerCase()) ? " (" + m + ")" : ""); };
+  return use.slice(0, 4).map(nm).join(" · ") + (use.length > 4 ? " · and " + (use.length - 4) + " more" : "");
+}
+async function mcItemsLoad(calls) {
+  MC.items ||= {}; const L = (calls || []).filter(c => c && c.visit_id && MC.items[c.visit_id] === undefined); if (!L.length) return false;
+  await Promise.all(L.map(async c => { MC.items[c.visit_id] = null;
+    try { let r = await db.rpc("call_items", { p_visit_id: c.visit_id });
+      if (r.error) { r = await db.rpc("install_check_info", { p_visit_id: c.visit_id }); MC.items[c.visit_id] = r.error || !r.data ? [] : (r.data.items || []).map(i => ({ ...i, type: "equipment" })); }
+      else MC.items[c.visit_id] = r.data || []; } catch (e) { MC.items[c.visit_id] = []; } }));
+  return true;
+}
 function mcCard(c) {
   const open = MC.open === c.visit_id, done = ["completed", "needs_return", "cancelled"].includes(c.status);
   const addr = [c.street, c.unit && "Unit " + c.unit, c.city].filter(Boolean).join(", ");
@@ -18823,6 +18846,9 @@ function mcCard(c) {
   const stIc = { en_route: "🚚", on_site: "📍", completed: "✅", needs_return: "🔁" };
   return `<section class="mc st-${c.status} ${open ? "open" : ""} ${done ? "done" : ""}" data-visit="${c.visit_id}">
     <header class="mc-head" data-mc-toggle="${c.visit_id}" tabindex="0" aria-expanded="${open}">
+      ${(() => { const w = mcWhatFor(c), it = mcItemsWords(c), isIn = mcIsWalk(c) || mcIsInstall(c);
+        if (open && MC.items?.[c.visit_id] === undefined) mcItemsLoad([c]).then(ok => { if (ok && MC.open === c.visit_id && document.querySelector(".mycalls")) renderMyCalls(); });
+        return w || it ? `<div class="mc-what">${w ? `<b>${esc(w)}</b>` : ""}${it ? `<span>${isIn ? "Being installed" : "For this call"}: ${esc(it)}</span>` : ""}</div>` : ""; })()}
       <div class="mc-time">${esc(winText(c.arrival_start, c.arrival_end))}</div>
       <span class="vstat ${c.status}">${esc(VISIT_STATUS[c.status] || c.status)}</span>
       <div class="mc-name">${esc(c.customer_name)}</div>
