@@ -3891,6 +3891,11 @@ button.hold-drag { opacity: .85; transform: scale(1.06) !important; box-shadow: 
   .mc.open { opacity: 1; }
   .mc-head { padding: 12px 14px; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; }
   .mc-time { font-weight: 800; font-size: calc(17px * var(--fs, 1)); }
+  .mc-pics { position: fixed; inset: 0; z-index: 70; background: rgba(10, 14, 18, .6); display: flex; align-items: flex-start; justify-content: center; padding: 14px; overflow: auto; }
+  .mc-pics-in { background: #fff; color: #10233d; border: 2px solid #34506c; border-radius: 14px; width: min(1100px, 100%); padding: 14px 16px 18px; box-shadow: 0 10px 40px rgba(0,0,0,.35); }
+  .mc-pics-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; } .mc-pics-top h2 { margin: 0; font-size: 22px; overflow-wrap: anywhere; }
+  .mc-pics-x { width: 92px !important; min-height: 76px !important; flex: 0 0 auto; } .mc-pics-n { margin: 0 0 8px; font-weight: 600; }
+  .mc-pics .files-job { margin-top: 12px; }
   .mc-what { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; overflow-wrap: anywhere; } .mc-what b { font-size: calc(19px * var(--fs, 1)); font-weight: 800; line-height: 1.25; } .mc-what span { font-size: calc(15px * var(--fs, 1)); font-weight: 600; }
   .mc-name { grid-column: 1 / -1; font-weight: 700; font-size: calc(19px * var(--fs, 1)); }
   .mc-line { grid-column: 1 / -1; color: var(--steel); }
@@ -18562,6 +18567,7 @@ function renderMyCalls() {
     MC.secOpen ||= new Set(); MC.secOpen.has(k) ? MC.secOpen.delete(k) : MC.secOpen.add(k); renderMyCalls();
   }));
   document.querySelectorAll("[data-mc-open-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.mcOpenCust))));
+  document.querySelectorAll("[data-mc-pics]").forEach(b => b.addEventListener("click", () => mcCustPics(Number(b.dataset.mcPics), b.dataset.mcPicsName)));
   document.querySelectorAll("[data-mc-costco]").forEach(b => b.addEventListener("click", () => openStoreForm(Number(b.dataset.mcCostco))));
   document.querySelectorAll("[data-mc-invoice]").forEach(b => b.addEventListener("click", () => startInvoice(Number(b.dataset.mcInvoice))));
   document.querySelectorAll("[data-mc-inst]").forEach(b => b.addEventListener("click", () => { const c = (MC.data?.calls || []).find(x => x.visit_id === Number(b.dataset.mcInst)); if (c) mcInstBox(c, null); }));
@@ -18831,6 +18837,35 @@ async function mcItemsLoad(calls) {
       else MC.items[c.visit_id] = r.data || []; } catch (e) { MC.items[c.visit_id] = []; } }));
   return true;
 }
+// Carlo, Nov 19, 2026, 5:07 p.m.: "on the tech view add a button that lets them look at all the customer pictures on file".
+// A box over Tech Calls with every picture of the customer (customer_files, the same read as the customer page's Photos and files),
+// grouped by job, newest job first; a click opens the big viewer (showFile). Nobody leaves the call's page.
+async function mcCustPics(cid, name) {
+  document.getElementById("mc-pics")?.remove();
+  const o = document.createElement("div"); o.id = "mc-pics"; o.className = "mc-pics"; o.setAttribute("role", "dialog"); o.setAttribute("aria-modal", "true"); o.setAttribute("aria-label", "Customer pictures");
+  o.innerHTML = `<div class="mc-pics-in"><div class="mc-pics-top"><h2>Pictures on file${name ? ": " + esc(name) : ""}</h2><button class="mc-sq mc-pics-x" type="button" data-mcp-x><span class="mc-sq-ic" aria-hidden="true">✕</span><span class="mc-sq-tn">Close</span></button></div><div class="mc-pics-body"><div class="quiet">Loading the pictures…</div></div></div>`;
+  const key = e => { if (e.key === "Escape" && !document.querySelector(".file-viewer")) close(); };
+  const close = () => { o.remove(); document.removeEventListener("keydown", key); };
+  o.addEventListener("click", e => { if (e.target === o || e.target.closest("[data-mcp-x]")) close(); });
+  document.addEventListener("keydown", key); document.body.append(o);
+  const body = o.querySelector(".mc-pics-body"), k = cid + ":null";
+  if (!(FILES.key === k && Date.now() - FILES.t < 45 * 60e3)) {
+    const { data, error } = await db.rpc("customer_files", { p_customer: cid, p_location: null, p_limit: 2000 });
+    if (!o.isConnected) return;
+    if (error) { body.innerHTML = `<div class="staff-msg err">I could not load the pictures: ${esc(rpcErr(error))}</div>`; return; }
+    FILES = { rows: data || [], shown: 0, urls: new Map(), key: k, t: Date.now() };
+    FILES.pics = []; FILES.docs = []; FILES.rows.forEach((f, i) => (isPic(f) ? FILES.pics : FILES.docs).push(i));
+  }
+  const idx = FILES.pics || [], rows = idx.map(i => FILES.rows[i]);
+  if (!rows.length) { body.innerHTML = `<div class="quiet">There are no pictures on file for this customer yet.</div>`; return; }
+  await signFiles(rows); if (!o.isConnected) return;
+  let last, html = `<p class="mc-pics-n">${rows.length.toLocaleString()} ${rows.length === 1 ? "picture" : "pictures"}. Tap a picture to see it big.</p>`;
+  rows.forEach((f, n) => { const url = FILES.urls.get(tileKey(f)); if (!url) return;
+    if (String(f.job_id) !== last) { if (last !== undefined) html += `</div>`; html += filesJobHead(f) + `<div class="files-grid">`; last = String(f.job_id); }
+    html += `<button class="file-tile" type="button" data-mcp-fi="${idx[n]}" title="${esc(f.file_name)}"><img loading="lazy" alt="${esc(f.file_name)}" src="${esc(url)}">${f.taken_by ? `<span class="file-by">📷 ${esc(f.taken_by)}</span>` : ""}</button>`; });
+  body.innerHTML = html + (last !== undefined ? `</div>` : "");
+  body.querySelectorAll("[data-mcp-fi]").forEach(b => b.addEventListener("click", () => showFile(Number(b.dataset.mcpFi))));
+}
 function mcCard(c) {
   const open = MC.open === c.visit_id, done = ["completed", "needs_return", "cancelled"].includes(c.status);
   const addr = [c.street, c.unit && "Unit " + c.unit, c.city].filter(Boolean).join(", ");
@@ -18884,6 +18919,7 @@ function mcCard(c) {
         ${!hasPo && MC.poOpen !== c.visit_id ? sq("📦", "Get a PO number", `data-po-open="${c.visit_id}"`) : ""}
         ${!invDone ? sq("🧾", "Invoice and payment", `data-mc-invoice="${c.job_id}"`) : ""}
         ${/^costco/i.test(c.job_type || "") ? sq("📝", "Costco form (customer signs)", `data-mc-costco="${c.job_id}"`) : ""}
+        ${sq("📷", "Customer pictures on file", `data-mc-pics="${c.customer_id}" data-mc-pics-name="${esc(c.customer_name || "")}"`)}
         ${sq("👤", "Open the full customer file", `data-mc-open-cust="${c.customer_id}"`)}
         ${c.status === "on_site" || c.status === "en_route" ? sq("↩", "Undo", `data-mc-status="scheduled"`, "mc-sq-quiet") : ""}
         ${done && c.status !== "cancelled" ? sq("↩", "Not finished after all", `data-mc-status="on_site"`, "mc-sq-quiet") : ""}</div>
