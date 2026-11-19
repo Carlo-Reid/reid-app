@@ -18503,12 +18503,14 @@ async function openMyCalls(date) {
   setPage("mycalls", "mycalls", "Tech Calls");
   $("#main").innerHTML = `<div class="loading">Loading your calls…</div>`;
   if (ME.role === "technician" && MC.senior == null) { try { const r = await db.rpc("is_senior_tech"); MC.senior = !r.error && r.data === true; } catch { MC.senior = false; } }   // a senior tech (Staff page tick) may look at every tech's calls
+  if (MC.senior && !MC.onlyTech && !(can("calls.dispatch") || can("calls.book"))) { try { const r = await db.rpc("senior_tech_ids"); if (!r.error) MC.onlyTech = new Set((r.data || []).map(Number)); } catch {} }   // a senior tech sees techs only: no sales, office or owners
   if (can("calls.dispatch") || can("calls.book") || MC.senior) await bookLists().catch(() => {});
   await loadEmpPhotos().catch(() => {});
   startCallsLive();
   await loadMyCalls();
 }
 // a senior tech looking at another tech's calls (or at every tech's): he may look, not work on them
+function mcTechs() { return ((BOOK && BOOK.techs) || []).filter(t => t.recent && (!MC.onlyTech || MC.onlyTech.has(Number(t.id)))); }   // the techs in the row of squares
 function mcRo() { return !!MC.senior && ME.role === "technician" && !(can("calls.dispatch") || can("calls.book")) && !!(MC.all || (MC.emp && MC.emp !== ME.emp)); }
 // which partner each call's job is from (for "This is a Vista Customer" at the top of a call)
 async function mcPtnLoad(calls) {
@@ -18522,7 +18524,7 @@ async function loadMyCalls(quiet) {
   const d = MC.date;
   let data, error;
   if (MC.all && BOOK) {   // every tech's calls for the day, grouped under each tech
-    const techs = (BOOK.techs || []).filter(t => t.recent), res = await Promise.all(techs.map(t => db.rpc("my_day", { p_date: d, p_employee_id: t.id })));
+    const techs = mcTechs(), res = await Promise.all(techs.map(t => db.rpc("my_day", { p_date: d, p_employee_id: t.id })));
     error = res.find(r => r.error)?.error;
     const groups = techs.map((t, i) => ({ id: t.id, name: t.name, calls: res[i].data?.calls || [] })), seen = new Set();
     data = { employee_id: "all", name: "", groups, calls: groups.flatMap(g => g.calls).filter(c => !seen.has(c.visit_id) && seen.add(c.visit_id)) };
@@ -18564,7 +18566,7 @@ function renderMyCalls() {
       ${office ? `<div class="mc-techs" role="group" aria-label="Whose calls">
         <button type="button" class="sinv-app ${MC.all ? "on" : ""}" data-mc-emp="all" aria-pressed="${!!MC.all}"><span class="sa-ic">▦</span><span class="sa-tn">All techs</span></button>
         ${ME.emp ? `<button type="button" class="sinv-app ${!MC.all && (!MC.emp || MC.emp === ME.emp) ? "on" : ""}" data-mc-emp="" aria-pressed="${!MC.all && (!MC.emp || MC.emp === ME.emp)}">${empPhoto(ME.emp, "sa-photo") || `<span class="sa-ic">★</span>`}<span class="sa-tn">Me</span></button>` : ""}
-        ${(BOOK.techs || []).filter(t => t.recent && t.id !== ME.emp).map(t => `<button type="button" class="sinv-app ${!MC.all && t.id === MC.emp ? "on" : ""}" data-mc-emp="${t.id}" aria-pressed="${!MC.all && t.id === MC.emp}">${empPhoto(t.id, "sa-photo")}<span class="sa-ic ${EMP_PHOTOS?.has(t.id) ? "hidden" : ""}">${esc(String(t.name).trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase())}</span><span class="sa-tn">${esc(t.name)}</span></button>`).join("")}</div>` : ""}
+        ${mcTechs().filter(t => t.id !== ME.emp).map(t => `<button type="button" class="sinv-app ${!MC.all && t.id === MC.emp ? "on" : ""}" data-mc-emp="${t.id}" aria-pressed="${!MC.all && t.id === MC.emp}">${empPhoto(t.id, "sa-photo")}<span class="sa-ic ${EMP_PHOTOS?.has(t.id) ? "hidden" : ""}">${esc(String(t.name).trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase())}</span><span class="sa-tn">${esc(t.name)}</span></button>`).join("")}</div>` : ""}
     ${mcRo() ? `<p class="mc-ro-say">You are looking at ${MC.all ? "every tech's calls" : "another tech's calls"}. You can look, but you can not work on them here. To work on your own calls, press <b>Me</b>.</p>` : ""}
     ${MC.all ? (D.groups || []).map(g => `<h2 class="mc-tech-h">${empPhoto(g.id, "mc-photo")}${esc(g.name)} <span class="quiet">${g.calls.length ? callsWord(g.calls.length) : "no calls"}</span></h2>${g.calls.map(mcCard).join("")}`).join("") || `<div class="empty-small">No techs on the schedule.</div>`
       : !D.employee_id ? `<div class="empty-small">${office ? "Pick a tech to see their calls." : "Your login isn't linked to your name on the schedule yet. Ask Carlo or George to pick it for you on the Staff page."}</div>`

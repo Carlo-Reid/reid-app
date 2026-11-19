@@ -41,14 +41,26 @@ END $function$;
 REVOKE EXECUTE ON FUNCTION public.is_senior_tech(), public.staff_senior_list(), public.staff_senior_set(bigint, boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.is_senior_tech(), public.staff_senior_list(), public.staff_senior_set(bigint, boolean) TO authenticated;
 
--- my_day (made by the sync's own schema on every run): a senior tech may look at another tech's day. Patched in place, once per run.
+-- Carlo, Nov 19, 2026, 5:22 p.m.: "adam and dave should only see techs not sales or office or owners". A tech = a person whose login's role is technician.
+CREATE OR REPLACE FUNCTION public._emp_is_tech(p_emp bigint) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
+  SELECT EXISTS (SELECT 1 FROM app_users u WHERE u.employee_id = p_emp AND u.role = 'technician' AND u.active AND u.deleted_at IS NULL) $f$;
+-- the techs a senior tech may look at (employee ids)
+CREATE OR REPLACE FUNCTION public.senior_tech_ids() RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $f$
+  SELECT CASE WHEN public.is_senior_tech() THEN coalesce((SELECT jsonb_agg(DISTINCT u.employee_id) FROM app_users u
+    WHERE u.role = 'technician' AND u.active AND u.deleted_at IS NULL AND u.employee_id IS NOT NULL), '[]'::jsonb) ELSE '[]'::jsonb END $f$;
+REVOKE EXECUTE ON FUNCTION public._emp_is_tech(bigint), public.senior_tech_ids() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._emp_is_tech(bigint), public.senior_tech_ids() TO authenticated;
+
+-- my_day (made by the sync's own schema on every run): a senior tech may look at another TECH's day. Patched in place, once per run.
 DO $$
 DECLARE d text; a text := 'AND NOT (public.has_permission(''calls.dispatch'') OR public.has_permission(''calls.book'')) THEN';
+  b text := 'AND NOT (public.has_permission(''calls.dispatch'') OR public.has_permission(''calls.book'') OR public.is_senior_tech()) THEN';
+  c text := 'AND NOT (public.has_permission(''calls.dispatch'') OR public.has_permission(''calls.book'') OR (public.is_senior_tech() AND public._emp_is_tech(p_employee_id))) THEN';
 BEGIN
   SELECT pg_get_functiondef(p.oid) INTO d FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = 'my_day' LIMIT 1;
-  IF d IS NOT NULL AND position('is_senior_tech' IN d) = 0 AND position(a IN d) > 0 THEN
-    EXECUTE replace(d, a, 'AND NOT (public.has_permission(''calls.dispatch'') OR public.has_permission(''calls.book'') OR public.is_senior_tech()) THEN');
-  END IF;
+  IF d IS NULL OR position('_emp_is_tech' IN d) > 0 THEN RETURN; END IF;
+  IF position(b IN d) > 0 THEN EXECUTE replace(d, b, c);
+  ELSIF position(a IN d) > 0 THEN EXECUTE replace(d, a, c); END IF;
 END $$;
 
 -- what is being installed on a call (323): a senior tech may read it for any call
