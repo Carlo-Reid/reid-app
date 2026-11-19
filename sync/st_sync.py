@@ -4546,19 +4546,57 @@ def main():
         fail("Another sync is running right now. Try again in a few minutes.")
     cur.execute("INSERT INTO st_sync_runs (source) VALUES (%s) RETURNING id", (args.source,))
     run_id = cur.fetchone()[0]; conn.commit()
+    # Which database pieces to run (speed round 3, Nov 19, 2026).
+    # The nightly run and a run by hand: every piece, as always.
+    # A run started by a push (a database change added while people are working): only from the first piece that
+    # changed, and every piece after it, in the same order. Pieces before it are the same as the last time they ran,
+    # so the database ends up the same, without making every function again (which made the app's buttons fail for minutes).
+    import hashlib
+    pieces = {"seen": None, "dirty": False, "ran": 0, "skipped": 0}
+    def piece_hash(text): return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS public.sync_piece_hash (name text PRIMARY KEY, hash text NOT NULL, ran_at timestamptz NOT NULL DEFAULT now())")
+        cur.execute("ALTER TABLE public.sync_piece_hash ENABLE ROW LEVEL SECURITY")
+        cur.execute("SELECT name, hash FROM public.sync_piece_hash")
+        known = dict(cur.fetchall()); conn.commit()
+        if os.environ.get("GITHUB_EVENT_NAME") == "push" and known: pieces["seen"] = known
+        pieces["table"] = True
+    except Exception as e:
+        conn.rollback(); pieces["table"] = False; log(f"  Could not read which database pieces ran before, so all of them run: {str(e)[:160]}")
+    def piece_skip(name, text):
+        # True = this piece is the same as when it last ran, and nothing before it changed: leave it
+        if pieces["seen"] is None or pieces["dirty"]: return False
+        if pieces["seen"].get(name) == piece_hash(text): pieces["skipped"] += 1; return True
+        pieces["dirty"] = True; return False
+    def piece_done(name, text, ok):
+        pieces["ran"] += 1
+        if not pieces.get("table"): return
+        try:
+            if ok: cur.execute("INSERT INTO public.sync_piece_hash (name, hash) VALUES (%s, %s) ON CONFLICT (name) DO UPDATE SET hash = EXCLUDED.hash, ran_at = now()", (name, piece_hash(text)))
+            else: cur.execute("DELETE FROM public.sync_piece_hash WHERE name = %s", (name,))
+            conn.commit()
+        except Exception: conn.rollback()
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
+        if piece_skip("APP_SCHEMA", APP_SCHEMA): raise StopIteration
         cur.execute(APP_SCHEMA); conn.commit(); log("App database pieces checked (item looks, labour).")
+        piece_done("APP_SCHEMA", APP_SCHEMA, True)
         cur.execute("SELECT to_regprocedure('public.set_pb_item_look(bigint,jsonb,numeric)') IS NOT NULL AND to_regprocedure('public.set_pb_item_labour(bigint,numeric,integer,numeric)') IS NOT NULL AND to_regprocedure('public.set_tech_kind(bigint,text)') IS NOT NULL AND to_regprocedure('public.set_job_partner(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_close(bigint,bigint)') IS NOT NULL AND to_regprocedure('public._can_see_invoices()') IS NOT NULL AND to_regprocedure('public.set_golive_lock(boolean)') IS NOT NULL AND to_regprocedure('public._is_install_sale(text)') IS NOT NULL AND to_regprocedure('public.sales_list(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_seller(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.est_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.sales_on_site(bigint)') IS NOT NULL AND to_regprocedure('public.set_sales_for(bigint,bigint[])') IS NOT NULL AND to_regprocedure('public._sales_own_visit(bigint)') IS NOT NULL AND to_regprocedure('public.sales_job_cancel(bigint)') IS NOT NULL AND to_regprocedure('public.est_item_info(bigint[])') IS NOT NULL AND to_regprocedure('public.est_costing(bigint[])') IS NOT NULL AND to_regprocedure('public.copy_addon_kit(bigint,text)') IS NOT NULL AND to_regprocedure('public.delete_addon_kit(bigint)') IS NOT NULL AND to_regprocedure('public.pap_set(bigint[],text,boolean)') IS NOT NULL AND to_regprocedure('public.htin_book_link(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_edit(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_booking_details_import(bigint,jsonb)') IS NOT NULL AND to_regprocedure('public.partner_bookings_export(bigint)') IS NOT NULL AND to_regprocedure('public.customer_partner_bookings(bigint)') IS NOT NULL AND to_regprocedure('public.set_job_tank_payer(bigint,text)') IS NOT NULL AND to_regprocedure('public.htin_stats(bigint)') IS NOT NULL AND to_regprocedure('public.partner_booking_link_customer(bigint,bigint)') IS NOT NULL AND to_regprocedure('public.inv_partner_rule(bigint)') IS NOT NULL AND to_regprocedure('public.est_unsell(bigint)') IS NOT NULL")
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks ready in the database: {cur.fetchone()[0]}", flush=True)
+    except StopIteration:
+        pass
     except Exception as e:
         conn.rollback(); log(f"  App database pieces not added: {str(e)[:200]}")
+        piece_done("APP_SCHEMA", APP_SCHEMA, False)
         if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Item looks not added: {str(e)[:200]}", flush=True)
     for attempt in range(3):   # after APP_SCHEMA, so these newer versions win; a busy app can deadlock these changes for a moment: try again
+        if piece_skip("EXTRA_SCHEMA", EXTRA_SCHEMA): break
         try:
-            cur.execute(EXTRA_SCHEMA); conn.commit(); log("Extra database pieces checked (find by amount, EFT people)."); break
+            cur.execute(EXTRA_SCHEMA); conn.commit(); log("Extra database pieces checked (find by amount, EFT people).")
+            piece_done("EXTRA_SCHEMA", EXTRA_SCHEMA, True); break
         except Exception as e:
             conn.rollback(); log(f"  Extra database pieces not added (try {attempt + 1}): {str(e)[:200]}")
+            if attempt == 2: piece_done("EXTRA_SCHEMA", EXTRA_SCHEMA, False)
             if os.environ.get("GITHUB_ACTIONS") and attempt == 2: print(f"::notice::Find by amount not added: {str(e)[:200]}", flush=True)
             time.sleep(5)
     # newer database pieces, one file each in sync/extra (in name order): each runs on its own, so one can't hold up another
@@ -4566,18 +4604,24 @@ def main():
     # instead of the two blocking each other until the database stops one of them ("deadlock detected"); it tries again after
     for path in sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "extra", "*.sql"))):
         name = os.path.basename(path)
+        sql_text = open(path, encoding="utf-8").read()
+        if piece_skip(name, sql_text): continue
         for attempt in range(3):
             try:
                 cur.execute("SET lock_timeout = '500ms'")
-                cur.execute(open(path, encoding="utf-8").read()); conn.commit(); log(f"  {name} checked."); break
+                cur.execute(sql_text); conn.commit(); log(f"  {name} checked.")
+                piece_done(name, sql_text, True); break
             except Exception as e:
                 conn.rollback()
                 if "probe" in name: log(f"  {name}: {e}"); break   # a read-only look at the database: its whole answer, once
                 log(f"  {name} not added (try {attempt + 1}): {str(e)[:200]}")
+                if attempt == 2: piece_done(name, sql_text, False)
                 if os.environ.get("GITHUB_ACTIONS") and attempt == 2: print(f"::notice::{name} not added: {str(e)[:200]}", flush=True)
                 time.sleep(5)
     try: cur.execute("SET lock_timeout = 0"); conn.commit()
     except Exception: conn.rollback()
+    log(f"Database pieces: {pieces['ran']} ran, {pieces['skipped']} left as they were (not changed since they last ran).")
+    if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Database pieces: {pieces['ran']} ran, {pieces['skipped']} left as they were", flush=True)
 
     try:
         new_state = {}
