@@ -4566,14 +4566,16 @@ def main():
     def piece_skip(name, text):
         # True = this piece is the same as when it last ran, and nothing before it changed: leave it
         if pieces["seen"] is None or pieces["dirty"]: return False
-        if pieces["seen"].get(name) == piece_hash(text): pieces["skipped"] += 1; return True
+        # (a piece that failed the last time and has not changed since is also left: the nightly run tries it again.
+        #  Without this, one piece that fails on every run would make every push run everything after it.)
+        if pieces["seen"].get(name) in (piece_hash(text), "failed:" + piece_hash(text)): pieces["skipped"] += 1; return True
         pieces["dirty"] = True; return False
     def piece_done(name, text, ok):
         pieces["ran"] += 1
         if not pieces.get("table"): return
         try:
-            if ok: cur.execute("INSERT INTO public.sync_piece_hash (name, hash) VALUES (%s, %s) ON CONFLICT (name) DO UPDATE SET hash = EXCLUDED.hash, ran_at = now()", (name, piece_hash(text)))
-            else: cur.execute("DELETE FROM public.sync_piece_hash WHERE name = %s", (name,))
+            cur.execute("INSERT INTO public.sync_piece_hash (name, hash) VALUES (%s, %s) ON CONFLICT (name) DO UPDATE SET hash = EXCLUDED.hash, ran_at = now()",
+                        (name, ("" if ok else "failed:") + piece_hash(text)))
             conn.commit()
         except Exception: conn.rollback()
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
