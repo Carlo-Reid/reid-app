@@ -8879,6 +8879,13 @@ article.ie .ie-grp .ie-notes2.ie-notes-in { margin-top: 12px; }
 .cpy-btn:hover, .cpy-btn:focus-visible { background: #e6eff8; border-color: #23415f; } .cpy-btn.cpy-ok { background: #1f9d4a; border-color: #1f9d4a; color: #fff; } .cpy-btn.cpy-sure { width: auto; padding: 0 8px; background: #c0392b; border-color: #c0392b; color: #fff; }
 body.cpy-on #main, body.cpy-on #search-page { cursor: crosshair; } body.cpy-on #main *, body.cpy-on #search-page * { cursor: crosshair !important; } body.cpy-on .cpy-btn { cursor: pointer !important; outline: 2px solid #c0392b; }
 .cpy-picked { outline: 3px solid #1f9d4a !important; outline-offset: 2px; background-color: rgba(31, 157, 74, .12) !important; }
+/* Waiting to send (Carlo, Nov 20, 2026): the bar at the bottom of a tech's screen when there is no internet, or things are still to send */
+#ob-bar { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 9400; width: max-content; max-width: calc(100vw - 20px); box-sizing: border-box; padding: 11px 16px; border-radius: 10px; font-size: 15.5px; line-height: 1.4; color: #fff; background: #23415f; box-shadow: 0 6px 22px rgba(0, 0, 0, .35); text-align: center; }
+#ob-bar.ob-off { background: #8a4b00; } #ob-bar.ob-ok { background: #1f9d4a; } #ob-bar.ob-bad { background: #8f1410; }
+#ob-bar button { margin-left: 6px; padding: 5px 12px; border-radius: 8px; border: 1.5px solid #fff; background: #fff; color: #10233d; font: inherit; font-weight: 700; cursor: pointer; }
+#ob-bar .ob-badt { display: inline-block; margin-top: 4px; font-weight: 700; color: #ffe08a; }
+.ie-walk-wait { display: block; margin-top: 3px; padding: 2px 6px; border-radius: 6px; background: #fff3cd; border: 1px solid #d9b800; color: #5c4300; font-size: 12px; font-weight: 700; text-align: center; }
+@media print { #ob-bar { display: none !important; } }
 #cpy-bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 9500; display: flex; align-items: center; gap: 12px; width: min(900px, calc(100vw - 28px)); padding: 12px 16px; border-radius: 8px; background: #23415f; color: #fff; box-shadow: 0 6px 24px rgba(0, 0, 0, .35); font-size: 16px; }
 #cpy-bar .cpy-bar-t { flex: 1; min-width: 0; display: grid; gap: 3px; } #cpy-bar .cpy-bar-n { font-size: 13.5px; opacity: .85; } #cpy-bar q { font-weight: 700; color: #ffd966; }
 #cpy-bar button { flex: none; padding: 10px 16px; border-radius: 6px; border: 0; font: inherit; font-weight: 700; cursor: pointer; } #cpy-bar .cpy-bar-add { background: #1f9d4a; color: #fff; } #cpy-bar .cpy-bar-add:disabled { background: #6f8296; color: #d6dde5; cursor: default; } #cpy-bar .cpy-bar-x { background: #fff; color: #23415f; }
@@ -18530,10 +18537,13 @@ async function loadMyCalls(quiet) {
     data = { employee_id: "all", name: "", groups, calls: groups.flatMap(g => g.calls).filter(c => !seen.has(c.visit_id) && seen.add(c.visit_id)) };
   } else ({ data, error } = await db.rpc("my_day", { p_date: d, p_employee_id: MC.emp }));
   if (MC.date !== d || !document.querySelector(".mycalls, .loading")) return;
-  if (error) { $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the calls</h2>${esc(rpcErr(error))}</div></div>`; return; }
+  if (error) { if (obNet(error) && MC.data && MC.dataDate === d) { if (!quiet) { MC.said = (MC.said ? MC.said + " " : "") + "📡 No internet: this is the list as it was when I last had it."; renderMyCalls(); } return; }   // no internet: the calls already on this phone stay
+    if (quiet && MC.data) return;
+    $("#main").innerHTML = `<div class="empty"><div><h2>Couldn't load the calls</h2>${esc(obNet(error) ? "There is no internet. The calls load when it is back." : rpcErr(error))}</div></div>`; return; }
   const sig = JSON.stringify(data);
   if (quiet && sig === MC.sig) return;
-  MC.sig = sig; MC.data = data;
+  MC.sig = sig; MC.data = data; MC.dataDate = d;
+  OB.items.forEach(x => { const c = (data?.calls || []).find(y => y.visit_id === x.v); if (!c || x.stuck) return; if (x.k === "status") c.status = x.a.status; else if (x.k === "walkdone") c.status = "completed"; });   // what is waiting to send still shows as pressed
   MC.invDone = new Set(); try { const ids = [...new Set((data?.calls || []).map(c => c.job_id).filter(Boolean))];
     if (ids.length) { const r = await db.rpc("jobs_inv_done", { p_ids: ids }); if (!r.error) MC.invDone = new Set(r.data || []); } } catch {}
   // the events on their schedule that day (not calls): shown above the calls
@@ -18725,7 +18735,8 @@ function wayPlace(p, to) {
 const wayPlaceTag = (p, lead, to, what) => { const w = wayPlace(p, to); if (!w) return "";
   return `<a class="way-place${w.far ? " way-far" : ""}" href="${w.url}" target="_blank" rel="noopener" title="Where the phone was when ${what || "On my way was pressed"}${p.by ? " by " + esc(p.by) : ""}${w.far ? ". That is not at the customer's address." : ""}${w.rough ? ". The phone only knew its place roughly." : ""}. Click to see it on the map.">📍 ${lead || ""}${w.words}${w.rough ? " (rough)" : ""} · map ›</a>`; };
 // a location stamp for the start (I'm here) or the end (Done, Needs another visit, walk completed) of a call. It is saved behind the button, so the tech does not wait for it.
-function mcStamp(id, kind) { try { mcWhere().then(at => { if (at) return db.rpc("call_place_set", { p_visit: id, p_kind: kind, p_lat: at.lat, p_lng: at.lng, p_acc: at.acc != null ? Math.round(at.acc) : null }); }).catch(() => {}); } catch { } }
+function mcStamp(id, kind) { const when = new Date().toISOString(); try { mcWhere().then(at => { if (!at) return; const a = { kind, lat: at.lat, lng: at.lng, acc: at.acc != null ? Math.round(at.acc) : null };
+  return obTry({ k: "place", v: id, at: when, a }, async () => (await obT(db.rpc("call_place_set", { p_visit: id, p_kind: kind, p_lat: a.lat, p_lng: a.lng, p_acc: a.acc }), 20000)).error); }).catch(() => {}); } catch { } }
 async function mcWayCard(id) {
   try { const { data: c } = await db.rpc("on_way_card_info", { p_visit: id }); if (!c?.image) return null;
     const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = `data:${c.mime || "image/jpeg"};base64,${c.image}`; });
@@ -18768,13 +18779,21 @@ async function mcDelayed(card, id) {
 async function mcSet(card, id, status, note) {
   const m = card.querySelector(".mc-msg"); m.className = "mc-msg"; m.textContent = "Saving…";
   card.querySelectorAll("button").forEach(b => b.disabled = true);
-  if (status === "en_route") { m.textContent = "Telling the customer you are on the way…"; const at = await mcWhere();   // the spot is kept, so the office can see where On my way was pressed
+  const when = new Date().toISOString(), off = obUse(id);   // no internet (Carlo, Nov 20): the press is kept on this phone with its time and sent when the internet is back
+  if (status === "en_route" && off) { const at = await mcWhere();
+    if (at) await obAdd({ k: "place", v: id, at: when, a: { kind: "way", lat: at.lat, lng: at.lng, acc: at.acc != null ? Math.round(at.acc) : null } });
+    await obAdd({ k: "waytext", v: id, at: when, a: {} });
+    MC.said = "There is no internet, so the customer was not texted yet. The text goes when the internet is back. If you can, please call them."; }
+  else if (status === "en_route") { m.textContent = "Telling the customer you are on the way…"; const at = await mcWhere();   // the spot is kept, so the office can see where On my way was pressed
     if (at) { try { await db.rpc("on_way_place_set", { p_visit: id, p_lat: at.lat, p_lng: at.lng, p_acc: at.acc != null ? Math.round(at.acc) : null }); } catch { } }
     MC.said = await mcOnWayText(id, at); if (!at) MC.said = (MC.said ? MC.said + " " : "") + "This phone did not say where it is, so the place where you pressed On my way was not saved."; m.textContent = "Saving…"; }
   if (status === "on_site") mcStamp(id, "start"); else if (status === "completed" || status === "needs_return") mcStamp(id, "end");
-  const { error } = await db.rpc("set_call_status", { p_visit_id: id, p_status: status, p_note: note });
-  if (error) { card.querySelectorAll("button").forEach(b => b.disabled = false); m.className = "mc-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
+  const r = await obTry({ k: "status", v: id, at: when, a: { status, note: note || null } }, async () => (await obT(db.rpc("set_call_status", { p_visit_id: id, p_status: status, p_note: note }), 40000)).error);
+  if (!r.ok) { card.querySelectorAll("button").forEach(b => b.disabled = false); m.className = "mc-msg err"; m.textContent = "Not saved: " + rpcErr(r.error); return; }
   if (status === "completed" || status === "needs_return") MC.open = null;
+  if (r.ob) { const c = (MC.data?.calls || []).find(x => x.visit_id === id); if (c) c.status = status; MC.sig = null;
+    MC.said = (MC.said ? MC.said + " " : "") + "📡 No internet: this is kept on this phone with the time you pressed it, and sent when the internet is back." + (status === "on_site" ? " The invoice opens when the internet is back." : "");
+    return renderMyCalls(); }
   if (status === "on_site") { const c = (MC.data?.calls || []).find(x => x.visit_id === id); if (c) return openOnSite(c.job_id, c.job_type, c.job_class, c); }
   await loadMyCalls();
 }
@@ -29209,7 +29228,7 @@ async function startInvoice(jobId) {
    dark part around it, and if it is still there it is taken off the screen. Left alone on purpose (POP_SKIP): things that go away by themselves
    (Working…, Eco Man thinking or dancing, messages), the dark layer behind Help, and "Let's start the day" (it is how office staff start their time). */
 const POP_OUT_RE = /close|cancel|✕|✖|×|\bexit\b|go back|\bback\b|←|⬅|\bstop\b|not now|not yet|never mind|put (him|it) away|^\s*no\b|\bdone\b|got it|^\s*ok\s*$/i;
-const POP_SKIP = ".work-clock, .ie-toast, .sl-toast, .rem-progress, .rem-done, .eco-think, .eco-dance, .eco-pop, .train-back, #atag-layer, #od-over, #call-pops, #creq-bar, #viewas-bar, #remote-lock, #remote-bar, #cpy-bar, #sec-verify-bar, #ua-side, #hsg-msg, .eco-live-box, .eco-find-bar, #login, #app";
+const POP_SKIP = ".work-clock, .ie-toast, .sl-toast, .rem-progress, .rem-done, .eco-think, .eco-dance, .eco-pop, .train-back, #atag-layer, #od-over, #call-pops, #creq-bar, #viewas-bar, #remote-lock, #remote-bar, #cpy-bar, #ob-bar, #sec-verify-bar, #ua-side, #hsg-msg, .eco-live-box, .eco-find-bar, #login, #app";
 const POP_BASE = new Set(document.body.children);   // what the page itself is made of: never a pop-up
 function popShown(e) { if (!e.isConnected || e.hidden) return false; const c = getComputedStyle(e); if (c.display === "none" || c.visibility === "hidden" || Number(c.opacity) === 0) return false; const r = e.getBoundingClientRect(); return r.width > 40 && r.height > 40; }
 function popHasOut(e) {
@@ -30397,7 +30416,114 @@ const walkLeft = W => (W.qs || []).filter((t, i) => !(W.ans && W.ans[i + 1])).le
 // by the question's place in the list. A 9th question added later has no drawing; the green ring marks the spot to photograph.
 const WALK_EX_N = 8;
 // one saved walk picture, with a ✕ to delete it (Carlo, Nov 14, 2:25 p.m.: "have a way for the tech to delete the picture")
-const walkThumb = (p, alt) => `<span class="ie-walk-thw">${p.url ? `<img class="ie-walk-th" alt="${alt}" src="${p.url}">` : `<span class="ie-walk-th ie-walk-th-ph" aria-hidden="true">📷</span>`}<button class="ie-walk-thx" type="button" data-walk-delpic="${esc(p.key)}" title="Delete this picture" aria-label="Delete this picture">✕</button></span>`;
+// ---- Waiting to send (Carlo, Nov 20, 2026: "when a tech is in a call taking pictures and working sometimes they loose internet connection, when that
+// happens and it re-connects later I need any info that was not uploaded to the program to get uploaded"). What can not be sent is kept on the phone
+// (IndexedDB "reid-outbox", so it survives the app being closed) in the order it was done, and sent by itself when the internet is back.
+// An item = { id, user, k, v (visit), at (when it was pressed), a {…}, blob?, up?, tries, err, stuck }.
+// k: pic · extra · na · note · status · place · waytext · walkdone · inst. A status or Complete the call that is sent late carries its pressed time.
+const OB = { p: null, items: [], busy: false, okAt: 0, timer: null };
+function obOpen() { return OB.p ||= new Promise(res => { try { const r = indexedDB.open("reid-outbox", 1); r.onupgradeneeded = () => r.result.createObjectStore("q", { keyPath: "id", autoIncrement: true }); r.onsuccess = () => res(r.result); r.onerror = () => res(null); r.onblocked = () => res(null); } catch { res(null); } }); }
+async function obTx(mode, fn) { const d = await obOpen(); if (!d) return null;
+  return new Promise(res => { try { const t = d.transaction("q", mode), rq = fn(t.objectStore("q")); let out = true; if (rq) rq.onsuccess = () => { out = rq.result; }; t.oncomplete = () => res(out); t.onerror = t.onabort = () => res(null); } catch { res(null); } }); }
+const obMe = () => ME.email || "";
+async function obAll() { const l = await obTx("readonly", s => s.getAll()); return (Array.isArray(l) ? l : []).filter(x => x.user === obMe()).sort((a, b) => a.id - b.id); }
+const obPut = it => obTx("readwrite", s => s.put(it));
+const obDel = id => obTx("readwrite", s => s.delete(id));
+async function obAdd(it) {
+  if (!obMe()) return null;
+  const row = Object.assign({ user: obMe(), at: new Date().toISOString(), tries: 0 }, it), id = await obTx("readwrite", s => s.add(row));
+  if (id == null || id === true) return null;
+  row.id = id; OB.items.push(row); try { navigator.storage?.persist?.(); } catch { }
+  obBar(); clearTimeout(OB.timer); OB.timer = setTimeout(obRun, 4000); return id;
+}
+// no internet, or a slow dead line: the thing is kept and tried again. The same for the few minutes the database is being updated.
+const obNet = e => { const m = (e && typeof e === "object" ? [e.message, e.name].filter(Boolean).join(" ") : String(e || "")); return !navigator.onLine || /failed to fetch|failed to send|functionsfetcherror|networkerror|network error|load failed|network request failed|fetch failed|timed out|timeout|err_internet|err_network|connection|aborted/i.test(m) || (e && (e.status === 0 || (e.status >= 500 && e.status < 600))); };
+const obWait = e => obNet(e) || (e && (e.code === "PGRST202" || e.code === "PGRST301" || e.status === 401)) || /could not find the function|schema cache|deadlock|too many (connections|clients)|jwt/i.test(String((e && e.message) || ""));
+const obT = (p, ms) => Promise.race([Promise.resolve(p).catch(e => ({ data: null, error: { message: String((e && e.message) || e || "failed to fetch") } })), new Promise(r => setTimeout(() => r({ data: null, error: { message: "timed out" } }), ms))]);
+// when to keep a thing on the phone without trying: no internet, or something of the same call is already waiting (so the order is kept)
+const obUse = v => !navigator.onLine || OB.items.some(x => x.v === v && !x.stuck);
+// send it now, or keep it on the phone. direct() answers the error, or nothing when it was saved. -> { ok, ob (its id on the list), error }
+async function obTry(item, direct) {
+  if (obUse(item.v)) { const id = await obAdd(item); if (id) return { ok: true, ob: id }; }
+  let error = null; try { error = await direct(); } catch (e) { error = e; }
+  if (!error) return { ok: true };
+  if (obWait(error)) { const id = await obAdd(item); if (id) return { ok: true, ob: id }; }
+  return { ok: false, error };
+}
+async function obSend(it) {
+  const a = it.a || {}, R = (fn, args) => obT(db.rpc(fn, args), 30000); let e = null;
+  const up = async () => { if (!it.blob || it.up || !a.key) return null;
+    const r = await obT(db.storage.from("job-files").upload(a.key, it.blob, { contentType: "image/jpeg" }), 120000);
+    if (r.error && !/exist|duplicate/i.test(r.error.message || "")) return r.error; it.up = true; await obPut(it); return null; };
+  switch (it.k) {
+    case "pic": e = await up(); if (!e) ({ error: e } = await R("walk_answer_set", { p_visit_id: it.v, p_q: a.q, p_question: a.question, p_na: false, p_key: a.key, p_size: a.size })); break;
+    case "extra": e = await up(); if (!e) ({ error: e } = await R("walk_extra_photo_once", { p_visit_id: it.v, p_key: a.key, p_size: a.size })); break;
+    case "na": ({ error: e } = await R("walk_answer_set", { p_visit_id: it.v, p_q: a.q, p_question: a.question, p_na: true, p_key: null, p_size: null })); break;
+    case "note": ({ error: e } = await R("walk_pic_note_set", { p_visit_id: it.v, p_key: a.key, p_note: a.note })); break;
+    case "status": ({ error: e } = await R("call_status_at", { p_visit_id: it.v, p_status: a.status, p_note: a.note || null, p_at: it.at })); break;
+    case "place": ({ error: e } = await R("call_place_at", { p_visit: it.v, p_kind: a.kind, p_lat: a.lat, p_lng: a.lng, p_acc: a.acc, p_at: it.at })); break;
+    case "walkdone": ({ error: e } = await R("walk_complete_at", { p_visit_id: it.v, p_notes: a.notes, p_signer: a.signer, p_png: a.png, p_at: it.at })); if (e && /already done/i.test(e.message || "")) e = null; break;
+    case "inst": e = await up(); if (!e) ({ error: e } = await R("install_check_save", { p_visit_id: it.v, p_line_id: a.line, p: a.p })); break;
+    case "waytext": {   // Carlo, Nov 20: the On my way text is sent late anyway, with no minutes in it. Not when the tech has since pressed I'm here or Done: "on the way" would be wrong then.
+      if (OB.items.some(x => x.v === it.v && x.id > it.id && (x.k === "walkdone" || (x.k === "status" && /on_site|completed|needs_return|scheduled/.test(x.a?.status || ""))))) return "ok";
+      let card = null; try { card = await obT(mcWayCard(it.v), 20000); if (card && card.error) card = null; } catch { card = null; }
+      const r = await obT(db.functions.invoke("on-way-text", { body: { visit_id: it.v, lat: null, lng: null, card: typeof card === "string" ? card : null } }), 45000);
+      if (r.error && obNet(r.error)) e = r.error; break; }   // any other answer (no phone on file, already texted): nothing more to do
+    default: return "ok";
+  }
+  return !e ? "ok" : obWait(e) ? "wait" : "no:" + rpcErr(e);
+}
+// what the open screens show for a thing that has now been sent
+function obMark(it) {
+  const W = WALK, a = it.a || {};
+  if (W && W.visit === it.v) { const p = a.key ? walkPicFind(W, a.key) : null; if (p) { p.wait = false; p.ob = null; }
+    if (it.k === "na" && W.ans && W.ans[a.q]) W.ans[a.q].wait = false;
+    if (it.k === "note" && p) { p.noteSaved = a.note; p.noteSaid = a.note ? "✔ Note saved" : ""; } }
+}
+async function obRun() {
+  if (OB.busy || !obMe()) return;
+  const list = await obAll(); OB.items = list; if (!list.length || !navigator.onLine) return obBar();
+  OB.busy = true; obBar(); let sent = 0, calls = false;
+  try { for (const it of list) { if (it.stuck) continue;
+      const r = await obSend(it);
+      if (r === "ok") { await obDel(it.id); OB.items = OB.items.filter(x => x.id !== it.id); sent++; if (/status|walkdone|waytext/.test(it.k)) calls = true; obMark(it); obBar(); continue; }
+      if (r === "wait") break;
+      it.tries = (it.tries || 0) + 1; it.err = r.slice(3); if (it.tries >= 3) it.stuck = true; await obPut(it); if (!it.stuck) break; } }
+  catch (e) { console.warn("outbox", e); }
+  OB.busy = false; OB.items = await obAll();
+  if (sent && !OB.items.length) OB.okAt = Date.now();
+  obBar();
+  if (sent) { const typing = /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement?.tagName || "");
+    if (!typing && document.querySelector("#ie-walk")) { try { renderInvoiceEditor(); } catch { } }
+    if (calls && document.querySelector(".mycalls")) { MC.sig = null; try { loadMyCalls(true); } catch { } } }
+}
+const OB_WORD = { pic: "a picture", extra: "a picture", na: "an N/A answer", note: "a note on a picture", status: "a button you pressed", place: "a location stamp", waytext: "the On my way text", walkdone: "Complete the call", inst: "an equipment label" };
+function obBar() {
+  let b = document.getElementById("ob-bar"); const n = OB.items.filter(x => !x.stuck).length, bad = OB.items.filter(x => x.stuck), off = !navigator.onLine,
+    done = !n && !bad.length && Date.now() - OB.okAt < 6000, tech = !!document.querySelector(".mycalls, #ie-walk");
+  if (!n && !bad.length && !done && !(off && tech && obMe())) { if (b) b.remove(); return; }
+  if (!b) { b = document.createElement("div"); b.id = "ob-bar"; b.setAttribute("role", "status"); document.body.appendChild(b);
+    b.addEventListener("click", async e => { const t = e.target.closest("[data-ob]"); if (!t) return;
+      if (t.dataset.ob === "go") { for (const x of OB.items) if (x.stuck) { x.stuck = false; x.tries = 0; await obPut(x); } obRun(); }
+      if (t.dataset.ob === "rm") { const l = OB.items.filter(x => x.stuck);
+        const ok = await askChoice("Remove what could not be sent?", `<span class="ask-sq"></span>${l.length === 1 ? "This one thing is" : "These " + l.length + " things are"} taken off this phone and never sent: ${esc(l.map(x => OB_WORD[x.k] || "a thing").join(", "))}. This can not be undone.`, [["y", "🗑|Yes, remove|"], ["", "↩|No, keep|"]]);
+        if (ok === "y") { for (const x of l) await obDel(x.id); OB.items = await obAll(); obBar(); } } }); }
+  const things = k => k === 1 ? "1 thing is" : k + " things are";
+  b.className = bad.length && !n ? "ob-bad" : done ? "ob-ok" : off ? "ob-off" : "ob-go";
+  b.innerHTML = done ? `<b>✓ Everything is sent.</b>`
+    : `${off ? `<b>📡 No internet.</b> ` : ""}${n ? (off ? `${things(n)} waiting to send. ${n === 1 ? "It is" : "They are"} safe on this phone. I send ${n === 1 ? "it" : "them"} when the internet is back. Do not sign out.`
+        : OB.busy ? `<b>⬆ Sending…</b> ${things(n)} still to send.` : `${things(n)} waiting to send. I keep trying. <button type="button" data-ob="go">Send now</button>`)
+      : off ? "What you do on this call is kept on this phone and sent when the internet is back." : ""}`
+      + (bad.length ? ` <span class="ob-badt">⚠ ${bad.length === 1 ? "1 thing" : bad.length + " things"} could not be sent (${esc(OB_WORD[bad[0].k] || "a thing")}): ${esc(bad[0].err || "it was refused")}</span> <button type="button" data-ob="go">Try again</button> <button type="button" data-ob="rm">Remove</button>` : "");
+  if (done) setTimeout(obBar, 6200);
+}
+window.addEventListener("online", () => { obBar(); setTimeout(obRun, 1500); });
+window.addEventListener("offline", obBar);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) obRun(); });
+setInterval(() => { if (OB.items.length || !navigator.onLine) obRun(); }, 20000);
+setTimeout(obRun, 6000);
+window.addEventListener("beforeunload", e => { if (OB.items.some(x => !x.stuck) && !navigator.onLine) { e.preventDefault(); e.returnValue = ""; } });
+const walkThumb = (p, alt) => `<span class="ie-walk-thw">${p.url ? `<img class="ie-walk-th" alt="${alt}" src="${p.url}">` : `<span class="ie-walk-th ie-walk-th-ph" aria-hidden="true">📷</span>`}<button class="ie-walk-thx" type="button" data-walk-delpic="${esc(p.key)}" title="Delete this picture" aria-label="Delete this picture">✕</button>${p.wait ? `<span class="ie-walk-wait" title="There was no internet. This picture is safe on this phone and is sent when the internet is back.">⏳ Waiting to send</span>` : ""}</span>`;
 // a picture with its own note box under it (Carlo, Nov 14, 3:39 p.m.: "in the questions have a way to add notes to each picture they take").
 // The note is saved when the box is left (walk_pic_note_set): on the walk, and on the photo's caption in the customer's file.
 const walkPic = (p, alt) => `<span class="ie-walk-pw">${walkThumb(p, alt)}<textarea class="ie-walk-note" rows="2" maxlength="500" data-walk-note="${esc(p.key)}" placeholder="📝 Add a note for this picture" aria-label="Note for this picture">${esc(p.note || "")}</textarea><span class="ie-walk-notesaid" data-walk-notesaid="${esc(p.key)}">${p.noteSaid ? esc(p.noteSaid) : ""}</span></span>`;
@@ -30407,9 +30533,9 @@ async function walkNoteSave(ta) {
   const t = ta.value.trim(); if (t === (p.noteSaved || "")) return;
   const said = x => { p.noteSaid = x; const el = [...document.querySelectorAll("[data-walk-notesaid]")].find(e => e.dataset.walkNotesaid === key); if (el) { el.textContent = x; el.classList.toggle("err", /^Not/.test(x)); } };
   said("Saving…");
-  const { error } = await db.rpc("walk_pic_note_set", { p_visit_id: W.visit, p_key: key, p_note: t });
-  if (error) return said("Not saved: " + rpcErr(error));
-  p.noteSaved = t; p.note = t; said(t ? "✔ Note saved" : "");
+  const r = await obTry({ k: "note", v: W.visit, a: { key, note: t } }, async () => (await obT(db.rpc("walk_pic_note_set", { p_visit_id: W.visit, p_key: key, p_note: t }), 20000)).error);
+  if (!r.ok) return said("Not saved: " + rpcErr(r.error));
+  p.noteSaved = t; p.note = t; said(r.ob ? "⏳ Kept on this phone. It is sent when the internet is back." : t ? "✔ Note saved" : "");
 }
 function walkQsHtml(W) {
   if (!W.qs) return `<p class="ie-walk-p quiet">Loading the questions…</p>`;
@@ -30421,7 +30547,7 @@ function walkQsHtml(W) {
       return `<div class="ie-walk-q${a ? " done" : ""}" data-walk-q="${q}">
         <div class="ie-walk-qtop"><span class="ie-sec-n" aria-hidden="true">${q}</span>
         <div class="ie-walk-qt"><b>${esc(t)}</b>
-          <span class="ie-walk-qa">${busy ? "Saving the picture…" : !a ? (W.qErr && W.qErr.q === q ? `<span class="ie-walk-qerr">${esc(W.qErr.t)}</span>` : "Not answered yet.") : a.na ? "✔ N/A: no picture." : pics.length > 1 ? `✔ ${pics.length} pictures saved.` : "✔ Picture saved."}</span></div>
+          <span class="ie-walk-qa">${busy ? "Saving the picture…" : !a ? (W.qErr && W.qErr.q === q ? `<span class="ie-walk-qerr">${esc(W.qErr.t)}</span>` : "Not answered yet.") : a.na ? (a.wait ? "⏳ N/A. Waiting to send." : "✔ N/A: no picture.") : pics.some(p => p.wait) ? `⏳ ${pics.length > 1 ? pics.length + " pictures" : "Picture"} kept on this phone. Waiting to send.` : pics.length > 1 ? `✔ ${pics.length} pictures saved.` : "✔ Picture saved."}</span></div>
         ${pics.map((p, j) => walkPic(p, `Picture ${j + 1} for question ${q}`)).join("")}</div>
         ${q <= WALK_EX_N ? `<img class="ie-walk-ex" alt="" src="walk/q${q}.svg" loading="lazy" onerror="this.remove()">` : ""}
         <div class="ie-walk-qb">
@@ -30440,12 +30566,18 @@ async function walkLoadQs(W) {
   (a.data || []).forEach(x => { if (x.q >= 1000) return; const g = W.ans[x.q] || (W.ans[x.q] = { na: false, pics: [] }); g.pics ||= [];
     if (x.na) g.na = true; else if (x.key && !g.pics.some(p => p.key === x.key)) g.pics.push({ key: x.key, note: x.note || "", noteSaved: x.note || "" }); });
   if (!W.extra) W.extra = (ex.data || []).map(x => ({ q: x.q, key: x.key || null, note: x.note || "", noteSaved: x.note || "" }));
+  try { OB.items = await obAll();   // what is still waiting to send on this phone (taken with no internet) shows on the cards too
+    OB.items.filter(x => x.v === W.visit).forEach(x => { const a = x.a || {};
+      if (x.k === "pic" && !walkPicFind(W, a.key)) { const g = W.ans[a.q] && !W.ans[a.q].na ? W.ans[a.q] : (W.ans[a.q] = { na: false, pics: [] }); (g.pics ||= []).push({ key: a.key, url: x.blob ? URL.createObjectURL(x.blob) : null, ob: x.id, wait: true }); }
+      else if (x.k === "extra" && !walkPicFind(W, a.key)) W.extra.push({ q: null, key: a.key, url: x.blob ? URL.createObjectURL(x.blob) : null, ob: x.id, wait: true });
+      else if (x.k === "na") W.ans[a.q] = { na: true, pics: [], wait: true };
+      else if (x.k === "note") { const p = walkPicFind(W, a.key); if (p) { p.note = a.note; p.noteSaved = a.note; } } }); } catch { }
   if (document.querySelector("#ie-walk")) renderInvoiceEditor();
   walkSignPics(W);
 }
 // the pictures saved before this sitting (or by the tech, when the office is remoted in) get a link so they show on the cards
 async function walkSignPics(W) {
-  const need = [...Object.values(W.ans || {}).flatMap(g => g.pics || []), ...(W.extra || [])].filter(p => p.key && !p.url);
+  const need = [...Object.values(W.ans || {}).flatMap(g => g.pics || []), ...(W.extra || [])].filter(p => p.key && !p.url && !p.wait);
   if (!need.length) return;
   await Promise.all(need.map(async p => { try { const { data } = await db.storage.from("job-files").createSignedUrl(p.key, 3600); if (data?.signedUrl) p.url = data.signedUrl; } catch (e) {} }));
   if (WALK === W && document.querySelector("#ie-walk")) renderInvoiceEditor();
@@ -30455,8 +30587,10 @@ async function walkPicDel(key) {
   const W = WALK; if (!W || !key) return;
   const ok = await askChoice("Delete this picture?", `<span class="ask-sq"></span>It comes off the walk and off the customer's file.`, [["y", "🗑|Yes, delete it|"], ["", "↩|No, keep it|"]]);
   if (ok !== "y") return;
-  const { error } = await db.rpc("walk_answer_del", { p_visit_id: W.visit, p_key: key });
-  if (error) return alertMsg("Not deleted: " + rpcErr(error));
+  const wp = walkPicFind(W, key);
+  if (wp && wp.wait) { for (const x of OB.items.filter(x => x.v === W.visit && x.a && x.a.key === key)) await obDel(x.id); OB.items = await obAll(); obBar(); }   // never sent: it only comes off this phone
+  else { const { error } = await db.rpc("walk_answer_del", { p_visit_id: W.visit, p_key: key });
+    if (error) return alertMsg("Not deleted: " + (obNet(error) ? "there is no internet. Try again when it is back." : rpcErr(error))); }
   Object.keys(W.ans || {}).forEach(q => { const g = W.ans[q]; if (!g.pics) return; g.pics = g.pics.filter(p => p.key !== key); if (!g.pics.length && !g.na) delete W.ans[q]; });
   W.extra = (W.extra || []).filter(x => x.key !== key);
   renderInvoiceEditor();
@@ -30481,11 +30615,13 @@ async function walkExtraAdd(file) {
   W.extraBusy = true; W.extraErr = null; renderInvoiceEditor();
   try {
     const blob = await walkShrink(file), key = `forms/${W.job}/walk-${W.visit}-extra-${Date.now()}.jpg`;
-    const up = await db.storage.from("job-files").upload(key, blob, { contentType: "image/jpeg" }); if (up.error) throw new Error(up.error.message);
-    let error = null, data = null;
-    for (let n = 0; n < 4; n++) { ({ data, error } = await db.rpc("walk_extra_photo_add", { p_visit_id: W.visit, p_key: key, p_size: blob.size })); if (!error) break; await new Promise(r => setTimeout(r, 3000)); }
-    if (error) throw new Error(rpcErr(error));
-    (W.extra ||= []).push({ q: data, key, url: URL.createObjectURL(blob) }); W.extraBusy = false; renderInvoiceEditor();
+    let data = null;
+    const r = await obTry({ k: "extra", v: W.visit, blob, a: { key, size: blob.size } }, async () => {
+      const up = await obT(db.storage.from("job-files").upload(key, blob, { contentType: "image/jpeg" }), 45000); if (up.error) return up.error;
+      let error = null; for (let n = 0; n < 4; n++) { ({ data, error } = await obT(db.rpc("walk_extra_photo_add", { p_visit_id: W.visit, p_key: key, p_size: blob.size }), 30000)); if (!error || obNet(error)) break; await new Promise(r => setTimeout(r, 3000)); }
+      return error; });
+    if (!r.ok) throw new Error(rpcErr(r.error));
+    (W.extra ||= []).push({ q: r.ob ? null : data, key, url: URL.createObjectURL(blob), ob: r.ob || null, wait: !!r.ob }); W.extraBusy = false; renderInvoiceEditor();
   } catch (e) { W.extraBusy = false; W.extraErr = "The picture was not saved: " + (e.message || "try again") + ". Try again."; renderInvoiceEditor(); }
 }
 // a phone's picture is made smaller (1600px at most, JPEG) before it is saved, so it loads fast for the office
@@ -30570,12 +30706,16 @@ function mcInstBox(c, then) {
     o.querySelector('[data-inst="save"]')?.addEventListener("click", async () => {
       const ser = (o.querySelector("#inst-serial")?.value || "").trim(); if (!ser) { S.err = "Type the serial number from the label first."; return draw(); }
       S.serial = ser; S.busy = "Saving…"; S.err = ""; draw();
-      try { let key = null, size = null;
-        if (S.blob && !S.hand) { const small = await walkShrink(S.blob); key = `forms/${I.job_id}/install-${c.visit_id}-${cur.line_id}-${Date.now()}.jpg`; size = small.size;
-          const up = await db.storage.from("job-files").upload(key, small, { contentType: "image/jpeg" }); if (up.error) throw new Error(up.error.message); }
-        const p = { serial: ser, matched: !!(R && R.hit) && !S.hand, by_hand: !!S.hand, key, size, model_read: (R && R.hit) || "", text: R ? [R.codes.join(" "), R.text].join("\n").slice(0, 4000) : "" };
-        let error = null; for (let t = 0; t < 3; t++) { ({ error } = await db.rpc("install_check_save", { p_visit_id: c.visit_id, p_line_id: cur.line_id, p })); if (!error || !/setup|schema|function/i.test(error.message || "")) break; await new Promise(r => setTimeout(r, 3000)); }
-        if (error) throw new Error(rpcErr(error));
+      let key = null, size = null, small = null, p = null;
+      const kept = async () => { const id = p ? await obAdd({ k: "inst", v: c.visit_id, blob: small, a: { key, line: cur.line_id, p } }) : null; if (!id) return false;   // no internet: kept on this phone
+        cur.done = { serial: ser.toUpperCase().replace(/\s+/g, ""), matched: p.matched, by_hand: p.by_hand }; if (S.url) URL.revokeObjectURL(S.url); Object.assign(S, { read: null, blob: null, url: null, busy: "", err: "", hand: false, serial: null }); draw(); return true; };
+      try {
+        if (S.blob && !S.hand) { small = await walkShrink(S.blob); key = `forms/${I.job_id}/install-${c.visit_id}-${cur.line_id}-${Date.now()}.jpg`; size = small.size; }
+        p = { serial: ser, matched: !!(R && R.hit) && !S.hand, by_hand: !!S.hand, key, size, model_read: (R && R.hit) || "", text: R ? [R.codes.join(" "), R.text].join("\n").slice(0, 4000) : "" };
+        if (obUse(c.visit_id) && await kept()) return;
+        if (small) { const up = await obT(db.storage.from("job-files").upload(key, small, { contentType: "image/jpeg" }), 45000); if (up.error) { if (obWait(up.error) && await kept()) return; throw new Error(up.error.message); } }
+        let error = null; for (let t = 0; t < 3; t++) { ({ error } = await obT(db.rpc("install_check_save", { p_visit_id: c.visit_id, p_line_id: cur.line_id, p }), 30000)); if (!error || !/setup|schema|function/i.test(error.message || "")) break; await new Promise(r => setTimeout(r, 3000)); }
+        if (error) { if (obNet(error) && await kept()) return; throw new Error(rpcErr(error)); }
         cur.done = { serial: ser.toUpperCase().replace(/\s+/g, ""), matched: p.matched, by_hand: p.by_hand };
         if (S.url) URL.revokeObjectURL(S.url); Object.assign(S, { read: null, blob: null, url: null, busy: "", err: "", hand: false, serial: null }); draw();
       } catch (e) { S.busy = ""; S.err = "Not saved: " + (e.message || "try again") + ". Press Save again."; draw(); }
@@ -30673,17 +30813,20 @@ async function walkAnswer(q, file) {
   const W = WALK; if (!W || W.busy) return; const say = t => { const m = $("#ie-walk-msg"); if (m) { m.className = "ie-walk-msg" + (t ? " err" : ""); m.textContent = t || ""; } };
   const t = (W.qs || [])[q - 1] || "";
   if (!file) {   // N/A
-    const { error } = await db.rpc("walk_answer_set", { p_visit_id: W.visit, p_q: q, p_question: t, p_na: true, p_key: null, p_size: null });
-    if (error) return say("Not saved: " + rpcErr(error));
-    W.ans[q] = { na: true, pics: [] }; W.qErr = null; renderInvoiceEditor(); return; }
+    const r = await obTry({ k: "na", v: W.visit, a: { q, question: t } }, async () => (await obT(db.rpc("walk_answer_set", { p_visit_id: W.visit, p_q: q, p_question: t, p_na: true, p_key: null, p_size: null }), 20000)).error);
+    if (!r.ok) return say("Not saved: " + rpcErr(r.error));
+    W.ans[q] = { na: true, pics: [], wait: !!r.ob }; W.qErr = null; renderInvoiceEditor(); return; }
   W.busy = q; renderInvoiceEditor();
   try {
     const blob = await walkShrink(file), key = `forms/${W.job}/walk-${W.visit}-q${q}-${Date.now()}.jpg`;
-    const up = await db.storage.from("job-files").upload(key, blob, { contentType: "image/jpeg" }); if (up.error) throw new Error(up.error.message);
-    // the save is tried up to 4 times, a few seconds apart: right after an update of the app the database can be busy for a few minutes (Carlo, Nov 13: "it does not load")
-    let error = null; for (let n = 0; n < 4; n++) { ({ error } = await db.rpc("walk_answer_set", { p_visit_id: W.visit, p_q: q, p_question: t, p_na: false, p_key: key, p_size: blob.size })); if (!error) break; await new Promise(r => setTimeout(r, 3000)); }
-    if (error) throw new Error(rpcErr(error));
-    const g = W.ans[q] && !W.ans[q].na ? W.ans[q] : (W.ans[q] = { na: false, pics: [] }); (g.pics ||= []).push({ key, url: URL.createObjectURL(blob) });   // added, never replaced
+    // no internet (Carlo, Nov 20): the picture is kept on this phone and sent when the internet is back
+    const r = await obTry({ k: "pic", v: W.visit, blob, a: { q, question: t, key, size: blob.size } }, async () => {
+      const up = await obT(db.storage.from("job-files").upload(key, blob, { contentType: "image/jpeg" }), 45000); if (up.error) return up.error;
+      // the save is tried up to 4 times, a few seconds apart: right after an update of the app the database can be busy for a few minutes (Carlo, Nov 13: "it does not load")
+      let error = null; for (let n = 0; n < 4; n++) { ({ error } = await obT(db.rpc("walk_answer_set", { p_visit_id: W.visit, p_q: q, p_question: t, p_na: false, p_key: key, p_size: blob.size }), 30000)); if (!error || obNet(error)) break; await new Promise(r => setTimeout(r, 3000)); }
+      return error; });
+    if (!r.ok) throw new Error(rpcErr(r.error));
+    const g = W.ans[q] && !W.ans[q].na ? W.ans[q] : (W.ans[q] = { na: false, pics: [] }); (g.pics ||= []).push({ key, url: URL.createObjectURL(blob), ob: r.ob || null, wait: !!r.ob });   // added, never replaced
     W.busy = null; W.qErr = null; renderInvoiceEditor();
   } catch (e) { W.busy = null; W.qErr = { q, t: "The picture was not saved: " + (e.message || "try again") + ". Take it again, or press N/A." }; renderInvoiceEditor(); say("The picture for question " + q + " was not saved: " + (e.message || "try again") + ". Take it again, or press N/A."); }
 }
@@ -30711,9 +30854,12 @@ function ieWalkWire() {
   $("#ie-walk-finish")?.addEventListener("click", async e => {
     const b = e.currentTarget, m = $("#ie-walk-msg"); b.disabled = true; m.className = "ie-walk-msg"; m.textContent = "Saving…";
     if (!W.remote) mcStamp(W.visit, "end");   // the end stamp of the call (not when the office is remoted in: that would be the office's own place)
-    const { error } = await db.rpc("walk_complete", { p_visit_id: W.visit, p_notes: (W.notes || "").trim() || null, p_signer: W.signer || null, p_png: W.png || null });
-    if (error) { b.disabled = false; m.className = "ie-walk-msg err"; m.textContent = "Not saved: " + rpcErr(error); return; }
-    WALK = null; MC.open = null; MC.sig = null; MC.said = "✓ The walk is done. The office will book the install date.";
+    const wa = { notes: (W.notes || "").trim() || null, signer: W.signer || null, png: W.png || null }, wv = W.visit;
+    const r = await obTry({ k: "walkdone", v: wv, a: wa }, async () => (await obT(db.rpc("walk_complete", { p_visit_id: wv, p_notes: wa.notes, p_signer: wa.signer, p_png: wa.png }), 40000)).error);
+    if (!r.ok) { b.disabled = false; m.className = "ie-walk-msg err"; m.textContent = "Not saved: " + rpcErr(r.error); return; }
+    if (r.ob) { const c = (MC.data?.calls || []).find(x => x.visit_id === wv); if (c) c.status = "completed"; }
+    WALK = null; MC.open = null; MC.sig = null; MC.said = r.ob ? "✓ The walk is done on this phone. There is no internet, so it is sent to the office when the internet is back, with the time you pressed it. Do not sign out until the bar at the bottom says everything is sent."
+      : "✓ The walk is done. The office will book the install date.";
     openMyCalls();
   });
 }
