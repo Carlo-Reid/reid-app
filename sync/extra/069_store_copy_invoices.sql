@@ -349,9 +349,7 @@ SELECT public._patch_fn('pb_item_stock', $o$JOIN invoices i ON i.id = il.invoice
 SELECT public._patch_fn('pb_list', $o$JOIN invoices i ON i.id = il.invoice_id$o$, $n$JOIN invoices i ON i.id = il.invoice_id AND i.store_copy_of IS NULL$n$);
 -- (Nov 19, 2026: the inv_editor line was taken out. inv_editor was rewritten since and has the store-copy check itself;
 --  the old words were gone, so this file stopped here on every sync and nothing below it ran.)
-SELECT public._patch_fn('_inv_for_edit', $o$IF i.st_id IS NOT NULL THEN RAISE EXCEPTION$o$,
-  $n$IF i.store_copy_of IS NOT NULL THEN RAISE EXCEPTION 'This is the store''s copy. It''s made from the customer''s invoice and the store''s numbers on the Partners page.'; END IF;
-  IF i.st_id IS NOT NULL THEN RAISE EXCEPTION$n$);
+-- (the _inv_for_edit line is out too: 185_invoice_st_edit.sql puts the store-copy check in that function.)
 SELECT public._patch_fn('est_sold_invoice', $o$SELECT id INTO v_id FROM invoices WHERE job_id = ij.id AND status <> 'void' ORDER BY id DESC LIMIT 1;$o$,
                                             $n$SELECT id INTO v_id FROM invoices WHERE job_id = ij.id AND status <> 'void' AND store_copy_of IS NULL ORDER BY id DESC LIMIT 1;$n$);
 SELECT public._patch_fn('partner_statement_match', $o$        AND i.subtotal > 0$o$, $n$        AND i.subtotal > 0 AND i.store_copy_of IS NULL$n$);
