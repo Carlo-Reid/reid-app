@@ -347,7 +347,8 @@ SELECT public._patch_fn('missing_costs', $o$AND i.status NOT IN ('void', 'draft'
 SELECT public._patch_fn('missing_costs', $o$WHERE x.cost_source = 'price book' AND i.invoice_date$o$, $n$WHERE x.cost_source = 'price book' AND i.store_copy_of IS NULL AND i.invoice_date$n$);
 SELECT public._patch_fn('pb_item_stock', $o$JOIN invoices i ON i.id = il.invoice_id$o$, $n$JOIN invoices i ON i.id = il.invoice_id AND i.store_copy_of IS NULL$n$);
 SELECT public._patch_fn('pb_list', $o$JOIN invoices i ON i.id = il.invoice_id$o$, $n$JOIN invoices i ON i.id = il.invoice_id AND i.store_copy_of IS NULL$n$);
-SELECT public._patch_fn('inv_editor', $o$'can_edit', i.st_id IS NULL AND$o$, $n$'can_edit', i.st_id IS NULL AND i.store_copy_of IS NULL AND$n$);
+-- (Nov 19, 2026: the inv_editor line was taken out. inv_editor was rewritten since and has the store-copy check itself;
+--  the old words were gone, so this file stopped here on every sync and nothing below it ran.)
 SELECT public._patch_fn('_inv_for_edit', $o$IF i.st_id IS NOT NULL THEN RAISE EXCEPTION$o$,
   $n$IF i.store_copy_of IS NOT NULL THEN RAISE EXCEPTION 'This is the store''s copy. It''s made from the customer''s invoice and the store''s numbers on the Partners page.'; END IF;
   IF i.st_id IS NOT NULL THEN RAISE EXCEPTION$n$);
