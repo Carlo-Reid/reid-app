@@ -4578,6 +4578,20 @@ def main():
                         (name, ("" if ok else "failed:") + piece_hash(text)))
             conn.commit()
         except Exception: conn.rollback()
+    # (Nov 19, 2026, later) Pieces are only left alone when everything that changed is a NEW file at the end.
+    # Many older files change a function in place (they look for words that an earlier piece wrote); run again without
+    # the pieces before them, they do not find those words and fail. So a change to a piece that ran before = run them all.
+    if pieces["seen"] is not None:
+        try:
+            order = [("APP_SCHEMA", APP_SCHEMA), ("EXTRA_SCHEMA", EXTRA_SCHEMA)]
+            for p in sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "extra", "*.sql"))):
+                order.append((os.path.basename(p), open(p, encoding="utf-8").read()))
+            same = [pieces["seen"].get(n) in (piece_hash(t), "failed:" + piece_hash(t)) for n, t in order]
+            first = same.index(False) if False in same else len(order)
+            if any(n in pieces["seen"] for n, _ in order[first:]):
+                pieces["seen"] = None; log("  A database piece that ran before was changed, so every piece runs.")
+        except Exception as e:
+            pieces["seen"] = None; log(f"  Could not compare the database pieces, so all of them run: {str(e)[:160]}")
     # small app database changes that don't hold customer data, so the app works even before RUN SETUP NOW.bat is run (safe to repeat)
     try:
         if piece_skip("APP_SCHEMA", APP_SCHEMA): raise StopIteration
