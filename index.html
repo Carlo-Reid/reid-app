@@ -8899,6 +8899,14 @@ html body #main article.ie button.ie-nonotes.ie-nonotes-on { color: #1b6b36; bac
 html body #main article.ie .vr-chip button.vr-notrent { font: inherit; font-size: 14px; font-weight: 700; color: #23415f; background: linear-gradient(180deg, #fff, #eef4fa); border: 1.5px solid #bcd0e3; border-radius: 10px; padding: 7px 12px; margin-left: 8px; cursor: pointer; width: auto; }
 html body #main article.ie .vr-chip button.vr-notrent:hover { border-color: #23415f; background: #dbe8f4; }
 article.ie .vr-chip .vr-notrent-on { margin-left: 8px; font-size: 13.5px; font-weight: 700; color: #4a5f74; }
+/* Dispatch board on a tablet or phone: its own scroll bar that always shows, and finger scrolling (Carlo, Nov 23, 2026) */
+.dsp-fbar { display: none; position: relative; height: 30px; margin: 2px 0 6px; background: #dfe6ee; border: 1.5px solid #9fb6cc; border-radius: 15px; touch-action: none; user-select: none; -webkit-user-select: none; cursor: pointer; overflow: hidden; }
+.dsp-fbar > i { position: absolute; left: 0; top: 2px; bottom: 2px; min-width: 64px; border-radius: 13px; background: linear-gradient(180deg, #3d6a96, #23415f); box-shadow: 0 1px 3px rgba(16, 24, 32, .35); }
+.dsp-fbar > i::after { content: "‹  ›"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-style: normal; font-weight: 800; font-size: 15px; letter-spacing: 2px; }
+.dsp-fbar.dsp-fbar-on > i { background: #1f9d4a; }
+@media (pointer: coarse), (hover: none) { .dsp-fbar:not(.dsp-fbar-off) { display: block; } .dsp-boardcol > .dsp-fbar:not(.dsp-fbar-off) + .dsp-topscroll { display: none; }
+  .dsp-board { touch-action: pan-x pan-y; -webkit-overflow-scrolling: touch; } }
+@media print { .dsp-fbar { display: none !important; } }
 /* copy buttons an owner put on a page (Carlo, Nov 12) */
 .cpy-pasted { outline: 3px solid #1f9d4a !important; outline-offset: 1px; transition: outline-color .3s; }
 /* Supplier invoices: the Rules box of a supplier (Carlo, Nov 18, 2026): what to pick up and where it is on their page */
@@ -17948,6 +17956,21 @@ function dspBoardWire() {
     ts.addEventListener("scroll", () => { if (lock) { lock = false; return; } lock = true; bd.scrollLeft = ts.scrollLeft; }, { passive: true });
     bd.addEventListener("scroll", () => { if (Math.abs(ts.scrollLeft - bd.scrollLeft) < 1) return; lock = true; ts.scrollLeft = bd.scrollLeft; }, { passive: true });
     if (window.ResizeObserver) { DSP.tsObs?.disconnect(); DSP.tsObs = new ResizeObserver(size); DSP.tsObs.observe(bd); } }
+  // a tablet or phone hides the browser's own scroll bars, so the board has its own bar that always shows there (Carlo, Nov 23, 2026, 4:44 p.m.: "when i look at the board on a tablet it does not have a scroll bar"):
+  // slide its handle with a finger, or tap the bar, to change the time on the screen
+  const fb = $("#dsp-fbar");
+  if (fb) { const th = fb.firstElementChild, fit = () => { const sw = bd.scrollWidth, cw = bd.clientWidth; fb.classList.toggle("dsp-fbar-off", sw <= cw + 2); const W = fb.clientWidth; if (!W) return;
+      const tw = Math.max(64, W * cw / Math.max(sw, 1)); th.style.width = tw + "px";
+      th.style.transform = `translateX(${sw > cw ? (W - tw) * bd.scrollLeft / (sw - cw) : 0}px)`; };
+    fit(); setTimeout(fit, 80); bd.addEventListener("scroll", fit, { passive: true }); if (DSP.fbFit) window.removeEventListener("resize", DSP.fbFit); DSP.fbFit = fit; window.addEventListener("resize", fit);
+    if (window.ResizeObserver) { DSP.fbObs?.disconnect(); DSP.fbObs = new ResizeObserver(fit); DSP.fbObs.observe(bd); [...bd.children].slice(0, 3).forEach(c => DSP.fbObs.observe(c)); }
+    [300, 1000].forEach(ms => setTimeout(fit, ms));
+    let d = null; const to = x => { const sw = bd.scrollWidth, cw = bd.clientWidth, W = fb.clientWidth, tw = th.offsetWidth; if (W > tw) bd.scrollLeft = Math.max(0, Math.min(1, x / (W - tw))) * (sw - cw); DSP.manualAt = Date.now(); };
+    fb.addEventListener("pointerdown", e => { const r = fb.getBoundingClientRect(), tr = th.getBoundingClientRect(); e.preventDefault();
+      const off = e.clientX >= tr.left && e.clientX <= tr.right ? e.clientX - tr.left : tr.width / 2;   // on the handle: keep the finger's spot on it; on the bar: the handle's middle jumps to the finger
+      d = { id: e.pointerId, off, left: r.left }; try { fb.setPointerCapture(e.pointerId); } catch {} fb.classList.add("dsp-fbar-on"); to(e.clientX - d.left - d.off); });
+    fb.addEventListener("pointermove", e => { if (d && e.pointerId === d.id) { e.preventDefault(); to(e.clientX - d.left - d.off); } });
+    const up = e => { if (d && e.pointerId === d.id) { d = null; fb.classList.remove("dsp-fbar-on"); } }; fb.addEventListener("pointerup", up); fb.addEventListener("pointercancel", up); }
   // click and hold on an empty spot, then move: slides the board back and forth in time (and up and down)
   const main = $("#main"); let pan = null;
   bd.addEventListener("pointerdown", e => {
@@ -17957,6 +17980,7 @@ function dspBoardWire() {
   bd.addEventListener("pointermove", e => { if (!pan || e.pointerId !== pan.id) return;
     const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
     if (!pan.moved && Math.abs(dx) + Math.abs(dy) < 6) return;
+    if (e.pointerType === "touch") { pan.moved = true; return; }   // a finger: the browser's own touch scrolling moves the board (smooth, with a flick); this code only moves it for a mouse
     if (!pan.moved) { pan.moved = true; bd.setPointerCapture(e.pointerId); bd.classList.add("dsp-panning"); }
     bd.scrollLeft = pan.left - dx; main.scrollTop = pan.top - dy; e.preventDefault(); });
   const end = e => { if (!pan || e.pointerId !== pan.id) return; const p = pan; pan = null; bd.classList.remove("dsp-panning");
@@ -18300,7 +18324,7 @@ function renderDispatch() {
         return `<div class="dw-item">${d != null ? `<span class="dw-age ${d >= 14 ? "old" : d >= 7 ? "mid" : ""}" title="Waiting since ${esc(fmtDate(String(r.created_at).slice(0, 10)))}">${d < 1 ? "Today" : d === 1 ? "1 day" : d + " days"}</span>` : ""}${dspCard(r, 0)}</div>`; }).join("")}</div></details>` : ""}
     ${DSP.bookFor ? `<div class="dsp-bookfor">Booking a call for <b>${esc(DSP.bookFor.name)}</b>${DSP.bookFor.what ? ` (${esc(DSP.bookFor.what)})` : ""}: click a free spot on any tech's line, on any day, to book it at that time. <button class="link" type="button" id="dsp-bookx">Cancel</button>${DSP.bookFor.bk ? ` · <button class="link" type="button" id="dsp-bookback">Back to the booking</button>` : ""}</div>` : ""}
     <div class="dsp-wrap">
-      <div class="dsp-boardcol"><div class="dsp-topscroll" id="dsp-topscroll" aria-hidden="true"><div></div></div>
+      <div class="dsp-boardcol"><div class="dsp-fbar" id="dsp-fbar" aria-hidden="true" title="Slide this bar to move the board earlier or later in the day"><i></i></div><div class="dsp-topscroll" id="dsp-topscroll" aria-hidden="true"><div></div></div>
       <div class="dsp-board" id="dsp-board">${dspTimeline(rows, techs, none, colOf, mins, isToday)}</div></div>
       <aside class="dsp-panel ${DSP.sel ? "" : "hidden"}" id="dsp-panel" aria-label="Call details"></aside>
     </div>
