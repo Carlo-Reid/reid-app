@@ -8921,6 +8921,10 @@ article.ie .ie-table tr:has(textarea.ie-desc) > td:not(:first-child) .ie-free { 
 article.ie .ie-table tr:has(textarea.ie-desc) > td.ie-row-act button { height: 38px; vertical-align: top; }
 article.ie .ie-table textarea.ie-desc { line-height: 22px; padding-top: 7px; padding-bottom: 7px; }
 article.ie .ie-table .ie-nohst { color: #8a4b00; } article.ie .ie-table .ie-nohst .ie-tag { background: #fff1dc; color: #8a4b00; }
+/* Invoice page: the step that has to be done first flashes green (Carlo, Nov 23, 2026, 5:17 p.m.) */
+@keyframes ieNeed { 0%, 100% { outline-color: #1f9d4a; box-shadow: inset 0 0 0 999px rgba(31, 157, 74, .30); } 50% { outline-color: #a9dfbd; box-shadow: inset 0 0 0 999px rgba(31, 157, 74, .04); } }
+article.ie .ie-need { outline: 4px solid #1f9d4a; outline-offset: 2px; animation: ieNeed 1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { article.ie .ie-need { animation: none; box-shadow: inset 0 0 0 999px rgba(31, 157, 74, .22); } }
 /* copy buttons an owner put on a page (Carlo, Nov 12) */
 .cpy-pasted { outline: 3px solid #1f9d4a !important; outline-offset: 1px; transition: outline-color .3s; }
 /* Supplier invoices: the Rules box of a supplier (Carlo, Nov 18, 2026): what to pick up and where it is on their page */
@@ -31156,6 +31160,30 @@ function ieEcoEarly(m) {
   const i = rows.findIndex((r, n) => n < at && !r[0] && r[4] !== "notes" && r[4] !== "lines" && !(r[4] === "tanksup" && IE.supOk)); if (i < 0) return null;
   return { lab: labs[i], go: rows[i][2], key: rows[i][4] };
 }
+// A button of a later step, pressed while an earlier step is not done (Carlo, Nov 23, 2026, 5:17 p.m.: "when i hit a button but the step prior is not complete do not let the
+// user move on have it say you need to complete and tell them what step and bring them to it and have it flash green"): the press does nothing; a message names the step,
+// the page goes to it and it flashes green for 7 seconds. Notes are never required (Add a Note or Move on). On a finished invoice the rental question is not asked for.
+function ieStepGuardKey(b) {
+  if (b.closest(".ie-side, .ie-walk, .ie-install") || b.dataset.iePress || b.closest("img")) return null;
+  const rx = b.closest("[data-ie-rxrow]"); if (rx) return rx.dataset.ieRxrow;
+  if (b.id === "ie-finish") return "finish"; if (b.id === "ie-booktech") return "book";
+  if (b.matches(".ie-tpo-go") && b.closest('[data-ie-card="tank"]')) return "tankpo";
+  return null;
+}
+function ieStepGuard(b) {
+  if (typeof IE === "undefined" || !IE || !IE.todoO || IE.status === "void") return null;
+  const key = ieStepGuardKey(b); if (!key) return null;
+  const rows = ieTodoRows(IE, IE.todoO), labs = ieStepLabs(rows), at = rows.findIndex(r => r[4] === key); if (at < 1) return null;
+  const i = rows.findIndex((r, n) => n < at && !r[0] && r[4] !== "notes" && !(r[4] === "lines" && !IE.todoO.draft) && !(r[4] === "tanksup" && (IE.supOk || key === "tankpo")));
+  return i < 0 ? null : { lab: labs[i], words: rows[i][1], go: rows[i][2] === "tank" || !["promo", "drive"].includes(rows[i][4]) ? rows[i][2] : rows[i][4] };
+}
+window.addEventListener("click", e => {
+  const b = e.target.closest?.("article.ie button"); if (!b || e.target.closest("img.eco-man")) return;
+  const g = ieStepGuard(b); if (!g) return;
+  e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+  alertMsg(`You need to complete Step ${g.lab} first: ${g.words}. I am taking you there now.`);
+  const el = ieGoEl(g.go); if (el) { ieGoScroll(el, g.go); document.querySelectorAll("article.ie .ie-need").forEach(x => x.classList.remove("ie-need")); el.classList.add("ie-need"); clearTimeout(ieStepGuard.t); ieStepGuard.t = setTimeout(() => el.classList.remove("ie-need"), 7000); }
+}, true);
 // Write a note, before an item is on the invoice (Carlo, Nov 19, 2026, 1:09 p.m.: "have it say add an item first then you can add a note and make the pop up
 // smaller its to big and scary in fact just make the write a note change to the message in a brighter yellow color"): no pop-up; the words "Write a note" change
 function ieNoteFirst(el, early) {
