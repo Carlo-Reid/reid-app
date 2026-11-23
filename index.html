@@ -15479,7 +15479,7 @@ async function openBooking(custId, opt = {}) {
   BK = { cust: c, locs, jobs: jobs.error ? [] : jobs.data, mode: opt.jobId ? "visit" : "new", jobId: opt.jobId || null,
          loc: loc || locs[0]?.id, type: "", unit: "", prio: "normal", summary: "", note: "",
          date: opt.date || ymd(addDays(new Date(), 1)), later: false, win: ["08:00", "11:00"], start: "", end: "", dur: "", techs: opt.tech ? [opt.tech] : [], allTechs: false, load: {}, htin: opt.htin || null,
-         fillVisit: opt.fillVisit || null, backInv: opt.backInv || null, backTo: opt.backTo || null, kindForce: opt.kindForce || null, invFill: opt.invFill || null };
+         fillVisit: opt.fillVisit || null, revive: !!opt.revive, backInv: opt.backInv || null, backTo: opt.backTo || null, kindForce: opt.kindForce || null, invFill: opt.invFill || null };
   if (BK.invFill) { BK.summary = BK.invFill.job; BK.note = BK.invFill.note || ""; }   // from the invoice (Carlo, Nov 13, 11:04 a.m.): the page is filled in already   // from the invoice's Book a tech step (Carlo, Nov 13): the job's waiting call gets the day and the tech, then the invoice opens again
   if (opt.walk) {   // after a sale: walk the site, as a visit on the install job; the installers are shown first
     BK.walk = opt.walk; BK.kind = opt.kind || null; BK.summary = "Walk the site before the install"; BK.dur = "60";
@@ -16002,6 +16002,8 @@ async function bkDoBook(F, start, end) {
   if (F.invFill) { const nt = (F.note || "").trim(), was = (F.invFill.note || "").trim(); invExtra = !nt || nt === was ? "" : was && nt.startsWith(was) ? nt.slice(was.length).trim() : nt; p.note = ""; }
   const invNote = async () => { if (invExtra && F.jobId) await db.rpc("add_note", { p_entity_type: "job", p_entity_id: F.jobId, p_body: TECH_NOTE + invExtra, p_pinned: false }); };
   if (F.mode === "visit" && F.fillVisit && !F.later) {   // the job already has a call waiting for a day (made with the invoice): give that one the day, the time and the tech, so there are not two calls
+    // the job's only call was cancelled (so the job is cancelled): Book a tech puts that call back on the schedule first, which opens the job again (Carlo, Nov 23, 2026, 5:27 p.m.: "not booked that job is cancelled book a new job instead")
+    if (F.revive) { const r0 = await db.rpc("set_call_status", { p_visit_id: F.fillVisit, p_status: "scheduled", p_note: null }); if (r0.error) return { error: r0.error }; F.revive = false; }
     const r1 = await db.rpc("move_call", { p_visit_id: F.fillVisit, p_date: F.date, p_start: start, p_end: end, p_method: "edit" }); if (r1.error) return { error: r1.error };
     const r2 = await db.rpc("set_call_techs", { p_visit_id: F.fillVisit, p_techs: F.techs }); if (r2.error) return { error: r2.error };
     { const mins = Number(F.dur) || Number(document.querySelector("#bk-dur")?.value) || null;   // the length that was booked, not the job type's
@@ -31365,9 +31367,10 @@ function wireInvoiceEditor() {
   $("#ie-inst-book")?.addEventListener("click", async () => { if (!INSTALL_BOOK) return;
     if (I.status === "draft" && !(await askChoice("The invoice is not finished yet", "Do you want to book the install anyway?", [["y", "Yes, book it"], ["", "No, I will finish the invoice first"]]))) return;
     tobBookInstall(INSTALL_BOOK.r, (IE.techNotes || []).map(n => String(n.body || "").slice(TECH_NOTE.length).trim()).filter(Boolean).join("\n")); });
-  $("#ie-booktech")?.addEventListener("click", e => { const w = Number(e.currentTarget.dataset.wait) || null;
+  $("#ie-booktech")?.addEventListener("click", e => { let w = Number(e.currentTarget.dataset.wait) || null;
+    const vsAll = IE.visits || [], back = !w && vsAll.length && vsAll.every(v => v.status === "cancelled") ? vsAll.reduce((a, v) => Number(v.id) > Number(a.id) ? v : a) : null; if (back) w = Number(back.id);
     const eq = (I.lines || []).find(l => l.item_id && !l.kit_parent), model = eq ? (eq.sku || pbName(String(eq.description || ""))) : (I.job_type || "the job");
-    openBooking(I.customer_id, { jobId: I.job_id, fillVisit: w, backInv: I.id, kindForce: I.prule?.tank ? "installs" : null,
+    openBooking(I.customer_id, { jobId: I.job_id, fillVisit: w, revive: !!back, backInv: I.id, kindForce: I.prule?.tank ? "installs" : null,
       invFill: { call: "Book a Walk for the Install", job: `Walk site for ${model}`, show: `Pick a Technician to Walk this site for the install of a ${model}`,
         eq: eq ? { id: Number(eq.item_id), name: pbName(String(eq.description || "").split("\n")[0]), sku: eq.sku || "", qty: Number(eq.quantity) || 1 } : null, who: [I.customer_name, I.address].filter(Boolean).join(", "),
         note: (IE.techNotes || []).map(n => String(n.body || "").slice(TECH_NOTE.length).trim()).filter(Boolean).join("\n") } }); });
