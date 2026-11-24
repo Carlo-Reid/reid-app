@@ -21767,9 +21767,35 @@ function sinvDetail(r, edit) {
 function sinvDropHtml(r, has) {
   return `<section class="sinv-drop" data-sinv-drop="${r.id}" ${has ? `data-sd-more="${has}"` : ""} tabindex="0"><div class="sd-ico" aria-hidden="true">⬇</div>
     <b>${has ? `Did you find more pages of ${esc(r.number)}, or a better copy? Drop them here` : `Drop ${esc(sinvShort(r.supplier) || "the supplier")}'s invoice ${esc(r.number)} here`}</b>
-    ${has ? `<span>${has} ${has === 1 ? "page is" : "pages are"} on file now. The pages you drop here are added after ${has === 1 ? "it" : "them"}. Nothing on file is taken off.</span>` : ""}
+    ${has ? `<span>${has} ${has === 1 ? "page is" : "pages are"} on file now. I put the pages you drop here in their printed order with ${has === 1 ? "it" : "them"}. A page that is already on file is not added a second time.</span>` : ""}
     <span>Drag the PDF attachment from the email (not the email itself) onto this box, or <label class="link">pick the file<input type="file" accept="application/pdf,image/*" multiple hidden data-sinv-dropfile="${r.id}"></label>.</span>
     <div class="sd-msg" role="status"></div></section>`;
+}
+// The pages of a supplier's paper in their printed order, and no page twice (Carlo, Nov 24, 2026).
+// The page number printed on a page ("Page 3 of 6"; Boone prints the word Page in a box, with 0003 under it), or null.
+function sinvPageNo(t) {
+  const s = String(t || ""); let m = s.match(/\bP(?:AGE|G)\.?\s*(?:NO\.?|NUMBER|#)?\s*[:.]?\s*0{0,3}(\d{1,2})\s*(?:OF|DE|\/)\s*0{0,3}(\d{1,2})\b(?!\s*[\/.:-]?\d)/i);
+  if (m && +m[1] >= 1 && +m[1] <= +m[2]) return +m[1];
+  m = s.match(/\b0{0,3}(\d{1,2})\s+OF\s+0{0,3}(\d{1,2})\s*(?:PAGES?)?\s*$/im); if (m && +m[1] >= 1 && +m[1] <= +m[2] && +m[2] <= 60) return +m[1];
+  m = s.match(/\bPAGE\s*(?:NO\.?|NUMBER|#)?\s*[:.]?\s*0{0,3}(\d{1,2})\b(?!\s*[\/:.,-]\s*\d)/i); if (m && +m[1] >= 1) return +m[1];
+  const L = s.split(/\n/); for (let i = 0; i < Math.min(L.length, 14); i++) if (/\bPage\W*$/i.test(L[i])) for (let j = i + 1; j <= i + 2 && j < L.length; j++) { const k = L[j].trim().match(/(?:^|\s)[0O]{1,3}([1-9]\d?)\W*$/); if (k) return +k[1]; }
+  return null;
+}
+// the number of the first item line on a page (suppliers number their lines 001, 002… and carry on over the pages), or null
+function sinvFirstLine(t) {
+  const fix = x => x.replace(/[oO]/g, "0").replace(/[Il|]/g, "1").replace(/[sS]/g, "5").replace(/[zZ]/g, "2").replace(/B/g, "8"), N = [];
+  for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/); if (!m || !/\d/.test(m[1])) continue;
+    if (!/\d[.,]\d{2}\b|\d{5}\b/.test(l.slice(m[0].length - 1))) continue; const v = Number(fix(m[1])); if (v >= 1 && v <= 400) N.push(v); }
+  if (!N.length) return null; const S = new Set(N), run = N.filter(v => S.has(v + 1) || S.has(v - 1));
+  return Math.min(...(run.length ? run : N));
+}
+function sinvPageSig(t) { return new Set(String(t || "").toUpperCase().match(/[A-Z0-9]{3,}/g) || []); }
+function sinvPageSim(a, b) { if (a.size < 12 || b.size < 12) return 0; let n = 0; for (const x of a) if (b.has(x)) n++; return n / (a.size + b.size - n); }
+function sinvPageMeta(t) { return { no: sinvPageNo(t), line: sinvFirstLine(t), sig: sinvPageSig(t) }; }
+// are two pages the same page? Their words are compared; the printed page number and the first line number make it surer, or rule it out
+function sinvPageSame(a, b, strict) {
+  const s = sinvPageSim(a.sig, b.sig), k = (x, y) => x != null && y != null ? (x === y ? 1 : -1) : 0, kn = k(a.no, b.no), kl = k(a.line, b.line);
+  if (kn < 0 || kl < 0) return s >= .93; if (strict) return s >= .85; if (kn > 0 || kl > 0) return s >= .5; return s >= .72;
 }
 async function sinvAttachFiles(id, files) {
   const box = document.querySelector(`[data-sinv-drop="${id}"]`), msg = box?.querySelector(".sd-msg"), say = t => { if (msg) msg.innerHTML = t; };
@@ -21789,6 +21815,11 @@ async function sinvAttachFiles(id, files) {
     if (!cv.length) return say(`<span class="st-bad">That isn't a PDF or a picture. Drag the invoice's PDF attachment from the email.</span>`);
     const worker = await window.Tesseract.createWorker("eng"); let text = ""; const PTX = [];
     for (let i = 0; i < cv.length; i++) { say(`Reading page ${i + 1} of ${cv.length}…`); const t1 = (await worker.recognize(cv[i])).data.text; PTX.push(t1); text += "\n" + t1; }
+    // the pages already on file: what was read on them before, and a page never read is read now (so the order and the copies can be worked out)
+    let have = null; { const q = await db.rpc("supplier_invoice_pages_info", { p_invoice: id }); if (!q.error && Array.isArray(q.data)) have = q.data; }
+    if (have) for (let i = 0; i < have.length; i++) { const h = have[i]; if (h.words != null) continue; say(`Reading page ${i + 1} of the ${have.length} already on file…`);
+      try { if (!SINV.img.has(h.id)) { const q = await db.rpc("supplier_doc_page", { p_id: h.id }); if (q.data) SINV.img.set(h.id, "data:image/jpeg;base64," + q.data); }
+        if (SINV.img.has(h.id)) { h.words = (await worker.recognize(SINV.img.get(h.id))).data.text.slice(0, 8000); h.fresh = true; } } catch (e) {} }
     await worker.terminate();
     // a file with several invoices in it (a supplier's packet): only the pages with this invoice's number on them (and a page right after one, its next page)
     const flatN = String(r?.number || "").replace(/\W/g, "").toUpperCase(), onIt = PTX.map(t => !!flatN && t.replace(/\W/g, "").toUpperCase().includes(flatN));
@@ -21801,17 +21832,42 @@ async function sinvAttachFiles(id, files) {
     const po = (text.match(/(?:P\.?\s?O\.?|PURCHASE\s+ORDER|CUSTOMER\s+ORDER|ORDER|COMMANDE)\s*(?:#|NO\.?|NUMBER|NUM\.?)?\s*[:#.]?\s*([A-Z]{0,3}\d[\w-]{2,})/i) || [])[1] || "";
     const sub = n((text.match(/SUB\s*-?\s*TOTAL\D{0,12}([\d,]+\.\d{2})/i) || [])[1]), hst = n((text.match(/(?:H\.?S\.?T|TVH|TAX)\D{0,12}([\d,]+\.\d{2})/i) || [])[1]);
     const hasNum = r && text.replace(/\W/g, "").toUpperCase().includes(String(r.number).replace(/\W/g, "").toUpperCase());
-    let pages = pagesAll.filter((_, i) => keep[i]);
+    // in order, and no page twice: a page of this file that is already on the invoice (or twice in the file) is left out; a second copy on file comes off
+    const NM = PTX.map(sinvPageMeta), HM = (have || []).map(h => Object.assign(sinvPageMeta(h.words), { id: h.id })), kept = [], drop = [], dup = cv.map(() => 0);
+    for (let i = 0; i < HM.length; i++) { if (kept.some(k => sinvPageSame(k, HM[i], true))) drop.push(HM[i].id); else kept.push(Object.assign(HM[i], { at: i + 1 })); }
+    if (have) for (let i = 0; i < cv.length; i++) { if (!keep[i]) continue; const k = kept.find(k => sinvPageSame(k, NM[i])); if (k) dup[i] = k.at ? `page ${k.at} on file` : `page ${k.file} of this file`; else kept.push(Object.assign(NM[i], { file: i + 1 })); }
+    const nDup = dup.filter(Boolean).length; let all = false, twice = false;
+    const chosen = () => cv.map((_, i) => (all || keep[i]) && (twice || !dup[i]));
+    let pages = pagesAll.filter((_, i) => chosen()[i]);
+    const dupH = !have ? "" : `${nDup ? `<span class="st-look">${nDup === 1 ? "1 page of this file is" : nDup + " pages of this file are"} already on the invoice, so I leave ${nDup === 1 ? "it" : "them"} out: ${dup.map((d, i) => d ? `page ${i + 1} (the same as ${d})` : "").filter(Boolean).join(", ")}. <label><input type="checkbox" data-sd-twice> ${nDup === 1 ? "It is not the same page: add it" : "They are not the same pages: add them"} anyway</label></span>` : ""}${drop.length ? `<span class="st-look">${drop.length === 1 ? "1 page is" : drop.length + " pages are"} on file twice. I take the second copy off when you save.</span>` : ""}<span class="quiet">When you save, I put all the pages in their printed order.</span>`;
     say(`<div class="sd-read">${hasNum ? `✓ It's invoice ${esc(r.number)}.` : `<span class="st-bad">⚠ I couldn't find the number ${esc(r?.number || "")} on it: make sure it's the right invoice.</span>`} ${leftOut ? `<span class="st-look">This file has ${cv.length} pages, but only page${pages.length === 1 ? "" : "s"} ${keep.map((k, i) => k ? i + 1 : null).filter(Boolean).join(", ")} ${pages.length === 1 ? "has" : "have"} ${esc(r.number)} on ${pages.length === 1 ? "it" : "them"}: the other ${leftOut} look like other invoices and won't be added to this one. <label><input type="checkbox" data-sd-allpages> Add all ${cv.length} pages anyway</label></span>` : `${cv.length} ${cv.length === 1 ? "page" : "pages"}.`}
       <label>PO number on it <input type="text" data-sd-po value="${esc(po)}" placeholder="PO number"></label>
       <label>Subtotal <input type="number" step="0.01" data-sd-sub value="${sub ?? ""}"></label><label>HST <input type="number" step="0.01" data-sd-hst value="${hst ?? ""}"></label>
-      <button class="btn" type="button" data-sd-save>${more ? "Add these pages to the invoice" : "Save the invoice"}</button>${more ? `<span class="quiet">They go after the ${more} already on file.</span>` : ""}</div>`);
-    box.querySelector("[data-sd-allpages]")?.addEventListener("change", e => { pages = e.target.checked ? pagesAll : pagesAll.filter((_, i) => keep[i]); });
+      ${dupH}
+      <button class="btn" type="button" data-sd-save>${more ? (pages.length ? "Add these pages to the invoice" : "Put the pages in order") : "Save the invoice"}</button>${more && !have ? `<span class="quiet">They go after the ${more} already on file.</span>` : ""}</div>`);
+    const repick = () => { pages = pagesAll.filter((_, i) => chosen()[i]); const sb = box.querySelector("[data-sd-save]"); if (sb && more) sb.textContent = pages.length ? "Add these pages to the invoice" : "Put the pages in order"; };
+    box.querySelector("[data-sd-allpages]")?.addEventListener("change", e => { all = e.target.checked; repick(); });
+    box.querySelector("[data-sd-twice]")?.addEventListener("change", e => { twice = e.target.checked; repick(); });
     box.querySelector("[data-sd-save]").addEventListener("click", async e => { e.target.disabled = true; say2("Saving…");
       const v = q => box.querySelector(q)?.value.trim() || null;
-      const { error } = await db.rpc("supplier_invoice_attach", { p_invoice: id, p: { pages, po_text: v("[data-sd-po]"), subtotal: v("[data-sd-sub]"), hst: v("[data-sd-hst]"), file: files.map(f => f.name).join(" + ") } });
+      const P0 = { po_text: v("[data-sd-po]"), subtotal: v("[data-sd-sub]"), hst: v("[data-sd-hst]"), file: files.map(f => f.name).join(" + ") };
+      let error = null, T = null;
+      if (have) { const pick = chosen(), idx = cv.map((_, i) => i).filter(i => pick[i]), left = HM.filter(h => !drop.includes(h.id)).concat(idx.map(i => NM[i]));
+        // the order goes by what could be read on the most pages: the printed page number, or the first item line
+        const by = left.filter(m => m.line != null).length > left.filter(m => m.no != null).length ? "line" : "no";
+        const q = await db.rpc("supplier_invoice_pages_add", { p_invoice: id, p: Object.assign({}, P0, { by, drop,
+          pages: idx.map(i => ({ image: pagesAll[i], no: NM[i].no, line: NM[i].line, words: PTX[i].slice(0, 8000) })),
+          have: have.map((h, i) => ({ id: h.id, no: HM[i].no, line: HM[i].line, words: h.fresh ? h.words : null })) }) });
+        error = q.error; T = q.data;
+      } else { if (!pages.length) { e.target.disabled = false; return say2(`<span class="st-bad">There is no page to add.</span>`); }
+        error = (await db.rpc("supplier_invoice_attach", { p_invoice: id, p: Object.assign({ pages }, P0) })).error; }
       if (error) { e.target.disabled = false; return say2(`<span class="st-bad">Not saved: ${esc(rpcErr(error))}</span>`); }
-      SINV.det.delete(id); SINV.open = id; await openSupInv(more ? `✓ ${pages.length} ${pages.length === 1 ? "page was" : "pages were"} added to ${r?.number || "the invoice"}. Now press Read it again at the top, so I read the lines on the new ${pages.length === 1 ? "page" : "pages"} too.` : `Invoice ${r?.number || ""} loaded.`); });
+      const left2 = twice ? 0 : nDup, tidy = !T ? "" : `${left2 ? ` ${left2 === 1 ? "1 page was" : left2 + " pages were"} already on the invoice and ${left2 === 1 ? "was" : "were"} left out.` : ""}${T.dropped ? ` ${T.dropped === 1 ? "1 second copy of a page was" : T.dropped + " second copies of pages were"} taken off.` : ""}${T.pages > 1 ? ` The ${T.pages} pages are in their printed order now.` : ""}${T.unread && T.pages > 1 ? ` I could not read a page number on ${T.unread} of them, so ${T.unread === 1 ? "it is" : "they are"} at the end.` : ""}`;
+      for (const k of [...SINV.img.keys()]) if (drop.includes(k)) SINV.img.delete(k);
+      SINV.det.delete(id); SINV.open = id;
+      if (T && !pages.length) return void await openSupInv(`✓ Nothing new was added to ${r?.number || "the invoice"}.${tidy}`);
+      if (T && !more) return void await openSupInv(`Invoice ${r?.number || ""} loaded.${tidy}`);
+      await openSupInv(more ? `✓ ${pages.length} ${pages.length === 1 ? "page was" : "pages were"} added to ${r?.number || "the invoice"}. ${tidy} Now press Read it again at the top, so I read the lines on the new ${pages.length === 1 ? "page" : "pages"} too.` : `Invoice ${r?.number || ""} loaded.`); });
     function say2(t) { const m2 = box.querySelector(".sd-read"); if (m2) m2.insertAdjacentHTML("beforeend", `<div>${t}</div>`); }
   } catch (e) { say(`<span class="st-bad">Couldn't load it: ${esc(e.message || String(e))}</span>`); }
 }
