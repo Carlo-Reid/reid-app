@@ -9,7 +9,10 @@ BEGIN
   v_po := public._sinv_po(i); IF v_po IS NULL THEN RETURN '[]'::jsonb; END IF;
   SELECT po_number INTO v_num FROM purchase_orders WHERE id = v_po;
   RETURN (SELECT coalesce(jsonb_agg(jsonb_build_object('id', o.id, 'number', o.supplier_invoice_number, 'date', o.invoice_date, 'subtotal', o.subtotal, 'total', o.total,
-                   'lines', coalesce(o.lines, '[]'::jsonb)) ORDER BY o.invoice_date, o.id), '[]'::jsonb)
+                   'lines', coalesce(o.lines, '[]'::jsonb),
+                   -- its scanned pages, in their order, so the open invoice can show the other invoice itself (Carlo, Nov 24, 2026)
+                   'pages', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', d.id, 'page_no', d.page_no) ORDER BY coalesce(d.ord, d.page_no), d.page_no), '[]'::jsonb) FROM supplier_doc_pages d WHERE d.supplier_invoice_id = o.id))
+                   ORDER BY o.invoice_date, o.id), '[]'::jsonb)
           FROM supplier_invoices o
           WHERE o.id <> i.id AND o.supplier_id = i.supplier_id AND o.total > 0
             AND (o.purchase_order_id = v_po OR btrim(o.po_text) = v_num OR btrim(o.po_text) = split_part(v_num, '-', 1)));
