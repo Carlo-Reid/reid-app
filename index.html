@@ -8976,6 +8976,7 @@ html body #main article.ie .ie-card[data-ie-card="lines"] .ie-table textarea.ie-
 #sr-box .sr-forms { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; padding: 10px 12px; background: #f4f8fc; border: 1.5px solid #bcd0e3; border-radius: 12px; color: #23415f; font-size: 15px; }
 #sr-box .sr-forms .sr-form.on { background: #dbe9f6; border: 2px solid #23415f; font-weight: 800; }
 #sr-box .sr-formsay { flex: 1 1 100%; font-size: 13.5px; color: #3d566f; }
+#sr-box .sr-pgs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 14px; color: #23415f; } #sr-box .sr-pgs .sr-b { min-width: 38px; } #sr-box .sr-pgs .sr-b.on { background: #dbe9f6; border: 2px solid #23415f; font-weight: 800; } #sr-box .sr-pgs span { font-size: 13px; color: #4a5a68; }
 #sr-box .sr-formed { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin: 0 0 10px; }
 #sr-box .sr-formed input { font: inherit; padding: 6px 8px; border: 1.5px solid #bcd0e3; border-radius: 8px; min-width: 0; width: 220px; max-width: 100%; }
 .cpy-btn { display: inline-grid; place-items: center; vertical-align: middle; width: 26px; height: 26px; margin: 0 0 0 6px; padding: 0; border: 1px solid #9fb6cc; border-radius: 5px; background: #fff; color: #23415f; font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 1px 2px rgba(35, 65, 95, .15); font-weight: 700; text-indent: 0; letter-spacing: 0; text-transform: none; }
@@ -22850,21 +22851,32 @@ async function srReadBest(c, rules) {
 }
 const srPos = n => /['’]s$/i.test(n) ? n : n + "'s";
 const srShow = (f, v) => v == null ? "" : f === "date" || f === "due" ? fmtDate(v) : f === "subtotal" || f === "hst" || f === "total" ? money(v) : String(v);
-const SR = { sup: null, name: "", rules: [], notes: "", url: "", from: "", canvas: null, pick: null, tried: null, dirty: false, busy: "", can: false, form: SR_FORM0, forms: [SR_FORM0], pages: {} };
+const SR = { sup: null, name: "", rules: [], notes: "", url: "", from: "", canvas: null, pick: null, tried: null, dirty: false, busy: "", can: false, form: SR_FORM0, forms: [SR_FORM0], pages: {}, pg: 0 };
 const srSlipName = n => /slip|pick|packing|ticket/i.test(n || "");
-async function srSample(sup, slip) {   // a page to draw the boxes on: the first page of this supplier's newest invoice (or packing slip) that has a copy
-  const rows = (SINV.data?.rows || []).filter(r => Number(r.supplier_id) === Number(sup) && r.pages > 0 && (slip ? /packing slip/i.test(r.read_notes || "") : r.doc_type === "invoice" && Number(r.total) > 0 && !/packing slip/i.test(r.read_notes || ""))).sort((a, b) => String(b.invoice_date || "").localeCompare(String(a.invoice_date || "")));
-  for (const r of rows.slice(0, 4)) { try { const g = await db.rpc("supplier_invoice_get", { p_id: r.id }), p = (g.data?.pages || []).slice().sort((a, b) => (a.page_no || 0) - (b.page_no || 0))[0]; if (!p) continue;
-    const d = await db.rpc("supplier_doc_page", { p_id: p.id }); if (d.data) return { url: "data:image/jpeg;base64," + d.data, from: (slip ? "their packing slip " : "their invoice ") + r.number }; } catch { } }
-  return null;
+// One saved example for each kind of a supplier's papers (Carlo, Nov 24, 2026: "it should always refer to the same examples for all documents for all months").
+// SR.pages[kind] = { imgs: [data urls], from, n: pages on file, was: the name it is saved under, changed: loaded here and not saved yet }.
+function srPg(name) { name = name || SR.form; return SR.pages[name] || (SR.pages[name] = { imgs: [], from: "", n: 0, was: "", changed: false }); }
+const srPgCount = P => Math.max(P.imgs.length, P.changed ? 0 : P.n);
+async function srShowPage(i) {
+  const P = srPg(), form = SR.form, sup = SR.sup, alive = () => SR.sup === sup && SR.form === form && document.getElementById("sr-box");
+  SR.pg = Math.max(0, Math.min(i || 0, srPgCount(P) - 1)); SR.tried = null; SR.pick = null; SR.url = ""; SR.canvas = null; SR.from = P.from;
+  if (!P.imgs[SR.pg] && !P.changed && P.n > SR.pg) { SR.busy = "Opening the example…"; srDraw();
+    try { const d = await db.rpc("supplier_rule_example_page", { p_supplier: sup, p_form: P.was || form, p_page: SR.pg + 1 }); if (d.data) P.imgs[SR.pg] = "data:image/jpeg;base64," + d.data; } catch { }
+    if (!alive()) return; }
+  SR.url = P.imgs[SR.pg] || ""; if (SR.url) { try { const c = await srCanvas(SR.url); if (!alive()) return; SR.canvas = c; } catch { } }
+  SR.busy = ""; srDraw();
 }
-async function srFormGo(name) {   // show another kind of paper: its own boxes, on its own page
-  if (name === SR.form) return; SR.pages[SR.form] = { url: SR.url, from: SR.from, canvas: SR.canvas };
-  const pg = SR.pages[name]; Object.assign(SR, { form: name, pick: null, tried: null, msg: "", url: pg?.url || "", from: pg?.from || "", canvas: pg?.canvas || null });
-  if (pg?.url) return srDraw();
-  const sup = SR.sup; SR.busy = "Looking for one of their papers to show you…"; srDraw();
-  const s = await srSample(sup, srSlipName(name)); if (SR.sup !== sup || SR.form !== name || !document.getElementById("sr-box")) return;
-  if (s) { SR.url = s.url; SR.from = s.from; try { SR.canvas = await srCanvas(s.url); } catch { } } SR.busy = ""; srDraw();
+async function srFormGo(name) {   // show another kind of paper: its own boxes, on its own example
+  if (name === SR.form) return; SR.form = name; SR.msg = ""; await srShowPage(0);
+}
+async function srFilePages(f) {   // every page of a PDF (8 at most), or one picture, each as a canvas
+  if (/pdf/i.test(f.type) || /\.pdf$/i.test(f.name)) { await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"); window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const pdf = await window.pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise, out = [];
+    for (let n = 1; n <= Math.min(pdf.numPages, 8); n++) { const pg = await pdf.getPage(n), v1 = pg.getViewport({ scale: 1 }), vp = pg.getViewport({ scale: Math.min(3, 1700 / v1.width) }), c = document.createElement("canvas"); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+      const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: g, viewport: vp }).promise; out.push(c); }
+    return { pages: out, more: Math.max(0, pdf.numPages - 8) }; }
+  if (/^image\//.test(f.type)) { const img = await createImageBitmap(f), k = Math.min(1, 1700 / img.width), c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height); return { pages: [c], more: 0 }; }
+  throw new Error("Pick a PDF or a picture");
 }
 function srCanvas(url) { return new Promise((ok, no) => { const im = new Image(); im.onload = () => { const c = document.createElement("canvas"); c.width = im.naturalWidth; c.height = im.naturalHeight; const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0); ok(c); }; im.onerror = () => no(new Error("I could not open that picture")); im.src = url; }); }
 async function srFile(f) {   // another paper to draw on: a PDF's first page, or a picture
@@ -22876,11 +22888,14 @@ async function srFile(f) {   // another paper to draw on: a PDF's first page, or
 }
 async function openSupRules(sup) {
   sup = Number(sup); await srLoad(true); const cur = SRULES.by?.[String(sup)] || {};
-  Object.assign(SR, { sup, name: dropInSupName(sup) || "this supplier", rules: (cur.rules || []).map(r => ({ ...r, g: srFormOf(r) })), notes: cur.notes || "", url: "", from: "", canvas: null, pick: null, tried: null, dirty: false, busy: "Looking for one of their invoices to show you…", can: SRULES.can, msg: "", pages: {} });
-  SR.forms = srForms(SR.rules).map(f => f.name); if (!SR.forms.length) SR.forms = [SR_FORM0]; SR.form = SR.forms[0];
+  Object.assign(SR, { sup, name: dropInSupName(sup) || "this supplier", rules: (cur.rules || []).map(r => ({ ...r, g: srFormOf(r) })), notes: cur.notes || "", url: "", from: "", canvas: null, pick: null, tried: null, dirty: false, busy: "Opening the example…", can: SRULES.can, msg: "", pages: {}, pg: 0 });
+  SR.forms = srForms(SR.rules).map(f => f.name); SR.form = SR.forms[0] || SR_FORM0;
   srDraw();
-  const s = await srSample(sup, srSlipName(SR.form)); if (SR.sup !== sup || SR.form !== SR.forms[0] || !document.getElementById("sr-box")) return;
-  if (s) { SR.url = s.url; SR.from = s.from; try { SR.canvas = await srCanvas(s.url); } catch { } } SR.busy = ""; srDraw();
+  let ex = []; try { const r = await db.rpc("supplier_rule_examples", { p_supplier: sup }); if (!r.error && Array.isArray(r.data)) ex = r.data; } catch { }
+  if (SR.sup !== sup || !document.getElementById("sr-box")) return;
+  for (const e of ex) { SR.pages[e.form] = { imgs: [], from: e.src || "", n: Number(e.n) || 0, was: e.form, changed: false }; if (!SR.forms.includes(e.form)) SR.forms.push(e.form); }
+  if (!SR.forms.length) SR.forms = [SR_FORM0]; if (!SR.forms.includes(SR.form)) SR.form = SR.forms[0];
+  await srShowPage(0);
 }
 function srClose() { document.getElementById("sr-box")?.remove(); document.removeEventListener("keydown", srKey, true); }
 async function srAskClose() { if (SR.dirty && SR.can && (await askChoice("Close the rules?", `<span class="ask-sq"></span>You changed the rules and did not save them.`, [["stay", "✏️|Go back|Keep working on the rules", true], ["go", "🚪|Close|Do not save the changes"]])) !== "go") return; srClose(); }
@@ -22897,19 +22912,21 @@ function srDraw() {
       ${can ? `<div class="sr-rbtn"><button type="button" class="sr-b" data-sr-draw="${r.id}">${SR.pick === r.id ? "Drawing… (Esc to stop)" : r.w ? "✏ Draw its box again" : "✏ Draw its box"}</button><button type="button" class="sr-b sr-del" data-sr-del="${r.id}">✕ Remove</button></div>` : ""}</div></li>`; };
   box.innerHTML = `<div class="sr-in"><header class="sr-top"><h2>Rules for reading ${esc(srPos(SR.name))} papers</h2><button type="button" class="sr-x" data-sr-x>✕ Close</button></header>
     <p class="sr-lead">Each rule tells me <b>what to pick up</b> and <b>where it is printed</b> on their page. The coloured boxes on the page show where I look. These rules are used each time one of their papers is dropped in, read again, or read on Auto update.</p>
-    <div class="sr-forms"><b>Which kind of paper?</b>${SR.forms.map(f => `<button type="button" class="sr-b sr-form${f === SR.form ? " on" : ""}" data-sr-form="${esc(f)}" aria-pressed="${f === SR.form}">${esc(f)} (${SR.rules.filter(r => srFormOf(r) === f).length})</button>`).join("")}${can ? `<button type="button" class="sr-b" data-sr-formadd>＋ Add another kind of paper</button>` : ""}
-      <span class="sr-formsay">${SR.forms.length > 1 ? "Each kind of paper has its own boxes. When a paper comes in I try each kind and use the one that fits the page." : "If this supplier sends another kind of paper (a packing slip, a credit), add it here with its own boxes."}</span></div>
+    <div class="sr-forms"><b>Which kind of paper?</b>${SR.forms.map(f => `<button type="button" class="sr-b sr-form${f === SR.form ? " on" : ""}" data-sr-form="${esc(f)}" aria-pressed="${f === SR.form}">${esc(f)} (${SR.rules.filter(r => srFormOf(r) === f).length})${srPgCount(srPg(f)) ? "" : " · no example"}</button>`).join("")}${can ? `<button type="button" class="sr-b" data-sr-formadd>＋ Add another kind of paper</button>` : ""}
+      <span class="sr-formsay">Each kind of paper has one saved example and its own boxes. The example does not change from month to month. When a paper comes in I try each kind that has boxes and use the one that fits the page.</span></div>
     ${SR.msg ? `<div class="sr-msg">${SR.msg}</div>` : ""}
     <div class="sr-grid"><div class="sr-left">
       ${pk ? `<div class="sr-drawing" style="--c:${SR_COL[Math.max(0, FR.indexOf(pk)) % SR_COL.length]}">✏ Hold the mouse down on the page and drag a box around <b>${esc(SR_SHORT[pk.f])}</b>. Make it a little bigger than the words.</div>` : ""}
-      ${SR.url ? `<div class="sr-page${SR.pick ? " drawing" : ""}" data-sr-page><img alt="A page of this supplier" src="${SR.url}" draggable="false">${FR.map(zone).join("")}<div class="sr-rub" hidden></div></div><p class="sr-from">This page is ${esc(SR.from)}.</p>`
-        : `<div class="sr-nopage">${SR.busy ? esc(SR.busy) : `I have no ${esc(SR.form.toLowerCase())} of theirs with a copy to show. Pick one of their papers with the button below.`}</div>`}
-      <div class="sr-pick"><button type="button" class="sr-b" data-sr-other>📄 Use another paper of theirs</button><input type="file" accept="application/pdf,image/*" hidden data-sr-file></div></div>
+      ${(() => { const P = srPg(), n = srPgCount(P); return (n > 1 ? `<div class="sr-pgs"><b>Page</b>${Array.from({ length: n }, (_, i) => `<button type="button" class="sr-b${i === SR.pg ? " on" : ""}" data-sr-pgno="${i}" aria-pressed="${i === SR.pg}">${i + 1}</button>`).join("")}<span>of ${n}. The boxes are in the same place on every page.</span></div>` : "")
+        + (SR.url ? `<div class="sr-page${SR.pick ? " drawing" : ""}" data-sr-page><img alt="The example page of this kind of paper" src="${SR.url}" draggable="false">${FR.map(zone).join("")}<div class="sr-rub" hidden></div></div>
+          <p class="sr-from">${P.changed ? `<b class="sr-bad">This example is not saved yet. Press Save the rules.</b> ` : `<b class="sr-ok">✔ This is the saved example for ${esc(SR.form)}.</b> It is the same one every month. `}${P.from ? `It is ${esc(P.from)}.` : ""}</p>`
+          : `<div class="sr-nopage">${SR.busy ? esc(SR.busy) : `No example is saved for <b>${esc(SR.form)}</b> yet.${can ? " Press the button below and pick one of their papers of this kind (a PDF or a picture)." : ""}`}</div>`)
+        + (can ? `<div class="sr-pick"><button type="button" class="sr-b" data-sr-other>📄 ${n ? "Change the example" : "Load the example for this kind of paper"}</button><input type="file" accept="application/pdf,image/*" hidden data-sr-file></div>` : ""); })()}</div>
     <div class="sr-right"><h3>The rules for: ${esc(SR.form)} (${FR.length})</h3>
       ${can ? `<div class="sr-formed"><label class="sr-what">Name of this kind of paper <input type="text" maxlength="40" data-sr-fname value="${esc(SR.form)}"></label>${SR.forms.length > 1 ? `<button type="button" class="sr-b sr-del" data-sr-formdel>✕ Remove this kind of paper</button>` : ""}</div>` : ""}
       <div class="sr-acts"><button type="button" class="sr-sq" data-sr-try ${SR.canvas && FR.some(r => r.w) && !SR.busy ? "" : "disabled"}><span>🔎</span><b>${SR.busy && SR.canvas ? esc(SR.busy) : "Try the rules on this page"}</b></button>
         ${can ? `<button type="button" class="sr-sq sr-save" data-sr-save ${SR.dirty ? "" : "disabled"}><span>💾</span><b>Save the rules</b></button>` : ""}<button type="button" class="sr-sq" data-sr-x><span>✕</span><b>Close</b></button></div>
-      ${FR.length ? `<ol class="sr-list">${FR.map(li).join("")}</ol>` : `<p class="sr-none">No rules for this kind of paper yet. Press Add a rule. A kind of paper with no rules is not kept.</p>`}
+      ${FR.length ? `<ol class="sr-list">${FR.map(li).join("")}</ol>` : `<p class="sr-none">No rules for this kind of paper yet. Load its example first, then press Add a rule and draw the box on the example.</p>`}
       ${can ? `<button type="button" class="sr-b sr-add" data-sr-add>＋ Add a rule</button>` : ""}
       <div class="sr-lines"><b>The lines of the invoice</b> (part number, what it is, quantity, price, discount, net amount) are read by a layout built into the app. If the lines of this supplier read wrong, write it below and tell Claude.</div>
       <label class="sr-notes">Other rules for this supplier, in plain words<textarea data-sr-notes rows="4" ${can ? "" : "readonly"} placeholder="Example: their credit memos have CREDIT in the top right corner.">${esc(SR.notes)}</textarea><span>These words are kept here for people to read. The reader does not act on them by itself.</span></label>
@@ -22919,10 +22936,10 @@ function srDraw() {
   box.querySelectorAll("[data-sr-x]").forEach(b => b.addEventListener("click", srAskClose));
   box.querySelectorAll("[data-sr-f]").forEach(s => s.addEventListener("change", () => { const r = R(s.dataset.srF); r.f = s.value; SR.tried = null; touch(); srDraw(); }));
   box.querySelectorAll("[data-sr-fmt]").forEach(s => s.addEventListener("change", () => { R(s.dataset.srFmt).fmt = s.value; SR.tried = null; touch(); srDraw(); }));
-  box.querySelectorAll("[data-sr-draw]").forEach(b => b.addEventListener("click", () => { if (!SR.url) { SR.msg = "First pick a page to draw on: press Use another paper of theirs."; return srDraw(); } SR.pick = SR.pick === b.dataset.srDraw ? null : b.dataset.srDraw; srDraw(); if (SR.pick) box.querySelector("[data-sr-page]")?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }));
+  box.querySelectorAll("[data-sr-draw]").forEach(b => b.addEventListener("click", () => { if (!SR.url) { SR.msg = "First load the example for this kind of paper: press Load the example."; return srDraw(); } SR.pick = SR.pick === b.dataset.srDraw ? null : b.dataset.srDraw; srDraw(); if (SR.pick) box.querySelector("[data-sr-page]")?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }));
   box.querySelectorAll("[data-sr-del]").forEach(b => b.addEventListener("click", () => { SR.rules = SR.rules.filter(r => r.id !== b.dataset.srDel); if (SR.pick === b.dataset.srDel) SR.pick = null; touch(); srDraw(); }));
   box.querySelectorAll("[data-sr-form]").forEach(b => b.addEventListener("click", () => srFormGo(b.dataset.srForm)));
-  box.querySelector("[data-sr-formadd]")?.addEventListener("click", () => { let nm = SR.forms.some(srSlipName) ? "Another paper" : "Packing slip", k = 2; while (SR.forms.includes(nm)) nm = "Another paper " + k++; SR.forms.push(nm); touch(); srFormGo(nm); });
+  box.querySelector("[data-sr-formadd]")?.addEventListener("click", () => { let nm = "New kind of paper", k = 2; while (SR.forms.includes(nm)) nm = "New kind of paper " + k++; SR.forms.push(nm); srPg(nm); touch(); srFormGo(nm).then(() => { const i = document.querySelector("#sr-box [data-sr-fname]"); if (i) { i.focus(); i.select(); } }); });
   box.querySelector("[data-sr-fname]")?.addEventListener("change", e => { const nm = e.target.value.replace(/\s+/g, " ").trim().slice(0, 40), old = SR.form; if (!nm || nm === old) return void setTimeout(srDraw, 0);
     if (SR.forms.includes(nm)) { SR.msg = `<span class="sr-bad">Another kind of paper is already named ${esc(nm)}.</span>`; return void setTimeout(srDraw, 0); }
     SR.rules.forEach(r => { if (srFormOf(r) === old) r.g = nm; }); SR.forms = SR.forms.map(f => f === old ? nm : f); if (SR.pages[old]) { SR.pages[nm] = SR.pages[old]; delete SR.pages[old]; } SR.form = nm; touch(); setTimeout(srDraw, 0); });
@@ -22932,8 +22949,11 @@ function srDraw() {
   box.querySelector("[data-sr-add]")?.addEventListener("click", () => { const used = new Set(FR.map(r => r.f)), f = Object.keys(SR_F).find(k => !used.has(k)) || "date", id = "r" + Date.now().toString(36); SR.rules.push({ id, f, g: SR.form, x: 0, y: 0, w: 0, h: 0, fmt: "mdy" }); if (SR.url) SR.pick = id; touch(); srDraw(); });
   const nt = box.querySelector("[data-sr-notes]"); nt?.addEventListener("input", () => { SR.notes = nt.value; if (!SR.dirty) { SR.dirty = true; const sv = box.querySelector("[data-sr-save]"); if (sv) sv.disabled = false; } });
   const fi = box.querySelector("[data-sr-file]"); box.querySelector("[data-sr-other]")?.addEventListener("click", () => fi.click());
-  fi?.addEventListener("change", async () => { const f = fi.files[0]; if (!f) return; SR.busy = "Opening " + f.name + "…"; srDraw();
-    try { const c = await srFile(f); SR.canvas = c; SR.url = c.toDataURL("image/jpeg", 0.85); SR.from = f.name + " (page 1)"; SR.tried = null; SR.msg = ""; } catch (er) { SR.msg = esc(er.message || String(er)); } SR.busy = ""; srDraw(); });
+  fi?.addEventListener("change", async () => { const f = fi.files[0]; if (!f) return; const form = SR.form; SR.busy = "Opening " + f.name + "…"; srDraw();
+    try { const z = await srFilePages(f), P = srPg(form); P.imgs = z.pages.map(c => c.toDataURL("image/jpeg", 0.82)); P.from = f.name; P.changed = true; SR.dirty = true; SR.busy = "";
+      SR.msg = `<span class="sr-ok">✔ I opened ${z.pages.length} page${z.pages.length > 1 ? "s" : ""} of ${esc(f.name)}${z.more ? ` (its last ${z.more} page${z.more > 1 ? "s" : ""} are left out: 8 at most)` : ""}. Check the name of this kind of paper, then press Save the rules.</span>`; if (SR.form === form) await srShowPage(0); else srDraw(); }
+    catch (er) { SR.busy = ""; SR.msg = `<span class="sr-bad">${esc(er.message || String(er))}</span>`; srDraw(); } });
+  box.querySelectorAll("[data-sr-pgno]").forEach(b => b.addEventListener("click", () => srShowPage(Number(b.dataset.srPgno))));
   box.querySelector("[data-sr-try]")?.addEventListener("click", async () => { SR.busy = "Reading…"; srDraw();
     try { await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); const z = await srRead(SR.canvas, FR.filter(r => r.w)); SR.tried = z.by; const n = Object.values(z.by).filter(t => t.v != null).length;
       SR.msg = n === Object.keys(z.by).length ? `<span class="sr-ok">✔ Every rule read something on this page. Check each one is right.</span>` : `<span class="sr-bad">${Object.keys(z.by).length - n} of ${Object.keys(z.by).length} rules read nothing. Draw those boxes again, a little bigger.</span>`; }
@@ -22941,7 +22961,15 @@ function srDraw() {
   box.querySelector("[data-sr-save]")?.addEventListener("click", async () => { const bad = SR.rules.find(r => !r.w); if (bad) { const g = srFormOf(bad); SR.msg = `<span class="sr-bad">${esc(g)}: rule ${SR.rules.filter(r => srFormOf(r) === g).indexOf(bad) + 1} has no box yet. Press Draw its box, or Remove it.</span>`; if (g !== SR.form) return srFormGo(g); return srDraw(); }
     const { data, error } = await db.rpc("supplier_rules_set", { p_supplier: SR.sup, p_rules: SR.rules, p_notes: SR.notes });
     if (error) { SR.msg = `<span class="sr-bad">Not saved: ${esc(rpcErr(error))}</span>`; return srDraw(); }
-    SR.rules = (data?.rules || SR.rules).map(r => ({ ...r, g: srFormOf(r) })); SR.forms = SR.forms.filter(f => f === SR.form || SR.rules.some(r => srFormOf(r) === f)); SRULES.by = SRULES.by || {}; SRULES.by[String(SR.sup)] = { rules: SR.rules.map(r => ({ ...r })), notes: SR.notes }; SR.dirty = false; SR.msg = `<span class="sr-ok">✔ Saved. ${esc(srPos(SR.name))} papers are read with these rules from now on.</span>`; srDraw(); });
+    SR.rules = (data?.rules || SR.rules).map(r => ({ ...r, g: srFormOf(r) })); SRULES.by = SRULES.by || {}; SRULES.by[String(SR.sup)] = { rules: SR.rules.map(r => ({ ...r })), notes: SR.notes };
+    let exErr = "";   // the examples: renamed and removed kinds first, then each example that was loaded here
+    try { const ren = {}; for (const f of SR.forms) { const P = SR.pages[f]; if (P?.was && P.was !== f) ren[P.was] = f; }
+      const t = await db.rpc("supplier_rule_examples_tidy", { p_supplier: SR.sup, p_renames: ren, p_keep: SR.forms.filter(f => srPgCount(srPg(f)) > 0) }); if (t.error) throw t.error;
+      for (const f of SR.forms) { const P = SR.pages[f]; if (!P) continue; if (P.was) P.was = f;
+        if (P.changed && P.imgs.length) { SR.msg = `Saving the example for ${esc(f)}…`; srDraw(); const r = await db.rpc("supplier_rule_example_set", { p_supplier: SR.sup, p_form: f, p_pages: P.imgs.map(u => u.split(",")[1]), p_src: P.from }); if (r.error) throw r.error; P.changed = false; P.was = f; P.n = P.imgs.length; } } }
+    catch (er) { exErr = rpcErr(er); }
+    SR.forms = SR.forms.filter(f => f === SR.form || SR.rules.some(r => srFormOf(r) === f) || srPgCount(srPg(f)) > 0);
+    SR.dirty = !!exErr; SR.msg = exErr ? `<span class="sr-bad">The rules are saved, but an example was not saved: ${esc(exErr)}</span>` : `<span class="sr-ok">✔ Saved. ${esc(srPos(SR.name))} papers are read with these rules and these examples from now on, every month.</span>`; srDraw(); });
   const pg = box.querySelector("[data-sr-page]"); if (pg && SR.pick && can) { const rub = pg.querySelector(".sr-rub"); let a = null;
     const at = e => { const b = pg.getBoundingClientRect(); return [Math.max(0, Math.min(100, (e.clientX - b.left) / b.width * 100)), Math.max(0, Math.min(100, (e.clientY - b.top) / b.height * 100))]; };
     const box4 = e => { const [x, y] = at(e); return { x: Math.min(a[0], x), y: Math.min(a[1], y), w: Math.abs(x - a[0]), h: Math.abs(y - a[1]) }; };
