@@ -6587,7 +6587,7 @@ body[data-page="supplier-invoices"] #main { position: relative; }
 .sinv-allok { background: #ebfbee; border: 1px solid #b2f2bb; border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; color: #2b8a3e; font-weight: 700; }
 .sinv-lt { width: 100%; font-size: 12.5px; border-collapse: collapse; } .sinv-lt th, .sinv-lt td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; } .sinv-lt .r { text-align: right; }
 .sinv-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; } .sinv-acts input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; width: 150px; margin-left: 4px; }
-.sinv-scans { margin-top: 14px; } .sinv-scan { margin: 0 0 10px; border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: 80vh; background: #fff; cursor: zoom-in; }
+.sinv-scans { margin-top: 14px; } .sinv-pgbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0 6px; max-width: 900px; font-size: 15px; color: #23415f; } .sinv-pgbar .btn { min-height: 38px; } .sinv-scan { margin: 0 0 10px; border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: 80vh; background: #fff; cursor: zoom-in; }
 .sinv-scan img { width: 100%; display: block; } .sinv-scan.zoom { cursor: zoom-out; } .sinv-scan.zoom img { width: 200%; max-width: none; }
 .sl-toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 3000; box-shadow: 0 8px 24px rgba(0,0,0,.25); max-width: min(560px, 90vw); animation: slToast 4s forwards; pointer-events: none; }
 @keyframes slToast { 0%, 85% { opacity: 1; } 100% { opacity: 0; } }
@@ -21763,7 +21763,7 @@ function sinvDetail(r, edit) {
       ${edit && r.po_id && SINV.edPo === r.id ? sinvPoEditor(r, P, d) : ""}
       ${(d.changes || []).length ? sinvHistory(d.changes) : ""}</details></section></div>
     ${(d.returns || []).length ? sinvReturnsHtml(d.returns, edit) : ""}
-    ${(d.pages || []).length ? `<section class="sinv-scans"><h3>Scanned ${d.pages.length === 1 ? "page" : "pages"}</h3>${d.pages.map(p => `<figure class="sinv-scan" data-sinv-img="${p.id}">${SINV.img.has(p.id) ? `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">` : `<span class="quiet">Loading page ${p.page_no}…</span>`}</figure>`).join("")}
+    ${(d.pages || []).length ? `<section class="sinv-scans"><h3>Scanned ${d.pages.length === 1 ? "page" : "pages"}</h3>${d.pages.map((p, k) => `<div class="sinv-pgbar no-print"><b>Page ${k + 1} of ${d.pages.length}</b><button class="btn quiet-btn" type="button" data-sinv-pgprint="${p.id}" data-pg="${k + 1}" data-inv="${r.id}" title="Print only this page">🖨 Print this page</button><span class="quiet" role="status"></span></div><figure class="sinv-scan" data-sinv-img="${p.id}">${SINV.img.has(p.id) ? `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">` : `<span class="quiet">Loading page ${p.page_no}…</span>`}</figure>`).join("")}
       <p class="quiet">Click a page to zoom in.</p></section>${edit ? sinvDropHtml(r, d.pages.length) : ""}` : sinvSysPaper(r, d) + (edit ? sinvDropHtml(r) : sinvSys(r) ? "" : `<p class="quiet">There's no copy of this one in the file: only its line on the statement.</p>`)}
   </div>`;
 }
@@ -23755,6 +23755,15 @@ function wireSupInv() {
   document.querySelectorAll("[data-sinv-addcopy]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); SINV.open = Number(b.dataset.sinvAddcopy); redo();
     setTimeout(() => { const z = document.querySelector(`[data-sinv-drop="${SINV.open}"]`); z?.scrollIntoView({ block: "center" }); z?.focus({ preventScroll: true }); }, 400); }));
   // Print the invoice (Carlo, Nov 10): the invoice's scanned pages, one to a sheet, in a new window with the print box open
+  document.querySelectorAll("[data-sinv-pgprint]").forEach(b => b.addEventListener("click", async () => { const pid = Number(b.dataset.sinvPgprint), r = (SINV.data?.rows || []).find(x => x.id === Number(b.dataset.inv)), msg = b.parentElement.querySelector("[role=status]"), say = t => { if (msg) msg.textContent = t; };
+    say(""); const w = window.open("", "_blank"); if (!w) return say("The print window was blocked. Allow pop-ups for this site, then press it again.");
+    const title = `${r ? sinvShort(r.supplier || "") || "Supplier" : "Supplier"} ${r && r.doc_type === "credit" ? "credit" : "invoice"} ${(r && r.number) || ""} page ${b.dataset.pg}`;
+    w.document.write(`<!doctype html><title>${esc(title)}</title><style>body{margin:0;font-family:sans-serif}p{padding:24px;font-size:18px}img{display:block;width:100%}@page{margin:8mm}</style><p id="w">Getting the page…</p>`);
+    b.disabled = true;
+    try { if (!SINV.img.has(pid)) { const q = await db.rpc("supplier_doc_page", { p_id: pid }); if (q.data) SINV.img.set(pid, "data:image/jpeg;base64," + q.data); }
+      if (w.closed) return; if (!SINV.img.has(pid)) { w.document.getElementById("w").textContent = "I could not get this page to print."; return; }
+      w.document.getElementById("w").remove(); const im = w.document.createElement("img"), go = () => setTimeout(() => { try { w.focus(); w.print(); } catch { } }, 200); im.alt = title; im.onload = go; im.onerror = go; im.src = SINV.img.get(pid); w.document.body.appendChild(im);
+    } catch (er) { say("I could not print it: " + (er.message || er)); } finally { b.disabled = false; } }));
   document.querySelectorAll("[data-sinv-print]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sinvPrint), r = (SINV.data?.rows || []).find(x => x.id === id), d = SINV.det.get(id), msg = b.parentElement.querySelector("[data-sinv-rereadmsg]"), say = t => { if (msg) msg.textContent = t; };
     if (!r || !d) return; const w = window.open("", "_blank"); if (!w) return say("The print window was blocked. Allow pop-ups for this site, then press it again.");
     const title = `${sinvShort(r.supplier || "") || "Supplier"} ${r.doc_type === "credit" ? "credit" : "invoice"} ${r.number || ""}`;
