@@ -21805,8 +21805,23 @@ function sinvLineSpan(t) {
   const fix = x => x.replace(/[oO]/g, "0").replace(/[Il|]/g, "1").replace(/[sS]/g, "5").replace(/[zZ]/g, "2").replace(/B/g, "8"), N = [];
   for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/); if (!m || !/\d/.test(m[1])) continue;
     if (!/\d[.,]\d{2}\b|\d{5}\b/.test(l.slice(m[0].length - 1))) continue; const v = Number(fix(m[1])); if (v >= 1 && v <= 400) N.push(v); }
-  if (!N.length) return { first: null, last: null }; const S = new Set(N), run = N.filter(v => S.has(v + 1) || S.has(v - 1)), R = run.length ? run : N;
+  if (!N.length) {   // an invoice that numbers its lines 2, 3, 4… with no zeros in front (Boone's invoice): a number, then a part code or an amount at the line's end; only a run of 3 in a row counts
+    const A = []; for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,3}(\d{1,3})[\s|\]]+(\S+)\s+\S/); if (!m) continue;
+      if (!/\d/.test(m[2]) && !/\d[.,]\d{2}\s*$/.test(l)) continue; if (/^\d+$/.test(m[2]) && !/\d[.,]\d{2}\s*$/.test(l)) continue; const v = Number(m[1]); if (v >= 1 && v <= 400) A.push(v); }
+    const S2 = new Set(A), R2 = A.filter(v => (S2.has(v + 1) && S2.has(v + 2)) || (S2.has(v - 1) && S2.has(v + 1)) || (S2.has(v - 1) && S2.has(v - 2)));
+    return R2.length ? { first: Math.min(...R2), last: Math.max(...R2) } : { first: null, last: null }; }
+  const S = new Set(N), run = N.filter(v => S.has(v + 1) || S.has(v - 1)), R = run.length ? run : N;
   return { first: Math.min(...R), last: Math.max(...R) };
+}
+// what kind of paper is this page? "slip" (a packing slip, sales order or pick ticket), "inv" (the invoice), or null (can not tell)
+function sinvPageKind(t) { const s = String(t || ""); return /PACKING\s*SLIP|SALES\s*ORDER|PICK\s*TICKET|BON\s+DE\s+LIVRAISON/i.test(s) ? "slip" : /\bFA\s?CTURE\b|\bIN\s?VOICE\b/i.test(s) ? "inv" : null; }
+// One record can hold two papers: the supplier's invoice and its packing slip (Carlo, Nov 24: C330314). Each is counted by itself.
+// M = the pages in their order on file, each with kind. The answer is the invoice's own, with slip = the packing slip's answer, two = true, all = every page on file.
+function sinvPagesCalc2(M) {
+  const K = M.map(p => p.kind); for (let i = 0; i < K.length; i++) if (!K[i]) K[i] = K[i - 1] || null; for (let i = K.length - 2; i >= 0; i--) if (!K[i]) K[i] = K[i + 1];
+  const I = M.filter((p, i) => K[i] === "inv"), S = M.filter((p, i) => K[i] === "slip");
+  if (!I.length || !S.length) return { ...(sinvPagesCalc(M) || {}), v: 2, all: M.length };
+  return { ...(sinvPagesCalc(I) || { unsure: true, have: I.length, miss: [] }), v: 2, all: M.length, two: true, slip: sinvPagesCalc(S) || { unsure: true, have: S.length, miss: [] } };
 }
 // P = the pages on file, in order: { no (printed page number), line (first item line), last (last item line), cont (the page says CONTINUED) }.
 // Answer: { miss: [page numbers], about (worked out from the line numbers, not read), after (a page is missing after the last one), have, total (null when not known), end }
@@ -21852,8 +21867,8 @@ async function sinvPagesCheck(id, pages) {
   const redraw = () => { if (SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } };
   const say = t => { SINV_PG.set(id, { busy: t }); const el = document.querySelector(`[data-sn-pages="${id}"]`); if (el) el.textContent = t; else redraw(); };
   try {
-    if (cur === undefined) { const q = await db.rpc("sinv_pages_check", { p_ids: [id] }); if (q.error) return void SINV_PG.set(id, null); if (q.data?.[id]) { SINV_PG.set(id, q.data[id]); return redraw(); } }
-    else if (cur && cur.have === pages.length) return;
+    if (cur === undefined) { const q = await db.rpc("sinv_pages_check", { p_ids: [id] }); if (q.error) return void SINV_PG.set(id, null); if (q.data?.[id] && (q.data[id].v === 2 || !SINV.data?.can_edit)) { SINV_PG.set(id, q.data[id]); return redraw(); } }
+    else if (cur && (cur.all ?? cur.have) === pages.length && (cur.v === 2 || !SINV.data?.can_edit)) return;
     if (!SINV.data?.can_edit) return void SINV_PG.set(id, null);
     say("Counting the pages of the supplier's invoice…");
     const q = await db.rpc("supplier_invoice_pages_info", { p_invoice: id }); if (q.error || !Array.isArray(q.data) || !q.data.length) return void SINV_PG.set(id, null);
@@ -21864,8 +21879,8 @@ async function sinvPagesCheck(id, pages) {
         if (SINV.img.has(h.id)) { h.words = (await worker.recognize(SINV.img.get(h.id))).data.text.slice(0, 8000); h.fresh = true; } } } finally { await worker.terminate(); } }
     { const sup = (SINV.data?.rows || []).find(x => x.id === id)?.supplier_id; for (const h of todo) if (h.fresh) h.ruleNo = await sinvRulePageNo(sup, SINV.img.get(h.id)); }
     if (have.some(h => h.words == null)) return void SINV_PG.set(id, null);
-    const M = have.map(h => { const sp = sinvLineSpan(h.words); return { id: h.id, no: h.ruleNo ?? sinvPageNo(h.words) ?? h.no ?? h.printed_no ?? null, line: sp.first, last: sp.last, cont: /\bCONTINUED\b|\bCONT['’]?D\b/i.test(h.words) && !/END OF ORDER/i.test(h.words) }; });
-    const res = sinvPagesCalc(M);
+    const M = have.map(h => { const sp = sinvLineSpan(h.words); return { id: h.id, no: h.ruleNo ?? sinvPageNo(h.words) ?? h.no ?? h.printed_no ?? null, line: sp.first, last: sp.last, kind: sinvPageKind(h.words), cont: /\bCONTINUED\b|\bCONT['’]?D\b/i.test(h.words) && !/END OF ORDER/i.test(h.words) }; });
+    const res = sinvPagesCalc2(M);
     const sv = await db.rpc("supplier_invoice_pages_seen", { p_invoice: id, p: { res, have: have.map((h, i) => ({ id: h.id, no: M[i].no, line: M[i].line, words: h.fresh ? h.words : null })) } });
     SINV_PG.set(id, res); if (sv.error) console.warn("pages check not saved", sv.error.message); redraw();
   } catch (e) { SINV_PG.set(id, null); console.warn("pages check", e); redraw(); }
@@ -22738,7 +22753,7 @@ window.addEventListener("click", e => { if (Date.now() - SCI_RO.skipClick < 400 
 function sinvSlipTile(r, edit, d) {
   // green when the paper is a packing slip: marked by a person, or read as one. The same test as the "This paper is the packing slip" line above it, so the two never disagree (Carlo, Nov 12)
   const byHand = /Marked as a packing slip in the app/i.test(r.read_notes || ""), is = byHand || /packing[ -]slip/i.test(r.read_notes || "");
-  if (is) return `<div class="sci-app"><button class="apb apb-green sci-big" type="button" data-sinv-slips="${r.supplier_id}" title="Open this supplier's packing slips"><span class="sci-app-k">Packing Slip</span><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">This is a Packing Slip</span></button>${edit && byHand ? `<button class="link" type="button" data-sci-slip="${r.id}" data-on="0">Not a packing slip? Undo</button>` : ""}</div>`;
+  if (is) return `<div class="sci-app"><button class="apb apb-green sci-big" type="button" data-sinv-slips="${r.supplier_id}" title="Open this supplier's packing slips"><span class="sci-app-k">Packing Slip</span><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">${SINV_PG.get(r.id)?.two ? "The Packing Slip is on file too" : "This is a Packing Slip"}</span></button>${edit && byHand ? `<button class="link" type="button" data-sci-slip="${r.id}" data-on="0">Not a packing slip? Undo</button>` : ""}</div>`;
   if (!edit || r.doc_type === "credit" || r.doc_type === "charge") return "";
   return `<div class="sci-app"><button class="apb apb-blue sci-big" type="button" data-sci-slip="${r.id}" data-on="1" title="Move this document to the packing slips"><span class="sci-app-k">Packing Slip</span><span class="apb-ic" aria-hidden="true">📦</span><span class="apb-tn">If this is a Packing Slip Click here.</span></button></div>`;
 }
@@ -23025,10 +23040,14 @@ document.addEventListener("click", async e => { const ld = e.target.closest?.("[
   STV.all = null; STV.allFor = null; STV.src = null; SINV.det.delete(id); await openSupInv(sy ? "✓ The system copy is made. Ask the supplier for a copy of the original." : "The system copy is off."); });
 function sinvNeedsHtml(r, d) {
   if (sinvIsCredit(r) || r.doc_type === "charge" || r.doc_type === "return") return "";
-  const st = sinvState(r), L = [], ok = t => L.push(`<li class="sn-ok"><span class="sn-m" aria-hidden="true">✔</span><span>${t}</span></li>`), need = t => L.push(`<li class="sn-need"><span class="sn-m" aria-hidden="true">!</span><span>${t}</span></li>`);
+  let two = false; const st = sinvState(r), L = [], ok = t => L.push(`<li class="sn-ok"><span class="sn-m" aria-hidden="true">✔</span><span>${t}</span></li>`), need = t => L.push(`<li class="sn-need"><span class="sn-m" aria-hidden="true">!</span><span>${t}</span></li>`);
   { const pc = (d.pages || []).length ? SINV_PG.get(r.id) : null, w = pc && !pc.busy ? sinvMissWords(pc) : null;   // are all of its pages on file? (Carlo, Nov 24, 2026)
     if (pc?.busy) L.push(`<li class="sn-wait"><span class="sn-m" aria-hidden="true">…</span><span data-sn-pages="${r.id}">${esc(pc.busy)}</span></li>`);
-    else if (w) (w.n ? need : ok)(w.long + (w.n && SINV.data?.can_edit ? ` <button class="link" type="button" data-sinv-missload="${r.id}">Load the missing ${w.n === 1 && !pc.after ? "page" : "pages"}</button>` : "")); }
+    else { const ld = (x, c) => x.n && SINV.data?.can_edit ? ` <button class="link" type="button" data-sinv-missload="${r.id}">Load the missing ${x.n === 1 && !c.after ? "page" : "pages"}</button>` : "";
+      if (w) (w.n ? need : ok)((pc.two ? "<b>The supplier's invoice:</b> " : "") + w.long + ld(w, pc));
+      else if (pc?.two) ok(`<b>The supplier's invoice:</b> ${pc.have} ${pc.have === 1 ? "page is" : "pages are"} on file. I could not tell from the pages if one is missing.`);
+      if (pc?.two) { const sw = sinvMissWords(pc.slip); two = true;
+        if (sw) (sw.n ? need : ok)("<b>The packing slip</b> is on this record too. " + sw.long + ld(sw, pc.slip)); else ok(`<b>The packing slip</b> is on this record too: ${pc.slip.have} ${pc.slip.have === 1 ? "page" : "pages"}.`); } } }
   if (!r.po_id) need(r.po_text ? `P.O. <b>${esc(r.po_text)}</b> is printed on it, but that P.O. is not in our system.` : "Need to find the P.O.");
   else if (st.po == null || !Number(r.po_lines)) need(`Found the P.O. <b>${esc(r.po_number || "")}</b>. But the P.O. has no amounts on it, so I can not compare.`);
   else if (Math.abs(st.diff) <= 1) ok(`Found the P.O. <b>${esc(r.po_number || "")}</b>. It matches.`);
@@ -23037,7 +23056,7 @@ function sinvNeedsHtml(r, d) {
   if (C?.linked?.length) ok(`Found the customer invoice: ${C.linked.map(i => `<b>#${esc(String(i.number || i.id))}</b>`).join(", ")}.`);
   else if (K?.done) ok("It is in our stock.");
   else if (C || (K && !K.not_invoice)) need("Need to find the customer invoice, or put it in our stock still.");
-  if (/packing[ -]slip/i.test(r.read_notes || "")) ok("This paper is the packing slip.");
+  if (two) {} else if (/packing[ -]slip/i.test(r.read_notes || "")) ok("This paper is the packing slip.");
   else if (d.slips?.length) ok(`Found the packing slip: ${d.slips.slice(0, 3).map(x => `<b>${esc(x.number || "no number")}</b>`).join(", ")}. <button class="link" type="button" data-sci-slipsee="${esc(d.slipQ || "")}">Open it</button>`);
   else if (d.slips) need("Need to find the packing slip.");
   if (!L.length) return "";
@@ -23133,7 +23152,7 @@ const stDate = d => { if (!d) return ""; const [y, m, dd] = String(d).slice(0, 1
 // last column of a statement: do we have the supplier's own invoice paper? (Carlo, Nov 12)
 const sinvMade = r => !!r && /System generated copy made in the app|Made by the app (from their statement|on )|because the original was lost/i.test(r.read_notes || "");   // the app made this record, the supplier's own paper is not in yet
 const sinvSys = r => !!r && /System generated copy made in the app/i.test(r.read_notes || "");   // "Create one from the system" was pressed on it
-const stvPgMiss = r => { const c = r && Number(r.pages) > 0 ? SINV_PG.get(r.id) : null, w = c && !c.busy && c.have === Number(r.pages) ? sinvMissWords(c) : null; return w && w.n ? w : null; };   // pages missing from the copy on file
+const stvPgMiss = r => { const c = r && Number(r.pages) > 0 ? SINV_PG.get(r.id) : null, w = c && !c.busy && (c.all ?? c.have) === Number(r.pages) ? sinvMissWords(c) : null; return w && w.n ? w : null; };   // pages missing from the copy on file
 const stvFileCell = r => `<td class="stv-c">${stvPgMiss(r) ? `<span class="st-look">On file, ${stvPgMiss(r).short}</span><div class="quiet">${esc(stvPgMiss(r).sub)}</div>` : r && Number(r.pages) > 0 ? `<span class="st-ok">On file</span>` : sinvSys(r) ? `<span class="st-look">System copy</span><div class="quiet">Ask the supplier for the original</div>` : `<span class="st-no">Missing</span>`}</td>`;
 // the P.O. column of a statement: Match, Over by, Under by, or None (Carlo, Nov 12)
 function stvPoCell(r) {
