@@ -21786,11 +21786,15 @@ function sinvPageNo(t) {
   const L = s.split(/\n/); for (let i = 0; i < Math.min(L.length, 14); i++) if (/\bPage\W*$/i.test(L[i])) for (let j = i + 1; j <= i + 2 && j < L.length; j++) { const k = L[j].trim().match(/(?:^|\s)[0O]{1,3}([1-9]\d?)\W*$/); if (k) return +k[1]; }
   return null;
 }
+// A line under an item that only says where it sits in the warehouse ("112 003 D02 148824") is not an item line (Carlo, Nov 24: C336643 read "pages 1 to 37 missing" from one).
+const SINV_BIN_RE = /^\W*\d{3}\s+\d{3}\s+[A-Z0-9]{2,4}\s+\d{4,7}\W*$/i;
+// what follows a line number: an amount or a long number, or only the part code (Boone's pick ticket prints "001 [1505BBS636P" and the price on the next line)
+function sinvLineRest(r) { return /\d[.,]\d{2}\b|\d{5}\b/.test(r) || (/^[\[|(]?\s*[A-Z0-9][A-Z0-9\/.-]{3,}\s*$/i.test(r.trim()) && /\d/.test(r) && /[A-Z]/i.test(r)); }
 // the number of the first item line on a page (suppliers number their lines 001, 002… and carry on over the pages), or null
 function sinvFirstLine(t) {
   const fix = x => x.replace(/[oO]/g, "0").replace(/[Il|]/g, "1").replace(/[sS]/g, "5").replace(/[zZ]/g, "2").replace(/B/g, "8"), N = [];
-  for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/); if (!m || !/\d/.test(m[1])) continue;
-    if (!/\d[.,]\d{2}\b|\d{5}\b/.test(l.slice(m[0].length - 1))) continue; const v = Number(fix(m[1])); if (v >= 1 && v <= 400) N.push(v); }
+  for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/); if (!m || !/\d/.test(m[1]) || SINV_BIN_RE.test(l)) continue;
+    if (!sinvLineRest(l.slice(m[0].length - 1))) continue; const v = Number(fix(m[1])); if (v >= 1 && v <= 400) N.push(v); }
   if (!N.length) return null; const S = new Set(N), run = N.filter(v => S.has(v + 1) || S.has(v - 1));
   return Math.min(...(run.length ? run : N));
 }
@@ -21806,8 +21810,8 @@ function sinvPageSame(a, b, strict) {
 // The item line numbers on a page (suppliers number their lines 001, 002… and carry on over the pages): its first and its last.
 function sinvLineSpan(t) {
   const fix = x => x.replace(/[oO]/g, "0").replace(/[Il|]/g, "1").replace(/[sS]/g, "5").replace(/[zZ]/g, "2").replace(/B/g, "8"), N = [];
-  for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/); if (!m || !/\d/.test(m[1])) continue;
-    if (!/\d[.,]\d{2}\b|\d{5}\b/.test(l.slice(m[0].length - 1))) continue; const v = Number(fix(m[1])); if (v >= 1 && v <= 400) N.push(v); }
+  for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/); if (!m || !/\d/.test(m[1]) || SINV_BIN_RE.test(l)) continue;
+    if (!sinvLineRest(l.slice(m[0].length - 1))) continue; const v = Number(fix(m[1])); if (v >= 1 && v <= 400) N.push(v); }
   if (!N.length) {   // an invoice that numbers its lines 2, 3, 4… with no zeros in front (Boone's invoice): a number, then a part code or an amount at the line's end; only a run of 3 in a row counts
     const A = []; for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,3}(\d{1,3})[\s|\]]+(\S+)\s+\S/); if (!m) continue;
       if (!/\d/.test(m[2]) && !/\d[.,]\d{2}\s*$/.test(l)) continue; if (/^\d+$/.test(m[2]) && !/\d[.,]\d{2}\s*$/.test(l)) continue; const v = Number(m[1]); if (v >= 1 && v <= 400) A.push(v); }
@@ -21823,8 +21827,8 @@ function sinvPageKind(t) { const s = String(t || ""); return /PACKING\s*SLIP|SAL
 function sinvPagesCalc2(M) {
   const K = M.map(p => p.kind); for (let i = 0; i < K.length; i++) if (!K[i]) K[i] = K[i - 1] || null; for (let i = K.length - 2; i >= 0; i--) if (!K[i]) K[i] = K[i + 1];
   const I = M.filter((p, i) => K[i] === "inv"), S = M.filter((p, i) => K[i] === "slip");
-  if (!I.length || !S.length) return { ...(sinvPagesCalc(M) || {}), v: 2, all: M.length };
-  return { ...(sinvPagesCalc(I) || { unsure: true, have: I.length, miss: [] }), v: 2, all: M.length, two: true, slip: sinvPagesCalc(S) || { unsure: true, have: S.length, miss: [] } };
+  if (!I.length || !S.length) return { ...(sinvPagesCalc(M) || {}), v: 3, all: M.length };
+  return { ...(sinvPagesCalc(I) || { unsure: true, have: I.length, miss: [] }), v: 3, all: M.length, two: true, slip: sinvPagesCalc(S) || { unsure: true, have: S.length, miss: [] } };
 }
 // P = the pages on file, in order: { no (printed page number), line (first item line), last (last item line), cont (the page says CONTINUED) }.
 // Answer: { miss: [page numbers], about (worked out from the line numbers, not read), after (a page is missing after the last one), have, total (null when not known), end }
@@ -21841,6 +21845,7 @@ function sinvPagesCalc(P) {
     for (let k = cur + 1; k < num; k++) miss.push(k); cur = num; prev = p;
   }
   const after = !!Q[Q.length - 1].cont;
+  if (about && miss.length > 2 * n + 3) return { unsure: true, have: n, miss: [] };   // far more pages missing than on file, worked out only from line numbers: a misread, so I say nothing
   if (!after && !miss.length && Q.every(p => p.no == null && p.line == null)) return { unsure: true, have: n, miss: [] };   // nothing could be read on the pages: I do not say "none missing"
   return { miss, about, after, have: n, total: after ? null : cur, end: cur };
 }
@@ -21857,8 +21862,10 @@ function sinvMissWords(c) {
 const SINV_PG = new Map();   // supplier invoice id -> the answer of sinvPagesCalc, or { busy: words } while the pages are being read, or null (not counted yet)
 // The pages of an open invoice are counted once: a page never read is read now (about 15 seconds each), the answer is kept for everyone, and the statement shows it.
 // the page number by the supplier's own Rules (a "Page number" rule, Carlo, Nov 24): pic = a canvas or a picture's address. null = no such rule, or not read
-async function sinvRulePageNo(sup, pic) {
-  try { await srLoad(); const RR = srRulesOf(sup).filter(z => z.w && z.f === "page"); if (!RR.length || !pic) return null;
+async function sinvRulePageNo(sup, pic, kind) {
+  try { await srLoad(); let RR = srRulesOf(sup).filter(z => z.w && z.f === "page"); const slipF = z => /slip|pick|packing|ticket|sales\s*order/i.test(srFormOf(z));
+    if (kind) { const K = RR.filter(z => (kind === "slip") === slipF(z)); if (K.length) RR = K; else return null; }   // a pick ticket is read by the packing slip's box, never by the invoice's box
+    if (!RR.length || !pic) return null;
     let c = pic; if (typeof pic === "string") { const im = await new Promise((ok, no) => { const e = new Image(); e.onload = () => ok(e); e.onerror = no; e.src = pic; });
       const k = Math.max(1, Math.min(2, 2400 / im.naturalWidth)); c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
       const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height); }
@@ -21870,8 +21877,8 @@ async function sinvPagesCheck(id, pages) {
   const redraw = () => { if (SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } };
   const say = t => { SINV_PG.set(id, { busy: t }); const el = document.querySelector(`[data-sn-pages="${id}"]`); if (el) el.textContent = t; else redraw(); };
   try {
-    if (cur === undefined) { const q = await db.rpc("sinv_pages_check", { p_ids: [id] }); if (q.error) return void SINV_PG.set(id, null); if (q.data?.[id] && (q.data[id].v === 2 || !SINV.data?.can_edit)) { SINV_PG.set(id, q.data[id]); return redraw(); } }
-    else if (cur && (cur.all ?? cur.have) === pages.length && (cur.v === 2 || !SINV.data?.can_edit)) return;
+    if (cur === undefined) { const q = await db.rpc("sinv_pages_check", { p_ids: [id] }); if (q.error) return void SINV_PG.set(id, null); if (q.data?.[id] && (q.data[id].v === 3 || !SINV.data?.can_edit)) { SINV_PG.set(id, q.data[id]); return redraw(); } }
+    else if (cur && (cur.all ?? cur.have) === pages.length && (cur.v === 3 || !SINV.data?.can_edit)) return;
     if (!SINV.data?.can_edit) return void SINV_PG.set(id, null);
     say("Counting the pages of the supplier's invoice…");
     const q = await db.rpc("supplier_invoice_pages_info", { p_invoice: id }); if (q.error || !Array.isArray(q.data) || !q.data.length) return void SINV_PG.set(id, null);
@@ -21880,7 +21887,7 @@ async function sinvPagesCheck(id, pages) {
       try { for (let i = 0; i < todo.length; i++) { const h = todo[i]; say(`Counting the pages of the supplier's invoice: reading page ${i + 1} of ${todo.length}…`);
         if (!SINV.img.has(h.id)) { const g = await db.rpc("supplier_doc_page", { p_id: h.id }); if (g.data) SINV.img.set(h.id, "data:image/jpeg;base64," + g.data); }
         if (SINV.img.has(h.id)) { h.words = (await worker.recognize(SINV.img.get(h.id))).data.text.slice(0, 8000); h.fresh = true; } } } finally { await worker.terminate(); } }
-    { const sup = (SINV.data?.rows || []).find(x => x.id === id)?.supplier_id; for (const h of todo) if (h.fresh) h.ruleNo = await sinvRulePageNo(sup, SINV.img.get(h.id)); }
+    { const sup = (SINV.data?.rows || []).find(x => x.id === id)?.supplier_id; for (const h of todo) if (h.fresh) h.ruleNo = await sinvRulePageNo(sup, SINV.img.get(h.id), sinvPageKind(h.words)); }
     if (have.some(h => h.words == null)) return void SINV_PG.set(id, null);
     const M = have.map(h => { const sp = sinvLineSpan(h.words); return { id: h.id, no: h.ruleNo ?? sinvPageNo(h.words) ?? h.no ?? h.printed_no ?? null, line: sp.first, last: sp.last, kind: sinvPageKind(h.words), cont: /\bCONTINUED\b|\bCONT['’]?D\b/i.test(h.words) && !/END OF ORDER/i.test(h.words) }; });
     const res = sinvPagesCalc2(M);
@@ -21944,8 +21951,8 @@ async function sinvAttachFiles(id, files) {
     // in order, and no page twice: a page of this file that is already on the invoice (or twice in the file) is left out; a second copy on file comes off
     const NM = PTX.map(sinvPageMeta), HM = (have || []).map(h => Object.assign(sinvPageMeta(h.words), { id: h.id })), kept = [], drop = [], dup = cv.map(() => 0);
     // the supplier's own "Page number" rule, when it has one, says the page number
-    for (let i = 0; i < cv.length; i++) { if (!keep[i]) continue; const v = await sinvRulePageNo(r?.supplier_id, cv[i]); if (v != null) NM[i].no = v; }
-    for (let i = 0; i < HM.length; i++) { const h = have[i]; if (h.fresh && SINV.img.has(h.id)) { const v = await sinvRulePageNo(r?.supplier_id, SINV.img.get(h.id)); if (v != null) HM[i].no = v; } else if (HM[i].no == null && (h.no ?? h.printed_no) != null) HM[i].no = h.no ?? h.printed_no; }
+    for (let i = 0; i < cv.length; i++) { if (!keep[i]) continue; const v = await sinvRulePageNo(r?.supplier_id, cv[i], sinvPageKind(PTX[i])); if (v != null) NM[i].no = v; }
+    for (let i = 0; i < HM.length; i++) { const h = have[i]; if (h.fresh && SINV.img.has(h.id)) { const v = await sinvRulePageNo(r?.supplier_id, SINV.img.get(h.id), sinvPageKind(h.words)); if (v != null) HM[i].no = v; } else if (HM[i].no == null && (h.no ?? h.printed_no) != null) HM[i].no = h.no ?? h.printed_no; }
     for (let i = 0; i < HM.length; i++) { if (kept.some(k => sinvPageSame(k, HM[i], true))) drop.push(HM[i].id); else kept.push(Object.assign(HM[i], { at: i + 1 })); }
     if (have) for (let i = 0; i < cv.length; i++) { if (!keep[i]) continue; const k = kept.find(k => sinvPageSame(k, NM[i])); if (k) dup[i] = k.at ? `page ${k.at} on file` : `page ${k.file} of this file`; else kept.push(Object.assign(NM[i], { file: i + 1 })); }
     const nDup = dup.filter(Boolean).length; let all = false, twice = false;
