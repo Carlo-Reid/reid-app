@@ -6571,6 +6571,10 @@ form.sinv-pin { margin: 0; padding: 8px; border: 2px solid #1f9d4a; border-radiu
 .sinv-page .sinv-ct-ed col:nth-child(6) { width: 5%; } .sinv-page .sinv-ct-ed col:nth-child(7) { width: 17%; } .sinv-page .sinv-ct-ed col:nth-child(8) { width: 8%; } .sinv-page .sinv-ct-ed col:nth-child(9) { width: 10%; } .sinv-page .sinv-ct-ed col:nth-child(10) { width: 8%; } .sinv-page .sinv-ct-ed col:nth-child(11) { width: 14%; }
 .sinv-page .sinv-ct-ed td.cp.r:has(input) { padding-left: 3px; padding-right: 3px; }
 .sinv-fromtot { color: #8a4b00; font-weight: 600; }
+.sm-allrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 12px; }
+.sm-allbtn { background: linear-gradient(180deg, #ffffff, #eef4fa); border: 1.5px solid #bcd0e3; color: #23415f; border-radius: 12px; font-weight: 700; font-size: 15px; padding: 10px 16px; min-height: 44px; }
+.sm-allbtn:hover { background: #e3eefa; border-color: #23415f; }
+.sm-allsay { color: #23415f; font-size: 14px; flex: 1 1 260px; }
 .sinv-pin-x { display: flex; gap: 5px; align-items: center; margin-top: 3px; font-size: 12px; color: #555; }
 .sinv-pin-bar { margin-top: 10px; } .sinv-pin-bar .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; } .sinv-pin-bar .row label { display: inline-flex; gap: 6px; align-items: center; }
 .sinv-pin-why { display: block; margin: 8px 0; } .sinv-pin-why input, .sinv-pin-newt input { font: inherit; padding: 5px 7px; border: 1px solid #5f7fa0; border-radius: 6px; } .sinv-pin-why input { width: min(460px, 100%); box-sizing: border-box; }
@@ -22706,7 +22710,7 @@ async function dropInSave() {
   DROPIN.items.filter(x => x.kind === "statement" && !x.busy).forEach(x => { x.err = x.sup || DROPIN.sup ? null : "Pick whose statement it is (the box above), or add a new supplier, then press Save again."; });
   const left = DROPIN.items.filter(x => (!x.done && x.kind !== "statement") || (x.kind === "statement" && x.err));
   if (left.length) { drawDropIn(); return; }   // something wasn't saved: stay here and show why
-  if (DROPIN.fromMail && DROPIN.items.some(x => x.done)) { await db.rpc("supplier_mail_loaded", { p_id: DROPIN.fromMail }); DROPIN.fromMail = null; MAIL.sent = null; }   // a sent document, now in Supplier invoices: off the Sent lists
+  if (DROPIN.fromMail && DROPIN.items.some(x => x.done)) { for (const mid of [].concat(DROPIN.fromMail)) await db.rpc("supplier_mail_loaded", { p_id: mid }); DROPIN.fromMail = null; MAIL.sent = null; SMW.at = 0; }   // a sent document, now in Supplier invoices: off the Sent lists
   const stItems = DROPIN.items.filter(x => x.kind === "statement"), stPages = stItems.flatMap(x => x.stFiles || []), stSup = stItems.find(x => x.sup)?.sup;
   DROPIN.items = DROPIN.items.filter(x => x.kind !== "statement");
   const moved = DROPIN.items.filter(x => x.sup && x.sup !== DROPIN.sup).map(x => `${x.number} went under ${dropInSupName(x.sup)}`);
@@ -33417,6 +33421,18 @@ async function smLoadToInvoices(id, supName, supId) {
   const file = new File([b], f.data.name || "document.pdf", { type: f.data.mime || "application/pdf" });
   await loadSuppliers(); const sid = supId || supIdOf(supName), list = sinvSupList(), sk = sid && list.has(sid) ? sid : [...list].find(([k, n]) => sinvShort(n).toLowerCase() === String(supName || "").toLowerCase())?.[0] || null;
   await openDropInvoices(sk, sk ? dropInSupName(sk) : ""); DROPIN.fromMail = id; dropInFiles([file]); }
+// Carlo, Nov 24, 2026: every paper waiting on a supplier's Sent from Auto update list, loaded into Supplier invoices in one go (40 at most a go)
+const SM_ALL_MAX = 40;
+async function smLoadAllToInvoices(sup, rows, say) {
+  const take = rows.slice(0, SM_ALL_MAX), files = [], ids = [], bad = [];
+  for (let i = 0; i < take.length; i++) { const r = take[i]; say?.(`Getting paper ${i + 1} of ${take.length}…`);
+    try { const f = await db.rpc("supplier_doc_file", { p_id: r.id }); if (!f.data || !f.data.b64) { bad.push(r); continue; }
+      const bin = atob(f.data.b64), b = new Uint8Array(bin.length); for (let k = 0; k < bin.length; k++) b[k] = bin.charCodeAt(k);
+      const nm = f.data.name || "document.pdf"; files.push(new File([b], files.some(x => x.name === nm) ? nm.replace(/(\.[a-z0-9]+)?$/i, ` (${r.id})$1`) : nm, { type: f.data.mime || "application/pdf" })); ids.push(r.id); } catch { bad.push(r); } }
+  if (!files.length) { say?.(""); return alertMsg("I could not open any of the files."); }
+  await loadSuppliers(); const list = sinvSupList(), sk = sup && list.has(sup) ? sup : null;
+  await openDropInvoices(sk, sk ? dropInSupName(sk) : ""); DROPIN.fromMail = ids; dropInFiles(files);
+  if (bad.length || rows.length > take.length) alertMsg(`${bad.length ? `${bad.length} ${bad.length === 1 ? "file" : "files"} could not be opened and ${bad.length === 1 ? "was" : "were"} left on the list. ` : ""}${rows.length > take.length ? `I took the first ${take.length}. ${rows.length - take.length} more are still on the list: save these, then press the button again.` : ""}`); }
 // the "Sent to suppliers" list (Auto update, and a supplier's own page)
 function smSentTable(rows, withSup) {
   if (!rows.length) return `<p class="quiet">Nothing sent to ${withSup ? "a supplier's list" : "this supplier's list"} yet. Press 📤 Send to … list beside a document on the Auto update page.</p>`;
@@ -33444,7 +33460,9 @@ async function openSupDocs(sup) {
   $("#inv-paper").innerHTML = `<div class="stv slips"><h2>📨 Sent from Auto update · ${esc(name)}</h2><p class="lead">Packing lists, scans and other papers sent to this supplier's list from the supplier mail on the Auto update page.</p><div id="sd-list"><div class="loading">Looking…</div></div></div>`;
   const { data, error } = await db.rpc("supplier_mail_sent", { p_supplier: sup || null, p_limit: 500 }); const box = $("#sd-list"); if (!box) return;
   if (error) { box.innerHTML = `<div class="staff-msg err">${esc(/PGRST202|function/i.test(error.message || "") ? "This turns on after the next update." : rpcErr(error))}</div>`; return; }
-  SMS_ROWS = data || []; box.innerHTML = smSentTable(data || [], !sup); smSentWire(box);
+  SMS_ROWS = data || []; const nAll = SMS_ROWS.length;
+  box.innerHTML = (sup && nAll > 1 ? `<div class="sm-allrow"><button class="btn sm-allbtn" type="button" data-sms-all>📥 Load all ${nAll > SM_ALL_MAX ? `(the first ${SM_ALL_MAX} of ${nAll})` : nAll} into Supplier invoices</button><span class="sm-allsay" data-sms-allsay>I read every paper, one after the other (about 15 seconds a page). Then you check the list and press Save once.</span></div>` : "") + smSentTable(data || [], !sup); smSentWire(box);
+  box.querySelector("[data-sms-all]")?.addEventListener("click", async e => { const b = e.currentTarget, sy = box.querySelector("[data-sms-allsay]"); b.disabled = true; try { await smLoadAllToInvoices(sup, SMS_ROWS, t => { if (sy) sy.textContent = t; }); } finally { b.disabled = false; } });
 }
 document.addEventListener("click", e => { const b = e.target.closest?.("[data-sinv-maildocs]"); if (!b) return; e.preventDefault(); openSupDocs(b.dataset.sinvMaildocs ? Number(b.dataset.sinvMaildocs) : null); });
 // the "Sent from Auto update" tile turns orange and flashes 3 times every 10 seconds while documents are waiting there
