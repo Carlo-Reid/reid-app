@@ -21924,6 +21924,7 @@ function sinvMissWords(c) {
   long += c.total ? ` <b>${c.have} of ${c.total}</b> pages are on file.` : ` ${c.have} ${pg(c.have)} ${c.have === 1 ? "is" : "are"} on file.`;
   return { n, long, short: `missing ${n}${c.after ? " or more" : ""} ${pg(c.after ? 2 : n)}`, sub: (m.length ? `${pg(m.length)} ${sinvNumList(m)}` : "") + (c.after ? `${m.length ? ", and " : ""}after page ${c.end}` : "") };
 }
+const SINV_PGDONE = new Set();   // invoices whose page count has finished on this screen (so the "Counting the pages…" line is not left up when there is no answer)
 const SINV_PG = new Map();   // supplier invoice id -> the answer of sinvPagesCalc, or { busy: words } while the pages are being read, or null (not counted yet)
 // The pages of an open invoice are counted once: a page never read is read now (about 15 seconds each), the answer is kept for everyone, and the statement shows it.
 // the page number by the supplier's own Rules (a "Page number" rule, Carlo, Nov 24): pic = a canvas or a picture's address. null = no such rule, or not read
@@ -23197,7 +23198,8 @@ function sinvNeedsHtml(r, d) {
   if (sinvIsCredit(r) || r.doc_type === "charge" || r.doc_type === "return") return "";
   let two = false; const st = sinvState(r), L = [], ok = t => L.push(`<li class="sn-ok"><span class="sn-m" aria-hidden="true">✔</span><span>${t}</span></li>`), need = t => L.push(`<li class="sn-need"><span class="sn-m" aria-hidden="true">!</span><span>${t}</span></li>`);
   { const pc = (d.pages || []).length ? SINV_PG.get(r.id) : null, w = pc && !pc.busy ? sinvMissWords(pc) : null;   // are all of its pages on file? (Carlo, Nov 24, 2026)
-    if (pc?.busy) L.push(`<li class="sn-wait"><span class="sn-m" aria-hidden="true">…</span><span data-sn-pages="${r.id}">${esc(pc.busy)}</span></li>`);
+    // a line holds the place from the first draw while the pages are counted, so the boxes under it do not jump when the answer comes (Carlo, Nov 24: "its still shaking")
+    if (pc?.busy || ((d.pages || []).length && pc == null && !SINV_PGDONE.has(r.id))) L.push(`<li class="sn-wait"><span class="sn-m" aria-hidden="true">…</span><span data-sn-pages="${r.id}">${esc(pc?.busy || "Counting the pages…")}</span></li>`);
     else { const ld = (x, c) => x.n && SINV.data?.can_edit ? ` <button class="link" type="button" data-sinv-missload="${r.id}">Load the missing ${x.n === 1 && !c.after ? "page" : "pages"}</button>` : "";
       if (w) (w.n ? need : ok)((pc.two ? "<b>The supplier's invoice:</b> " : "") + w.long + ld(w, pc));
       else if (pc?.two) ok(`<b>The supplier's invoice:</b> ${pc.have} ${pc.have === 1 ? "page is" : "pages are"} on file. I could not tell from the pages if one is missing.`);
@@ -23216,6 +23218,7 @@ function sinvNeedsHtml(r, d) {
   else if (d.slips?.length) ok(`Found the packing slip: ${d.slips.slice(0, 3).map(x => `<b>${esc(x.number || "no number")}</b>`).join(", ")}. <button class="link" type="button" data-sci-slipsee="${esc(d.slipQ || "")}">Open it</button>`);
   else if (d.slips && sinvSlipSys(r)) ok(`The packing slip was <b>made by the system</b>. It is not the supplier's original. <button class="link" type="button" data-sci-sysslipsee="${r.id}">See it</button>`);
   else if (d.slips) need("Need to find the packing slip.");
+  else if (!d.err && !d.slipNo && String(r.po_number || r.po_text || sinvNumBase(r.number) || "").trim().length >= 4) L.push(`<li class="sn-wait"><span class="sn-m" aria-hidden="true">…</span><span>Looking for the packing slip…</span></li>`);   // holds the line's place until the look-up answers
   if (!L.length) return "";
   const n = L.filter(x => x.includes("sn-need")).length;
   return `<div class="sinv-needs${n ? "" : " sn-done"}"><div class="sn-h">${n ? `This invoice still needs ${n} ${n === 1 ? "thing" : "things"}` : "This invoice has everything"}</div><ul>${L.join("")}</ul></div>`;
@@ -23322,14 +23325,16 @@ async function sinvLoadDet(id) {
     db.rpc("supplier_invoice_to_stock", { p_id: id, p_dry: true }), SINV.places ? { data: null } : db.rpc("stock_places"), db.rpc("credit_memo_for", { p_invoice: id })]); SINV.detBusy = null;
   const R0 = (SINV.data?.rows || []).find(x => x.id === id) || (STV.all || []).find(x => x.id === id), slipQ = R0 ? String(R0.po_number || R0.po_text || sinvNumBase(R0.number) || "").trim() : ""; if (pl.data?.places) SINV.places = pl.data.places;
   SINV.det.set(id, error ? { lines: [], po_lines: [], pages: [], err: rpcErr(error) } : { ...data, returns: rt.error ? [] : rt.data || [], cinv: ci.error ? null : ci.data || { linked: [], suggest: [] }, stock: sk.error ? null : sk.data, memo: cm.error ? null : cm.data || null });
-  if (!error && R0 && slipQ.length >= 4) db.rpc("sinv_packing_slips", { p_q: slipQ, p_supplier: null, p_limit: 50 }).then(sl => { const d = SINV.det.get(id); if (!d || sl.error) return;   // is its packing slip in the system? (same P.O., or the same number)
+  if (!error && R0 && slipQ.length >= 4) db.rpc("sinv_packing_slips", { p_q: slipQ, p_supplier: null, p_limit: 50 }).then(sl => { const d = SINV.det.get(id); if (!d) return; if (sl.error) d.slipNo = true; else {   // is its packing slip in the system? (same P.O., or the same number)
     const po = String(R0.po_number || "").trim(), pt = String(R0.po_text || "").trim(), nb = sinvNumBase(R0.number);
-    d.slips = (sl.data || []).filter(x => x.id !== id && ((po && String(x.po_number || "").trim() === po) || (pt && String(x.po_text || "").trim() === pt) || (nb && sinvNumBase(x.number) === nb))); d.slipQ = slipQ;
+    d.slips = (sl.data || []).filter(x => x.id !== id && ((po && String(x.po_number || "").trim() === po) || (pt && String(x.po_text || "").trim() === pt) || (nb && sinvNumBase(x.number) === nb))); d.slipQ = slipQ; }
     if (SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } });
   if (SINV.open === id && document.body.dataset.page === "supplier-invoices") { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; }
   for (const p of (data?.pages || [])) if (!SINV.img.has(p.id)) { const r = await db.rpc("supplier_doc_page", { p_id: p.id }); if (r.data) SINV.img.set(p.id, "data:image/jpeg;base64," + r.data);
     const fig = document.querySelector(`[data-sinv-img="${p.id}"]`); if (fig && r.data) fig.innerHTML = `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">`; }
-  if (!error && R0 && !sinvIsCredit(R0) && R0.doc_type !== "charge" && R0.doc_type !== "return") sinvPagesCheck(id, data?.pages || []);   // are pages missing? counted once, in the background
+  if (!error && R0 && !sinvIsCredit(R0) && R0.doc_type !== "charge" && R0.doc_type !== "return") Promise.resolve(sinvPagesCheck(id, data?.pages || [])).catch(() => {}).finally(() => { SINV_PGDONE.add(id);   // are pages missing? counted once, in the background
+    if (SINV_PG.get(id) == null && SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } });
+  else SINV_PGDONE.add(id);
 }
 /* ---------- a supplier's statement as a page that looks like theirs (Boone's layout), and loading / comparing their PDF ---------- */
 const STV = { id: null, sup: null, D: null, read: null };
@@ -23479,6 +23484,7 @@ function drawSupStatement() {
     if (STV.inline) SINV.backScroll = { top: $("#main").scrollTop, inv: id, st: STV.id };   // so Back lands on the line that was clicked, not the top of the page
     closeInvoice(); SINV.sup = STV.sup; SINV.st = STV.id; SINV.f = "all"; SINV.q = ""; SINV.open = id; SINV.backTo = { id: STV.id, sup: STV.sup }; sinvSaveTab();
     // the invoice's page at once, with no flash of the top of the list while the list is asked for again (Carlo, Nov 24, 2026: "it flashes to the statements buttons then goes to the page")
+    window.dispatchEvent(new Event("wheel"));   // lets go of any "Nothing moves" hold from an earlier click (it kept the invoice's page as tall as the list and could move it)
     try { if ((SINV.data?.rows || []).some(x => x.id === id)) { renderSupInv(); $("#main").scrollTop = 0; } else { $("#main").innerHTML = `<div class="loading">Opening ${esc(num || "the invoice")}…</div>`; } } catch (e) { $("#main").innerHTML = `<div class="loading">Opening ${esc(num || "the invoice")}…</div>`; }
     await openSupInv(); let row = document.querySelector(`.sinv-row[data-sinv="${SINV.open}"]`);
     if (!row && !document.querySelector("#main .sinv-page")) { SINV.st = 0; SINV.pick = "all"; SINV.q = num; await openSupInv(); row = document.querySelector(`.sinv-row[data-sinv="${SINV.open}"]`); }   // billed in an earlier month: find it among all of theirs
@@ -23844,7 +23850,7 @@ function wireSupInv() {
   document.querySelectorAll("[data-sinv-f]").forEach(b => b.addEventListener("click", () => { SINV.f = b.dataset.sinvF; SINV.q = ""; try { localStorage.setItem("reid.sinvF", SINV.f); } catch {} redo(); }));
   let t; $("#sinv-q")?.addEventListener("input", e => { clearTimeout(t); t = setTimeout(() => { SINV.q = e.target.value; const pos = e.target.selectionStart; redo(); const q = $("#sinv-q"); q.focus(); try { q.setSelectionRange(pos, pos); } catch {} }, 200); });
   document.querySelectorAll("tr[data-sinv]").forEach(tr => tr.addEventListener("keydown", e => { if (e.key === "Enter" && tr.matches(".stv-go")) tr.click(); }));
-  document.querySelectorAll("tr[data-sinv]").forEach(tr => tr.addEventListener("click", e => { if (e.target.closest("button:not([data-pend-inv]), a, input")) return; SINV.listTop = $("#main").scrollTop; SINV.open = Number(tr.dataset.sinv); renderSupInv(); $("#main").scrollTop = 0; }));
+  document.querySelectorAll("tr[data-sinv]").forEach(tr => tr.addEventListener("click", e => { if (e.target.closest("button:not([data-pend-inv]), a, input")) return; window.dispatchEvent(new Event("wheel")); SINV.listTop = $("#main").scrollTop; SINV.open = Number(tr.dataset.sinv); renderSupInv(); $("#main").scrollTop = 0; }));
   document.querySelector("[data-sinv-pageback]")?.addEventListener("click", () => { const top = SINV.listTop || 0; stvFresh(SINV.open); SINV.open = null; renderSupInv(); $("#main").scrollTop = top;
     openSupInv().then(() => { if (SINV.open == null && document.body.dataset.page === "supplier-invoices") $("#main").scrollTop = top; }); });   // the list at once, then again with what was changed (Carlo, Nov 24, 2026)
   document.querySelectorAll("[data-sinv-po]").forEach(b => b.addEventListener("click", () => { POP.q = b.dataset.sinvPo; openPOs(); }));
