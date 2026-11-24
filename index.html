@@ -23261,6 +23261,9 @@ function stvFlagsLoad(ids, redraw) {
   stvFlagsLoad.busy = true; db.rpc("sinv_line_flags", { p_ids: need }).then(({ data, error }) => { stvFlagsLoad.busy = false;
     need.forEach(id => STV_FLAGS.set(id, (!error && data?.[id]) || { cinv: [], stock: false, is_slip: false, slip: null, err: !!error })); if (!error) redraw(); });
 }
+// back from an opened invoice: what was changed on it has to show in the list at once, with no refresh (Carlo, Nov 24, 2026). The statement keeps three things it
+// looked up before: every invoice of the supplier (STV.all), each line's customer invoice / stock / packing slip (STV_FLAGS) and the page count (SINV_PG). All three are asked for again.
+function stvFresh(id) { STV.all = null; STV.allFor = null; STV.src = null; STV_FLAGS.clear(); if (id != null) SINV_PG.delete(id); }
 const stvPaper = () => (STV.inline && document.getElementById("stv-inline")) || $("#inv-paper");
 async function openSupStatement(stId, sup, inline) {
   const same = inline && STV.inline && STV.id === stId && STV.D && STV.src === SINV.data;   // the page was only drawn again: show what we have, no reload
@@ -23656,7 +23659,7 @@ function wireSupInv() {
   document.querySelectorAll("[data-sinv-stid]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sinvStid), sup = SINV.sup ?? (SINV.data?.statements || []).find(x => x.id === id)?.supplier_id;   // a month opens its statement page right away (Carlo, Nov 12), not the table
     SINV.st = id; SINV.open = null; SINV.backTo = null; sinvSaveTab(); openSupInv(); }));
   document.querySelector("[data-sinv-stsel]")?.addEventListener("change", e => { SINV.st = Number(e.target.value); SINV.open = null; sinvSaveTab(); openSupInv(); });
-  document.querySelector("[data-stv-back]")?.addEventListener("click", () => { const t = SINV.backTo; if (!t) return; SINV.backTo = null; SINV.sup = t.sup; SINV.st = t.id; SINV.open = null; SINV.q = ""; SINV.pick = "year"; sinvSaveTab(); openSupInv(); });
+  document.querySelector("[data-stv-back]")?.addEventListener("click", () => { const t = SINV.backTo; if (!t) return; stvFresh(SINV.open); SINV.backTo = null; SINV.sup = t.sup; SINV.st = t.id; SINV.open = null; SINV.q = ""; SINV.pick = "year"; sinvSaveTab(); openSupInv(); });
   { const h = document.getElementById("stv-inline"); if (h) openSupStatement(Number(h.dataset.st), SINV.sup, true); }
   // an invoice that was just opened always starts at the top of its page (Carlo, Nov 12: "it's opening at a strange spot")
   if (SINV.open == null) SINV.topFor = null;
@@ -23695,7 +23698,8 @@ function wireSupInv() {
   let t; $("#sinv-q")?.addEventListener("input", e => { clearTimeout(t); t = setTimeout(() => { SINV.q = e.target.value; const pos = e.target.selectionStart; redo(); const q = $("#sinv-q"); q.focus(); try { q.setSelectionRange(pos, pos); } catch {} }, 200); });
   document.querySelectorAll("tr[data-sinv]").forEach(tr => tr.addEventListener("keydown", e => { if (e.key === "Enter" && tr.matches(".stv-go")) tr.click(); }));
   document.querySelectorAll("tr[data-sinv]").forEach(tr => tr.addEventListener("click", e => { if (e.target.closest("button:not([data-pend-inv]), a, input")) return; SINV.listTop = $("#main").scrollTop; SINV.open = Number(tr.dataset.sinv); renderSupInv(); $("#main").scrollTop = 0; }));
-  document.querySelector("[data-sinv-pageback]")?.addEventListener("click", () => { SINV.open = null; renderSupInv(); $("#main").scrollTop = SINV.listTop || 0; });
+  document.querySelector("[data-sinv-pageback]")?.addEventListener("click", () => { const top = SINV.listTop || 0; stvFresh(SINV.open); SINV.open = null; renderSupInv(); $("#main").scrollTop = top;
+    openSupInv().then(() => { if (SINV.open == null && document.body.dataset.page === "supplier-invoices") $("#main").scrollTop = top; }); });   // the list at once, then again with what was changed (Carlo, Nov 24, 2026)
   document.querySelectorAll("[data-sinv-po]").forEach(b => b.addEventListener("click", () => { POP.q = b.dataset.sinvPo; openPOs(); }));
   document.querySelectorAll("[data-sci-poopen]").forEach(b => b.addEventListener("click", () => { const top = NAV.stack[NAV.stack.length - 1], h = (document.querySelector("#main .sinv-page h1")?.textContent || "").trim(); if (top && h) top.label = h; openPOPage(Number(b.dataset.sciPoopen)); }));   // the "PO found" square opens that PO (Carlo, Nov 10)
   document.querySelectorAll("[data-sinv-cust]").forEach(b => b.addEventListener("click", () => openCustomer(Number(b.dataset.sinvCust))));
