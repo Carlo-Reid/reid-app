@@ -9037,6 +9037,7 @@ body.cpy-on #main, body.cpy-on #search-page { cursor: crosshair; } body.cpy-on #
 .sinv-needs .sn-m { flex: 0 0 24px; height: 24px; border-radius: 4px; display: grid; place-items: center; font-size: 14px; font-weight: 900; color: #fff; margin-top: 1px; }
 .sinv-needs .sn-ok .sn-m { background: #1f9d4a; } .sinv-needs .sn-need .sn-m { background: #b7791f; }
 .sinv-needs .sn-need { font-weight: 600; }
+.sinv-needs .sn-wait .sn-m { background: #8a97a6; } .sinv-needs .sn-wait { color: #55616e; }
 .stv-t tr.stv-was > td { background: #fff6cf; box-shadow: inset 0 2px 0 #e0b100, inset 0 -2px 0 #e0b100; }
 
 .pr-tw-new { border: 2px solid #c0392b; background: #fdecea; border-radius: 10px; padding: 10px 12px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; color: #5a1a12; }
@@ -21568,6 +21569,7 @@ function sinvPendStmt(rows, D) {
   const L = [...rows].sort((a, b) => String(a.invoice_date || "").localeCompare(String(b.invoice_date || "")) || String(a.number || "").localeCompare(String(b.number || "")));
   const tot = L.reduce((a, r) => a + Number(r.total || 0), 0), [py, pm] = SINV.pend.split("-").map(Number), end = ymd(new Date(py, pm, 0)), asOf = end < ymd(new Date()) ? end : ymd(new Date());
   stvFlagsLoad(L.map(r => r.id), () => { if (SINV.st === 0 && SINV.pend && SINV.open == null && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.("#main input, #main textarea")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } });
+  stvPagesLoad(L.map(r => r.id), () => { if (SINV.st === 0 && SINV.pend && SINV.open == null && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.("#main input, #main textarea")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } });
   return `<section class="stv-inline"><div class="stv">
     <div class="stv-hd"><div class="stv-sup">${lg ? `<img class="stv-logo-img" alt="${esc(sinvShort(name))}" src="${lg}">` : `<div class="stv-logo">${esc(sinvShort(name))}</div>`}<div class="stv-supn">${esc(name)}</div></div>
       <div class="stv-box"><div class="stv-ttl">STATEMENT SO FAR</div><table><tr><th>PAGES</th><th>DATE</th></tr><tr><td>—</td><td>${esc(stDate(asOf))}</td></tr>
@@ -21797,6 +21799,73 @@ function sinvPageSame(a, b, strict) {
   const s = sinvPageSim(a.sig, b.sig), k = (x, y) => x != null && y != null ? (x === y ? 1 : -1) : 0, kn = k(a.no, b.no), kl = k(a.line, b.line);
   if (kn < 0 || kl < 0) return s >= .93; if (strict) return s >= .85; if (kn > 0 || kl > 0) return s >= .5; return s >= .72;
 }
+// Which pages of a supplier's paper are missing? (Carlo, Nov 24, 2026: "can it say missing 2 of 5 pages")
+// The item line numbers on a page (suppliers number their lines 001, 002… and carry on over the pages): its first and its last.
+function sinvLineSpan(t) {
+  const fix = x => x.replace(/[oO]/g, "0").replace(/[Il|]/g, "1").replace(/[sS]/g, "5").replace(/[zZ]/g, "2").replace(/B/g, "8"), N = [];
+  for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/); if (!m || !/\d/.test(m[1])) continue;
+    if (!/\d[.,]\d{2}\b|\d{5}\b/.test(l.slice(m[0].length - 1))) continue; const v = Number(fix(m[1])); if (v >= 1 && v <= 400) N.push(v); }
+  if (!N.length) return { first: null, last: null }; const S = new Set(N), run = N.filter(v => S.has(v + 1) || S.has(v - 1)), R = run.length ? run : N;
+  return { first: Math.min(...R), last: Math.max(...R) };
+}
+// P = the pages on file, in order: { no (printed page number), line (first item line), last (last item line), cont (the page says CONTINUED) }.
+// Answer: { miss: [page numbers], about (worked out from the line numbers, not read), after (a page is missing after the last one), have, total (null when not known), end }
+function sinvPagesCalc(P) {
+  const n = P.length; if (!n) return null;
+  const uniq = k => { const v = P.map(p => p[k]).filter(x => x != null); return new Set(v).size === v.length; };
+  if (!uniq("no") || !uniq("line")) return { unsure: true, have: n, miss: [] };   // two pages say the same number: more than one paper in here, so I do not guess
+  const Q = P.slice(); if (Q.every(p => p.line != null)) Q.sort((a, b) => a.line - b.line); else if (Q.every(p => p.no != null)) Q.sort((a, b) => a.no - b.no);
+  const sz = Q.filter(p => p.line != null && p.last != null && p.last >= p.line).map(p => p.last - p.line + 1).sort((a, b) => a - b), per = Math.max(3, sz.length ? sz[sz.length >> 1] : 0);
+  const miss = []; let cur = 0, about = false, prev = null;
+  for (const p of Q) {
+    const hasL = sz.length > 0 && p.line != null && (!prev || prev.last != null), g = hasL ? p.line - (prev ? prev.last : 0) - 1 : 0, gap = g > 0 ? Math.round(g / per) : 0;
+    let num; if (hasL) { num = cur + 1 + gap; if (gap && p.no !== num) about = true; } else num = p.no != null && p.no > cur ? p.no : cur + 1;
+    for (let k = cur + 1; k < num; k++) miss.push(k); cur = num; prev = p;
+  }
+  const after = !!Q[Q.length - 1].cont;
+  if (!after && !miss.length && Q.every(p => p.no == null && p.line == null)) return { unsure: true, have: n, miss: [] };   // nothing could be read on the pages: I do not say "none missing"
+  return { miss, about, after, have: n, total: after ? null : cur, end: cur };
+}
+const sinvNumList = a => a.length < 2 ? a.join("") : a.slice(0, -1).join(", ") + " and " + a[a.length - 1];
+// the words for it: long = a sentence for the open invoice, short + sub = for the statement's column, n = how many pages are missing (0 = none)
+function sinvMissWords(c) {
+  if (!c || c.unsure) return null; const m = c.miss || [], n = m.length + (c.after ? 1 : 0), pg = k => k === 1 ? "page" : "pages";
+  if (!n) return { n: 0, long: `No page looks to be missing. ${c.have} ${pg(c.have)} ${c.have === 1 ? "is" : "are"} on file.` };
+  let long = m.length ? (c.about ? `${m.length === 1 ? "Page" : "Pages"} <b>${sinvNumList(m)}</b> ${m.length === 1 ? "looks" : "look"} to be missing. I worked that out from the line numbers, so check it.` : `Missing ${pg(m.length)} <b>${sinvNumList(m)}</b>.`) : "";
+  if (c.after) long += `${long ? " And at" : "At"} least one page is missing after page ${c.end}: the last page on file says CONTINUED.`;
+  long += c.total ? ` <b>${c.have} of ${c.total}</b> pages are on file.` : ` ${c.have} ${pg(c.have)} ${c.have === 1 ? "is" : "are"} on file.`;
+  return { n, long, short: `missing ${n}${c.after ? " or more" : ""} ${pg(c.after ? 2 : n)}`, sub: (m.length ? `${pg(m.length)} ${sinvNumList(m)}` : "") + (c.after ? `${m.length ? ", and " : ""}after page ${c.end}` : "") };
+}
+const SINV_PG = new Map();   // supplier invoice id -> the answer of sinvPagesCalc, or { busy: words } while the pages are being read, or null (not counted yet)
+// The pages of an open invoice are counted once: a page never read is read now (about 15 seconds each), the answer is kept for everyone, and the statement shows it.
+async function sinvPagesCheck(id, pages) {
+  if (!pages?.length || SINV_PG.get(id)?.busy) return; const cur = SINV_PG.get(id);
+  const redraw = () => { if (SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } };
+  const say = t => { SINV_PG.set(id, { busy: t }); const el = document.querySelector(`[data-sn-pages="${id}"]`); if (el) el.textContent = t; else redraw(); };
+  try {
+    if (cur === undefined) { const q = await db.rpc("sinv_pages_check", { p_ids: [id] }); if (q.error) return void SINV_PG.set(id, null); if (q.data?.[id]) { SINV_PG.set(id, q.data[id]); return redraw(); } }
+    else if (cur && cur.have === pages.length) return;
+    if (!SINV.data?.can_edit) return void SINV_PG.set(id, null);
+    say("Counting the pages of the supplier's invoice…");
+    const q = await db.rpc("supplier_invoice_pages_info", { p_invoice: id }); if (q.error || !Array.isArray(q.data) || !q.data.length) return void SINV_PG.set(id, null);
+    const have = q.data, todo = have.filter(h => h.words == null);
+    if (todo.length) { await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); const worker = await window.Tesseract.createWorker("eng");
+      try { for (let i = 0; i < todo.length; i++) { const h = todo[i]; say(`Counting the pages of the supplier's invoice: reading page ${i + 1} of ${todo.length}…`);
+        if (!SINV.img.has(h.id)) { const g = await db.rpc("supplier_doc_page", { p_id: h.id }); if (g.data) SINV.img.set(h.id, "data:image/jpeg;base64," + g.data); }
+        if (SINV.img.has(h.id)) { h.words = (await worker.recognize(SINV.img.get(h.id))).data.text.slice(0, 8000); h.fresh = true; } } } finally { await worker.terminate(); } }
+    if (have.some(h => h.words == null)) return void SINV_PG.set(id, null);
+    const M = have.map(h => { const sp = sinvLineSpan(h.words); return { id: h.id, no: sinvPageNo(h.words), line: sp.first, last: sp.last, cont: /\bCONTINUED\b|\bCONT['’]?D\b/i.test(h.words) && !/END OF ORDER/i.test(h.words) }; });
+    const res = sinvPagesCalc(M);
+    const sv = await db.rpc("supplier_invoice_pages_seen", { p_invoice: id, p: { res, have: have.map((h, i) => ({ id: h.id, no: M[i].no, line: M[i].line, words: h.fresh ? h.words : null })) } });
+    SINV_PG.set(id, res); if (sv.error) console.warn("pages check not saved", sv.error.message); redraw();
+  } catch (e) { SINV_PG.set(id, null); console.warn("pages check", e); redraw(); }
+}
+// the statement: the kept answers for all of its lines, in one call
+function stvPagesLoad(ids, redraw) {
+  const need = [...new Set(ids.filter(id => id && !SINV_PG.has(id)))]; if (!need.length || stvPagesLoad.busy) return;
+  stvPagesLoad.busy = true; db.rpc("sinv_pages_check", { p_ids: need }).then(({ data, error }) => { stvPagesLoad.busy = false;
+    need.forEach(id => { if (!SINV_PG.has(id)) SINV_PG.set(id, (!error && data?.[id]) || null); }); if (!error && data && Object.keys(data).length) redraw(); });
+}
 async function sinvAttachFiles(id, files) {
   const box = document.querySelector(`[data-sinv-drop="${id}"]`), msg = box?.querySelector(".sd-msg"), say = t => { if (msg) msg.innerHTML = t; };
   const r = (SINV.data?.rows || []).find(x => x.id === id); if (!files.length || !box) return;
@@ -21864,7 +21933,7 @@ async function sinvAttachFiles(id, files) {
       if (error) { e.target.disabled = false; return say2(`<span class="st-bad">Not saved: ${esc(rpcErr(error))}</span>`); }
       const left2 = twice ? 0 : nDup, tidy = !T ? "" : `${left2 ? ` ${left2 === 1 ? "1 page was" : left2 + " pages were"} already on the invoice and ${left2 === 1 ? "was" : "were"} left out.` : ""}${T.dropped ? ` ${T.dropped === 1 ? "1 second copy of a page was" : T.dropped + " second copies of pages were"} taken off.` : ""}${T.pages > 1 ? ` The ${T.pages} pages are in their printed order now.` : ""}${T.unread && T.pages > 1 ? ` I could not read a page number on ${T.unread} of them, so ${T.unread === 1 ? "it is" : "they are"} at the end.` : ""}`;
       for (const k of [...SINV.img.keys()]) if (drop.includes(k)) SINV.img.delete(k);
-      SINV.det.delete(id); SINV.open = id;
+      SINV.det.delete(id); SINV_PG.delete(id); SINV.open = id;
       if (T && !pages.length) return void await openSupInv(`✓ Nothing new was added to ${r?.number || "the invoice"}.${tidy}`);
       if (T && !more) return void await openSupInv(`Invoice ${r?.number || ""} loaded.${tidy}`);
       await openSupInv(more ? `✓ ${pages.length} ${pages.length === 1 ? "page was" : "pages were"} added to ${r?.number || "the invoice"}. ${tidy} Now press Read it again at the top, so I read the lines on the new ${pages.length === 1 ? "page" : "pages"} too.` : `Invoice ${r?.number || ""} loaded.`); });
@@ -22931,6 +23000,9 @@ document.addEventListener("click", async e => { const ld = e.target.closest?.("[
 function sinvNeedsHtml(r, d) {
   if (sinvIsCredit(r) || r.doc_type === "charge" || r.doc_type === "return") return "";
   const st = sinvState(r), L = [], ok = t => L.push(`<li class="sn-ok"><span class="sn-m" aria-hidden="true">✔</span><span>${t}</span></li>`), need = t => L.push(`<li class="sn-need"><span class="sn-m" aria-hidden="true">!</span><span>${t}</span></li>`);
+  { const pc = (d.pages || []).length ? SINV_PG.get(r.id) : null, w = pc && !pc.busy ? sinvMissWords(pc) : null;   // are all of its pages on file? (Carlo, Nov 24, 2026)
+    if (pc?.busy) L.push(`<li class="sn-wait"><span class="sn-m" aria-hidden="true">…</span><span data-sn-pages="${r.id}">${esc(pc.busy)}</span></li>`);
+    else if (w) (w.n ? need : ok)(w.long + (w.n && SINV.data?.can_edit ? ` <button class="link" type="button" data-sinv-missload="${r.id}">Load the missing ${w.n === 1 && !pc.after ? "page" : "pages"}</button>` : "")); }
   if (!r.po_id) need(r.po_text ? `P.O. <b>${esc(r.po_text)}</b> is printed on it, but that P.O. is not in our system.` : "Need to find the P.O.");
   else if (st.po == null || !Number(r.po_lines)) need(`Found the P.O. <b>${esc(r.po_number || "")}</b>. But the P.O. has no amounts on it, so I can not compare.`);
   else if (Math.abs(st.diff) <= 1) ok(`Found the P.O. <b>${esc(r.po_number || "")}</b>. It matches.`);
@@ -23025,6 +23097,7 @@ async function sinvLoadDet(id) {
   if (SINV.open === id && document.body.dataset.page === "supplier-invoices") { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; }
   for (const p of (data?.pages || [])) if (!SINV.img.has(p.id)) { const r = await db.rpc("supplier_doc_page", { p_id: p.id }); if (r.data) SINV.img.set(p.id, "data:image/jpeg;base64," + r.data);
     const fig = document.querySelector(`[data-sinv-img="${p.id}"]`); if (fig && r.data) fig.innerHTML = `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">`; }
+  if (!error && R0 && !sinvIsCredit(R0) && R0.doc_type !== "charge" && R0.doc_type !== "return") sinvPagesCheck(id, data?.pages || []);   // are pages missing? counted once, in the background
 }
 /* ---------- a supplier's statement as a page that looks like theirs (Boone's layout), and loading / comparing their PDF ---------- */
 const STV = { id: null, sup: null, D: null, read: null };
@@ -23034,7 +23107,8 @@ const stDate = d => { if (!d) return ""; const [y, m, dd] = String(d).slice(0, 1
 // last column of a statement: do we have the supplier's own invoice paper? (Carlo, Nov 12)
 const sinvMade = r => !!r && /System generated copy made in the app|Made by the app (from their statement|on )|because the original was lost/i.test(r.read_notes || "");   // the app made this record, the supplier's own paper is not in yet
 const sinvSys = r => !!r && /System generated copy made in the app/i.test(r.read_notes || "");   // "Create one from the system" was pressed on it
-const stvFileCell = r => `<td class="stv-c">${r && Number(r.pages) > 0 ? `<span class="st-ok">On file</span>` : sinvSys(r) ? `<span class="st-look">System copy</span><div class="quiet">Ask the supplier for the original</div>` : `<span class="st-no">Missing</span>`}</td>`;
+const stvPgMiss = r => { const c = r && Number(r.pages) > 0 ? SINV_PG.get(r.id) : null, w = c && !c.busy && c.have === Number(r.pages) ? sinvMissWords(c) : null; return w && w.n ? w : null; };   // pages missing from the copy on file
+const stvFileCell = r => `<td class="stv-c">${stvPgMiss(r) ? `<span class="st-look">On file, ${stvPgMiss(r).short}</span><div class="quiet">${esc(stvPgMiss(r).sub)}</div>` : r && Number(r.pages) > 0 ? `<span class="st-ok">On file</span>` : sinvSys(r) ? `<span class="st-look">System copy</span><div class="quiet">Ask the supplier for the original</div>` : `<span class="st-no">Missing</span>`}</td>`;
 // the P.O. column of a statement: Match, Over by, Under by, or None (Carlo, Nov 12)
 function stvPoCell(r) {
   if (!r || !r.po_id) return `<td class="stv-po"><span class="st-no">None</span></td>`;
@@ -23062,7 +23136,7 @@ function stvCols(r, diff) {
 function stvDoneCell(r, f, inv, isCr, memo) {
   if (inv && !isCr && !f) return stvC("quiet", "…");   // the customer invoice and packing slip answers are still loading
   const s = r._s || sinvState(r), miss = [];
-  if (!(Number(r.pages) > 0)) miss.push("the supplier's invoice");
+  if (!(Number(r.pages) > 0)) miss.push("the supplier's invoice"); else if (stvPgMiss(r)) miss.push("pages of the supplier's invoice (" + stvPgMiss(r).sub + ")");
   if (!r.po_id) miss.push("the P.O.");
   else if (r.doc_type === "invoice" && (s.po == null || !Number(r.po_lines) || Math.abs(s.diff) > 1)) miss.push("the P.O. does not match");
   if (isCr) { if (!memo) miss.push("the Credit Memo"); }
@@ -23157,6 +23231,7 @@ function drawSupStatement() {
     <div id="stv-read"></div></div>`;
   stvScrollWrap(stvPaper());
   stvFlagsLoad(SL.map(l => l.invoice_id), () => { if (stvPaper().querySelector(".stv")) drawSupStatement(); });
+  stvPagesLoad(SL.map(l => l.invoice_id), () => { if (stvPaper().querySelector(".stv")) drawSupStatement(); });
   // a click anywhere on a line opens its invoice, not only on the reference (Carlo, Nov 12)
   if (STV.inline && SINV.backScroll && SINV.open == null && SINV.backScroll.st === STV.id) { const bs = SINV.backScroll; SINV.backScroll = null;
     const put = () => { const m = $("#main"); if (!m || SINV.open != null) return; m.scrollTop = bs.top; const tr = stvPaper().querySelector(`[data-stv-inv="${bs.inv}"]`)?.closest("tr");
