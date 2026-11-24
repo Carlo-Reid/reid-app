@@ -21053,7 +21053,8 @@ const sinvBefore = r => r.subtotal != null ? Number(r.subtotal) : Number(r.total
 function sinvState(r) {
   // another invoice on the same P.O. that its own credit took back in full is not added to this one (Carlo, Nov 24, 2026: Boone C333818 and C336872 are both on
   // P.O. 108624132-001, each with its own credit; the page said "over the P.O. by $1,746.00" while each invoice was right)
-  const before = sinvBefore(r), cr = SINV.cred || {}, grp0 = r.po_id && Number(r.po_other_invoices) ? (SINV.data?.rows || []).filter(x => x.po_id === r.po_id && x.doc_type === "invoice" && (x.id === r.id || !cr[x.id])) : null, grp = grp0 && grp0.length > 1 ? grp0 : null;
+  const before = sinvBefore(r), cr = SINV.cred || {}, pool = () => { const M = new Map(); for (const L of [typeof STV !== "undefined" ? STV.all : null, typeof STV !== "undefined" ? STV.D?.rows : null, typeof STV !== "undefined" ? STV.src?.rows : null, SINV.data?.rows, [r]]) for (const x of L || []) if (x && x.id != null) M.set(x.id, x); return [...M.values()]; },   // every list on hand, not only the one on the screen: the statement is drawn from its own rows, and the page's list can be empty or another month's at that moment (Carlo, Nov 24: C372518 said "Under by $109.02" after the P.O. was put right, because C372469 was not added)
+    grp0 = r.po_id && Number(r.po_other_invoices) ? pool().filter(x => x.po_id === r.po_id && x.doc_type === "invoice" && (x.id === r.id || !cr[x.id])) : null, grp = grp0 && grp0.length > 1 ? grp0 : null;
   const billed = grp ? Math.round(grp.reduce((a, x) => a + sinvBefore(x), 0) * 100) / 100 : before;
   const po = r.po_amount != null ? Number(r.po_amount) : null, diff = po != null ? Math.round((billed - po) * 100) / 100 : null;
   let k, label;
@@ -21857,7 +21858,7 @@ function sinvLineRest(r) { return /\d[.,]\d{2}\b|\d{5}\b/.test(r) || (/^[\[|(]?\
 // the number of the first item line on a page (suppliers number their lines 001, 002… and carry on over the pages), or null
 function sinvFirstLine(t) {
   const fix = x => x.replace(/[oO]/g, "0").replace(/[Il|]/g, "1").replace(/[sS]/g, "5").replace(/[zZ]/g, "2").replace(/B/g, "8"), N = [];
-  for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/); if (!m || !/\d/.test(m[1]) || SINV_BIN_RE.test(l)) continue;
+  for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/) || l.match(/^[^A-Za-z0-9]{0,4}[1Il]([0oO][0-9oOIlsSzZB]{2})[\s|\]]+\S/); if (!m || !/\d/.test(m[1]) || SINV_BIN_RE.test(l)) continue;
     if (!sinvLineRest(l.slice(m[0].length - 1))) continue; const v = Number(fix(m[1])); if (v >= 1 && v <= 400) N.push(v); }
   if (!N.length) return null; const S = new Set(N), run = N.filter(v => S.has(v + 1) || S.has(v - 1));
   return Math.min(...(run.length ? run : N));
@@ -21874,7 +21875,7 @@ function sinvPageSame(a, b, strict) {
 // The item line numbers on a page (suppliers number their lines 001, 002… and carry on over the pages): its first and its last.
 function sinvLineSpan(t) {
   const fix = x => x.replace(/[oO]/g, "0").replace(/[Il|]/g, "1").replace(/[sS]/g, "5").replace(/[zZ]/g, "2").replace(/B/g, "8"), N = [];
-  for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/); if (!m || !/\d/.test(m[1]) || SINV_BIN_RE.test(l)) continue;
+  for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,4}([0-9oOIlsSzZB]{3})[\s|\]]+\S/) || l.match(/^[^A-Za-z0-9]{0,4}[1Il]([0oO][0-9oOIlsSzZB]{2})[\s|\]]+\S/); if (!m || !/\d/.test(m[1]) || SINV_BIN_RE.test(l)) continue;
     if (!sinvLineRest(l.slice(m[0].length - 1))) continue; const v = Number(fix(m[1])); if (v >= 1 && v <= 400) N.push(v); }
   if (!N.length) {   // an invoice that numbers its lines 2, 3, 4… with no zeros in front (Boone's invoice): a number, then a part code or an amount at the line's end; only a run of 3 in a row counts
     const A = []; for (const l of String(t || "").split(/\n/)) { const m = l.match(/^[^A-Za-z0-9]{0,3}(\d{1,3})[\s|\]]+(\S+)\s+\S/); if (!m) continue;
@@ -21891,8 +21892,8 @@ function sinvPageKind(t) { const s = String(t || ""); return /PACKING\s*SLIP|SAL
 function sinvPagesCalc2(M) {
   const K = M.map(p => p.kind); for (let i = 0; i < K.length; i++) if (!K[i]) K[i] = K[i - 1] || null; for (let i = K.length - 2; i >= 0; i--) if (!K[i]) K[i] = K[i + 1];
   const I = M.filter((p, i) => K[i] === "inv"), S = M.filter((p, i) => K[i] === "slip");
-  if (!I.length || !S.length) return { ...(sinvPagesCalc(M) || {}), v: 3, all: M.length };
-  return { ...(sinvPagesCalc(I) || { unsure: true, have: I.length, miss: [] }), v: 3, all: M.length, two: true, slip: sinvPagesCalc(S) || { unsure: true, have: S.length, miss: [] } };
+  if (!I.length || !S.length) return { ...(sinvPagesCalc(M) || {}), v: 4, all: M.length };
+  return { ...(sinvPagesCalc(I) || { unsure: true, have: I.length, miss: [] }), v: 4, all: M.length, two: true, slip: sinvPagesCalc(S) || { unsure: true, have: S.length, miss: [] } };
 }
 // P = the pages on file, in order: { no (printed page number), line (first item line), last (last item line), cont (the page says CONTINUED) }.
 // Answer: { miss: [page numbers], about (worked out from the line numbers, not read), after (a page is missing after the last one), have, total (null when not known), end }
@@ -21904,7 +21905,7 @@ function sinvPagesCalc(P) {
   const sz = Q.filter(p => p.line != null && p.last != null && p.last >= p.line).map(p => p.last - p.line + 1).sort((a, b) => a - b), per = Math.max(3, sz.length ? sz[sz.length >> 1] : 0);
   const miss = []; let cur = 0, about = false, prev = null;
   for (const p of Q) {
-    const hasL = sz.length > 0 && p.line != null && (!prev || prev.last != null), g = hasL ? p.line - (prev ? prev.last : 0) - 1 : 0, gap = g > 0 ? Math.round(g / per) : 0;
+    const hasL = sz.length > 0 && p.line != null && (!prev || prev.last != null), g = hasL ? p.line - (prev ? prev.last : 0) - 1 : 0, gap = g <= 0 || p.no === cur + 1 || (!prev && g < per) ? 0 : Math.round(g / per);   // the printed page number says it is the next page, or the first page on file starts less than a page of lines in (a first line the reader missed; Boone starts at 002): no page is missing before it (Carlo, Nov 24: C372518)
     let num; if (hasL) { num = cur + 1 + gap; if (gap && p.no !== num) about = true; } else num = p.no != null && p.no > cur ? p.no : cur + 1;
     for (let k = cur + 1; k < num; k++) miss.push(k); cur = num; prev = p;
   }
@@ -21941,8 +21942,8 @@ async function sinvPagesCheck(id, pages) {
   const redraw = () => { if (SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } };
   const say = t => { SINV_PG.set(id, { busy: t }); const el = document.querySelector(`[data-sn-pages="${id}"]`); if (el) el.textContent = t; else redraw(); };
   try {
-    if (cur === undefined) { const q = await db.rpc("sinv_pages_check", { p_ids: [id] }); if (q.error) return void SINV_PG.set(id, null); if (q.data?.[id] && (q.data[id].v === 3 || !SINV.data?.can_edit)) { SINV_PG.set(id, q.data[id]); return redraw(); } }
-    else if (cur && (cur.all ?? cur.have) === pages.length && (cur.v === 3 || !SINV.data?.can_edit)) return;
+    if (cur === undefined) { const q = await db.rpc("sinv_pages_check", { p_ids: [id] }); if (q.error) return void SINV_PG.set(id, null); if (q.data?.[id] && (q.data[id].v === 4 || !SINV.data?.can_edit)) { SINV_PG.set(id, q.data[id]); return redraw(); } }
+    else if (cur && (cur.all ?? cur.have) === pages.length && (cur.v === 4 || !SINV.data?.can_edit)) return;
     if (!SINV.data?.can_edit) return void SINV_PG.set(id, null);
     say("Counting the pages of the supplier's invoice…");
     const q = await db.rpc("supplier_invoice_pages_info", { p_invoice: id }); if (q.error || !Array.isArray(q.data) || !q.data.length) return void SINV_PG.set(id, null);
@@ -23295,7 +23296,7 @@ function sinvOthersHtml(r) {
   const one = (o, k) => { const P = o.pages || [], L = o.lines || [];
     return `<div class="sinv-oth-one" data-sinv-othone="${o.id}"><div class="sinv-oth-h"><b>Invoice ${esc(o.number || "")}</b><span>${esc(fmtDate(o.date))}${o.subtotal != null ? ` · before tax ${money(Number(o.subtotal))}` : ""}${o.total != null ? ` · total ${money(Number(o.total))}` : ""} · ${P.length ? `${P.length} ${P.length === 1 ? "page" : "pages"} on file` : "no copy on file"}</span>
         <button class="btn quiet-btn no-print" type="button" data-sinv-othopen="${o.id}" data-num="${esc(o.number || "")}" title="Open invoice ${esc(o.number || "")} on its own page">Open this invoice ›</button></div>
-      ${P.length ? P.map((pg, n) => `<div class="sinv-pgbar no-print"><b>${esc(o.number || "")} · page ${n + 1} of ${P.length}</b><button class="btn quiet-btn" type="button" data-sinv-pgprint="${pg.id}" data-pg="${n + 1}" data-inv="${o.id}" title="Print only this page">🖨 Print this page</button><span class="quiet" role="status"></span></div><figure class="sinv-scan" data-sinv-img="${pg.id}">${SINV.img.has(pg.id) ? `<img alt="${esc(o.number || "")} page ${n + 1}" src="${SINV.img.get(pg.id)}">` : `<span class="quiet">Loading page ${n + 1}…</span>`}</figure>`).join("")
+      ${P.length ? P.map((pg, n) => `<div class="sinv-pgbar no-print"><b>The other invoice, ${esc(o.number || "")} · page ${n + 1} of ${P.length}</b><button class="btn quiet-btn" type="button" data-sinv-pgprint="${pg.id}" data-pg="${n + 1}" data-inv="${o.id}" title="Print only this page">🖨 Print this page</button><span class="quiet" role="status"></span></div><figure class="sinv-scan" data-sinv-img="${pg.id}">${SINV.img.has(pg.id) ? `<img alt="${esc(o.number || "")} page ${n + 1}" src="${SINV.img.get(pg.id)}">` : `<span class="quiet">Loading page ${n + 1}…</span>`}</figure>`).join("")
         : `<p class="sinv-oth-no">We have no copy of this invoice's pages. These are its lines as they were read.</p><section class="sinv-syspaper"><table class="ssp-t"><thead><tr><th>Code</th><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th></tr></thead><tbody>${L.map(line).join("") || `<tr><td colspan="5">Its lines were not read.</td></tr>`}</tbody></table></section>`}</div>`; };
   return `<section class="sinv-oth sinv-scans" data-sinv-othbox><h3 class="sinv-both-h">P.O. ${po} is billed over ${O.length + 1} invoices: this one and ${esc(sinvNumList(O.map(o => o.number || "no number")))}</h3>
     <p class="sinv-oth-say">${O.length === 1 ? "The other invoice is" : `The other ${O.length} invoices are`} shown here, so you can see ${O.length === 1 ? "both" : "all of them"} on one page.</p>${O.map(one).join("")}</section>`;
