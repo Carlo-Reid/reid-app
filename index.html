@@ -21759,19 +21759,22 @@ function sinvDetail(r, edit) {
       ${(d.changes || []).length ? sinvHistory(d.changes) : ""}</details></section></div>
     ${(d.returns || []).length ? sinvReturnsHtml(d.returns, edit) : ""}
     ${(d.pages || []).length ? `<section class="sinv-scans"><h3>Scanned ${d.pages.length === 1 ? "page" : "pages"}</h3>${d.pages.map(p => `<figure class="sinv-scan" data-sinv-img="${p.id}">${SINV.img.has(p.id) ? `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">` : `<span class="quiet">Loading page ${p.page_no}…</span>`}</figure>`).join("")}
-      <p class="quiet">Click a page to zoom in.</p></section>` : sinvSysPaper(r, d) + (edit ? sinvDropHtml(r) : sinvSys(r) ? "" : `<p class="quiet">There's no copy of this one in the file: only its line on the statement.</p>`)}
+      <p class="quiet">Click a page to zoom in.</p></section>${edit ? sinvDropHtml(r, d.pages.length) : ""}` : sinvSysPaper(r, d) + (edit ? sinvDropHtml(r) : sinvSys(r) ? "" : `<p class="quiet">There's no copy of this one in the file: only its line on the statement.</p>`)}
   </div>`;
 }
 // an invoice that's on the statement but was never loaded: drop its PDF (from the email) here; the app keeps the pages and reads the PO number
-function sinvDropHtml(r) {
-  return `<section class="sinv-drop" data-sinv-drop="${r.id}" tabindex="0"><div class="sd-ico" aria-hidden="true">⬇</div>
-    <b>Drop ${esc(sinvShort(r.supplier) || "the supplier")}'s invoice ${esc(r.number)} here</b>
+// has = how many pages are already on file: then the box is for more pages that were found later (Carlo, Nov 24, 2026)
+function sinvDropHtml(r, has) {
+  return `<section class="sinv-drop" data-sinv-drop="${r.id}" ${has ? `data-sd-more="${has}"` : ""} tabindex="0"><div class="sd-ico" aria-hidden="true">⬇</div>
+    <b>${has ? `Did you find more pages of ${esc(r.number)}, or a better copy? Drop them here` : `Drop ${esc(sinvShort(r.supplier) || "the supplier")}'s invoice ${esc(r.number)} here`}</b>
+    ${has ? `<span>${has} ${has === 1 ? "page is" : "pages are"} on file now. The pages you drop here are added after ${has === 1 ? "it" : "them"}. Nothing on file is taken off.</span>` : ""}
     <span>Drag the PDF attachment from the email (not the email itself) onto this box, or <label class="link">pick the file<input type="file" accept="application/pdf,image/*" multiple hidden data-sinv-dropfile="${r.id}"></label>.</span>
     <div class="sd-msg" role="status"></div></section>`;
 }
 async function sinvAttachFiles(id, files) {
   const box = document.querySelector(`[data-sinv-drop="${id}"]`), msg = box?.querySelector(".sd-msg"), say = t => { if (msg) msg.innerHTML = t; };
   const r = (SINV.data?.rows || []).find(x => x.id === id); if (!files.length || !box) return;
+  const more = Number(box.dataset.sdMore) || 0;
   try {
     say("Getting the reader ready…");
     await stLoadJs("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"); await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
@@ -21802,13 +21805,13 @@ async function sinvAttachFiles(id, files) {
     say(`<div class="sd-read">${hasNum ? `✓ It's invoice ${esc(r.number)}.` : `<span class="st-bad">⚠ I couldn't find the number ${esc(r?.number || "")} on it: make sure it's the right invoice.</span>`} ${leftOut ? `<span class="st-look">This file has ${cv.length} pages, but only page${pages.length === 1 ? "" : "s"} ${keep.map((k, i) => k ? i + 1 : null).filter(Boolean).join(", ")} ${pages.length === 1 ? "has" : "have"} ${esc(r.number)} on ${pages.length === 1 ? "it" : "them"}: the other ${leftOut} look like other invoices and won't be added to this one. <label><input type="checkbox" data-sd-allpages> Add all ${cv.length} pages anyway</label></span>` : `${cv.length} ${cv.length === 1 ? "page" : "pages"}.`}
       <label>PO number on it <input type="text" data-sd-po value="${esc(po)}" placeholder="PO number"></label>
       <label>Subtotal <input type="number" step="0.01" data-sd-sub value="${sub ?? ""}"></label><label>HST <input type="number" step="0.01" data-sd-hst value="${hst ?? ""}"></label>
-      <button class="btn" type="button" data-sd-save>Save the invoice</button></div>`);
+      <button class="btn" type="button" data-sd-save>${more ? "Add these pages to the invoice" : "Save the invoice"}</button>${more ? `<span class="quiet">They go after the ${more} already on file.</span>` : ""}</div>`);
     box.querySelector("[data-sd-allpages]")?.addEventListener("change", e => { pages = e.target.checked ? pagesAll : pagesAll.filter((_, i) => keep[i]); });
     box.querySelector("[data-sd-save]").addEventListener("click", async e => { e.target.disabled = true; say2("Saving…");
       const v = q => box.querySelector(q)?.value.trim() || null;
       const { error } = await db.rpc("supplier_invoice_attach", { p_invoice: id, p: { pages, po_text: v("[data-sd-po]"), subtotal: v("[data-sd-sub]"), hst: v("[data-sd-hst]"), file: files.map(f => f.name).join(" + ") } });
       if (error) { e.target.disabled = false; return say2(`<span class="st-bad">Not saved: ${esc(rpcErr(error))}</span>`); }
-      SINV.det.delete(id); SINV.open = id; await openSupInv(`Invoice ${r?.number || ""} loaded.`); });
+      SINV.det.delete(id); SINV.open = id; await openSupInv(more ? `✓ ${pages.length} ${pages.length === 1 ? "page was" : "pages were"} added to ${r?.number || "the invoice"}. Now press Read it again at the top, so I read the lines on the new ${pages.length === 1 ? "page" : "pages"} too.` : `Invoice ${r?.number || ""} loaded.`); });
     function say2(t) { const m2 = box.querySelector(".sd-read"); if (m2) m2.insertAdjacentHTML("beforeend", `<div>${t}</div>`); }
   } catch (e) { say(`<span class="st-bad">Couldn't load it: ${esc(e.message || String(e))}</span>`); }
 }
@@ -22785,7 +22788,7 @@ function sinvChgHtml(r, edit) {
       <button class="btn" type="submit">Save the ${kind}</button><button class="btn quiet-btn" type="button" data-sinv-ed="${r.id}">Cancel</button>
       <p class="quiet">The before-tax amount and the HST are worked out again from the total, at 13%.</p></form>` : "";
   return `<div class="sinv-chg">
-    <div class="sinv-chg-g"><span class="sinv-chg-k">This supplier ${kind}<b>${esc(r.number || "")}</b></span>${b(`data-sinv-ed="${r.id}"`, "✎", "Edit it", SINV.edInv === r.id ? "on" : "")}${own ? b(`data-sinv-del="${r.id}" data-n="${esc(r.number || "")}"`, "🗑", "Delete it", "bad own-only") : ""}</div>
+    <div class="sinv-chg-g"><span class="sinv-chg-k">This supplier ${kind}<b>${esc(r.number || "")}</b></span>${b(`data-sinv-ed="${r.id}"`, "✎", "Edit it", SINV.edInv === r.id ? "on" : "")}${Number(r.pages) > 0 ? b(`data-sinv-missload="${r.id}"`, "⬆", "Load more pages") : ""}${own ? b(`data-sinv-del="${r.id}" data-n="${esc(r.number || "")}"`, "🗑", "Delete it", "bad own-only") : ""}</div>
     ${r.po_id ? `<div class="sinv-chg-g"><span class="sinv-chg-k">Its P.O.<b>${esc(r.po_number || "")}</b></span>${b(`data-sci-poopen="${r.po_id}"`, "✎", "Edit it")}${b(`data-sci-pofind="${r.id}"`, "🔁", "Change it", SINV.poFind === r.id ? "on" : "")}${b(`data-sinv-podel="${r.id}" data-po="${r.po_id}" data-n="${esc(r.po_number || "")}"`, "✕", "Delete it", "bad")}</div>` : ""}
     ${form}</div>`;
 }
