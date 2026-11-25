@@ -22946,7 +22946,7 @@ document.addEventListener("pointerup", sciBoxDrop); document.addEventListener("p
 window.addEventListener("click", e => { if (Date.now() - SCI_RO.skipClick < 400 && e.target.closest?.(".sci-apps")) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);   // the click that ends a drag does not press the box
 function sinvSlipTile(r, edit, d) {
   // green when the paper is a packing slip: marked by a person, or read as one. The same test as the "This paper is the packing slip" line above it, so the two never disagree (Carlo, Nov 12)
-  const byHand = /Marked as a packing slip in the app/i.test(r.read_notes || ""), is = byHand || /packing[ -]slip/i.test(r.read_notes || "");
+  const byHand = /Marked as a packing slip in the app/i.test(r.read_notes || ""), is = byHand || sinvIsSlipRec(r);
   if (is) return `<div class="sci-app"><button class="apb apb-green sci-big" type="button" data-sinv-slips="${r.supplier_id}" title="Open this supplier's packing slips"><span class="sci-app-k">Packing Slip</span><span class="apb-ic" aria-hidden="true">✔</span><span class="apb-tn">${SINV_PG.get(r.id)?.two ? "The Packing Slip is on file too" : "This is a Packing Slip"}</span></button>${edit && byHand ? `<button class="link" type="button" data-sci-slip="${r.id}" data-on="0">Not a packing slip? Undo</button>` : ""}</div>`;
   if (r.doc_type === "credit" || r.doc_type === "charge") return "";
   // the P.O. is found but no packing slip is: the system can make one (Carlo, Nov 24, 2026). It is orange, never green, and says it is not the original.
@@ -22958,7 +22958,7 @@ function sinvSlipTile(r, edit, d) {
 // the real one but has a water mark letting us know it's not the original"). The mark is in read_notes (supplier_invoice_system_slip, 331). Its words must never say
 // "packing slip": the app and the database take those two words in read_notes to mean the paper IS a packing slip.
 const sinvSlipSys = r => !!r && /Shipping paper made by the system in the app/i.test(r.read_notes || "");
-const sinvSlipReal = (r, d) => /packing[ -]slip/i.test(r.read_notes || "") || !!(d && d.slips && d.slips.length) || !!SINV_PG.get(r.id)?.two;   // the real one is on file
+const sinvSlipReal = (r, d) => sinvIsSlipRec(r) || !!(d && d.slips && d.slips.length) || !!SINV_PG.get(r.id)?.two;   // the real one is on file
 const sinvSlipSysOn = (r, d) => sinvSlipSys(r) && !sinvSlipReal(r, d);   // the system's one shows only until the real one is found
 const sinvSlipCan = (r, d, edit) => !!edit && !!r.po_id && r.doc_type === "invoice" && !sinvIsCredit(r) && !!d && Array.isArray(d.slips) && !sinvSlipReal(r, d) && !sinvSlipSys(r);
 function sinvSysSlipPaper(r, d) {
@@ -23041,6 +23041,12 @@ function sinvSysPagePaper(r, d) {
 // A record that holds both papers, and the packing slip's own pages are not all on file (Carlo, Nov 25, 2026, 12:40 p.m.: "it should also trigger a way for the
 // system to create that missing one"). The page is made by itself, like the invoice's missing page: the lines we know (the invoice's, else the P.O.'s) that are not
 // found on the slip's pages on file. Drawn each time, never saved, never read or counted. "Take the system's page off" is kept on that computer only.
+// A record whose every page on file reads as a packing slip (SALES ORDER / PACKING SLIP) and none as an invoice is a packing slip, even when its notes do not say so (Carlo, Nov 25, 2026, C397328)
+const SINV_ONLYSLIP = new Map();   // record id -> true / false, from the words of its pages
+const sinvIsSlipRec = r => !!r && (/packing[ -]slip/i.test(r.read_notes || "") || SINV_ONLYSLIP.get(r.id) === true);
+async function sinvOnlySlipLoad(id) { if (SINV_ONLYSLIP.has(id)) return SINV_ONLYSLIP.get(id);
+  const q = await db.rpc("supplier_invoice_pages_info", { p_invoice: id }); if (q.error || !Array.isArray(q.data)) return null;
+  const K = q.data.map(x => sinvPageKind(x.words || "")), v = K.length > 0 && K.every(k => k === "slip"); SINV_ONLYSLIP.set(id, v); return v; }
 const SINV_SLW = new Map();   // record id -> the words of its packing slip pages on file (null while they load)
 const sinvSlPgOffList = () => { try { return JSON.parse(localStorage.getItem("reid.sinv.slpgoff") || "[]") || []; } catch (e) { return []; } };
 const sinvSlPgOff = id => sinvSlPgOffList().includes(Number(id));
@@ -23108,7 +23114,7 @@ async function sinvViewSplit(id, pages) {   // a record that holds both papers: 
 document.addEventListener("click", async e => {
   const b = e.target.closest?.("[data-sinv-view]"); if (!b) return; e.preventDefault();
   const id = Number(b.dataset.id), k = b.dataset.sinvView, r = (SINV.data?.rows || []).find(x => x.id === id); if (!r) return;
-  let d = SINV.det.get(id); const num = r.number || "no number", isSlip = /packing[ -]slip/i.test(r.read_notes || "");
+  let d = SINV.det.get(id); const num = r.number || "no number"; let isSlip = sinvIsSlipRec(r);
   const prt = `<button class="btn" type="button" data-sv-print>Print</button>`, none = t => `<p class="sv-none">${t}</p>`;
   if (k === "po") {
     if (!r.po_id) { attPop("Purchase Order", none(`No purchase order is matched to ${esc(num)} yet. Press <b>Pick a New P.O.</b> on the page to match one.`)); return; }
@@ -23133,6 +23139,7 @@ document.addEventListener("click", async e => {
   v.querySelector("[data-sv-print]").onclick = printPics;
   if (!d) { await sinvLoadDet(id); d = SINV.det.get(id); if (!v.isConnected) return; }
   const pages = (d && d.pages) || [], two = !!SINV_PG.get(id)?.two; let split = null;
+  if (!isSlip && !two && pages.length) { isSlip = (await sinvOnlySlipLoad(id)) === true; if (!v.isConnected) return; }
   if (two && pages.length > 1) { split = await sinvViewSplit(id, pages); if (!v.isConnected) return; }
   if (k === "inv") {
     const P = isSlip && !two ? [] : split ? (split.inv.length ? split.inv : pages) : pages;
@@ -23508,6 +23515,7 @@ function sinvNeedsHtml(r, d, part) {
   else if (C || (K && !K.not_invoice)) need("Need to find the customer invoice, or put it in our stock still.");
   cur = "slip";
   if (two) {} else if (/packing[ -]slip/i.test(r.read_notes || "")) ok("This paper is the packing slip.");
+  else if (sinvIsSlipRec(r)) ok("This paper is the packing slip: its page reads SALES ORDER / PACKING SLIP. The supplier's own invoice is not on file.");
   else if (d.slips?.length) ok(`Found the packing slip: ${d.slips.slice(0, 3).map(x => `<b>${esc(x.number || "no number")}</b>`).join(", ")}. <button class="link" type="button" data-sci-slipsee="${esc(d.slipQ || "")}">Open it</button>`);
   else if (d.slips && sinvSlipSys(r)) ok(`The packing slip was <b>made by the system</b>. It is not the supplier's original. <button class="link" type="button" data-sci-sysslipsee="${r.id}">See it</button>`);
   else if (d.slips) need("Need to find the packing slip.");
@@ -23626,6 +23634,8 @@ async function sinvLoadDet(id) {
   if (SINV.open === id && document.body.dataset.page === "supplier-invoices") { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; }
   for (const p of (data?.pages || [])) if (!SINV.img.has(p.id)) { const r = await db.rpc("supplier_doc_page", { p_id: p.id }); if (r.data) SINV.img.set(p.id, "data:image/jpeg;base64," + r.data);
     const fig = document.querySelector(`[data-sinv-img="${p.id}"]`); if (fig && r.data) fig.innerHTML = `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">`; }
+  if (!error && R0 && (data?.pages || []).length && !/packing[ -]slip/i.test(R0.read_notes || "") && !SINV_ONLYSLIP.has(id)) sinvOnlySlipLoad(id).then(v => {   // is the only paper on file really the packing slip?
+    if (v === true && !SINV_PG.get(id)?.two && SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } }).catch(() => {});
   if (!error && R0 && !sinvIsCredit(R0) && R0.doc_type !== "charge" && R0.doc_type !== "return") Promise.resolve(sinvPagesCheck(id, data?.pages || [])).catch(() => {}).finally(() => { SINV_PGDONE.add(id);   // are pages missing? counted once, in the background
     if (SINV_PG.get(id) == null && SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } });
   else SINV_PGDONE.add(id);
