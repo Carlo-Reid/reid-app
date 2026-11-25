@@ -22221,7 +22221,7 @@ function sinvParseLines(text, credit) {
 // A scan can lose the quantity column ("uN 6.450 | NET 77.40"): then the quantity is worked out, net amount / (price less the discount), when that is a whole number.
 function sinvParseInv(text, credit) {
   const L = String(text || "").split(/\n/), out = [], seen = new Set(), n = t => Number(String(t).replace(/,/g, ""));
-  const E = /^(.*?)\s+((?=[A-Z0-9]{0,2}[A-Z])[A-Z0-9]{1,3})\s+(\d{1,5})\s+([\d,]+\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)[\s|\[\]]+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
+  const E = /^(.*?)\s+((?=[A-Z0-9]{0,2}[A-Z])[A-Z0-9]{1,3})\s+(\d{1,5})\s+([\d,]*\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)[\s|\[\]]+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
   const E2 = /^(.*?)\s+([A-Za-z]{1,3})\s+([\d,]*\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)[\s|\[\]]+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
   const E3 = /^(.*?\S)\s+(?:(\d{1,5})\s+)?([\d,]*\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)[\s|\[\]]+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
   for (let i = 0; i < L.length; i++) { let e = L[i].match(E), noQ = false;
@@ -22234,11 +22234,12 @@ function sinvParseInv(text, credit) {
       e = [z[0], head, "", String(qi), z[3], z[4], z[5], z[6]]; noQ = true; }
     if (!e) { const z = L[i].match(E2); if (!z) continue; const pr = n(z[3]), d = /^net$/i.test(z[4]) ? 0 : n(z[4]), each = pr * (1 - d / 100), q = each > 0 ? n(z[5]) / each : 0, qi = Math.round(q);
       if (!(qi >= 1) || Math.abs(q - qi) > Math.max(0.02, qi * 0.012)) continue; e = [z[0], z[1], z[2], String(qi), z[3], z[4], z[5], z[6]]; noQ = true; }
-    const tk = e[1].trim().split(/\s+/); while (tk.length > 1 && /^[^A-Za-z0-9]*[iIl]?[|)\]}+%.:,;]*$/.test(tk[0])) tk.shift();   // a form bar read as | or I in front of the line number (Carlo, Nov 25, 2026, C381229 read again)
+    const tk = e[1].trim().split(/\s+/); if (tk.length > 2 && /^[a-z]$/.test(tk[0]) && /^\d{1,3}$/.test(tk[1])) tk.shift();   // a stray letter in front of the line number ("a 8 oscc", Carlo, Nov 25, 2026, C405183)
+    while (tk.length > 1 && /^[^A-Za-z0-9]*[iIl]?[|)\]}+%.:,;]*$/.test(tk[0])) tk.shift();   // a form bar read as | or I in front of the line number (Carlo, Nov 25, 2026, C381229 read again)
     const hadNo = /^[^A-Za-z0-9]*\d{1,3}[|)\]}+%.:,;]*$/.test(tk[0] || ""); const lineNo = hadNo ? Number(tk[0].replace(/\D/g, "")) : ""; while (tk.length > 1 && /^[^A-Za-z0-9]*(?:\d{1,3}|[iIl])?[|)\]}+%.:,;]*$/.test(tk[0])) tk.shift();
     let code = (tk.shift() || "").replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "").replace(/[^A-Za-z0-9\-\/.]/g, "").toUpperCase();
     { const c2 = (tk[0] || "").toUpperCase(); if (noQ && tk.length > 1 && c2.length === code.length && /^[A-Z0-9][A-Z0-9\-\/.]+$/.test(c2) && /\d/.test(c2) && [...c2].filter((ch, k) => ch !== code[k]).length <= 1) { code = c2; tk.shift(); } }   // the part number printed twice, the first one smudged
-    if (code.length < 3 || (!/\d/.test(code) && !hadNo)) continue;   // a part number with no digit in it (KITNIPOSB) counts when the line starts with its line number
+    if (code.length < (hadNo ? 2 : 3) || (!/\d/.test(code) && !hadNo)) continue;   // a short part number (AB, 8C) counts when the line starts with its line number   // a part number with no digit in it (KITNIPOSB) counts when the line starts with its line number
     const neg = credit || !!e[7], row = { code, description: tk.join(" ").replace(/[|\[\]]/g, " ").replace(/\s+/g, " ").trim(), shipped: n(e[3]), backorder: null, unit_price: n(e[4]), discount: /^net$/i.test(e[5]) ? null : n(e[5]), net_amount: (neg ? -1 : 1) * n(e[6]) }, k = [row.code, row.shipped, row.unit_price, row.net_amount, lineNo].join("|");   // the same part billed on two lines of the paper is two lines
     if (!seen.has(k)) { seen.add(k); out.push(row); } }
   return out;
