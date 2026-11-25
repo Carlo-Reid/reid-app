@@ -22973,8 +22973,12 @@ document.addEventListener("click", async e => { const mk = e.target.closest?.("[
 // on file. It is drawn by the app each time, never saved as a page, so it is never read or counted. It goes away when no page is missing any more.
 const sinvPgSys = r => !!r && /Missing page made by the system in the app/i.test(r.read_notes || "");
 const sinvPgMiss = (r, d) => { const pc = d && (d.pages || []).length ? SINV_PG.get(r.id) : null; if (!pc || pc.busy) return null; const w = sinvMissWords(pc); return w && w.n ? { pc, w, no: (pc.miss || [])[0] || (Number(pc.end) || (d.pages || []).length) + 1 } : null; };
-const sinvPgSysOn = (r, d) => sinvPgSys(r) && !!sinvPgMiss(r, d);
-const sinvPgCan = (r, d, edit) => !!edit && !!r.po_id && !sinvIsCredit(r) && !sinvPgSys(r) && !!sinvPgMiss(r, d);
+// A missing page is made from the P.O. by itself, with no button to press (Carlo, Nov 25, 2026: "that means we do not have the page and it should trigger the create one"). "Take the system's page off" is kept on that computer only.
+const sinvPgOffList = () => { try { return JSON.parse(localStorage.getItem("reid.sinv.pgoff") || "[]") || []; } catch (e) { return []; } };
+const sinvPgOff = id => sinvPgOffList().includes(Number(id));
+const sinvPgOffSet = (id, on) => { try { const L = sinvPgOffList().filter(x => x !== Number(id)); if (on) L.push(Number(id)); localStorage.setItem("reid.sinv.pgoff", JSON.stringify(L.slice(-300))); } catch (e) {} };
+const sinvPgSysOn = (r, d) => !!r && !!r.po_id && !sinvIsCredit(r) && !sinvPgOff(r.id) && !!sinvPgMiss(r, d);
+const sinvPgCan = (r, d) => !!r.po_id && !sinvIsCredit(r) && sinvPgOff(r.id) && !!sinvPgMiss(r, d);
 function sinvSysPagePaper(r, d) {
   d = d || {}; if (!sinvPgSysOn(r, d)) return ""; const M = sinvPgMiss(r, d), slip = /packing[ -]slip|pick ticket/i.test(r.read_notes || "");
   const left = sinvPair(sinvDedupLines(d.lines || [], sinvBeforeOwn(r)), d.po_lines || [], d.pairs).filter(x => x.b && !x.a).map(x => x.b.y);
@@ -23006,10 +23010,8 @@ document.addEventListener("click", async e => { const mk = e.target.closest?.("[
   if (see) { document.querySelector(`[data-syspage="${see.dataset.sinvSyspagesee}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" }); return; }
   if (pr) { const z = pr.closest("[data-syspage]"), r = (SINV.data?.rows || []).find(x => x.id === Number(pr.dataset.sinvSyspageprint)); if (z) sspPrint(z, `${r ? sinvShort(r.supplier || "") : "Supplier"} page made by the system ${(r && r.number) || ""}`, pr.parentElement.querySelector("[role=status]")); return; }
   const id = Number((mk || off).dataset.sinvSyspage || (mk || off).dataset.sinvSyspageoff);
-  if (mk) { const k = await askChoice("Create the missing page from the P.O.?", "I make the missing page from our P.O.: the P.O.'s lines that are not on the pages on file, with the P.O.'s own quantities and prices. It looks like the supplier's own page, with a watermark across it: <b>We made this page. Not the supplier's original.</b> The supplier's real page can have other quantities or prices. When the real page is loaded, the system's one goes away.", [["yes", "Create it", true], ["", "Not now"]]); if (k !== "yes") return; }
-  else { const k = await askChoice("Take the system's page off?", "The paper goes back to showing only its missing page line.", [["yes", "Take it off", true], ["", "Keep it"]]); if (k !== "yes") return; }
-  const { error } = await db.rpc("supplier_invoice_system_page", { p_id: id, p_on: !!mk }); if (error) return alertMsg("Not saved: " + rpcErr(error));
-  SINV.data = null; STV.all = null; STV.allFor = null; STV.src = null; SINV.det.delete(id);
+  if (off) { const k = await askChoice("Take the system's page off?", "The paper goes back to showing only its missing page line. This is for this computer only. You can put it back with Create it from the P.O.", [["yes", "Take it off", true], ["", "Keep it"]]); if (k !== "yes") return; }
+  sinvPgOffSet(id, !mk);
   await openSupInv(mk ? "✓ The missing page is made from the P.O. It is under the scanned pages, with its watermark." : "The system's page is off.");
   if (mk) { let n = 0; const go = () => { const z = document.querySelector(`[data-syspage="${id}"]`); if (z) z.scrollIntoView({ block: "start", behavior: "smooth" }); else if (++n < 30) setTimeout(go, 300); }; setTimeout(go, 600); } });
 document.addEventListener("click", async e => { const b = e.target.closest?.("[data-sci-slip]"); if (!b) return; e.preventDefault(); e.stopPropagation(); const id = Number(b.dataset.sciSlip), on = b.dataset.on === "1";
@@ -23326,7 +23328,7 @@ function sinvNeedsHtml(r, d) {
   { const pc = (d.pages || []).length ? SINV_PG.get(r.id) : null, w = pc && !pc.busy ? sinvMissWords(pc) : null;   // are all of its pages on file? (Carlo, Nov 24, 2026)
     // a line holds the place from the first draw while the pages are counted, so the boxes under it do not jump when the answer comes (Carlo, Nov 24: "its still shaking")
     if (pc?.busy || ((d.pages || []).length && pc == null && !SINV_PGDONE.has(r.id))) L.push(`<li class="sn-wait"><span class="sn-m" aria-hidden="true">…</span><span data-sn-pages="${r.id}">${esc(pc?.busy || "Counting the pages…")}</span></li>`);
-    else { const sysOn = sinvPgSysOn(r, d), mkB = sinvPgCan(r, d, SINV.data?.can_edit) ? ` <button class="sn-mk" type="button" data-sinv-syspage="${r.id}" title="Make the missing page from our P.O., with a watermark that says it is not the supplier's original">🤖 Create it from the P.O.</button>` : sysOn ? ` <b>The system made it from P.O. ${esc(r.po_number || "")}. It is not the supplier's original.</b> <button class="link" type="button" data-sinv-syspagesee="${r.id}">See it</button>${SINV.data?.can_edit ? ` · <button class="link" type="button" data-sinv-syspageoff="${r.id}">Take the system's page off</button>` : ""}` : "";
+    else { const sysOn = sinvPgSysOn(r, d), mkB = sinvPgCan(r, d) ? ` <button class="sn-mk" type="button" data-sinv-syspage="${r.id}" title="Make the missing page from our P.O., with a watermark that says it is not the supplier's original">🤖 Create it from the P.O.</button>` : sysOn ? ` <b>The system made it from P.O. ${esc(r.po_number || "")}. It is not the supplier's original.</b> <button class="link" type="button" data-sinv-syspagesee="${r.id}">See it</button> · <button class="link" type="button" data-sinv-syspageoff="${r.id}">Take the system's page off</button>` : "";
       const ld = (x, c) => (x.n && SINV.data?.can_edit ? ` <button class="link" type="button" data-sinv-missload="${r.id}">Load the missing ${x.n === 1 && !c.after ? "page" : "pages"}</button>` : "") + (c === pc ? mkB : "");
       if (w) (w.n && !sysOn ? need : ok)((pc.two ? "<b>The supplier's invoice:</b> " : "") + w.long + ld(w, pc));
       else if (pc?.two) ok(`<b>The supplier's invoice:</b> ${pc.have} ${pc.have === 1 ? "page is" : "pages are"} on file. I could not tell from the pages if one is missing.`);
