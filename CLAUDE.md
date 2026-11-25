@@ -1114,6 +1114,8 @@
 
 - (Carlo, Nov 10.) In an open supplier invoice, "Changes to this PO" shows **↩ Put it back** beside each "Took off" line. It asks first, then adds the line again with the same words, quantity and price (the usual PO save, reason "Put back: it was taken off by mistake"), and the entry then says "(put back)". `sinvHistory`, `data-sinv-putback` in `index.html`; no database change. It comes back as a new line, so anything tied to the old line (received counts) is not carried over.
 
+- **↩ Put all N lines back on the P.O., one button** (Carlo, Nov 25, 2026, 10:51 a.m.: "when I remove items from the P.O. have a button that lets me put it all back at once"). At the top of "Changes to this PO" on an open supplier invoice (`sinvHistory`, `.sinv-putall`, `data-sinv-putall`): shown while at least one "Took off" line has not been put back; it asks first with the list of lines, then adds them all in one save (`apply` → `po_lines_apply`, reason "Put back: it was taken off by mistake"). The ↩ Put it back on each line is still there. They come back as new lines, with the words, quantity and price they had. It is inside the "On PO …" section, in Changes to this PO. Checked: the script parses. **Not run in a browser and not seen on the live app.**
+
 ## Our statement (suppliers): invoices that miss their statement
 
 - **"👁 View the document" on Check what was read** (Carlo, Nov 10): beside Save the statement in the statement loader (`stReviewHtml`); it opens the statement's own pages big over the screen (`stViewDoc`, `#stv-doc`, from `STV.read.imgs`), Close or Esc shuts it, so the lines can be checked against the paper before saving.
