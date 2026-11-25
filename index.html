@@ -21899,6 +21899,7 @@ function sinvDetail(r, edit) {
     ${(d.pages || []).length ? `<section class="sinv-scans"><h3>Scanned ${d.pages.length === 1 ? "page" : "pages"}</h3>${d.pages.map((p, k) => `<div class="sinv-pgbar no-print"><b>Page ${k + 1} of ${d.pages.length}</b><button class="btn quiet-btn" type="button" data-sinv-pgprint="${p.id}" data-pg="${k + 1}" data-inv="${r.id}" title="Print only this page">🖨 Print this page</button><span class="quiet" role="status"></span></div><figure class="sinv-scan" data-sinv-img="${p.id}">${SINV.img.has(p.id) ? `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">` : `<span class="quiet">Loading page ${p.page_no}…</span>`}</figure>`).join("")}
       <p class="quiet">Click a page to zoom in.</p></section>${edit ? sinvDropHtml(r, d.pages.length) : ""}` : sinvSysPaper(r, d) + (edit ? sinvDropHtml(r) : sinvSys(r) ? "" : `<p class="quiet">There's no copy of this one in the file: only its line on the statement.</p>`)}
     ${sinvSysPagePaper(r, d)}
+    ${sinvSysSlipPgPaper(r, d)}
     ${sinvOthersHtml(r)}
     ${sinvSysSlipPaper(r, d)}
   </div>`;
@@ -23037,6 +23038,60 @@ function sinvSysPagePaper(r, d) {
         ${slip || !left.length ? "" : `<table class="ssp-totals"><tr><th>These lines, from our P.O.</th><td>${sum.toFixed(2)}</td></tr><tr><th>The paper's total</th><td>${r.total != null ? Number(r.total).toFixed(2) : "Not known"}</td></tr></table>`}</div>
     </div>${warn}</section>`;
 }
+// A record that holds both papers, and the packing slip's own pages are not all on file (Carlo, Nov 25, 2026, 12:40 p.m.: "it should also trigger a way for the
+// system to create that missing one"). The page is made by itself, like the invoice's missing page: the lines we know (the invoice's, else the P.O.'s) that are not
+// found on the slip's pages on file. Drawn each time, never saved, never read or counted. "Take the system's page off" is kept on that computer only.
+const SINV_SLW = new Map();   // record id -> the words of its packing slip pages on file (null while they load)
+const sinvSlPgOffList = () => { try { return JSON.parse(localStorage.getItem("reid.sinv.slpgoff") || "[]") || []; } catch (e) { return []; } };
+const sinvSlPgOff = id => sinvSlPgOffList().includes(Number(id));
+const sinvSlPgOffSet = (id, on) => { try { const L = sinvSlPgOffList().filter(x => x !== Number(id)); if (on) L.push(Number(id)); localStorage.setItem("reid.sinv.slpgoff", JSON.stringify(L.slice(-300))); } catch (e) {} };
+const sinvSlPgMiss = (r, d) => { const pc = d && (d.pages || []).length ? SINV_PG.get(r.id) : null; if (!pc || pc.busy || !pc.two || !pc.slip) return null; const w = sinvMissWords(pc.slip); return w && w.n ? { pc: pc.slip, w, no: (pc.slip.miss || [])[0] || (Number(pc.slip.end) || Number(pc.slip.have) || 1) + 1 } : null; };
+const sinvSlPgOn = (r, d) => !!r && !sinvIsCredit(r) && !sinvSlPgOff(r.id) && !!sinvSlPgMiss(r, d);
+const sinvSlPgCan = (r, d) => !!r && !sinvIsCredit(r) && sinvSlPgOff(r.id) && !!sinvSlPgMiss(r, d);
+const sinvSlNorm = t => String(t || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1").replace(/S/g, "5").replace(/B/g, "8").replace(/Z/g, "2");
+function sinvSlWordsLoad(id) {
+  if (SINV_SLW.has(id)) return; SINV_SLW.set(id, null);
+  db.rpc("supplier_invoice_pages_info", { p_invoice: id }).then(({ data, error }) => { let cur = null, t = "";
+    if (!error && Array.isArray(data)) for (const h of data) { const k = sinvPageKind(h.words || ""); if (k) cur = k; if (cur === "slip") t += "\n" + (h.words || ""); }
+    SINV_SLW.set(id, t || "");
+    if (SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } });
+}
+function sinvSysSlipPgPaper(r, d) {
+  d = d || {}; if (!sinvSlPgOn(r, d)) return ""; const M = sinvSlPgMiss(r, d);
+  if (!SINV_SLW.has(r.id)) sinvSlWordsLoad(r.id);
+  const words = SINV_SLW.get(r.id); if (words == null) return `<section class="sinv-syspaper ssp-form ssp-slip" data-sysslippg="${r.id}"><div class="sinv-pgbar no-print"><b>The packing slip, page ${M.no}: I am making it…</b></div></section>`;
+  const fromPo = !(d.lines || []).length && (d.po_lines || []).length > 0;
+  const all = fromPo ? d.po_lines.map(y => ({ code: y.sku || "", description: y.description || "", ordered: y.quantity, shipped: y.quantity })) : sinvDedupLines(d.lines || [], sinvBeforeOwn(r));
+  const W = sinvSlNorm(words), on = x => { const c = sinvSlNorm(x.code); return c.length >= 4 && W.includes(c); };
+  const found = all.filter(on).length, L = found ? all.filter(x => !on(x)) : all;   // none found on the pages on file = their words could not be used: every line is listed
+  const lg = SINV.logos?.get(r.supplier_id), co = (typeof COMPANY !== "undefined" && COMPANY) || {}, us = (co.company_name || "Home Service Group Inc.").toUpperCase();
+  const warn = `<div class="ssp-warn">THIS PACKING SLIP PAGE IS SYSTEM GENERATED. IT IS NOT THE SUPPLIER'S ORIGINAL.</div>`;
+  const line = (x, n) => { const q = x.shipped ?? x.ordered ?? x.quantity ?? "", um = x.um || "";
+    return `<tr><td>${esc(String(x.line || String(n + 1).padStart(3, "0")))}</td><td>${esc(x.code || "")}</td><td>${esc(String(x.description || "").replace(/&deg;/g, "°"))}</td><td>${esc(um)}</td><td class="r">${esc(String(x.ordered ?? q))}</td><td class="r">${esc(String(q))}</td><td class="r">${esc(String(x.backorder ?? 0))}</td><td class="r"></td><td class="r"></td><td class="r">${q !== "" ? esc(String(q)) + (um ? " " + esc(um) : "") : ""}</td></tr>`; };
+  const blank = n => Array.from({ length: n }, () => `<tr class="ssp-blank"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`).join("");
+  const body = L.length ? L.map(line).join("") + blank(Math.max(0, 5 - L.length)) : `<tr><td>001</td><td></td><td>${all.length ? "Every line we know is already on the packing slip pages on file, so I have no lines to put on this page." : "The lines are not known: the invoice has no lines read, and the P.O. has no lines."}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>` + blank(4);
+  const src = fromPo ? "our P.O. " + esc(r.po_number || "") : "the supplier's invoice " + esc(r.number || "");
+  return `<section class="sinv-syspaper ssp-form ssp-slip" data-sysslippg="${r.id}">${warn}
+    <div class="sinv-pgbar no-print"><b>The packing slip, page ${M.no}: made by the system</b><button class="btn quiet-btn" type="button" data-sinv-slpgprint="${r.id}" title="Print this page, with its watermark">🖨 Print this page</button><span class="quiet" role="status"></span></div>
+    <div class="ssp-sheet"><div class="ssp-mark" aria-hidden="true"><span>WE MADE THIS PAGE</span><span>NOT THE SUPPLIER'S ORIGINAL</span></div>
+      <div class="ssp-head"><div class="ssp-from">${lg ? `<img alt="" src="${lg}">` : ""}<b>${esc(r.supplier || "")}</b></div>
+        <div class="ssp-box"><div class="ssp-title">SALES ORDER<br>PACKING SLIP</div>
+          <table><tr><th>Document no.</th><th>Document date</th><th>Page</th></tr><tr><td><b>${esc(r.number || "")}</b></td><td>${esc(stDate(r.invoice_date))}</td><td>${M.no}</td></tr></table></div></div>
+      <div class="ssp-to"><div><span>SOLD TO</span><b>${esc(us)}</b></div><div><span>SHIP TO</span><b>${esc(us)}</b></div></div>
+      <table class="ssp-order"><tr><th>Customer P.O. number</th><th>Job name</th><th>Order date</th><th>Continued from</th><th>Original order number</th></tr><tr><td>${esc(r.po_number || r.po_text || "—")}</td><td>${esc(r.job_name || d.job_name || "—")}</td><td>${esc(stDate(r.invoice_date))}</td><td>Page ${M.no - 1}</td><td>${esc(r.original_order || d.original_order || sinvNumBase(r.number) || "—")}</td></tr></table>
+      <table class="ssp-lines"><thead><tr><th>Line</th><th>Prod. no.</th><th>Description</th><th>U/M</th><th class="r">Ordered</th><th class="r">Shipped</th><th class="r">B/O</th><th class="r">Unit price</th><th class="r">Disc.</th><th class="r">Net amount</th></tr></thead><tbody>${body}</tbody></table>
+      <div class="ssp-foot"><div class="ssp-note">This page was made by our system. Page ${M.no} of the supplier's packing slip ${esc(r.number || "")} is missing, so I put on it the lines of ${src} ${found ? "that I did not find on the packing slip pages on file" : "(I could not tell which of them are on the packing slip pages on file, so all of them are here)"}. It is not the supplier's paper: their page can have other quantities or lines. Nobody signed it, so it does not show that the goods were received. When the real page is loaded, this one goes away.</div>
+        <table class="ssp-totals ssp-recv"><tr><th>Received in good condition by</th><td>Not signed</td></tr><tr><th>Date and time shipped</th><td>Not known</td></tr></table></div>
+    </div>${warn}</section>`;
+}
+document.addEventListener("click", async e => { const mk = e.target.closest?.("[data-sinv-slpg]"), off = e.target.closest?.("[data-sinv-slpgoff]"), see = e.target.closest?.("[data-sinv-slpgsee]"), pr = e.target.closest?.("[data-sinv-slpgprint]"); if (!mk && !off && !see && !pr) return; e.preventDefault();
+  if (see) { document.querySelector(`[data-sysslippg="${see.dataset.sinvSlpgsee}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" }); return; }
+  if (pr) { const z = pr.closest("[data-sysslippg]"), r = (SINV.data?.rows || []).find(x => x.id === Number(pr.dataset.sinvSlpgprint)); if (z) sspPrint(z, `${r ? sinvShort(r.supplier || "") : "Supplier"} packing slip page made by the system ${(r && r.number) || ""}`, pr.parentElement.querySelector("[role=status]")); return; }
+  const id = Number((mk || off).dataset.sinvSlpg || (mk || off).dataset.sinvSlpgoff);
+  if (off) { const k = await askChoice("Take the system's page off?", "The packing slip goes back to showing only its missing page line. This is for this computer only. You can put it back with Create The Missing Page.", [["yes", "Take it off", true], ["", "Keep it"]]); if (k !== "yes") return; }
+  sinvSlPgOffSet(id, !mk);
+  await openSupInv(mk ? "✓ The packing slip's missing page is made. It is under the scanned pages, with its watermark." : "The system's page is off.");
+  if (mk) { let n = 0; const go = () => { const z = document.querySelector(`[data-sysslippg="${id}"]`); if (z) z.scrollIntoView({ block: "start", behavior: "smooth" }); else if (++n < 30) setTimeout(go, 300); }; setTimeout(go, 600); } });
 // View The Supplier Invoice / View The Purchase Order / View The Packing Slip: each opens in a pop-up window over the open supplier invoice (Carlo, Nov 25, 2026, 11:09 a.m.)
 async function sinvViewPages(box, list) {   // list = [{ id, page_no, head }]: draws each scanned page, loading its picture when it is not on hand
   box.innerHTML = list.map((p, i) => `${p.head ? `<h3 class="sv-h">${esc(p.head)}</h3>` : ""}<figure class="sinv-scan" data-att-img="${p.id}">${SINV.img.has(p.id) ? `<img alt="Page ${i + 1}" src="${SINV.img.get(p.id)}">` : `<span class="quiet">Loading page ${i + 1}…</span>`}</figure>`).join("");
@@ -23432,7 +23487,8 @@ function sinvPagesLines(r, d) {
       if (w) (w.n && !sysOn ? need : ok)((pc.two ? "<b>The supplier's invoice:</b> " : "") + w.long + ld(w, pc));
       else if (pc?.two) ok(`<b>The supplier's invoice:</b> ${pc.have} ${pc.have === 1 ? "page is" : "pages are"} on file. I could not tell from the pages if one is missing.`);
       if (pc?.two) { const sw = sinvMissWords(pc.slip); two = true;
-        const n0 = L.length; if (sw) (sw.n ? need : ok)("<b>The packing slip</b> is on this record too. " + sw.long + ld(sw, pc.slip)); else ok(`<b>The packing slip</b> is on this record too: ${pc.slip.have} ${pc.slip.have === 1 ? "page" : "pages"}.`); slip = L.splice(n0).join(""); } }
+        const n0 = L.length; const slOn = sinvSlPgOn(r, d), slB = sinvSlPgCan(r, d) ? ` <button class="sn-mk" type="button" data-sinv-slpg="${r.id}" title="Make the packing slip's missing page from the lines we know, with a watermark that says it is not the supplier's original">Create The Missing Page</button>` : slOn ? ` <b>The system made it. It is not the supplier's original.</b> <button class="sn-mk" type="button" data-sinv-slpgsee="${r.id}" title="Go to the page the system made, lower on this page">See It</button> <button class="sn-mk sn-mk-red" type="button" data-sinv-slpgoff="${r.id}" title="Take the page the system made off this paper">Take The System's Page Off</button>` : "";
+        if (sw) (sw.n && !slOn ? need : ok)("<b>The packing slip</b> is on this record too. " + sw.long + ld(sw, pc.slip) + slB); else ok(`<b>The packing slip</b> is on this record too: ${pc.slip.have} ${pc.slip.have === 1 ? "page" : "pages"}.`); slip = L.splice(n0).join(""); } }
   return { html: L.join(""), slip, two };
 }
 // every line goes to its own spot for a person who can edit (Carlo, Nov 25, 2026: "move all the lines to the correct spots"): sup = the Supplier Invoice Number box, po = the Purchase Order Number box, apps = under the app boxes (packing slip, customer invoice, our stock).
