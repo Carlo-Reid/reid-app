@@ -23032,26 +23032,39 @@ const sinvPgOffSet = (id, on) => { try { const L = sinvPgOffList().filter(x => x
 const sinvPgSysOn = (r, d) => !!r && !!r.po_id && !sinvIsCredit(r) && !sinvPgOff(r.id) && !!sinvPgMiss(r, d);
 const sinvPgCan = (r, d) => !!r.po_id && !sinvIsCredit(r) && sinvPgOff(r.id) && !!sinvPgMiss(r, d);
 function sinvSysPagePaper(r, d) {
-  d = d || {}; if (!sinvPgSysOn(r, d)) return ""; const M = sinvPgMiss(r, d), slip = /packing[ -]slip|pick ticket/i.test(r.read_notes || "");
-  const left = sinvPair(sinvDedupLines(d.lines || [], sinvBeforeOwn(r)), d.po_lines || [], d.pairs).filter(x => x.b && !x.a).map(x => x.b.y);
+  d = d || {}; if (!sinvPgSysOn(r, d)) return ""; const M = sinvPgMiss(r, d), two = !!M.pc.two, slip = !two && sinvIsSlipRec(r);
+  // a record that holds both papers (Carlo, Nov 25, 2026, C396752): the missing page is the INVOICE's. The lines read from the packing slip have every line with its part
+  // number, list price and discount, so the lines that are not on the invoice's pages on file go on it, priced like the supplier's invoice.
+  let rd = null; if (two && (d.lines || []).some(x => x.code || x.unit_price != null)) { if (!SINV_INVW.has(r.id)) sinvSlWordsLoad(r.id); const IW = SINV_INVW.get(r.id);
+    if (!IW) return `<section class="sinv-syspaper ssp-form" data-syspage="${r.id}"><div class="sinv-pgbar no-print"><b>Page ${M.no}: I am making it…</b></div></section>`;
+    const W = sinvSlNorm(IW.words), lo = Math.min(...IW.spans.map(z => z[0])), mx = Math.max(...(M.pc.miss || [M.no])), endOn = mx < (Number(M.pc.end) || 0);   // the missing pages come before the ones on file
+    const inSpan = n => endOn ? n >= lo : IW.spans.some(([a, b]) => n >= a && n <= b), byCode = x => { const c = sinvSlNorm(x.code); return c.length >= 4 && W.includes(c); };
+    const on = x => { const n = parseInt(x.line, 10); return (n && IW.spans.length && inSpan(n)) || byCode(x); };
+    rd = sinvDedupLines(d.lines, sinvBeforeOwn(r)).filter(x => !on(x)); }
+  const left = rd ? [] : sinvPair(sinvDedupLines(d.lines || [], sinvBeforeOwn(r)), d.po_lines || [], d.pairs).filter(x => x.b && !x.a).map(x => x.b.y);
+  const pgs = (M.pc.miss || []).length ? M.pc.miss : [M.no], pgW = pgs.length > 1 ? pgs.slice(0, -1).join(", ") + " and " + pgs[pgs.length - 1] : String(pgs[0]);
   const lg = SINV.logos?.get(r.supplier_id), co = (typeof COMPANY !== "undefined" && COMPANY) || {}, us = (co.company_name || "Home Service Group Inc.").toUpperCase();
   const made = (String(r.read_notes || "").match(/Missing page made by the system in the app on ([A-Za-z]{3} \d{1,2}, \d{4})/) || [])[1] || "";
-  const warn = `<div class="ssp-warn">THIS PAGE IS SYSTEM GENERATED FROM OUR P.O. IT IS NOT THE SUPPLIER'S ORIGINAL.</div>`; let sum = 0;
+  const warn = `<div class="ssp-warn">THIS PAGE IS SYSTEM GENERATED${rd ? "" : " FROM OUR P.O."}. IT IS NOT THE SUPPLIER'S ORIGINAL.</div>`; let sum = 0;
   const line = (y, n) => { const q = Number(y.quantity) || 0, up = y.unit_cost != null && !isNaN(Number(y.unit_cost)) ? Number(y.unit_cost) : null, amt = up != null ? Math.round(q * up * 100) / 100 : null; if (amt != null) sum += amt;
     return `<tr><td>${String(n + 1).padStart(3, "0")}</td><td>${esc(y.sku || "")}</td><td>${esc(String(y.description || "").replace(/&deg;/g, "°"))}</td><td></td><td class="r">${esc(String(q))}</td><td class="r">${esc(String(q))}</td><td class="r">0</td><td class="r">${up != null ? up.toFixed(2) : ""}</td><td class="r"></td><td class="r">${slip ? esc(String(q)) : amt != null ? amt.toFixed(2) : ""}</td></tr>`; };
+  const rline = x => { const q = Number(x.shipped ?? x.ordered ?? x.quantity) || 0, up = x.unit_price != null && !isNaN(Number(x.unit_price)) ? Number(x.unit_price) : null, dc = x.discount != null && x.discount !== "" && !isNaN(Number(x.discount)) ? Number(x.discount) : null;
+    const amt = x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : up != null ? Math.round(q * up * (1 - (dc || 0) / 100) * 100) / 100 : null; if (amt != null) sum += amt;
+    return `<tr><td>${esc(String(x.line || ""))}</td><td>${esc(x.code || "")}</td><td>${esc(String(x.description || "").replace(/&deg;/g, "°"))}</td><td>${esc(x.um || "")}</td><td class="r">${esc(String(x.ordered ?? q))}</td><td class="r">${esc(String(q))}</td><td class="r">${esc(String(x.backorder ?? 0))}</td><td class="r">${up != null ? up.toFixed(3) : ""}</td><td class="r">${dc != null ? esc(String(dc)) : up != null ? "NET" : ""}</td><td class="r">${amt != null ? amt.toFixed(2) : ""}</td></tr>`; };
   const blank = n => Array.from({ length: n }, () => `<tr class="ssp-blank"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`).join("");
-  const body = left.length ? left.map(line).join("") + blank(Math.max(0, 5 - left.length)) : `<tr><td>001</td><td></td><td>Every line of our P.O. is already on the pages on file, so I have no lines to put on this page.</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>` + blank(4);
-  return `<section class="sinv-syspaper ssp-form ssp-slip" data-syspage="${r.id}">${warn}
-    <div class="sinv-pgbar no-print"><b>Page ${M.no}: made by the system from P.O. ${esc(r.po_number || "")}</b><button class="btn quiet-btn" type="button" data-sinv-syspageprint="${r.id}" title="Print this page, with its watermark">🖨 Print this page</button><span class="quiet" role="status"></span></div>
+  const rows = rd || left, body = rows.length ? rows.map(rd ? rline : line).join("") + blank(Math.max(0, 5 - rows.length)) : `<tr><td>001</td><td></td><td>${rd ? "Every line we know is already on the invoice's pages on file, so I have no lines to put on this page." : "Every line of our P.O. is already on the pages on file, so I have no lines to put on this page."}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>` + blank(4);
+  const srcW = rd ? "the lines read from its packing slip" : "P.O. " + esc(r.po_number || "");
+  return `<section class="sinv-syspaper ssp-form${slip ? " ssp-slip" : ""}" data-syspage="${r.id}">${warn}
+    <div class="sinv-pgbar no-print"><b>${pgs.length > 1 ? "Pages" : "Page"} ${pgW}: made by the system from ${srcW}</b><button class="btn quiet-btn" type="button" data-sinv-syspageprint="${r.id}" title="Print this page, with its watermark">🖨 Print this page</button><span class="quiet" role="status"></span></div>
     <div class="ssp-sheet"><div class="ssp-mark" aria-hidden="true"><span>WE MADE THIS PAGE</span><span>NOT THE SUPPLIER'S ORIGINAL</span></div>
       <div class="ssp-head"><div class="ssp-from">${lg ? `<img alt="" src="${lg}">` : ""}<b>${esc(r.supplier || "")}</b></div>
         <div class="ssp-box"><div class="ssp-title">${slip ? "SALES ORDER<br>PACKING SLIP" : sinvIsCredit(r) ? "CREDIT MEMO" : "INVOICE"}</div>
-          <table><tr><th>Document no.</th><th>Document date</th><th>Page</th></tr><tr><td><b>${esc(r.number || "")}</b></td><td>${esc(stDate(r.invoice_date))}</td><td>${M.no}</td></tr></table></div></div>
+          <table><tr><th>Document no.</th><th>Document date</th><th>Page</th></tr><tr><td><b>${esc(r.number || "")}</b></td><td>${esc(stDate(r.invoice_date))}</td><td>${esc(pgW)}</td></tr></table></div></div>
       <div class="ssp-to"><div><span>SOLD TO</span><b>${esc(us)}</b></div><div><span>SHIP TO</span><b>${esc(us)}</b></div></div>
-      <table class="ssp-order"><tr><th>Customer P.O. number</th><th>Job name</th><th>Order date</th><th>Continued from</th><th>Original order number</th></tr><tr><td>${esc(r.po_number || r.po_text || "—")}</td><td>${esc(r.job_name || d.job_name || "—")}</td><td>${esc(stDate(r.invoice_date))}</td><td>Page ${M.no - 1}</td><td>${esc(r.original_order || d.original_order || sinvNumBase(r.number) || "—")}</td></tr></table>
+      <table class="ssp-order"><tr><th>Customer P.O. number</th><th>Job name</th><th>Order date</th><th>Continued from</th><th>Original order number</th></tr><tr><td>${esc(r.po_number || r.po_text || "—")}</td><td>${esc(r.job_name || d.job_name || "—")}</td><td>${esc(stDate(r.invoice_date))}</td><td>${pgs[0] > 1 ? "Page " + (pgs[0] - 1) : "—"}</td><td>${esc(r.original_order || d.original_order || sinvNumBase(r.number) || "—")}</td></tr></table>
       <table class="ssp-lines"><thead><tr><th>Line</th><th>Prod. no.</th><th>Description</th><th>U/M</th><th class="r">Ordered</th><th class="r">Shipped</th><th class="r">B/O</th><th class="r">Unit price</th><th class="r">Disc.</th><th class="r">Net amount</th></tr></thead><tbody>${body}</tbody></table>
-      <div class="ssp-foot"><div class="ssp-note">This page was made by our system${made ? " on " + esc(made) : ""}. The supplier's page ${M.no} of ${esc(r.number || "this paper")} is missing, so I put the lines of our P.O. ${esc(r.po_number || "")} that are not on the pages on file on it, with our P.O.'s own quantities and prices. It is not the supplier's paper: their page can have other quantities, prices or lines. When the real page is loaded, this one goes away.</div>
-        ${slip || !left.length ? "" : `<table class="ssp-totals"><tr><th>These lines, from our P.O.</th><td>${sum.toFixed(2)}</td></tr><tr><th>The paper's total</th><td>${r.total != null ? Number(r.total).toFixed(2) : "Not known"}</td></tr></table>`}</div>
+      <div class="ssp-foot"><div class="ssp-note">${rd ? `This page was made by our system. The supplier's invoice ${esc(r.number || "")} is missing page ${esc(pgW)}, so I put on it the lines of its packing slip that are not on the invoice's pages on file, with the part numbers, list prices and discounts read from the packing slip. The net amount is the list price less the discount. It is not the supplier's paper: check it against their invoice. When the real page is loaded, this one goes away.` : `This page was made by our system${made ? " on " + esc(made) : ""}. The supplier's page ${esc(pgW)} of ${esc(r.number || "this paper")} is missing, so I put the lines of our P.O. ${esc(r.po_number || "")} that are not on the pages on file on it, with our P.O.'s own quantities and prices. It is not the supplier's paper: their page can have other quantities, prices or lines. When the real page is loaded, this one goes away.`}</div>
+        ${slip || !rows.length ? "" : `<table class="ssp-totals"><tr><th>${rd ? "These lines" : "These lines, from our P.O."}</th><td>${sum.toFixed(2)}</td></tr><tr><th>The paper's total</th><td>${r.total != null ? Number(r.total).toFixed(2) : "Not known"}</td></tr></table>`}</div>
     </div>${warn}</section>`;
 }
 // A record that holds both papers, and the packing slip's own pages are not all on file (Carlo, Nov 25, 2026, 12:40 p.m.: "it should also trigger a way for the
@@ -23063,7 +23076,8 @@ const sinvIsSlipRec = r => !!r && (/packing[ -]slip/i.test(r.read_notes || "") |
 async function sinvOnlySlipLoad(id) { if (SINV_ONLYSLIP.has(id)) return SINV_ONLYSLIP.get(id);
   const q = await db.rpc("supplier_invoice_pages_info", { p_invoice: id }); if (q.error || !Array.isArray(q.data)) return null;
   const K = q.data.map(x => sinvPageKind(x.words || "")), v = K.length > 0 && K.every(k => k === "slip"); SINV_ONLYSLIP.set(id, v); return v; }
-const SINV_SLW = new Map();   // record id -> the words of its packing slip pages on file (null while they load)
+const SINV_SLW = new Map();
+const SINV_INVW = new Map();   // record id -> { words, spans: [[first line, last line]…] } of the invoice's own pages on file (a record that holds both papers)   // record id -> the words of its packing slip pages on file (null while they load)
 const sinvSlPgOffList = () => { try { return JSON.parse(localStorage.getItem("reid.sinv.slpgoff") || "[]") || []; } catch (e) { return []; } };
 const sinvSlPgOff = id => sinvSlPgOffList().includes(Number(id));
 const sinvSlPgOffSet = (id, on) => { try { const L = sinvSlPgOffList().filter(x => x !== Number(id)); if (on) L.push(Number(id)); localStorage.setItem("reid.sinv.slpgoff", JSON.stringify(L.slice(-300))); } catch (e) {} };
@@ -23073,8 +23087,10 @@ const sinvSlPgCan = (r, d) => !!r && !sinvIsCredit(r) && sinvSlPgOff(r.id) && !!
 const sinvSlNorm = t => String(t || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1").replace(/S/g, "5").replace(/B/g, "8").replace(/Z/g, "2");
 function sinvSlWordsLoad(id) {
   if (SINV_SLW.has(id)) return; SINV_SLW.set(id, null);
-  db.rpc("supplier_invoice_pages_info", { p_invoice: id }).then(({ data, error }) => { let cur = null, t = "";
-    if (!error && Array.isArray(data)) for (const h of data) { const k = sinvPageKind(h.words || ""); if (k) cur = k; if (cur === "slip") t += "\n" + (h.words || ""); }
+  db.rpc("supplier_invoice_pages_info", { p_invoice: id }).then(({ data, error }) => { let cur = null, t = "", iw = "", sp = [];
+    if (!error && Array.isArray(data)) for (const h of data) { const k = sinvPageKind(h.words || ""); if (k) cur = k; if (cur === "slip") t += "\n" + (h.words || "");
+      if (cur === "inv") { iw += "\n" + (h.words || ""); const z = sinvLineSpan(h.words || ""), f = z.first ?? h.first_line ?? h.line ?? null; if (f != null) sp.push([Number(f), Number(z.last ?? f)]); } }
+    SINV_INVW.set(id, { words: iw, spans: sp });
     SINV_SLW.set(id, t || "");
     if (SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } });
 }
