@@ -29,7 +29,7 @@ BEGIN
   FOR e IN SELECT * FROM jsonb_array_elements(coalesce(p_rules, '[]'::jsonb)) LOOP
     f := e->>'f'; n := n + 1;
     IF n > 30 THEN RAISE EXCEPTION 'That is too many rules (30 at most)'; END IF;
-    IF f IS NULL OR f NOT IN ('date', 'number', 'po', 'due', 'subtotal', 'hst', 'total', 'page') THEN RAISE EXCEPTION 'Rule %: pick what it picks up', n; END IF;
+    IF f IS NULL OR f NOT IN ('date', 'number', 'ref', 'po', 'due', 'subtotal', 'hst', 'total', 'page') THEN RAISE EXCEPTION 'Rule %: pick what it picks up', n; END IF;
     IF NOT ((e->>'x')::numeric BETWEEN 0 AND 100 AND (e->>'y')::numeric BETWEEN 0 AND 100 AND (e->>'w')::numeric BETWEEN 0.5 AND 100 AND (e->>'h')::numeric BETWEEN 0.5 AND 100) THEN
       RAISE EXCEPTION 'Rule %: draw its box on the page', n; END IF;
     v := v || jsonb_build_array(jsonb_build_object('id', coalesce(nullif(e->>'id', ''), 'r' || n), 'f', f,

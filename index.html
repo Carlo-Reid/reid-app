@@ -22738,7 +22738,7 @@ async function dropInFill(x, text, C) {
   // this supplier's own rules (Carlo, Nov 18, 2026): each rule's box on the first page is read by itself, and what it finds wins over the general reading
   { const sid = DROPIN.sup || x.sup || x.other; await srLoad(); const RR = sid ? srRulesOf(sid).filter(r => r.w) : [];
     if (RR.length && C[0]) try { const z = (await srReadBest(C[0], RR)).vals, sg = x.credit ? -1 : 1; x.ruled = Object.keys(z);
-      if (z.number && !hit) x.number = z.number; if (z.date) x.date = z.date; if (z.po) x.po = z.po; if (z.due) x.due = z.due;
+      if (z.number && !hit) x.number = z.number; if (z.date) x.date = z.date; if (z.po) x.po = z.po; if (z.due) x.due = z.due; if (z.ref) x.ref = z.ref;
       if (z.subtotal != null) x.subtotal = sg * Math.abs(z.subtotal); if (z.hst != null) x.hst = sg * Math.abs(z.hst); if (z.total != null) x.total = sg * Math.abs(z.total); } catch { } }
   x.lines = sinvDedupLines(sinvParseLines(text, x.credit), x.subtotal ?? (x.total != null ? Math.round(x.total / 1.13 * 100) / 100 : null));
   if (x.slip) { x.total = null; x.credit = false; x.subtotal = null; x.hst = null; }
@@ -22836,6 +22836,7 @@ async function dropInSave() {
     const p = { supplier_id: x.sup || DROPIN.sup, number: x.number, date: x.date || null, total: x.slip ? null : x.total, po_text: x.po, subtotal: x.subtotal, hst: x.hst, pages: x.pages, file: x.slip ? `the packing slip (pick ticket) in ${x.file}` : x.file, lines: x.lines || [] };
     const { data: newId, error } = x.match ? await db.rpc("supplier_invoice_attach", { p_invoice: x.match.id, p }) : await db.rpc("supplier_invoice_add", { p });
     if (!error && x.due && !x.slip) { const iid = x.match ? x.match.id : Number(newId); if (iid) await db.rpc("supplier_invoice_due_set", { p_id: iid, p_due: x.due }).then(() => {}, () => {}); }   // the due date its rules read (Carlo, Nov 18)
+    if (!error && x.ref && !x.slip) { const iid = x.match ? x.match.id : Number(newId); if (iid) await db.rpc("supplier_invoice_ref_set", { p_id: iid, p_ref: x.ref }).then(() => {}, () => {}); }   // the invoice a credit takes back, read by the rules (Carlo, Nov 25)
     if (error) x.err = "Not saved: " + rpcErr(error); else { x.err = null; x.done = x.match ? (sinvMade(x.match) && !x.slip ? "The original replaced the copy the app made" : "Copy added to our invoice") : "Added"; }
   }
   DROPIN.kn = {}; DROPIN.known = await dropInKnown(DROPIN.sup); SINV.det.clear();
@@ -23224,7 +23225,7 @@ function sinvPoFindHtml(r, edit) {
 // have a box in each section called rules where we can keep them, add more or change them if needed"). A rule = what to pick up + a box on the supplier's page (percent of
 // the page). The reader reads that box alone, bigger, and takes the date / number / amount it finds there. Kept in supplier_read_rules (319_supplier_read_rules.sql).
 const SRULES = { by: null, can: false, at: 0 };
-const SR_F = { date: "Purchase date (the invoice date)", number: "Order number (the invoice number)", po: "P.O. number (our P.O.)", due: "Due date", subtotal: "Amount before tax", hst: "HST", total: "Total with tax", page: "Page number" };
+const SR_F = { date: "Purchase date (the invoice date)", number: "Order number (the invoice number)", ref: "Invoice reference number (the invoice a credit takes back)", po: "P.O. number (our P.O.)", due: "Due date", subtotal: "Amount before tax", hst: "HST", total: "Total with tax", page: "Page number" };
 const SR_SHORT = { date: "Purchase date", number: "Order number", po: "P.O. number", due: "Due date", subtotal: "Before tax", hst: "HST", total: "Total", page: "Page" };
 const SR_COL = ["#d93025", "#1a73e8", "#188038", "#e37400", "#9334e6", "#12858d", "#b0126f", "#5f6368"];
 async function srLoad(force) {
@@ -23260,7 +23261,7 @@ function srParse(f, text, fmt) {   // what a rule's box says, as the thing the r
     for (const m of T.matchAll(/(\d{1,2})\s*[\/\-.|]\s*(\d{1,2})\s*[\/\-.|]\s*(\d{4}|\d{2})(?!\d)/g)) { let a = +m[1], b = +m[2], y = +m[3]; if (y < 100) y += 2000; const mo = fmt === "dmy" ? b : a, d = fmt === "dmy" ? a : b;
       if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && y >= 2015 && y <= now + 2) return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
     return null; }
-  if (f === "number") { const U = T.toUpperCase().replace(/\(\s?0?(?=\d{6}(?!\d))/g, "C"), a = [...U.matchAll(/\b([A-Z]{1,3}[- ]?\d{5,}(?:[-.]\d{1,3})?)\b/g)].map(m => m[1].replace(/[ ]/g, "")), b = [...U.matchAll(/\b(\d{5,}(?:[-.]\d{1,3})?)\b/g)].map(m => m[1]); return a[0] || b[0] || null; }
+  if (f === "number" || f === "ref") { const U = T.toUpperCase().replace(/\(\s?0?(?=\d{6}(?!\d))/g, "C"), a = [...U.matchAll(/\b([A-Z]{1,3}[- ]?\d{5,}(?:[-.]\d{1,3})?)\b/g)].map(m => m[1].replace(/[ ]/g, "")), b = [...U.matchAll(/\b(\d{5,}(?:[-.]\d{1,3})?)\b/g)].map(m => m[1]); return a[0] || b[0] || null; }
   if (f === "page") { const m = T.match(/(?<![\d\/])(\d{1,4})\s*(?:of|de|\/)\s*\d{1,4}(?![\d\/])/i), a = m ? [m[1]] : (T.match(/(?<![\d.,\/-])\d{1,4}(?![\d.,\/-])/g) || []), n = a.length ? parseInt(a[a.length - 1], 10) : NaN; return n >= 1 && n <= 300 ? n : null; }
   if (f === "po") { const m = T.match(/(?<![\d.,\/])(\d{6,12}(?:-\d{1,3})?)(?![\d\/])/); return m ? m[1] : null; }
   const am = [...T.matchAll(/(\d[\d, ]*[.,]\d{2})(?!\d)\s*(-)?/g)].map(m => (m[2] ? -1 : 1) * Number(m[1].replace(/[ ,](?=\d{3})/g, "").replace(/,(\d{2})$/, ".$1").replace(/[ ,]/g, "")));
@@ -23286,6 +23287,7 @@ async function srRead(c, rules) {   // every rule read off one page: { vals: { d
 const SR_FORM0 = "Invoice";
 const srFormOf = r => String(r?.g || "").trim() || SR_FORM0;
 function srForms(rules) { const m = new Map(); for (const r of rules || []) { const g = srFormOf(r); if (!m.has(g)) m.set(g, []); m.get(g).push(r); } return [...m].map(([name, rules]) => ({ name, rules })); }
+const sinvKey = v => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 async function srReadBest(c, rules) {
   const F = srForms((rules || []).filter(r => r.w)); let best = null;
   for (const f of F) { const z = await srRead(c, f.rules), n = Object.keys(z.vals).length, of = new Set(f.rules.map(r => r.f)).size, sc = of ? n / of : 0;
@@ -24468,7 +24470,8 @@ function wireSupInv() {
       await w.terminate();
       // the supplier's own rules (Carlo, Nov 18): their boxes on the first page. The due date is saved right away; the P.O. number is used below when the invoice has none.
       try { await srLoad(); const RR = srRulesOf(r.supplier_id).filter(z => z.w); if (RR.length && c0) { say("Reading this supplier's own boxes…"); rz = (await srReadBest(c0, RR)).vals;
-          if (rz.due && rz.due !== String(SINV.dues?.[id] || "").slice(0, 10)) { const q = await db.rpc("supplier_invoice_due_set", { p_id: id, p_due: rz.due }); if (!q.error) { SINV.dues = { ...(SINV.dues || {}), [id]: rz.due }; dueSay = ` The due date on it is ${fmtDate(rz.due)}: saved.`; } } } } catch { }
+          if (rz.due && rz.due !== String(SINV.dues?.[id] || "").slice(0, 10)) { const q = await db.rpc("supplier_invoice_due_set", { p_id: id, p_due: rz.due }); if (!q.error) { SINV.dues = { ...(SINV.dues || {}), [id]: rz.due }; dueSay = ` The due date on it is ${fmtDate(rz.due)}: saved.`; } }
+          if (rz.ref && sinvKey(rz.ref) !== sinvKey(r.original_order) && sinvKey(rz.ref) !== sinvKey(r.number)) { const q = await db.rpc("supplier_invoice_ref_set", { p_id: id, p_ref: rz.ref }); if (!q.error) { r.original_order = rz.ref; dueSay += ` The invoice reference number on it is ${rz.ref}: saved.`; if (sinvIsCredit(r)) sinvOrigLoad(id).then(o => { const dd = SINV.det.get(id); if (dd) { dd.orig = o || {}; sinvOrigRedraw?.(); } }); } } } } catch { }
       const before = sinvBeforeOwn(r), old = (d.lines || []).filter(x => !x.by_hand); let L = sinvDedupLines(sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0), before);
       // no PO on it yet, and the plain reading does not show one: look again the way Auto update does (shading washed out, loose words), then keep a number only if it is a PO in the app
       let po = !r.po_id ? rz.po || sinvPoFromText(text) : "";
