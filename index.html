@@ -22191,23 +22191,24 @@ function sinvParseLines(text, credit) {
 // A scan can lose the quantity column ("uN 6.450 | NET 77.40"): then the quantity is worked out, net amount / (price less the discount), when that is a whole number.
 function sinvParseInv(text, credit) {
   const L = String(text || "").split(/\n/), out = [], seen = new Set(), n = t => Number(String(t).replace(/,/g, ""));
-  const E = /^(.*?)\s+((?=[A-Z0-9]{0,2}[A-Z])[A-Z0-9]{1,3})\s+(\d{1,5})\s+([\d,]+\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)\s+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
-  const E2 = /^(.*?)\s+([A-Za-z]{1,3})\s+([\d,]*\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)\s+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
-  const E3 = /^(.*?\S)\s+(?:(\d{1,5})\s+)?([\d,]*\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)\s+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
+  const E = /^(.*?)\s+((?=[A-Z0-9]{0,2}[A-Z])[A-Z0-9]{1,3})\s+(\d{1,5})\s+([\d,]+\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)[\s|\[\]]+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
+  const E2 = /^(.*?)\s+([A-Za-z]{1,3})\s+([\d,]*\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)[\s|\[\]]+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
+  const E3 = /^(.*?\S)\s+(?:(\d{1,5})\s+)?([\d,]*\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)[\s|\[\]]+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
   for (let i = 0; i < L.length; i++) { let e = L[i].match(E), noQ = false;
     if (!e && !E2.test(L[i])) { // no unit, or no quantity, or both (Carlo, Nov 25, 2026, C381229): the quantity is the printed one when it fits the amount, else it is worked out from the amount
       const z = L[i].match(E3); if (!z) continue; const pr = n(z[3]), d = /^net$/i.test(z[4]) ? 0 : n(z[4]), each = pr * (1 - d / 100), net = n(z[5]); if (!(each > 0) || !(net > 0)) continue;
       let head = z[1], qi = z[2] != null ? n(z[2]) : 0;
       if (!(qi >= 1 && Math.abs(qi * each - net) <= Math.max(0.02, net * 0.012))) { if (z[2] != null) head += " " + z[2]; const q = net / each; qi = Math.round(q); if (!(qi >= 1) || Math.abs(q - qi) > Math.max(0.02, qi * 0.012)) continue; }
-      if (!/^[^A-Za-z0-9]*\d{1,3}[|)\]}+%.:]*\s/.test(head.trim() + " ")) continue;   // such a loose line must start with its line number
-      const hu = head.match(/^(.*\S)\s+(UN|EA|FT|BX|PK|RL|PR|LB|CS|BG|ST|PC|LEN|LN|LG|M|C)$/i); if (hu) head = hu[1];
+      if (!/^[^A-Za-z0-9]*\d{1,3}[|)\]}+%.:,;]*\s/.test(head.trim() + " ")) continue;   // such a loose line must start with its line number
+      head = head.replace(/[\s|\[\]]+$/, ""); const hu = head.match(/^(.*\S)\s+(UN|EA|FT|BX|PK|RL|PR|LB|CS|BG|ST|PC|LEN|LN|LG|M|C)$/i); if (hu) head = hu[1];
       e = [z[0], head, "", String(qi), z[3], z[4], z[5], z[6]]; noQ = true; }
     if (!e) { const z = L[i].match(E2); if (!z) continue; const pr = n(z[3]), d = /^net$/i.test(z[4]) ? 0 : n(z[4]), each = pr * (1 - d / 100), q = each > 0 ? n(z[5]) / each : 0, qi = Math.round(q);
       if (!(qi >= 1) || Math.abs(q - qi) > Math.max(0.02, qi * 0.012)) continue; e = [z[0], z[1], z[2], String(qi), z[3], z[4], z[5], z[6]]; noQ = true; }
-    const tk = e[1].trim().split(/\s+/), hadNo = /^[^A-Za-z0-9]*\d{1,3}[|)\]}+%.:]*$/.test(tk[0] || ""); const lineNo = hadNo ? Number(tk[0].replace(/\D/g, "")) : ""; while (tk.length > 1 && /^[^A-Za-z0-9]*(?:\d{1,3}|[iIl])?[|)\]}+%.:]*$/.test(tk[0])) tk.shift();
+    const tk = e[1].trim().split(/\s+/); while (tk.length > 1 && /^[^A-Za-z0-9]*[iIl]?[|)\]}+%.:,;]*$/.test(tk[0])) tk.shift();   // a form bar read as | or I in front of the line number (Carlo, Nov 25, 2026, C381229 read again)
+    const hadNo = /^[^A-Za-z0-9]*\d{1,3}[|)\]}+%.:,;]*$/.test(tk[0] || ""); const lineNo = hadNo ? Number(tk[0].replace(/\D/g, "")) : ""; while (tk.length > 1 && /^[^A-Za-z0-9]*(?:\d{1,3}|[iIl])?[|)\]}+%.:,;]*$/.test(tk[0])) tk.shift();
     let code = (tk.shift() || "").replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "").replace(/[^A-Za-z0-9\-\/.]/g, "").toUpperCase();
     { const c2 = (tk[0] || "").toUpperCase(); if (noQ && tk.length > 1 && c2.length === code.length && /^[A-Z0-9][A-Z0-9\-\/.]+$/.test(c2) && /\d/.test(c2) && [...c2].filter((ch, k) => ch !== code[k]).length <= 1) { code = c2; tk.shift(); } }   // the part number printed twice, the first one smudged
-    if (code.length < 3 || (!/\d/.test(code) && !(noQ && hadNo))) continue;
+    if (code.length < 3 || (!/\d/.test(code) && !hadNo)) continue;   // a part number with no digit in it (KITNIPOSB) counts when the line starts with its line number
     const neg = credit || !!e[7], row = { code, description: tk.join(" ").replace(/[|\[\]]/g, " ").replace(/\s+/g, " ").trim(), shipped: n(e[3]), backorder: null, unit_price: n(e[4]), discount: /^net$/i.test(e[5]) ? null : n(e[5]), net_amount: (neg ? -1 : 1) * n(e[6]) }, k = [row.code, row.shipped, row.unit_price, row.net_amount, lineNo].join("|");   // the same part billed on two lines of the paper is two lines
     if (!seen.has(k)) { seen.add(k); out.push(row); } }
   return out;
@@ -22276,9 +22277,15 @@ function sinvPoFromText(text) {
 function sinvDedupLines(L, before) {
   const amt = x => x.net_amount != null ? Number(x.net_amount) : Number(x.unit_price || 0) * Number(x.shipped ?? x.ordered ?? 1) * (1 - Number(x.discount || 0) / 100);
   const seen = new Set(), U = L.filter(x => { const k = [x.code, x.description, x.shipped ?? x.ordered, x.unit_price, x.net_amount].join("|"); if (seen.has(k)) return false; seen.add(k); return true; });
-  if (U.length === L.length || before == null) return L;
   const sum = A => A.reduce((t, x) => t + amt(x), 0);
-  return Math.abs(sum(U) - before) < Math.abs(sum(L) - before) ? U : L;
+  // one printed amount read wrong (Carlo, Nov 25, 2026, C381229: 2 x 44.700 NET read as 85.40, the paper says 89.40): when the lines miss the invoice's own total,
+  // and putting quantity x price less the discount on exactly one line makes them add up to it, that line's amount is the worked-out one.
+  const fix = A => { if (before == null || !(Math.abs(before) > 0) || Math.abs(sum(A) - before) < 0.02) return A;
+    const c = x => Math.round(Number(x.unit_price || 0) * Number(x.shipped ?? x.ordered ?? 0) * (1 - Number(x.discount || 0) / 100) * 100) / 100 * (Number(x.net_amount) < 0 ? -1 : 1);
+    const hit = A.map((x, i) => i).filter(i => A[i].net_amount != null && Math.abs(c(A[i])) > 0 && Math.abs(c(A[i]) - Number(A[i].net_amount)) >= 0.02 && Math.abs(sum(A) - Number(A[i].net_amount) + c(A[i]) - before) < 0.02);
+    return hit.length === 1 ? A.map((x, i) => i === hit[0] ? { ...x, net_amount: c(x) } : x) : A; };
+  if (U.length === L.length || before == null) return fix(L);
+  return fix(Math.abs(sum(U) - before) < Math.abs(sum(L) - before) ? U : L);
 }
 function sinvPoDraft(r, L) {
   const credit = r.doc_type === "credit" || Number(r.total) < 0;
@@ -23334,7 +23341,7 @@ function sinvChgHtml(r, edit, d, X) {
     ${form}</div>`;
 }
 function sinvToolsHtml(r, edit, d) {
-  return edit && ((d && d.pages) || []).length ? `<div class="sci-po sci-tools"><button class="sinv-rcbtn sinv-topb" type="button" data-sinv-reread="${r.id}" title="Read the scanned pages again, in case the lines were read wrong the first time"><span class="cb-t">Read It Again</span><span class="cb-c">Click Here</span></button><button class="sinv-rcbtn sinv-topb" type="button" data-sinv-print="${r.id}" title="Print the scanned pages of this invoice"><span class="cb-t">Print The Invoice</span><span class="cb-c">Click Here</span></button><span class="quiet" data-sinv-rereadmsg role="status"></span></div>` : "";
+  return edit ? `<div class="sci-po sci-tools">${((d && d.pages) || []).length ? `<button class="sinv-rcbtn sinv-topb" type="button" data-sinv-reread="${r.id}" title="Read the scanned pages again, in case the lines were read wrong the first time"><span class="cb-t">Read It Again</span><span class="cb-c">Click Here</span></button>` : ""}<button class="sinv-rcbtn sinv-topb" type="button" data-sinv-print="${r.id}" title="Print every document on this file: the scanned pages, the papers the system made, the P.O. and the packing slip"><span class="cb-t">Print All Documents</span><span class="cb-c">Click Here</span></button><span class="quiet" data-sinv-rereadmsg role="status"></span></div>` : "";
 }
 // the Credit Memo app box (Carlo, Nov 11): a credit that came back from a supplier gets a Credit Memo, not a P.O.
 const sinvIsCredit = r => r.doc_type === "credit" || r.doc_type === "return" || Number(r.total) < 0;
@@ -24193,7 +24200,6 @@ function wireSupInv() {
   document.querySelectorAll("[data-sret-open]").forEach(b => b.addEventListener("click", () => { SINV.open = Number(b.dataset.sretOpen); SINV.f = "all"; SINV.q = ""; redo(); setTimeout(() => document.querySelector(".sinv-row.open")?.scrollIntoView({ block: "start" }), 300); }));
   document.querySelectorAll("[data-sinv-addcopy]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); SINV.open = Number(b.dataset.sinvAddcopy); redo();
     setTimeout(() => { const z = document.querySelector(`[data-sinv-drop="${SINV.open}"]`); z?.scrollIntoView({ block: "center" }); z?.focus({ preventScroll: true }); }, 400); }));
-  // Print the invoice (Carlo, Nov 10): the invoice's scanned pages, one to a sheet, in a new window with the print box open
   document.querySelectorAll("[data-sinv-pgprint]").forEach(b => b.addEventListener("click", async () => { const pid = Number(b.dataset.sinvPgprint), r = (SINV.data?.rows || []).find(x => x.id === Number(b.dataset.inv)), msg = b.parentElement.querySelector("[role=status]"), say = t => { if (msg) msg.textContent = t; };
     say(""); const w = window.open("", "_blank"); if (!w) return say("The print window was blocked. Allow pop-ups for this site, then press it again.");
     const title = `${r ? sinvShort(r.supplier || "") || "Supplier" : "Supplier"} ${r && r.doc_type === "credit" ? "credit" : "invoice"} ${(r && r.number) || ""} page ${b.dataset.pg}`;
@@ -24203,18 +24209,34 @@ function wireSupInv() {
       if (w.closed) return; if (!SINV.img.has(pid)) { w.document.getElementById("w").textContent = "I could not get this page to print."; return; }
       w.document.getElementById("w").remove(); const im = w.document.createElement("img"), go = () => setTimeout(() => { try { w.focus(); w.print(); } catch { } }, 200); im.alt = title; im.onload = go; im.onerror = go; im.src = SINV.img.get(pid); w.document.body.appendChild(im);
     } catch (er) { say("I could not print it: " + (er.message || er)); } finally { b.disabled = false; } }));
+  // Print All Documents (Carlo, Nov 25, 2026: "change Print the invoice to print all documents… all the documents that are attached to the file"):
+  // one print window with this record's scanned pages, the papers the system made (copy, missing page, packing slip), the P.O., and the packing slips found on file.
   document.querySelectorAll("[data-sinv-print]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sinvPrint), r = (SINV.data?.rows || []).find(x => x.id === id), d = SINV.det.get(id), msg = b.parentElement.querySelector("[data-sinv-rereadmsg]"), say = t => { if (msg) msg.textContent = t; };
     if (!r || !d) return; const w = window.open("", "_blank"); if (!w) return say("The print window was blocked. Allow pop-ups for this site, then press it again.");
-    const title = `${sinvShort(r.supplier || "") || "Supplier"} ${r.doc_type === "credit" ? "credit" : "invoice"} ${r.number || ""}`;
-    w.document.write(`<!doctype html><title>${esc(title)}</title><style>body{margin:0;font-family:sans-serif}p{padding:24px;font-size:18px}img{display:block;width:100%;page-break-after:always;break-after:page}img:last-child{page-break-after:auto;break-after:auto}@page{margin:8mm}</style><p id="w">Getting the pages…</p>`);
+    const title = `${sinvShort(r.supplier || "") || "Supplier"} ${r.doc_type === "credit" ? "credit" : "invoice"} ${r.number || ""}: all documents`;
+    const css = [...document.styleSheets].flatMap(z => { try { return [...z.cssRules]; } catch { return []; } }).filter(x => /ssp-|sinv-syspaper/.test(x.selectorText || "")).map(x => x.cssText).join("\n");
+    w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(title)}</title><style>*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#111}p#w{padding:24px;font-size:18px}img.pg{display:block;width:100%}.pb{page-break-after:always;break-after:page}.pb:last-child{page-break-after:auto;break-after:auto}.no-print{display:none!important}.r{text-align:right}@page{margin:8mm}h2{margin:0}.sv-po{padding:4mm}.sv-po table{width:100%;border-collapse:collapse;margin-top:12px}.sv-po th,.sv-po td{border:1px solid #999;padding:5px 8px;text-align:left;font-size:13px}.sv-po .r{text-align:right}.sv-po-h{display:flex;justify-content:space-between;gap:20px}.sv-po-m span{display:block}.sv-po-n{font-size:20px}${css}.sinv-syspaper{max-width:none!important;margin:0!important}</style><p id="w">Getting the documents…</p>`);
     b.disabled = true;
-    try { const P = d.pages || [], srcs = [];
-      for (const pg of P) { if (!SINV.img.has(pg.id)) { const q = await db.rpc("supplier_doc_page", { p_id: pg.id }); if (q.data) SINV.img.set(pg.id, "data:image/jpeg;base64," + q.data); } if (SINV.img.has(pg.id)) srcs.push(SINV.img.get(pg.id)); }
-      if (w.closed) return; if (!srcs.length) { w.document.getElementById("w").textContent = "There is no copy of this invoice to print."; return; }
-      w.document.getElementById("w").remove(); let left = srcs.length; const go = () => { if (--left <= 0) setTimeout(() => { try { w.focus(); w.print(); } catch { } }, 200); };
-      srcs.forEach(src => { const im = w.document.createElement("img"); im.alt = title; im.onload = go; im.onerror = go; im.src = src; w.document.body.appendChild(im); });
-    } catch (er) { say("I could not print it: " + (er.message || er)); } finally { b.disabled = false; } }));
-  // Read it again (Carlo, Nov 10): the saved pages are read again here in the browser; the new lines are shown first and only saved after a yes
+    try { const parts = [], pic = async pg => { if (!SINV.img.has(pg.id)) { const q = await db.rpc("supplier_doc_page", { p_id: pg.id }); if (q.data) SINV.img.set(pg.id, "data:image/jpeg;base64," + q.data); } return SINV.img.get(pg.id) || ""; };
+      const step = t => { try { if (!w.closed) w.document.getElementById("w").textContent = t; } catch { } };
+      let nPg = 0, nSys = 0, nPo = 0, nSlip = 0;
+      for (const pg of d.pages || []) { const src = await pic(pg); if (src) { parts.push(`<div class="pb"><img class="pg" src="${src}"></div>`); nPg++; } }
+      // the papers the system made, as they are on the page now (each keeps its watermark)
+      document.querySelectorAll(".sinv-page .sinv-syspaper").forEach(z => { if (z.parentElement?.closest(".sinv-syspaper")) return; parts.push(`<div class="pb">${z.outerHTML}</div>`); nSys++; });
+      if (r.po_id) { step("Getting the purchase order…"); const { data: P } = await db.rpc("po_full_get", { p_id: r.po_id });
+        if (P) { const L = P.lines || [], tot = L.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unit_cost || 0), 0); nPo = 1;
+          parts.push(`<div class="pb"><section class="sv-po"><div class="sv-po-h"><div><h2>Purchase Order</h2><b class="sv-po-n">${esc(P.po_number || "")}</b></div><div class="sv-po-m"><span>Supplier: <b>${esc(P.supplier || "")}</b></span><span>Date: <b>${esc(fmtDate((P.ordered_at || P.created_at || "").slice(0, 10)))}</b></span><span>Status: <b>${esc(PO_STATUS[P.status]?.[0] || P.status || "")}</b></span></div></div>
+            <p>${P.job_id ? `For: <b>${esc(P.customer_name || "")}</b> · Job ${esc(P.job_number || "")}` : P.purpose === "truck_restock" ? "For: truck stock" : P.purpose === "warehouse_restock" ? "For: shop stock" : "Not for a job"}${P.description ? ` · ${esc(P.description)}` : ""}</p>
+            ${L.length ? `<table><thead><tr><th>What</th><th class="r">Qty</th><th class="r">Each</th><th class="r">Amount</th></tr></thead><tbody>${L.map(l => `<tr><td>${esc(l.description || "")}</td><td class="r">${l.quantity != null ? Number(l.quantity) : ""}</td><td class="r">${l.unit_cost != null ? money(l.unit_cost) : ""}</td><td class="r">${money(Number(l.quantity || 0) * Number(l.unit_cost || 0))}</td></tr>`).join("")}</tbody><tfoot><tr><th colspan="3" class="r">Total before tax</th><th class="r">${money(tot)}</th></tr></tfoot></table>` : `<p>This purchase order has no lines on it.</p>`}
+            ${P.notes ? `<p>Notes: ${esc(P.notes)}</p>` : ""}</section></div>`); } }
+      for (const x of (d.slips || []).slice(0, 3)) { if (x.id === id) continue; step("Getting the packing slip…"); const g = await db.rpc("supplier_invoice_get", { p_id: x.id });
+        for (const pg of g.data?.pages || []) { const src = await pic(pg); if (src) { parts.push(`<div class="pb"><img class="pg" src="${src}"></div>`); nSlip++; } } }
+      if (w.closed) return; if (!parts.length) { step("There is no document on this file to print."); return; }
+      w.document.getElementById("w").remove(); w.document.body.insertAdjacentHTML("beforeend", parts.join(""));
+      const ims = [...w.document.images]; let left = ims.length; const go = () => { if (--left <= 0) setTimeout(() => { try { w.focus(); w.print(); } catch { } }, 300); };
+      if (!ims.length) { left = 1; go(); } else ims.forEach(im => { if (im.complete) go(); else { im.onload = go; im.onerror = go; } });
+      say(`Printing: ${[nPg ? `${nPg} scanned ${nPg === 1 ? "page" : "pages"}` : "", nSys ? `${nSys} made by the system` : "", nPo ? "the P.O." : "", nSlip ? `${nSlip} packing slip ${nSlip === 1 ? "page" : "pages"}` : ""].filter(Boolean).join(", ")}.`);
+    } catch (er) { try { w.document.body.textContent = "I could not get the documents: " + (er.message || er); } catch { } } finally { b.disabled = false; } }));
   document.querySelectorAll("[data-sinv-reread]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sinvReread), r = (SINV.data?.rows || []).find(x => x.id === id), d = SINV.det.get(id), msg = b.parentElement.querySelector("[data-sinv-rereadmsg]");
     if (!r || !d) return; b.disabled = true;
     const think = ecoThink("I am reading it again. Give me a moment…"), say = t => { if (msg) msg.textContent = t; think.say(t); };   // Eco Man thinks in the middle of the screen until the reading is done (Carlo, Nov 10)
