@@ -28,7 +28,7 @@ BEGIN
   IF jsonb_typeof(coalesce(p_rules, '[]'::jsonb)) <> 'array' THEN RAISE EXCEPTION 'The rules are not a list'; END IF;
   FOR e IN SELECT * FROM jsonb_array_elements(coalesce(p_rules, '[]'::jsonb)) LOOP
     f := e->>'f'; n := n + 1;
-    IF n > 30 THEN RAISE EXCEPTION 'That is too many rules (30 at most)'; END IF;
+    IF n > 200 THEN RAISE EXCEPTION 'That is too many rules (200 at most)'; END IF;
     IF f IS NULL OR f NOT IN ('date', 'number', 'ref', 'po', 'due', 'subtotal', 'hst', 'total', 'page') THEN RAISE EXCEPTION 'Rule %: pick what it picks up', n; END IF;
     IF NOT ((e->>'x')::numeric BETWEEN 0 AND 100 AND (e->>'y')::numeric BETWEEN 0 AND 100 AND (e->>'w')::numeric BETWEEN 0.5 AND 100 AND (e->>'h')::numeric BETWEEN 0.5 AND 100) THEN
       RAISE EXCEPTION 'Rule %: draw its box on the page', n; END IF;
