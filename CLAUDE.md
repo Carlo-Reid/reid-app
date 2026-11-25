@@ -372,6 +372,7 @@
 
 ## Payroll side bar
 
+- **A click on a kind in the Payroll side bar opens every call of that kind, one by one** (Carlo, Nov 25, 2026, 1:40 p.m.: "when I click on an item i want it to open a page and list all the calls so I can verify them. example I click on Maintenance"). Each kind box in "📊 His calls" (`.pr-side-go`, `data-pr-kind`, "See the calls ›"; Enter works too) opens a box over the page (`attPop`, Close / Escape): the tech's name, the kind, the date range picked (30 days to 1 year), and one line for each call, newest first: Day · Customer and address (a click opens the customer's page) · Job number and job type · On my way · Arrived · Done ("Not marked Done" in orange) · Drive (On my way to Arrived) · On the job (Arrived to Done), then the total and the average on the job. A cancelled call that was arrived at is struck through. Same data as the side bar (`payroll_tech_period`, the calls are kept by kind in `g.c`), no database change. Not seen on the live app.
 - **No green or red in the Payroll side bar ("His calls").** Carlo is saving those colours for special side bar functions later. Maintenance shows teal-blue and Warranty grey there (`.pr-side .pr-k-*`); the call boxes keep their usual colours.
 
 ## Payroll: Source payment to the CRA, and pay rates (George, Nov 13)
