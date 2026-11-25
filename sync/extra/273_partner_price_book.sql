@@ -50,7 +50,7 @@ BEGIN
   UPDATE partners SET price_book_id = NULL WHERE price_book_id = p_book AND NOT (id = ANY (coalesce(p_partners, '{}')));
   UPDATE partners SET price_book_id = p_book WHERE id = ANY (coalesce(p_partners, '{}'));
   BEGIN
-    INSERT INTO audit_log (table_name, record_id, action, new_values, changed_by)
+    INSERT INTO audit_log (table_name, row_id, action, new_values, changed_by_user_id)
       SELECT 'price_books', p_book, 'update', jsonb_build_object('partners', p_partners), public.current_app_user_id();
   EXCEPTION WHEN OTHERS THEN NULL;   -- the log is nice to have; never stop the change for it
   END;

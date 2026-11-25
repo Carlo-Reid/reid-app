@@ -84,7 +84,7 @@ BEGIN
   INSERT INTO supplier_credit_original (credit_id, invoice_id, by_email, at)
   VALUES (p_id, CASE WHEN p_mode = 'set' THEN p_invoice END, auth.jwt()->>'email', now())
   ON CONFLICT (credit_id) DO UPDATE SET invoice_id = EXCLUDED.invoice_id, by_email = EXCLUDED.by_email, at = now();
-  INSERT INTO audit_log (table_name, record_id, action, new_values)
-  VALUES ('supplier_invoices', p_id, 'update', jsonb_build_object('original_invoice', CASE WHEN p_mode = 'set' THEN i.supplier_invoice_number ELSE 'none' END));
+  INSERT INTO audit_log (table_name, row_id, action, changed_by_user_id, new_values)
+  VALUES ('supplier_invoices', p_id, 'update', public.current_app_user_id(), jsonb_build_object('original_invoice', CASE WHEN p_mode = 'set' THEN i.supplier_invoice_number ELSE 'none' END));
 END $$;
 REVOKE EXECUTE ON FUNCTION public.sinv_credit_original_set(bigint, bigint, text) FROM PUBLIC, anon; GRANT EXECUTE ON FUNCTION public.sinv_credit_original_set(bigint, bigint, text) TO authenticated;
