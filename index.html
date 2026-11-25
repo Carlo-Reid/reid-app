@@ -6555,6 +6555,9 @@ body[data-page="supplier-invoices"] #main { position: relative; }
 .sinv-acc, .sinv-ign { font: inherit; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
 .sinv-acc { border: 1.5px solid #2b8a3e; background: #ebfbee; color: #2b8a3e; } .sinv-acc:hover { background: #2b8a3e; color: #fff; }
 .sinv-ign { border: 1.5px solid #c9d3de; background: #fff; color: #5b6b78; } .sinv-ign:hover { border-color: #5b6b78; color: #1f2a37; }
+.sinv-alldone { position: fixed; top: 74px; right: 18px; z-index: 45; display: grid; gap: 3px; justify-items: center; padding: 12px 20px; border: 3px solid #1f9d4a; border-radius: 12px; background: #fff; box-shadow: 0 6px 20px rgba(0,0,0,.22); }
+.sinv-alldone b { color: #14803c; font-size: 26px; font-weight: 900; } .sinv-alldone span { color: #1c2630; font-size: 13px; } .sinv-alldone button { margin-top: 4px; padding: 3px 10px; border: 1px solid #9aa0a8; border-radius: 6px; background: #fff; color: #1c2630; font-size: 12.5px; cursor: pointer; }
+@media print { .sinv-alldone { display: none; } } @media (max-width: 700px) { .sinv-alldone { top: 56px; right: 8px; padding: 8px 12px; } .sinv-alldone b { font-size: 20px; } }
 .sinv-othtag { display: inline-block; margin-top: 3px; padding: 1px 7px; border: 1px solid #7fa3c4; border-radius: 4px; background: #fff; color: #23415f; font-size: 12.5px; font-weight: 700; }   /* a line that is on the P.O.'s other invoice */
 /* the small square beside "there are 4 lines on our P.O. but they are not on the invoice" (Carlo, Nov 12) */
 .sinv-rmall { flex-wrap: nowrap !important; } .sinv-rmall > b { font-weight: 600; min-width: 0; font-family: "Nunito", "Trebuchet MS", "Segoe UI", system-ui, sans-serif; font-size: calc(29px * var(--fs, 1)); line-height: 1.3; color: #23415f; }   /* twice the size, in a rounder, friendlier letter (Carlo, Nov 12) */
@@ -21105,8 +21108,10 @@ async function openSupInv(msg) {
 // how an invoice stands against its PO
 // before tax: as printed, else from the total (13% HST), else the invoice's own lines added up. The last one is for pick tickets, which are saved with $0:
 // the list used to say "Under the PO by $1,803.00" while every line matched the PO (Carlo, Nov 10, C440593).
-const sinvBeforeOwn = r => r.subtotal != null ? Number(r.subtotal) : Math.round(Number(r.total) / 1.13 * 100) / 100;   // only what the invoice itself says ($0 for a pick ticket): used to drop lines read twice
-const sinvBefore = r => r.subtotal != null ? Number(r.subtotal) : Number(r.total) ? Math.round(Number(r.total) / 1.13 * 100) / 100 : r.lines_amount != null ? Number(r.lines_amount) : 0;
+// Carlo, Nov 25, 2026 (Boone C437050 and C437083): an invoice saved with a minus on its before-tax amount while its total is a plus is not a credit: the minus was read wrong
+const sinvSub = r => { const s = r && r.subtotal != null ? Number(r.subtotal) : null; return s != null && s < 0 && Number(r.total) > 0 && r.doc_type !== "credit" && r.doc_type !== "return" ? -s : s; };
+const sinvBeforeOwn = r => r.subtotal != null ? sinvSub(r) : Math.round(Number(r.total) / 1.13 * 100) / 100;   // only what the invoice itself says ($0 for a pick ticket): used to drop lines read twice
+const sinvBefore = r => r.subtotal != null ? sinvSub(r) : Number(r.total) ? Math.round(Number(r.total) / 1.13 * 100) / 100 : r.lines_amount != null ? Number(r.lines_amount) : 0;
 // a PO billed on more than one invoice: they're added up and compared together
 function sinvState(r) {
   // another invoice on the same P.O. that its own credit took back in full is not added to this one (Carlo, Nov 24, 2026: Boone C333818 and C336872 are both on
@@ -21145,7 +21150,7 @@ function renderSupInv(msg) {
   const pr = SINV.open != null && (D.rows || []).find(x => x.id === SINV.open);
   if (pr) { const r = { ...pr, _s: sinvState(pr) }, lg = SINV.logos?.get(r.supplier_id);
     $("#main").innerHTML = `<article class="staff sinv sinv-page" data-hero="1">
-      <div class="sinv-page-top">${SINV.backTo ? `<button class="sinv-rcbtn sinv-topb" type="button" data-stv-back><span class="cb-t">Back To Statement</span><span class="cb-c">Click Here</span></button>` : `<button class="sinv-rcbtn sinv-topb" type="button" data-sinv-pageback><span class="cb-t">Back To The List</span><span class="cb-c">Click Here</span></button>`}${SINV.data?.can_edit ? "" : `<button class="sinv-rcbtn sinv-topb" type="button" data-sinv-view="inv" data-id="${r.id}" title="Open the supplier's invoice in a pop-up window"><span class="cb-t">View Supplier Invoice</span><span class="cb-c">Click Here</span></button><button class="sinv-rcbtn sinv-topb" type="button" data-sinv-view="po" data-id="${r.id}" title="Open our purchase order in a pop-up window"><span class="cb-t">View Purchase Order</span><span class="cb-c">Click Here</span></button><button class="sinv-rcbtn sinv-topb" type="button" data-sinv-view="slip" data-id="${r.id}" title="Open the packing slip in a pop-up window"><span class="cb-t">View Packing Slip</span><span class="cb-c">Click Here</span></button>`}</div>
+      ${sinvDoneHtml(r)}<div class="sinv-page-top">${SINV.backTo ? `<button class="sinv-rcbtn sinv-topb" type="button" data-stv-back><span class="cb-t">Back To Statement</span><span class="cb-c">Click Here</span></button>` : `<button class="sinv-rcbtn sinv-topb" type="button" data-sinv-pageback><span class="cb-t">Back To The List</span><span class="cb-c">Click Here</span></button>`}${SINV.data?.can_edit ? "" : `<button class="sinv-rcbtn sinv-topb" type="button" data-sinv-view="inv" data-id="${r.id}" title="Open the supplier's invoice in a pop-up window"><span class="cb-t">View Supplier Invoice</span><span class="cb-c">Click Here</span></button><button class="sinv-rcbtn sinv-topb" type="button" data-sinv-view="po" data-id="${r.id}" title="Open our purchase order in a pop-up window"><span class="cb-t">View Purchase Order</span><span class="cb-c">Click Here</span></button><button class="sinv-rcbtn sinv-topb" type="button" data-sinv-view="slip" data-id="${r.id}" title="Open the packing slip in a pop-up window"><span class="cb-t">View Packing Slip</span><span class="cb-c">Click Here</span></button>`}</div>
       ${msg ? `<div class="staff-msg ok sl-toast" role="status">${esc(msg)}</div>` : ""}
       <div class="sinv-page-h">${lg ? `<img class="sinv-page-logo" alt="" src="${lg}">` : ""}<div><h1>${esc({ credit: "Credit", charge: "Charge", return: "Return ticket" }[r.doc_type] || "Invoice")} ${esc(r.number)}</h1>
         <div class="quiet">${esc(sinvShort(r.supplier) || "")} · ${esc(fmtDate(r.invoice_date))} · ${money(r.total)} with tax${sinvDueHtml(r)}${r.po_number ? ` · PO ${esc(r.po_number)}` : r.po_text ? ` · printed: ${esc(r.po_text)}` : ""}${r.po_customer ? ` · ${esc(r.po_customer)}, job ${esc(r.po_job_number || "")}` : ""}</div></div>
@@ -21758,6 +21763,7 @@ function sinvPair(L, P, pairs) {
   return rows;
 }
 function sinvCompare(r, L, P, what, edit) {
+  if (r.doc_type === "invoice" && Number(r.total) > 0) L = L.map(x => !x.by_hand && Number(x.net_amount) < 0 ? { ...x, net_amount: -Number(x.net_amount) } : x);   // a plus invoice whose line amounts were read with a minus
   const rows = sinvPair(L, P, (SINV.det.get(r.id) || {}).pairs), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol, split = Number(r.po_other_invoices) > 0,
     partial = r.subtotal == null && /continued/i.test(r.read_notes || "") && !/end of order/i.test(r.read_notes || "") && !(Number(r.pages) >= 2) || sinvPgSysOn(r, SINV.det.get(r.id) || {});   // two or more pages on file: the CONTINUED page's other page is here (Carlo, Nov 18, 2026, slip C312797); a page the system made stands in for a missing one
   const issues = []; let ia = 0, pa = 0;
@@ -21766,9 +21772,15 @@ function sinvCompare(r, L, P, what, edit) {
   OTH.forEach(O => { const free = rows.filter(x => x.b && !x.a && !x.o); if (!free.length || !(O.lines || []).length) return;
     sinvPair(O.lines, free.map(x => x.b.y), null).forEach(pr => { if (!pr.a || !pr.b || pr.guess) return; const row = free.find(x => x.b.y === pr.b.y); if (row && !row.o) row.o = { a: pr.a, num: O.number, id: O.id }; }); });
   const othUsed = [...new Set(rows.filter(x => x.o).map(x => x.o.num))];
+  // Carlo, Nov 25, 2026 (P.O. 116308206: 100 ft of conduit on C437050 and 50 ft more on C437083, one P.O. line of 100): the same part billed again on another invoice of this P.O.
+  // is added to this line, so the P.O. line is compared with, and matched to, what all the invoices billed
+  const othFree = OTH.flatMap(O => (O.lines || []).filter(x => !rows.some(w => w.o && w.o.a.x === x)).map(x => ({ x, num: O.number }))), oxSeen = new Set();
+  const othMore = a => { const k = sinvSlNorm(a.x.code), no = { q: 0, amt: 0, nums: [] }; if (!k || r.doc_type !== "invoice" || sinvIsCredit(r) || oxSeen.has(k)) return no; const M = othFree.filter(e => sinvSlNorm(e.x.code) === k); if (!M.length) return no; oxSeen.add(k);
+    const qOf = e => Math.abs(Number(e.x.shipped ?? e.x.ordered) || 0), aOf = e => e.x.net_amount != null && !isNaN(Number(e.x.net_amount)) ? Math.abs(Number(e.x.net_amount)) : Math.abs((Number(e.x.unit_price) || 0) * (1 - (Number(e.x.discount) || 0) / 100) * qOf(e));
+    return { q: M.reduce((t, e) => t + qOf(e), 0), amt: Math.round(M.reduce((t, e) => t + aOf(e), 0) * 100) / 100, nums: [...new Set(M.map(e => e.num))] }; };
   // Carlo, Nov 24, 2026 (C372518): one line whose amount was not printed (it was worked out from a list price and a discount the scan may have misread),
   // while every other line has its printed amount: that line gets what is left of the paper's own total, so the compare shows the real price
-  if (r.doc_type === "invoice" && !sinvIsCredit(r) && !partial) { const subT = r.subtotal != null ? Number(r.subtotal) : r.total ? Math.round(Number(r.total) / 1.13 * 100) / 100 : null;
+  if (r.doc_type === "invoice" && !sinvIsCredit(r) && !partial) { const subT = r.subtotal != null ? sinvSub(r) : r.total ? Math.round(Number(r.total) / 1.13 * 100) / 100 : null;
     const mine = rows.filter(x => x.a).map(x => x.a), noNet = a => a.x.net_amount == null || a.x.net_amount === "" || isNaN(Number(a.x.net_amount)), soft0 = mine.filter(a => a.amt != null && !a.x.by_hand && noNet(a)), softD = soft0.filter(a => Number(a.x.discount) > 0), soft = soft0.length === 1 ? soft0 : softD.length === 1 ? softD : soft0, hard = mine.filter(a => !soft.includes(a));
     if (subT != null && soft.length === 1 && hard.length && hard.every(a => a.amt != null)) { const a = soft[0], q = Math.abs(Number(a.q) || 0), rest = Math.round((subT - hard.reduce((t, h) => t + h.amt, 0)) * 100) / 100;
       if (q && rest > 0 && Math.abs(rest - Math.abs(a.amt)) > 1) { a.was = { each: a.each, amt: a.amt }; a.amt = rest; a.each = Math.round(rest / q * 10000) / 10000; a.fromTotal = subT; } } }
@@ -21803,16 +21815,17 @@ function sinvCompare(r, L, P, what, edit) {
     if (a && !b && !a.comp) { why = `Not on the PO`; issues.push(`${a.x.code || a.x.description}: on the ${what} but not on the PO${a.amt != null ? ` (${money(a.amt)})` : ""}`); }
     else if (b && !a) { why = split || partial ? `Not on this ${what} (${split ? "maybe on the other one" : sinvPgSysOn(r, SINV.det.get(r.id) || {}) ? "it is on the page the system made" : "maybe on the missing page"})` : `Not on this ${what}`; if (!split && !partial) issues.push(`${b.y.sku || b.y.description}: on the PO but not billed on this ${what}${b.amt ? ` (${money(b.amt)})` : ""}`); }
     // the PO keeps prices to the cent, Boone to a tenth of a cent: a few cents apart over a line isn't a mistake
-    const aq = a && a.q != null ? Math.abs(a.q) + (a.xq || 0) : null, qOk = !a || !b || a.q == null || aq === b.q, eOk = !a || !b || near(a.each, b.each, Math.max(0.0101, b.each * 0.006)),
-      mOk = !a || !b || near(Math.abs(a.amt ?? 0) || null, b.amt, Math.max(0.03, Math.abs(b.q || 1) * 0.0101, (b.amt || 0) * 0.006));
+    const ox = a && b && a.q != null ? othMore(a) : { q: 0, amt: 0, nums: [] }, aq0 = a && a.q != null ? Math.abs(a.q) + (a.xq || 0) : null;
+    const aq = aq0 != null ? aq0 + ox.q : null, qOk = !a || !b || a.q == null || aq === b.q, eOk = !a || !b || near(a.each, b.each, Math.max(0.0101, b.each * 0.006)),
+      mOk = !a || !b || near((Math.abs(a.amt ?? 0) + ox.amt) || null, b.amt, Math.max(0.03, Math.abs(b.q || 1) * 0.0101, (b.amt || 0) * 0.006));
     if (a && b) { const w = [];
-      if (!qOk) w.push(`qty ${aq} vs ${b.q}`);
+      if (!qOk) w.push(ox.q ? `qty ${aq} on the invoices (${aq0} here + ${ox.q} on ${ox.nums.join(", ")}) vs ${b.q} on the PO` : `qty ${aq} vs ${b.q}`);
       if (!eOk) w.push(`${money(a.each)} each vs ${money(b.each)} (${a.each > b.each ? "+" : "−"}${money(Math.abs(a.each - b.each))})`);
       if (!mOk && (qOk && eOk)) w.push(`amount ${money(a.amt)} vs ${money(b.amt)}`);
       if (w.length) { why = w.join(" · "); issues.push(`${a.x.code || b.y.sku}: ${why}`); } }
     // on the paper with no price (free with a program, or part of a kit) while our P.O. has a price for it: not a mistake for sure, so it is yellow, with a button to make the P.O. price $0
     const noPrice = !!(a && b && a.comp && !why && b.amt > 0); if (noPrice) why = `On the ${what} with no price (free, or in a kit). Our P.O. says ${money(b.amt)}.`;
-    const ac = a ? `<td class="ci">${esc(a.x.code || "")}</td><td class="ci">${esc(a.x.description || "")}${a.x.backorder ? ` <span class="quiet">(${a.x.backorder} back-ordered)</span>` : ""}${a.x.by_hand ? ` <span class="ow-tag">typed in</span>${canFix ? ` <button class="link danger" type="button" data-sinv-lnx="${DL.indexOf(a.x)}" title="Take this typed-in line off">✕</button>` : ""}` : ""}
+    const ac = a ? `<td class="ci">${esc(a.x.code || "")}</td><td class="ci">${esc(a.x.description || "")}${a.x.backorder ? ` <span class="quiet">(${a.x.backorder} back-ordered)</span>` : ""}${ox.q ? `<div class="sinv-othtag">+ ${ox.q} more on invoice ${esc(ox.nums.join(", "))}</div>` : ""}${a.x.by_hand ? ` <span class="ow-tag">typed in</span>${canFix ? ` <button class="link danger" type="button" data-sinv-lnx="${DL.indexOf(a.x)}" title="Take this typed-in line off">✕</button>` : ""}` : ""}
         ${hand ? `<div class="quiet sinv-sm">paired by hand${canFix ? ` · <button class="link" type="button" data-sinv-unpair="${esc(sinvInvKey(a.x, a.i))}">undo</button>` : ""}</div>` : ""}
         ${guess && !hand ? `<div class="quiet sinv-sm">paired as the only line left on each side${canFix ? ` · <button class="link" type="button" data-sinv-pairok="${esc(sinvInvKey(a.x, a.i))}" data-po-line="${b?.y.id ?? ""}">that's right</button>` : ""}</div>` : ""}
         ${a && !b && !a.comp && canFix && freePo.length ? `<div class="sinv-pairpick"><select data-sinv-pair="${esc(sinvInvKey(a.x, a.i))}" aria-label="Same part as a PO line"><option value="">Same part as a PO line…</option>${freePo.map(f => `<option value="${f.y.id}">${esc([f.y.sku, f.y.model, f.y.description].filter(Boolean).join(" · ").slice(0, 80))} (${money(f.amt)})</option>`).join("")}</select></div>` : ""}${a && a.fromTotal ? `<div class="sinv-sm sinv-fromtot">This price is worked out from the invoice's total (${money(a.fromTotal)} before tax). The scan read ${money(a.was.each)} each.</div>` : ""}</td><td class="r ci">${a.q == null ? "" : bad(qOk, a.q)}</td>
@@ -21838,9 +21851,9 @@ function sinvCompare(r, L, P, what, edit) {
       : `<div class="sinv-fx">${fix ? `<button class="sinv-acc" type="button" data-sinv-acc="${esc(key)}">✓ ${esc(fix.t)}</button>` : ""}${SINV.ret.has(key) ? `<button class="sinv-ret" type="button" data-sinv-ret="${esc(key)}" title="It wasn't ordered: put it on a return to the supplier">↩ Return it</button>` : ""}<button class="sinv-ign" type="button" data-sinv-ign="${esc(key)}" title="Leave the PO as it is for this one (it's recorded)">Ignore</button></div>`) : "";
     return `<tr${pl(b)} class="${why && !ign ? (soft || noPrice ? "sinv-row-soft" : "sinv-row-bad") : a && b ? "sinv-row-ok" : ""}">${ac}${pc}<td class="sinv-why">${why ? `<span class="${ign ? "quiet" : soft || noPrice ? "sinv-soft" : "sinv-bad"}">${esc(why)}</span>${acts}` : a && b ? `<span class="sinv-ok">✓</span>` : a && a.free ? `<span class="quiet">No price: counted with the line of the same part</span>` : ""}</td></tr>`; }).join("");
   // before tax: as printed, else from the statement's total (13% HST), else the lines added up
-  const sub = r.subtotal != null ? Number(r.subtotal) : r.total ? Math.round(Number(r.total) / 1.13 * 100) / 100 : Math.round(ia * 100) / 100, poT = Number(r.po_amount || pa);
+  const sub = r.subtotal != null ? sinvSub(r) : r.total ? Math.round(Number(r.total) / 1.13 * 100) / 100 : Math.round(ia * 100) / 100, poT = Number(r.po_amount || pa);
   // the P.O. is billed over more than one invoice: the left total adds every one of them, so it can be compared with the whole P.O.
-  const othSub = OTH.map(O => O.subtotal != null ? Number(O.subtotal) : O.total != null ? Math.round(Number(O.total) / 1.13 * 100) / 100 : null), subAll = split && OTH.length && othSub.every(v => v != null) ? Math.round((sub + othSub.reduce((t, v) => t + v, 0)) * 100) / 100 : sub;
+  const othSub = OTH.map(O => O.subtotal != null ? (Number(O.subtotal) < 0 && Number(O.total) > 0 ? -Number(O.subtotal) : Number(O.subtotal)) : O.total != null ? Math.round(Number(O.total) / 1.13 * 100) / 100 : null), subAll = split && OTH.length && othSub.every(v => v != null) ? Math.round((sub + othSub.reduce((t, v) => t + v, 0)) * 100) / 100 : sub;
   const tip = (partial ? `A page of this ${what} looks to be missing from the scan (it says CONTINUED), so some of the PO's lines may be on that page. ` : "") + (split ? (OTH.length ? `This P.O. is billed over ${OTH.length + 1} invoices: this one and ${OTH.map(O => O.number).join(", ")}. The lines of the other${OTH.length > 1 ? "s" : ""} are shown here too, marked “On invoice …”. The other invoice${OTH.length > 1 ? "s are" : " is"} lower on this page, under this one's scanned pages.` : `The PO is billed over ${Number(r.po_other_invoices) + 1} invoices, so lines on the PO that aren't on this one may be on the other${Number(r.po_other_invoices) > 1 ? "s" : ""} (in yellow).`) : "");
   if (Math.abs(Math.abs(sub) - poT) > Math.max(0.05, poT * 0.003) && !split) issues.unshift(`Before tax: ${what} ${money(sub)} vs PO ${money(poT)} (${Math.abs(sub) > poT ? "over" : "under"} by ${money(Math.abs(Math.abs(sub) - poT))})`);
   // the lines read from the paper do not add up to the invoice's own total: they were read wrong (Carlo, Nov 24, 2026, C386306: the packing slip's lines, with discounts
@@ -23526,11 +23539,17 @@ function sinvNeedsHtml(r, d, part) {
   else if (d.slips && sinvSlipSys(r)) ok(`The packing slip was <b>made by the system</b>. It is not the supplier's original. <button class="link" type="button" data-sci-sysslipsee="${r.id}">See it</button>`);
   else if (d.slips) need("Need to find the packing slip.");
   else if (!d.err && !d.slipNo && String(r.po_number || r.po_text || sinvNumBase(r.number) || "").trim().length >= 4) (inChg ? P.slip : L).push(`<li class="sn-wait"><span class="sn-m" aria-hidden="true">…</span><span>Looking for the packing slip…</span></li>`);   // holds the line's place until the look-up answers
+  if (part === "done") { const A = [...L, ...Object.values(P).flat()]; return A.length > 0 && !A.some(x => /sn-need|sn-wait/.test(x)) && !sinvNoInvCopy(r, d); }   // nothing left to do on this invoice
   if (part) return inChg && P[part].length ? `<ul class="sinv-chg-pg${part === "apps" ? " sinv-apps-pg" : ""}">${P[part].join("")}</ul>` : "";
   if (!L.length) return "";
   const n = L.filter(x => x.includes("sn-need")).length;
   return `<div class="sinv-needs${n ? "" : " sn-done"}"><div class="sn-h">${n ? `This invoice still needs ${n} ${n === 1 ? "thing" : "things"}` : "This invoice has everything"}</div><ul>${L.join("")}</ul></div>`;
 }
+// Carlo, Nov 25, 2026, 1:28 p.m.: when everything on a supplier invoice is done, a box in the top right corner says Completed in bold green
+const SINV_DONEX = new Set();
+function sinvDoneHtml(r) { const d = SINV.det.get(r.id); if (!d || d.err || SINV_DONEX.has(r.id)) return ""; let ok = false; try { ok = sinvNeedsHtml(r, d, "done") === true; } catch (e) { ok = false; }
+  return ok ? `<div class="sinv-alldone" role="status" data-sinv-alldone="${r.id}"><b>✔ Completed</b><span>Everything on this invoice is done.</span><button type="button" data-sinv-alldone-x="${r.id}" aria-label="Close" title="Close">✕ Close</button></div>` : ""; }
+document.addEventListener("click", e => { const b = e.target.closest?.("[data-sinv-alldone-x]"); if (!b) return; e.preventDefault(); SINV_DONEX.add(Number(b.dataset.sinvAlldoneX)); b.closest(".sinv-alldone")?.remove(); });
 document.addEventListener("click", e => { const b = e.target.closest?.("[data-sci-slipsee]"); if (!b) return; e.preventDefault(); SLIPS.q = b.dataset.sciSlipsee || ""; openPackingSlips(null); });
 function sinvCustHtml(r, d, edit) {
   const C = d.cinv; if (!C) return `<section class="sinv-cust">${edit ? "" : sinvMissHtml(r, d, edit)}${sinvNeedsHtml(r, d)}${sinvChgHtml(r, edit, d, { slip: sinvSlipTile(r, edit, d) })}<div class="sci-apps sci-top">${sinvPoTile(r, edit)}${sinvMemoTile(r, d, edit)}${edit ? "" : sinvSlipTile(r, edit, d)}</div>${sinvPoFindHtml(r, edit)}${sinvToolsHtml(r, edit, d)}</section>`;
