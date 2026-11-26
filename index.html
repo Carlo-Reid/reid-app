@@ -22245,7 +22245,8 @@ const DROPIN = { sup: null, name: "", items: [], known: null, kn: {} };
 // Part no = Trent's own part number (kept as the line's code: it is the supplier's part number). Order qty and ship qty are "1ea" (a scan gives jea, lea, iea),
 // then the bin location, the words, the unit price with 3 decimals and "/ea" (or /ft, /bx…), the ext price. The words go on over the lines under it
 // (all in capitals: handwriting on the paper is left out) until the next part line, the serial or the totals. The serial number is kept on the line.
-function sinvParseTml(text, credit) {
+function sinvParseTml(text, credit, sid) {
+  const SRX = sinvSerialRe(sid);
   const L = String(text || "").split(/\r?\n/), out = [], n = v => Number(String(v).replace(/[$,\s]/g, ""));
   const Q = "([0-9jlIi|!]{1,4}(?:\\.\\d+)?)\\s*([a-zA-Z]{1,3})";   // 1ea, jea, 10ea
   const RE = new RegExp("^\\s*([A-Za-z0-9][A-Za-z0-9\\-\\/.]{1,20})\\s+" + Q + "\\s+" + Q + "\\s+(.*?)\\s(-?[\\d,]+\\.\\d{2,4})\\s*\\/\\s*([a-zA-Z]{1,4})\\s+(-?[\\d,]+\\.\\d{2})\\s*-?\\s*$");
@@ -22259,15 +22260,35 @@ function sinvParseTml(text, credit) {
     let serial = "";
     for (let j = i + 1, more = 0; j < L.length && j <= i + 6; j++) { const t = L[j].trim(); if (!t) continue;
       if (RE.test(L[j]) || stop.test(t)) break;
-      const sm = t.match(/serial\s*(?:#|no\.?|number)?\s*[:.]?\s*([A-Za-z0-9][A-Za-z0-9\-\/ ,]*[A-Za-z0-9])/i); if (sm) { serial = sm[1].replace(/\s*,\s*/g, ", ").replace(/\s+(?=[A-Za-z0-9])/g, m0 => m0.includes(",") ? m0 : "").trim(); break; }
+      const sm = sinvSerialOf(t, SRX); if (sm) { serial = sm[1].replace(/\s*,\s*/g, ", ").replace(/\s+(?=[A-Za-z0-9])/g, m0 => m0.includes(",") ? m0 : "").trim(); break; }
       if (more >= 3 || /[a-z]/.test(t.replace(/\b(ea|ft|gal|btu|in|lb)\b/gi, "")) || (t.match(/[A-Z]{3,}/g) || []).length < 1 || t.length < 6) break;   // handwriting (small letters) is not part of the words
       words += " " + t; more++; }
     const neg = credit || ext < 0;
     out.push({ code, description: words.replace(/[|\[\]{}]/g, m0 => m0 === "{" ? "(" : m0 === "}" ? ")" : " ").replace(/\s+/g, " ").trim(), ordered: qn(m[2]), shipped: q, backorder: null, unit: m[8].toLowerCase(), unit_price: each, discount: null, net_amount: (neg ? -1 : 1) * Math.abs(ext), ...(serial ? { serial } : {}) }); }
   return out;
 }
+// Serial numbers under a part line (Carlo, Nov 25, 2026: a rule in each supplier's Rules box, "Read the serial number after these words").
+// The words are the supplier's own (rdOpt(sid, "serial").w); the serial goes on the part line above it that has no serial yet. Turned off: no serial is read.
+function sinvSerialRe(sid) { const o = rdOpt(sid, "serial"); if (!o.on) return null; const parts = String(o.w || "").split(",").map(x => x.trim()).filter(Boolean); if (!parts.length) return null;
+  return new RegExp("(?<![A-Za-z0-9])(?:" + parts.map(x => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*").replace(/#/g, "\\s*#")).join("|") + ")\\s*[:.#]?\\s*([A-Za-z0-9][A-Za-z0-9\\-\\/ ,]*[A-Za-z0-9])", "i"); }
+function sinvSerialOf(t, re) { if (!re) return null; const m = String(t || "").match(re); if (!m) return null; const v = m[1].trim(); if (!/\d/.test(v) || v.replace(/\W/g, "").length < 4) return null; return [m[0], v]; }
+function sinvSerials(text, lines, sid) {
+  const re = sinvSerialRe(sid); if (!re || !lines || !lines.length) return lines;
+  const L = String(text || "").split(/\r?\n/), key = c => String(c || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  let cur = -1;
+  for (const raw of L) { const u = raw.toUpperCase().replace(/[^A-Z0-9 ]/g, " ");
+    const hit = lines.findIndex(x => { const k = key(x.code); return k.length >= 3 && (" " + u.replace(/\s+/g, " ") + " ").includes(" " + k + " ") || (k.length >= 3 && u.replace(/\s/g, "").includes(k) && /\d{1,4}\.\d{2}/.test(raw)); });
+    if (hit >= 0 && !sinvSerialOf(raw, re)) { cur = hit; continue; }
+    const sm = sinvSerialOf(raw, re); if (!sm || cur < 0) continue;
+    const ln = lines[cur]; if (!ln.serial) ln.serial = sm[1].replace(/\s*,\s*/g, ", ").replace(/\s+(?=[A-Za-z0-9])/g, m0 => m0.includes(",") ? m0 : "").trim();
+    else if (!String(ln.serial).includes(sm[1])) ln.serial += ", " + sm[1]; }
+  return lines;
+}
 function sinvParseLines(text, credit, sid) {
-  if (/TML\s*SUPPLY|Ship\s*Ticket/i.test(String(text || "")) || [8, 63].includes(Number(sid))) { const t = sinvParseTml(text, credit); if (t.length) return t; }   // Trent Metal's own layout first
+  if (/TML\s*SUPPLY|Ship\s*Ticket/i.test(String(text || "")) || [8, 63].includes(Number(sid))) { const t = sinvParseTml(text, credit, sid); if (t.length) return sinvSerials(text, t, sid); }   // Trent Metal's own layout first
+  return sinvSerials(text, sinvParseLines1(text, credit, sid), sid);
+}
+function sinvParseLines1(text, credit, sid) {
   const a = sinvParseLines0(text, credit, sid); if (!a.length || a.every(x => x.net_amount != null) || !rdOpt(sid, "both").on) return a;
   const b = sinvParseInv(text, credit, sid); if (b.length < 2) return a;
   const used = new Set();
@@ -23325,6 +23346,8 @@ const RD_OPTS = [
     num: ["n", "When both are at least this long", 5, 2, 20] },
   { k: "inwords", g: "pn", t: "A part number found in the words of a P.O. line counts", say: "Lennox prints short codes (Y3683) that our P.O. has only inside its words. The code must have a letter and a digit.",
     num: ["n", "When the code is at least this long", 5, 2, 20] },
+  { k: "serial", g: "pn", t: "Read the serial number after these words, under a part line", say: "It goes on the part line above it, and shows under that line on the open supplier invoice. \"Find anything by its number\" finds it. Saved lines change only on Read It Again or a new load.",
+    words: [["w", "Serial words (a comma between)", "Serial #, Serial No, Serial Number, S/N, SN"]] },
   { k: "lineno", g: "pn", t: "A line number is never a part number", say: "A code of digits only (001, 002) is the line's number on their paper: it is not matched to a part and no new part is made from it.",
     num: ["n", "Digits only, this many at most", 3, 1, 6] },
   { k: "slipdisc", t: "A packing slip with a list price and a discount: a line whose discount can not be read is left out", say: "Turned off, that line's list price is sent to Approvals as the cost (it is often too high)." },
