@@ -24090,42 +24090,64 @@ function stvRrCell(r) { if (!SINV.data?.can_edit) return ""; if (!stvRrCan(r)) r
   const x = STV_RR.res.get(r.id);
   return `<td class="stv-c stv-rr"><div class="stv-rr-in no-print"><input type="checkbox" data-stv-rrt="${r.id}" ${STV_RR.sel.has(r.id) ? "checked" : ""} aria-label="Tick to read it again"><button class="stv-rrb" type="button" data-stv-rr="${r.id}" ${STV_RR.busy ? "disabled" : ""}>🔄 Read again</button></div>${x ? `<div class="${x.ok ? "st-ok" : "st-warn"} stv-rr-res">${esc(x.t)}</div>` : ""}</td>`; }
 const stvRrRow = id => (STV.all || []).find(x => x.id === id) || (STV.D?.rows || []).find(x => x.id === id) || (STV.src?.rows || []).find(x => x.id === id) || (SINV.data?.rows || []).find(x => x.id === id);
-async function sinvRereadQuiet(r, w, say) {
-  const id = r.id, q = await db.rpc("supplier_invoice_get", { p_id: id }); if (q.error) return { ok: false, t: "Not read: " + rpcErr(q.error) };
-  const P = q.data?.pages || [], old = (q.data?.lines || []).filter(x => !x.by_hand), cr = r.doc_type === "credit" || r.doc_type === "return" || Number(r.total) < 0; let text = "", c0 = null, rz = {}, more = "";
-  for (let i = 0; i < P.length; i++) { const pg = P[i]; say(`page ${i + 1} of ${P.length}`);
-    if (!SINV.img.has(pg.id)) { const z = await db.rpc("supplier_doc_page", { p_id: pg.id }); if (z.data) SINV.img.set(pg.id, "data:image/jpeg;base64," + z.data); }
+// ONE way to read a supplier paper again (Carlo, Nov 26: the statement's Read again must work just like the main Read It Again). Both use this.
+async function sinvRereadCore(r, P, old, w, say) {
+  const id = r.id; let text = "", c0 = null, rz = {}, dueSay = "";
+  for (let i = 0; i < P.length; i++) { const pg = P[i]; say(`Reading page ${i + 1} of ${P.length}… (about 15 seconds a page)`);
+    if (!SINV.img.has(pg.id)) { const q = await db.rpc("supplier_doc_page", { p_id: pg.id }); if (q.data) SINV.img.set(pg.id, "data:image/jpeg;base64," + q.data); }
     if (!SINV.img.has(pg.id)) continue;
-    const im = await new Promise((ok, no) => { const e = new Image(); e.onload = () => ok(e); e.onerror = () => no(new Error("a page picture did not open")); e.src = SINV.img.get(pg.id); });
+    const im = await new Promise((ok, no) => { const e = new Image(); e.onload = () => ok(e); e.onerror = () => no(new Error("the page picture did not open")); e.src = SINV.img.get(pg.id); });
     const k = Math.max(1, Math.min(2, 2400 / im.naturalWidth)), c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
     const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
     if (!c0) c0 = c; text += "\n" + await stReadBoxes(w, c, (await w.recognize(c)).data.text); }
-  if (!text.trim()) return { ok: false, t: "No page could be read. Nothing changed." };
-  try { await srLoad(); const RR = srRulesOf(r.supplier_id).filter(z => z.w); if (RR.length && c0) { say("its own boxes"); rz = (await srReadBest(c0, RR)).vals || {}; if (rz.po) rz.po = await srPoFix(r.supplier_id, rz.po);
-      if (rz.due && rz.due !== String(SINV.dues?.[id] || "").slice(0, 10)) { const z = await db.rpc("supplier_invoice_due_set", { p_id: id, p_due: rz.due }); if (!z.error) { SINV.dues = { ...(SINV.dues || {}), [id]: rz.due }; more += " Due date saved."; } }
-      if (rz.ref && sinvKey(rz.ref) !== sinvKey(r.original_order) && sinvKey(rz.ref) !== sinvKey(r.number)) { const z = await db.rpc("supplier_invoice_ref_set", { p_id: id, p_ref: rz.ref }); if (!z.error) { r.original_order = rz.ref; more += " Reference saved."; } } } } catch { }
-  const before = sinvBeforeOwn(r); let L = sinvDedupLines(sinvParseLines(text, cr, r.supplier_id), before);
+  // the supplier's own rules (Carlo, Nov 18): their boxes on the first page. The due date is saved right away; the P.O. number is used below when the invoice has none.
+  try { await srLoad(); const RR = srRulesOf(r.supplier_id).filter(z => z.w); if (RR.length && c0) { say("Reading this supplier's own boxes…"); rz = (await srReadBest(c0, RR)).vals || {}; if (rz.po) rz.po = await srPoFix(r.supplier_id, rz.po);
+      if (rz.due && rz.due !== String(SINV.dues?.[id] || "").slice(0, 10)) { const q = await db.rpc("supplier_invoice_due_set", { p_id: id, p_due: rz.due }); if (!q.error) { SINV.dues = { ...(SINV.dues || {}), [id]: rz.due }; dueSay = ` The due date on it is ${fmtDate(rz.due)}: saved.`; } }
+      if (rz.ref && sinvKey(rz.ref) !== sinvKey(r.original_order) && sinvKey(rz.ref) !== sinvKey(r.number)) { const q = await db.rpc("supplier_invoice_ref_set", { p_id: id, p_ref: rz.ref }); if (!q.error) { r.original_order = rz.ref; dueSay += ` The invoice reference number on it is ${rz.ref}: saved.`; if (sinvIsCredit(r)) sinvOrigLoad(id).then(o => { const dd = SINV.det.get(id); if (dd) { dd.orig = o || {}; sinvOrigRedraw?.(); } }); } } } } catch { }
+  const cr = r.doc_type === "credit" || Number(r.total) < 0, before = sinvBeforeOwn(r); let L = sinvDedupLines(sinvParseLines(text, cr, r.supplier_id), before);
+  // no PO on it yet, and the plain reading does not show one: look again the way Auto update does (shading washed out, loose words), then keep a number only if it is a PO in the app
+  let po = !r.po_id ? rz.po || sinvPoFromText(text) : "";
+  if (!r.po_id && !po) { try { const cands = new Set();
+      for (let i = 0; i < P.length; i++) { if (!SINV.img.has(P[i].id)) continue; say(`Looking for the PO number on page ${i + 1} of ${P.length}… (about half a minute)`);
+        const du = SINV.img.get(P[i].id), bin = atob(du.split(",")[1]), u8 = new Uint8Array(bin.length); for (let z = 0; z < bin.length; z++) u8[z] = bin.charCodeAt(z); const bl = new Blob([u8], { type: "image/jpeg" }), t3 = await smScanAgain(bl, "page.jpg", null, null, null); text += "\n" + t3;
+        const p2 = sinvPoFromText(t3); if (p2) cands.add(p2); (t3.match(/\[numbers read again\][^\n]*/g) || []).forEach(l => (l.match(/\d{6,12}(?:-\d{1,3})?/g) || []).forEach(x => cands.add(x))); }
+      const sn = String(sinvShort(r.supplier || "") || "").toLowerCase();
+      for (const c of [...cands].slice(0, 6)) { const q = await db.rpc("po_list", { p_search: c, p_status: "all", p_supplier: null, p_from: null, p_to: null, p_limit: 20 });
+        const hit = (q.data || []).filter(x => x.status !== "cancelled" && (x.po_number === c || String(x.po_number).split("-")[0] === c)).sort((a, b) => (String(b.supplier || "").toLowerCase().startsWith(sn) ? 1 : 0) - (String(a.supplier || "").toLowerCase().startsWith(sn) ? 1 : 0))[0];
+        if (hit) { po = c; break; } }
+    } catch { } }
+  if (!L.length) L = sinvDedupLines(sinvParseLines(text, cr, r.supplier_id), before);   // the second look may show the lines too
+  // a line we already have with the same price and quantity keeps its part number and words (a person may have put them right)
   { const U = new Set(); L = L.map(x => { if (x.net_amount == null) return x; const i = old.findIndex((y, k) => !U.has(k) && Math.abs(Math.abs(Number(y.unit_price)) - Math.abs(Number(x.unit_price))) < 0.0006 && Number(y.shipped ?? y.ordered) === Number(x.shipped)); if (i < 0) return x; U.add(i);
       return { ...x, code: old[i].code || x.code, description: String(old[i].description || x.description || "").replace(/\s*\(discount not read\)/, "") }; }); }
+  return { L, po, dueSay, before };
+}
+// the same questions the main Read It Again asks, then the save. Answers { ok, saved, t }.
+async function sinvRereadAsk(r, old, R, label) {
+  const { L, po, dueSay, before } = R, id = r.id, hd = label ? label + ": " : "";
+  if (!L.length && po && (await askChoice(hd + "I found the PO, but no lines", `I could not pick out the lines on this one, but I read <b>PO ${esc(po)}</b> on it and that PO is in the app. Do you want me to match it?`, [["yes", "Yes, match the PO", true], ["", "No"]])) === "yes") {
+    const { error } = await db.rpc("supplier_invoice_set", { p_id: id, p: { po_number: po } }); if (error) return { ok: false, t: "Not saved: " + rpcErr(error) };
+    return { ok: true, saved: true, t: `Matched to PO ${po}.` }; }
+  if (!L.length) return { ok: false, t: "I read it again but could not pick out any lines." + (dueSay || " Nothing was changed.") };
   const amt = x => x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : Number(x.unit_price || 0) * Number(x.shipped ?? x.ordered ?? 1) * (1 - (Number(x.discount) || 0) / 100), sum = A => Math.round(A.reduce((a, x) => a + amt(x), 0) * 100) / 100;
-  if (!L.length) return { ok: false, t: "No lines found. Nothing changed." + more };
-  const ns = sum(L), os = sum(old), b = Math.abs(Number(before) || 0);
-  if (b && Math.abs(Math.abs(ns) - b) > 1) return { ok: false, t: `Not changed: the new reading adds up to ${money(Math.abs(ns))}, the invoice says ${money(b)} before tax. Open it and press Read It Again to look.` + more };
-  if (L.length === old.length && Math.abs(ns - os) < 0.01) return { ok: true, t: `Same as before: ${L.length} lines, ${money(Math.abs(ns))}.` + more };
-  const po = !r.po_id ? rz.po || sinvPoFromText(text) : "";
-  const z = await db.rpc("supplier_invoice_reread", { p_id: id, p_lines: L, p_extra: po ? { po_text: po } : {} }); if (z.error) return { ok: false, t: "Not saved: " + rpcErr(z.error) };
-  return { ok: true, t: `✓ Read again: ${L.length} lines, ${money(Math.abs(ns))} (it had ${old.length}).` + (po ? ` P.O. ${po} read on it.` : "") + more };
+  const li = A => A.length ? `<ul style="margin:4px 0 10px;padding-left:20px;text-align:left">${A.slice(0, 12).map(x => `<li>${esc(String(x.shipped ?? x.ordered ?? ""))} × ${esc([x.code, x.description].filter(Boolean).join(" · ").slice(0, 70))} · ${money(amt(x))}</li>`).join("")}${A.length > 12 ? `<li>…and ${A.length - 12} more</li>` : ""}</ul>` : `<p>(no lines)</p>`;
+  const k2 = await askChoice(hd + "Use the new reading?", `<b>New reading: ${L.length} ${L.length === 1 ? "line" : "lines"}, ${money(sum(L))}</b>${li(L)}<b>What it has now: ${old.length} ${old.length === 1 ? "line" : "lines"}, ${money(sum(old))}</b>${li(old)}${po ? `I also read <b>PO ${esc(po)}</b> on it. If that PO is in the app, I will match it. ` : ""}The invoice says ${money(before)} before tax. Lines typed in by hand are kept.`, [["yes", "Yes, use the new reading", true], ["", "No, keep what it has"]]);
+  if (k2 !== "yes") return { ok: true, t: "Nothing was changed." + dueSay };
+  const { error } = await db.rpc("supplier_invoice_reread", { p_id: id, p_lines: L, p_extra: po ? { po_text: po } : {} }); if (error) return { ok: false, t: "Not saved: " + rpcErr(error) };
+  return { ok: true, saved: true, t: `✓ Read again: ${L.length} lines, ${money(sum(L))} (it had ${old.length}).` + dueSay };
 }
 async function stvRereadMany(ids) {
-  if (STV_RR.busy) return; ids = ids.filter(Boolean); if (!ids.length) return; STV_RR.busy = true;
-  const think = ecoThink(`I am reading ${ids.length === 1 ? "it" : ids.length + " invoices"} again. About 15 seconds a page…`); let w = null;
-  try { await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); w = await window.Tesseract.createWorker("eng");
+  if (STV_RR.busy) return; ids = ids.filter(Boolean); if (!ids.length) return; STV_RR.busy = true; let w = null;
+  try { const t0 = ecoThink("Getting the reader ready…"); try { await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); w = await window.Tesseract.createWorker("eng"); } finally { t0.close(); }
     for (let n = 0; n < ids.length; n++) { const id = ids[n], r = stvRrRow(id); if (!r) { STV_RR.res.set(id, { ok: false, t: "Not found in this list." }); continue; }
-      const head = `Invoice ${n + 1} of ${ids.length}: ${r.number || ""}`; think.say(head + "…");
-      try { STV_RR.res.set(id, await sinvRereadQuiet(r, w, t => think.say(`${head}: ${t}…`))); } catch (er) { STV_RR.res.set(id, { ok: false, t: "Could not read it: " + (er.message || er) }); }
+      const head = ids.length > 1 ? `Invoice ${n + 1} of ${ids.length}: ${r.number || ""}` : `Invoice ${r.number || ""}`, think = ecoThink(head + "…");
+      try { const q = await db.rpc("supplier_invoice_get", { p_id: id }); if (q.error) throw new Error(rpcErr(q.error));
+        const old = (q.data?.lines || []).filter(x => !x.by_hand), R = await sinvRereadCore(r, q.data?.pages || [], old, w, t => think.say(`${head}: ${t}`));
+        think.close(); STV_RR.res.set(id, await sinvRereadAsk(r, old, R, head));
+      } catch (er) { think.close(); STV_RR.res.set(id, { ok: false, t: "Could not read it: " + (er.message || er) }); }
       SINV.det.delete(id); STV_RR.sel.delete(id); }
   } catch (er) { ids.forEach(id => STV_RR.res.has(id) || STV_RR.res.set(id, { ok: false, t: "Could not read it: " + (er.message || er) })); }
-  finally { try { await w?.terminate(); } catch { } think.close(); STV_RR.busy = false; }
+  finally { try { await w?.terminate(); } catch { } STV_RR.busy = false; }
   const top = $("#main").scrollTop; stvFresh(); ids.forEach(id => SINV_PG.delete(id));
   if (STV.inline || !STV.id) { SINV.data = null; await openSupInv(); $("#main").scrollTop = top; } else await openSupStatement(STV.id, STV.sup, false);
 }
@@ -24756,47 +24778,12 @@ function wireSupInv() {
   document.querySelectorAll("[data-sinv-reread]").forEach(b => b.addEventListener("click", async () => { const id = Number(b.dataset.sinvReread), r = (SINV.data?.rows || []).find(x => x.id === id), d = SINV.det.get(id), msg = b.parentElement.querySelector("[data-sinv-rereadmsg]");
     if (!r || !d) return; b.disabled = true;
     const think = ecoThink("I am reading it again. Give me a moment…"), say = t => { if (msg) msg.textContent = t; think.say(t); };   // Eco Man thinks in the middle of the screen until the reading is done (Carlo, Nov 10)
-    try { say("Getting the reader ready…"); await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); const w = await window.Tesseract.createWorker("eng"); let text = "", c0 = null, rz = {}, dueSay = "";
-      const P = d.pages || []; for (let i = 0; i < P.length; i++) { const pg = P[i]; say(`Reading page ${i + 1} of ${P.length}… (about 15 seconds a page)`);
-        if (!SINV.img.has(pg.id)) { const q = await db.rpc("supplier_doc_page", { p_id: pg.id }); if (q.data) SINV.img.set(pg.id, "data:image/jpeg;base64," + q.data); }
-        if (!SINV.img.has(pg.id)) continue;
-        const im = await new Promise((ok, no) => { const e = new Image(); e.onload = () => ok(e); e.onerror = () => no(new Error("the page picture did not open")); e.src = SINV.img.get(pg.id); });
-        const k = Math.max(1, Math.min(2, 2400 / im.naturalWidth)), c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
-        const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
-        if (!c0) c0 = c; text += "\n" + await stReadBoxes(w, c, (await w.recognize(c)).data.text); }
-      await w.terminate();
-      // the supplier's own rules (Carlo, Nov 18): their boxes on the first page. The due date is saved right away; the P.O. number is used below when the invoice has none.
-      try { await srLoad(); const RR = srRulesOf(r.supplier_id).filter(z => z.w); if (RR.length && c0) { say("Reading this supplier's own boxes…"); rz = (await srReadBest(c0, RR)).vals; if (rz?.po) rz.po = await srPoFix(r.supplier_id, rz.po);
-          if (rz.due && rz.due !== String(SINV.dues?.[id] || "").slice(0, 10)) { const q = await db.rpc("supplier_invoice_due_set", { p_id: id, p_due: rz.due }); if (!q.error) { SINV.dues = { ...(SINV.dues || {}), [id]: rz.due }; dueSay = ` The due date on it is ${fmtDate(rz.due)}: saved.`; } }
-          if (rz.ref && sinvKey(rz.ref) !== sinvKey(r.original_order) && sinvKey(rz.ref) !== sinvKey(r.number)) { const q = await db.rpc("supplier_invoice_ref_set", { p_id: id, p_ref: rz.ref }); if (!q.error) { r.original_order = rz.ref; dueSay += ` The invoice reference number on it is ${rz.ref}: saved.`; if (sinvIsCredit(r)) sinvOrigLoad(id).then(o => { const dd = SINV.det.get(id); if (dd) { dd.orig = o || {}; sinvOrigRedraw?.(); } }); } } } } catch { }
-      const before = sinvBeforeOwn(r), old = (d.lines || []).filter(x => !x.by_hand); let L = sinvDedupLines(sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0, r.supplier_id), before);
-      // no PO on it yet, and the plain reading does not show one: look again the way Auto update does (shading washed out, loose words), then keep a number only if it is a PO in the app
-      let po = !r.po_id ? rz.po || sinvPoFromText(text) : "";
-      if (!r.po_id && !po) { try { const cands = new Set();
-          for (let i = 0; i < P.length; i++) { if (!SINV.img.has(P[i].id)) continue; say(`Looking for the PO number on page ${i + 1} of ${P.length}… (about half a minute)`);
-            const du = SINV.img.get(P[i].id), bin = atob(du.split(",")[1]), u8 = new Uint8Array(bin.length); for (let z = 0; z < bin.length; z++) u8[z] = bin.charCodeAt(z); const bl = new Blob([u8], { type: "image/jpeg" }), t3 = await smScanAgain(bl, "page.jpg", null, null, null); text += "\n" + t3;
-            const p2 = sinvPoFromText(t3); if (p2) cands.add(p2); (t3.match(/\[numbers read again\][^\n]*/g) || []).forEach(l => (l.match(/\d{6,12}(?:-\d{1,3})?/g) || []).forEach(x => cands.add(x))); }
-          const sn = String(sinvShort(r.supplier || "") || "").toLowerCase();
-          for (const c of [...cands].slice(0, 6)) { const q = await db.rpc("po_list", { p_search: c, p_status: "all", p_supplier: null, p_from: null, p_to: null, p_limit: 20 });
-            const hit = (q.data || []).filter(x => x.status !== "cancelled" && (x.po_number === c || String(x.po_number).split("-")[0] === c)).sort((a, b) => (String(b.supplier || "").toLowerCase().startsWith(sn) ? 1 : 0) - (String(a.supplier || "").toLowerCase().startsWith(sn) ? 1 : 0))[0];
-            if (hit) { po = c; break; } }
-        } catch { } }
-      if (!L.length) L = sinvDedupLines(sinvParseLines(text, r.doc_type === "credit" || Number(r.total) < 0, r.supplier_id), before);   // the second look may show the lines too
-      // a line we already have with the same price and quantity keeps its part number and words (a person may have put them right)
-      { const U = new Set(); L = L.map(x => { if (x.net_amount == null) return x; const i = old.findIndex((y, k) => !U.has(k) && Math.abs(Math.abs(Number(y.unit_price)) - Math.abs(Number(x.unit_price))) < 0.0006 && Number(y.shipped ?? y.ordered) === Number(x.shipped)); if (i < 0) return x; U.add(i);
-          return { ...x, code: old[i].code || x.code, description: String(old[i].description || x.description || "").replace(/\s*\(discount not read\)/, "") }; }); }
-      think.close();
-      if (!L.length && po && (await askChoice("I found the PO, but no lines", `I could not pick out the lines on this one, but I read <b>PO ${esc(po)}</b> on it and that PO is in the app. Do you want me to match it?`, [["yes", "Yes, match the PO", true], ["", "No"]])) === "yes") {
-        const { error } = await db.rpc("supplier_invoice_set", { p_id: id, p: { po_number: po } }); if (error) { say("Not saved: " + rpcErr(error)); b.disabled = false; return; }
-        SINV.det.delete(id); SINV.data = null; await openSupInv(`Matched to PO ${po}.`); return; }
-      if (!L.length) { say("I read it again but could not pick out any lines." + (dueSay || " Nothing was changed.")); b.disabled = false; if (dueSay) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } return; }
-      const amt = x => x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : Number(x.unit_price || 0) * Number(x.shipped ?? x.ordered ?? 1) * (1 - (Number(x.discount) || 0) / 100), sum = A => Math.round(A.reduce((a, x) => a + amt(x), 0) * 100) / 100;
-      const li = A => A.length ? `<ul style="margin:4px 0 10px;padding-left:20px;text-align:left">${A.slice(0, 12).map(x => `<li>${esc(String(x.shipped ?? x.ordered ?? ""))} × ${esc([x.code, x.description].filter(Boolean).join(" · ").slice(0, 70))} · ${money(amt(x))}</li>`).join("")}${A.length > 12 ? `<li>…and ${A.length - 12} more</li>` : ""}</ul>` : `<p>(no lines)</p>`;
-      say("");
-      const k2 = await askChoice("Use the new reading?", `<b>New reading: ${L.length} ${L.length === 1 ? "line" : "lines"}, ${money(sum(L))}</b>${li(L)}<b>What it has now: ${old.length} ${old.length === 1 ? "line" : "lines"}, ${money(sum(old))}</b>${li(old)}${po ? `I also read <b>PO ${esc(po)}</b> on it. If that PO is in the app, I will match it. ` : ""}The invoice says ${money(before)} before tax. Lines typed in by hand are kept.`, [["yes", "Yes, use the new reading", true], ["", "No, keep what it has"]]);
-      if (k2 !== "yes") { say("Nothing was changed."); b.disabled = false; return; }
-      const { error } = await db.rpc("supplier_invoice_reread", { p_id: id, p_lines: L, p_extra: po ? { po_text: po } : {} }); if (error) { say("Not saved: " + rpcErr(error)); b.disabled = false; return; }
-      SINV.det.delete(id); SINV.data = null; await openSupInv("Read again. The lines are from the new reading." + dueSay);
+    try { say("Getting the reader ready…"); await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); const w = await window.Tesseract.createWorker("eng"); const old = (d.lines || []).filter(x => !x.by_hand);
+      let R; try { R = await sinvRereadCore(r, d.pages || [], old, w, say); } finally { await w.terminate(); }
+      think.close(); say("");
+      const A = await sinvRereadAsk(r, old, R); say(A.t);
+      if (A.saved) { SINV.det.delete(id); SINV.data = null; await openSupInv(A.t.startsWith("Matched") ? A.t : "Read again. The lines are from the new reading." + R.dueSay); return; }
+      b.disabled = false; if (R.dueSay) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; }
     } catch (er) { think.close(); say("I could not read it: " + (er.message || er)); b.disabled = false; } }));
   document.querySelectorAll("[data-sinv-edpo]").forEach(b => b.addEventListener("click", () => { SINV.edPo = SINV.edPo === Number(b.dataset.sinvEdpo) ? null : Number(b.dataset.sinvEdpo); redo();
     // Carlo, Nov 24, 2026: the editor opens lower on the page, so go to it and light it, or it looks like nothing happened
