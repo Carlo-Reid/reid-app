@@ -34099,6 +34099,10 @@ const supplierBySign = t => (SUPPLIER_SIGNS.find(([, re]) => re.test(t || "")) |
 // (a price has cents: "$528" read off a scan is noise; "1.25% per month" isn't a price; a page that calls itself a packing slip is one)
 const noPricesOn = lines => /\b(packing (slip|list)|pick(ing)? (ticket|list)|shipping list|delivery (slip|receipt)|bill of lading|feuille d.emballage|bon de cueillette|bordereau d.exp[ée]dition)\b/i.test(lines.join(" "))
   || !lines.some(l => /\b\d{1,3}(,\d{3})*\.\d{2}(?!\d|\s?%)/.test(l));
+// a packing slip, packing list or pick ticket whose page has no price, cost or amount column: its numbers are weights and counts, never costs
+const slipNoPrice = lines => { const t = lines.join(" ");
+  return /\b(packing (slip|list)|pick(ing)? (ticket|list)|shipping list|delivery (slip|receipt|note)|bill of lading|feuille d.emballage|bon de cueillette|bon de livraison|bordereau d.exp[ée]dition)\b/i.test(t)
+    && !/\b(unit price|price|prix|unit cost|amount|montant|extended|ext\.? ?price|net amount|sub-?total|sous-total)\b|\$\s?\d/i.test(t); };
 const MAIL = { busy: false, data: null };
 async function supMailLoad() { if (!(seeCost() && can("pricebook.edit"))) { await smMyFirstLoad(); return null; }
   // all three at once (the name used to be asked for first, then the papers): Carlo, Nov 10, "the page takes too long to load"
@@ -34331,6 +34335,9 @@ async function supMailRead(row, supplierPick, opts) {
       const { data, error } = await db.rpc("import_supplier_lines", { p_supplier: sup, p_ref: "order " + inv.order, p_date: inv.date || ymd(new Date(row.received || Date.now())), p_lines: inv.lines });
       if (error) throw new Error(rpcErr(error)); add(data.counts); refs.push("order " + inv.order); }
     unread = boone.unread;
+  } else if (slipNoPrice(doc.lines)) {
+    // a packing slip / packing list with no price column (Lennox prints Item Weight and Total Weight: 0.20 LB was read as a cost, Carlo, Nov 25, 2026):
+    // nothing is sent to Approvals; the supplier's invoice for this order has the prices
   } else {
     const g = await parseGenericInvoice(doc.rows, sup, doc.kind === "sheet" || doc.kind === "word"), rd = invoiceRefDate(doc.lines); unread = g.unread; unknown = g.unknown || [];
     if (RZ?.fits) { if (rz.number) rd.ref = rz.number; if (rz.date) rd.date = rz.date; }
