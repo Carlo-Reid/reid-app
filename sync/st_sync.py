@@ -593,7 +593,7 @@ def sync_purchase_orders(cur, st, state, new_state):
                    WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE name = 'Unknown supplier')""")
     cur.execute("""DROP TABLE IF EXISTS _s_po; CREATE TEMP TABLE _s_po (st_id bigint, num text, vendor bigint, job bigint, status text, tech bigint,
                    ordered text, expected text, ref text, summary text, total numeric, created text) ON COMMIT DROP""")
-    cur.execute("""DROP TABLE IF EXISTS _s_pol; CREATE TEMP TABLE _s_pol (po_st bigint, n int, descr text, qty numeric, cost numeric, rec numeric) ON COMMIT DROP""")
+    cur.execute("""DROP TABLE IF EXISTS _s_pol; CREATE TEMP TABLE _s_pol (po_st bigint, n int, descr text, qty numeric, cost numeric, rec numeric, sku bigint) ON COMMIT DROP""")
     with cur.copy("COPY _s_po FROM STDIN") as cp:
         for p in pos:
             cp.write_row((int(p["id"]), str(p.get("number") or p["id"]).strip(), int(p.get("vendorId") or 0) or None,
@@ -607,7 +607,8 @@ def sync_purchase_orders(cur, st, state, new_state):
                 q = float(it.get("quantity") or 0)
                 if q > 0:
                     cp.write_row((int(p["id"]), n, (it.get("description") or it.get("skuName") or it.get("skuCode") or "Item").strip()[:2000],
-                                  round(q, 2), round(float(it.get("cost") or 0), 2), round(float(it.get("quantityReceived") or 0), 2)))
+                                  round(q, 2), round(float(it.get("cost") or 0), 2), round(float(it.get("quantityReceived") or 0), 2),
+                                  int(it.get("skuId") or 0) or None))
     cur.execute("""
         INSERT INTO purchase_orders (po_number, supplier_id, purpose, job_id, status, ordered_by_employee_id, ordered_at, expected_on,
                                      supplier_reference, notes, description, amount, st_id, created_at)
@@ -632,11 +633,82 @@ def sync_purchase_orders(cur, st, state, new_state):
     cur.execute("""DELETE FROM purchase_order_lines l USING purchase_orders po
                    WHERE l.purchase_order_id = po.id AND po.st_id IN (SELECT st_id FROM _s_po)
                      AND NOT EXISTS (SELECT 1 FROM po_receipt_lines r WHERE r.purchase_order_line_id = l.id) """ + keep)
-    cur.execute("""INSERT INTO purchase_order_lines (purchase_order_id, description, quantity, unit_cost, quantity_received, job_id)
-                   SELECT po.id, l.descr, l.qty, l.cost, l.rec, po.job_id FROM _s_pol l JOIN purchase_orders po ON po.st_id = l.po_st
+    cur.execute("""INSERT INTO purchase_order_lines (purchase_order_id, description, quantity, unit_cost, quantity_received, job_id, item_id)
+                   SELECT po.id, l.descr, l.qty, l.cost, l.rec, po.job_id,
+                          (SELECT p.id FROM pricebook_items p WHERE p.st_id = l.sku ORDER BY p.active DESC, p.id LIMIT 1) FROM _s_pol l JOIN purchase_orders po ON po.st_id = l.po_st
                    WHERE true """ + keep + """
                    ORDER BY po.id, l.n""")
     return saved
+
+
+def sync_new_pricebook(cur, st, state, new_state):
+    """Parts, materials, equipment and services added in ServiceTitan's price book after the app's first copy (Oct 14, 2026):
+    each one not in our price book yet is added. Only adds: an item already here (by its ServiceTitan id, any kind) is never changed.
+    Everything the first time, then what changed. Runs before the converter, so new invoice lines find their part."""
+    since = (state.get("pb-new") or {}).get("since")
+    started = datetime.now(timezone.utc)
+    cur.execute("SELECT st_id FROM pricebook_items WHERE st_id IS NOT NULL")
+    have = {int(r[0]) for r in cur.fetchall()}
+    cur.execute("""DROP TABLE IF EXISTS _s_pbn; CREATE TEMP TABLE _s_pbn (st_id bigint, kind text, code text, name text, descr text, uom text,
+                   cost numeric, price numeric, taxable boolean, hours numeric, inv boolean, vendor bigint, model text, active boolean) ON COMMIT DROP""")
+    n = 0
+    with cur.copy("COPY _s_pbn FROM STDIN") as cp:
+        for kind, path in (("service", "services"), ("material", "materials"), ("equipment", "equipment")):
+            extra = {"active": "Any"}
+            if since: extra["modifiedOnOrAfter"] = since
+            for m in pull_pages(st, "pricebook/v2/tenant/{t}/" + path, extra):
+                sid = int(m.get("id") or 0)
+                if not sid or sid in have: continue
+                have.add(sid)
+                pv = m.get("primaryVendor") or {}
+                def numv(v):
+                    try: return float(v) if v not in (None, "") else None
+                    except (TypeError, ValueError): return None
+                cost = numv(m.get("cost")) or numv(pv.get("cost")) or 0
+                name = (m.get("displayName") or m.get("code") or f"Item {sid}").strip()[:300]
+                cp.write_row((sid, kind, (m.get("code") or "").strip()[:120] or None, name, (m.get("description") or "").strip()[:4000] or None,
+                              (m.get("unitOfMeasure") or "each")[:40], round(cost, 4), round(numv(m.get("price")) or 0, 2),
+                              m.get("taxable") is not False, numv(m.get("hours")), bool(m.get("isInventory")),
+                              int(pv.get("vendorId") or 0) or None, (m.get("model") or "").strip()[:120] or None if kind == "equipment" else None,
+                              m.get("active") is not False))
+                n += 1
+    added = 0
+    if n:
+        cur.execute("""
+            INSERT INTO pricebook_items (item_type, sku, name, description, unit_of_measure, unit_cost, unit_price, taxable,
+                                         est_labour_hours, track_inventory, preferred_supplier_id, model_number, active, st_id)
+            SELECT p.kind,
+                   CASE WHEN p.code IS NULL THEN 'ST-' || p.st_id
+                        WHEN EXISTS (SELECT 1 FROM pricebook_items x WHERE lower(x.sku) = lower(p.code))
+                          OR EXISTS (SELECT 1 FROM _s_pbn y WHERE lower(y.code) = lower(p.code) AND y.st_id < p.st_id)
+                        THEN p.code || '-' || p.st_id ELSE p.code END,
+                   p.name, p.descr, p.uom, p.cost, p.price, p.taxable, p.hours, p.inv,
+                   (SELECT s.id FROM suppliers s WHERE s.st_id = p.vendor LIMIT 1), p.model, p.active, p.st_id
+            FROM _s_pbn p
+            ON CONFLICT DO NOTHING""")
+        added = cur.rowcount
+        cur.execute("""INSERT INTO audit_log (table_name, row_id, action, new_values)
+                       SELECT 'pricebook_items', i.id, 'insert', jsonb_build_object('why', 'Added from ServiceTitan''s price book by the sync', 'st_id', i.st_id, 'sku', i.sku)
+                       FROM pricebook_items i JOIN _s_pbn p ON p.st_id = i.st_id AND p.kind = i.item_type""")
+    new_state["pb-new"] = {"continue_from": None, "since": (started - timedelta(hours=1)).isoformat()}
+    out = f"{added} new items added from ServiceTitan's price book"
+    # one time: the ServiceTitan invoice lines that came in with no part are asked for again, to find their part
+    if not (state.get("pb-link-old") or {}).get("since"):
+        cur.execute("""SELECT DISTINCT i.st_id FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
+                       WHERE l.st_id IS NOT NULL AND l.item_id IS NULL AND l.line_type = 'item' AND i.st_id IS NOT NULL""")
+        ids = [int(r[0]) for r in cur.fetchall()]
+        cur.execute("DROP TABLE IF EXISTS _s_lnk; CREATE TEMP TABLE _s_lnk (line_st bigint, sku bigint) ON COMMIT DROP")
+        with cur.copy("COPY _s_lnk FROM STDIN") as cp:
+            for k in range(0, len(ids), 50):
+                for inv in pull_pages(st, "accounting/v2/tenant/{t}/invoices", {"ids": ",".join(str(x) for x in ids[k:k + 50])}):
+                    for it in inv.get("items") or []:
+                        if it.get("id") and it.get("skuId"): cp.write_row((int(it["id"]), int(it["skuId"])))
+        cur.execute("""UPDATE invoice_lines l SET item_id = (SELECT p.id FROM pricebook_items p WHERE p.st_id = k.sku ORDER BY p.active DESC, p.id LIMIT 1)
+                       FROM _s_lnk k WHERE l.st_id = k.line_st AND l.item_id IS NULL
+                         AND EXISTS (SELECT 1 FROM pricebook_items p WHERE p.st_id = k.sku)""")
+        out += f"; {cur.rowcount} older invoice lines linked to their part (from {len(ids)} invoices)"
+        new_state["pb-link-old"] = {"continue_from": None, "since": started.isoformat()}
+    return out
 
 
 OLD_PLACE = re.compile(r"z+ ?-?past|do not use", re.I)
@@ -4709,6 +4781,17 @@ def main():
         os.makedirs(src); os.makedirs(out)
         for name, recs in delta.items():
             if recs: write_csv(os.path.join(src, name + ".csv"), recs)
+        if st:   # new parts in ServiceTitan's price book first, so the converter can tie new lines to them
+            cur.execute("SAVEPOINT pbnew")
+            try:
+                pbn = sync_new_pricebook(cur, st, state, new_state)
+                log("Price book: " + pbn)
+                if os.environ.get("GITHUB_ACTIONS"): print(f"::notice::Price book from ServiceTitan: {pbn}", flush=True)
+                cur.execute("RELEASE SAVEPOINT pbnew")
+            except Exception as e:   # never let this stop the rest of the sync
+                cur.execute("ROLLBACK TO SAVEPOINT pbnew")
+                for kk in ("pb-new", "pb-link-old"): new_state.pop(kk, None)
+                print(f"::notice::New price book items skipped this time: {str(e)[:300]}", flush=True)
         k = known_from_db(cur, src)
         kpath = os.path.join(work, "known.json")
         json.dump(k, open(kpath, "w", encoding="utf-8"), default=str)
