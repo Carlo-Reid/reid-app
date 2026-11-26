@@ -23282,7 +23282,16 @@ const SINV_ONLYSLIP = new Map();   // record id -> true / false, from the words 
 const sinvIsSlipRec = r => !!r && (/packing[ -]slip/i.test(r.read_notes || "") || SINV_ONLYSLIP.get(r.id) === true);
 async function sinvOnlySlipLoad(id) { if (SINV_ONLYSLIP.has(id)) return SINV_ONLYSLIP.get(id);
   const q = await db.rpc("supplier_invoice_pages_info", { p_invoice: id }); if (q.error || !Array.isArray(q.data)) return null;
-  const K = q.data.map(x => sinvPageKind(x.words || "")), v = K.length > 0 && K.every(k => k === "slip"); SINV_ONLYSLIP.set(id, v); return v; }
+  const K = q.data.map(x => sinvPageKind(x.words || "")); let v = K.length > 0 && K.every(k => k === "slip");
+  if (v && sinvSlipNo(id)) v = false;   // a person pressed "Not a packing slip? Undo" on it: leave it
+  SINV_ONLYSLIP.set(id, v);
+  if (v) db.rpc("supplier_invoice_mark_slip", { p_id: id, p_on: true }).then(({ error }) => {   // save the mark by itself, so View Packing Slips and the statement know it too (Carlo, Nov 26, 2026: "yes make it automatic")
+    if (error) return; for (const r of [...(SINV.data?.rows || []), ...(STV.all || []), ...(STV.D?.rows || [])]) if (r && r.id === id && !/packing[ -]slip/i.test(r.read_notes || "")) r.read_notes = ((r.read_notes || "") + " Marked as a packing slip in the app (by itself, every page reads as a packing slip).").trim();
+    if (typeof STV_FLAGS !== "undefined" && STV_FLAGS.delete) STV_FLAGS.delete(id); }).catch(() => {});
+  return v; }
+const sinvSlipNoList = () => { try { return JSON.parse(localStorage.getItem("reid.sinv.slipno") || "[]") || []; } catch (e) { return []; } };
+const sinvSlipNo = id => sinvSlipNoList().includes(Number(id));
+const sinvSlipNoSet = (id, on) => { try { const L = sinvSlipNoList().filter(x => x !== Number(id)); if (on) L.push(Number(id)); localStorage.setItem("reid.sinv.slipno", JSON.stringify(L.slice(-500))); } catch (e) {} };
 const SINV_SLW = new Map();
 const SINV_INVW = new Map();   // record id -> { words, spans: [[first line, last line]…] } of the invoice's own pages on file (a record that holds both papers)   // record id -> the words of its packing slip pages on file (null while they load)
 const sinvSlPgOffList = () => { try { return JSON.parse(localStorage.getItem("reid.sinv.slpgoff") || "[]") || []; } catch (e) { return []; } };
@@ -23416,6 +23425,7 @@ document.addEventListener("click", async e => { const mk = e.target.closest?.("[
 document.addEventListener("click", async e => { const b = e.target.closest?.("[data-sci-slip]"); if (!b) return; e.preventDefault(); e.stopPropagation(); const id = Number(b.dataset.sciSlip), on = b.dataset.on === "1";
   if (on && (await askChoice("Is this a packing slip?", "I will put it with the packing slips (📦 View Packing Slips). It also stays on this list, so nothing is lost.", [["yes", "Yes, it is a packing slip", true], ["", "No"]])) !== "yes") return;
   b.disabled = true; const { error } = await db.rpc("supplier_invoice_mark_slip", { p_id: id, p_on: on }); if (error) { b.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
+  sinvSlipNoSet(id, !on); if (!on) SINV_ONLYSLIP.set(id, false); else SINV_ONLYSLIP.delete(id);
   SINV.data = null; SINV.det.delete(id); await openSupInv(on ? "Moved to the packing slips." : "Taken off the packing slips."); }, true);
 function sinvPoFindHtml(r, edit) {
   return edit && SINV.poFind === r.id ? `<div class="sci-po"><label>${r.po_id ? "Change to another P.O." : "Match to PO"} <input id="sinv-po-${r.id}" placeholder="PO number, job number or customer" value="${esc(r.po_by_hand && !r.po_id ? r.po_number || "" : "")}" autocomplete="off"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button><div class="sci-po-found" data-sci-pofound="${r.id}"></div></div>` : "";
