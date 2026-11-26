@@ -7732,6 +7732,9 @@ table.th-stuck > thead th, table.th-stuck > thead td { position: relative; z-ind
 #s1-acts .fu-check[data-book-call]:focus-visible, #s1-acts .fu-check[data-book-board]:focus-visible, #s1-acts #inv-start-btn:focus-visible, #s1-acts #cust-apl:focus-visible, #s1-acts .fu-check[data-add-task]:focus-visible { outline: 3px solid #ffd966; outline-offset: 2px; }
 /* the statement's lines: the whole line opens its invoice (Carlo, Nov 12) */
 .stv-t .stv-rr-in { display: flex; gap: 6px; align-items: center; } .stv-t .stv-rr-in input, .stv-t .stv-rrh-in input { width: 18px; height: 18px; } .stv-t .stv-rrb, .stv-t .stv-rrgo { white-space: nowrap; font: 600 12.5px Arial, sans-serif; padding: 5px 9px; border: 1.5px solid #5f7fa0; border-radius: 8px; background: linear-gradient(#fff, #eef4fa); color: #23415f; cursor: pointer; } .stv-t .stv-rrgo { margin-top: 4px; background: linear-gradient(#5b93d8, #2f6dbd); color: #fff; border-color: #23415f; } .stv-t .stv-rrgo:disabled, .stv-t .stv-rrb:disabled { opacity: .5; cursor: default; } .stv-t .stv-rr-res { font-size: 12px; margin-top: 4px; white-space: normal; max-width: 260px; } .stv-t .st-warn { color: #9a5a00; } .stv-t .stv-rrh-in { font-weight: 400; margin-top: 4px; }
+html body .stv-t .stv-rrb { display: inline-flex; align-items: center; justify-content: center; min-width: 112px; min-height: 40px; padding: 6px 12px; font: 700 14px Arial, sans-serif; color: #fff; background: linear-gradient(#2fa8ff, #0b5fd6); border: 2px solid #0a2a55; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,.2); cursor: pointer; }
+html body .stv-t .stv-rrb:hover { background: linear-gradient(#55baff, #1a6fe6); } html body .stv-t .stv-rrb.stv-rrb-off { background: linear-gradient(#c9d3de, #9aa7b6); border-color: #6b7787; color: #fff; }
+html body .stv-t .stv-rrb:disabled { opacity: .55; cursor: default; }
 .stv-t tr.stv-go { cursor: pointer; } .stv-t tr.stv-go:hover > td, .stv-t tr.stv-go:focus-visible > td { background: #eef4fb; } .stv-t tr.stv-go:focus-visible { outline: 2px solid #23415f; outline-offset: -2px; }
 @media print { .stv-t tr.stv-go:hover > td { background: none; } }
 
@@ -24086,25 +24089,37 @@ const STV_RR = { sel: new Set(), busy: false, res: new Map() };
 const stvRrCan = r => !!r && !!SINV.data?.can_edit && Number(r.pages) > 0 && r.doc_type !== "charge";
 function stvRrHead() { if (!SINV.data?.can_edit) return ""; const n = STV_RR.sel.size;
   return `<th class="stv-c stv-rrh">Read again<div class="stv-rrh-in no-print"><input type="checkbox" data-stv-rrallt title="Tick every line that can be read again" aria-label="Tick every line"> All<br><button class="stv-rrgo" type="button" data-stv-rrgo ${n ? "" : "disabled"}>Read the ticked ones (${n})</button></div></th>`; }
-function stvRrCell(r) { if (!SINV.data?.can_edit) return ""; if (!stvRrCan(r)) return `<td class="stv-c stv-rr"><span class="quiet">—</span></td>`;
+function stvRrCell(r) { if (!SINV.data?.can_edit) return "";
+  if (!stvRrCan(r)) { const why = !r ? "We have no invoice of ours for this line yet, so there is no paper to read. Load the supplier's invoice first." : r.doc_type === "charge" ? "This is a service charge: there is no paper to read." : "There is no scanned page of it on file yet. Open it and press Load More Pages first.";
+    return `<td class="stv-c stv-rr"><div class="stv-rr-in no-print"><button class="stv-rrb stv-rrb-off" type="button" data-stv-rrno="${esc(why)}">🔄 Read Again</button></div></td>`; }
   const x = STV_RR.res.get(r.id);
-  return `<td class="stv-c stv-rr"><div class="stv-rr-in no-print"><input type="checkbox" data-stv-rrt="${r.id}" ${STV_RR.sel.has(r.id) ? "checked" : ""} aria-label="Tick to read it again"><button class="stv-rrb" type="button" data-stv-rr="${r.id}" ${STV_RR.busy ? "disabled" : ""}>🔄 Read again</button></div>${x ? `<div class="${x.ok ? "st-ok" : "st-warn"} stv-rr-res">${esc(x.t)}</div>` : ""}</td>`; }
+  return `<td class="stv-c stv-rr"><div class="stv-rr-in no-print"><input type="checkbox" data-stv-rrt="${r.id}" ${STV_RR.sel.has(r.id) ? "checked" : ""} aria-label="Tick to read it again"><button class="stv-rrb" type="button" data-stv-rr="${r.id}" ${STV_RR.busy ? "disabled" : ""}>🔄 Read Again</button></div>${x ? `<div class="${x.ok ? "st-ok" : "st-warn"} stv-rr-res">${esc(x.t)}</div>` : ""}</td>`; }
 const stvRrRow = id => (STV.all || []).find(x => x.id === id) || (STV.D?.rows || []).find(x => x.id === id) || (STV.src?.rows || []).find(x => x.id === id) || (SINV.data?.rows || []).find(x => x.id === id);
 // ONE way to read a supplier paper again (Carlo, Nov 26: the statement's Read again must work just like the main Read It Again). Both use this.
 async function sinvRereadCore(r, P, old, w, say) {
-  const id = r.id; let text = "", c0 = null, rz = {}, dueSay = "";
+  // Carlo, Nov 26, 2026: "same reader as on the main page that I can drop and load files". The saved pages go through the Drag and Drop reader itself:
+  // each page read (turned when it reads sideways, the boxes read again), then dropInFill (the supplier's Rules, the number, date, P.O., due date, amounts and lines).
+  const id = r.id; let text = "", dueSay = ""; const C = [];
+  const good = d => (d.words || []).filter(x => x.confidence > 80 && /[A-Za-z0-9]{3,}/.test(x.text)).length;
   for (let i = 0; i < P.length; i++) { const pg = P[i]; say(`Reading page ${i + 1} of ${P.length}… (about 15 seconds a page)`);
     if (!SINV.img.has(pg.id)) { const q = await db.rpc("supplier_doc_page", { p_id: pg.id }); if (q.data) SINV.img.set(pg.id, "data:image/jpeg;base64," + q.data); }
     if (!SINV.img.has(pg.id)) continue;
     const im = await new Promise((ok, no) => { const e = new Image(); e.onload = () => ok(e); e.onerror = () => no(new Error("the page picture did not open")); e.src = SINV.img.get(pg.id); });
-    const k = Math.max(1, Math.min(2, 2400 / im.naturalWidth)), c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+    const k = Math.max(1, Math.min(2, 2400 / im.naturalWidth)); let c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
     const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
-    if (!c0) c0 = c; text += "\n" + await stReadBoxes(w, c, (await w.recognize(c)).data.text); }
-  // the supplier's own rules (Carlo, Nov 18): their boxes on the first page. The due date is saved right away; the P.O. number is used below when the invoice has none.
-  try { await srLoad(); const RR = srRulesOf(r.supplier_id).filter(z => z.w); if (RR.length && c0) { say("Reading this supplier's own boxes…"); rz = (await srReadBest(c0, RR)).vals || {}; if (rz.po) rz.po = await srPoFix(r.supplier_id, rz.po);
-      if (rz.due && rz.due !== String(SINV.dues?.[id] || "").slice(0, 10)) { const q = await db.rpc("supplier_invoice_due_set", { p_id: id, p_due: rz.due }); if (!q.error) { SINV.dues = { ...(SINV.dues || {}), [id]: rz.due }; dueSay = ` The due date on it is ${fmtDate(rz.due)}: saved.`; } }
-      if (rz.ref && sinvKey(rz.ref) !== sinvKey(r.original_order) && sinvKey(rz.ref) !== sinvKey(r.number)) { const q = await db.rpc("supplier_invoice_ref_set", { p_id: id, p_ref: rz.ref }); if (!q.error) { r.original_order = rz.ref; dueSay += ` The invoice reference number on it is ${rz.ref}: saved.`; if (sinvIsCredit(r)) sinvOrigLoad(id).then(o => { const dd = SINV.det.get(id); if (dd) { dd.orig = o || {}; sinvOrigRedraw?.(); } }); } } } } catch { }
-  const cr = r.doc_type === "credit" || Number(r.total) < 0, before = sinvBeforeOwn(r); let L = sinvDedupLines(sinvParseLines(text, cr, r.supplier_id), before);
+    let d = (await w.recognize(c)).data;
+    if (good(d) < 8) for (const deg of [-90, 90]) { say(`Page ${i + 1} looks sideways: turning it…`); const t = dropInTurn(c, deg), e2 = (await w.recognize(t)).data; if (good(e2) > good(d) + 10) { d = e2; c = t; break; } }
+    C.push(c); text += "\n" + await stReadBoxes(w, c, d.text); }
+  if (!C.length) throw new Error("no page of it could be opened");
+  // the Drag and Drop reader's own step, with this supplier picked (it is put back as it was after)
+  say("Reading it the same way as Drag and Drop…");
+  const keep = { sup: DROPIN.sup, known: DROPIN.known }, y = { file: "re-read", slip: sinvIsSlipRec(r) && !(SINV_PG.get(id)?.two) };
+  try { DROPIN.sup = r.supplier_id; DROPIN.known = {}; await dropInFill(y, text, C); } finally { DROPIN.sup = keep.sup; DROPIN.known = keep.known; }
+  try { if (y.due && y.due !== String(SINV.dues?.[id] || "").slice(0, 10)) { const q = await db.rpc("supplier_invoice_due_set", { p_id: id, p_due: y.due }); if (!q.error) { SINV.dues = { ...(SINV.dues || {}), [id]: y.due }; dueSay = ` The due date on it is ${fmtDate(y.due)}: saved.`; } }
+    if (y.ref && sinvKey(y.ref) !== sinvKey(r.original_order) && sinvKey(y.ref) !== sinvKey(r.number)) { const q = await db.rpc("supplier_invoice_ref_set", { p_id: id, p_ref: y.ref }); if (!q.error) { r.original_order = y.ref; dueSay += ` The invoice reference number on it is ${y.ref}: saved.`; if (sinvIsCredit(r)) sinvOrigLoad(id).then(o => { const dd = SINV.det.get(id); if (dd) { dd.orig = o || {}; sinvOrigRedraw?.(); } }); } } } catch { }
+  const rz = (y.ruled || []).includes("po") ? { po: y.po } : {};
+  const cr = r.doc_type === "credit" || Number(r.total) < 0, before = y.subtotal != null && !y.slip ? Math.abs(Number(y.subtotal)) * (cr ? -1 : 1) : sinvBeforeOwn(r);
+  let L = (y.lines || []).length ? y.lines : sinvDedupLines(sinvParseLines(text, cr, r.supplier_id), before);
   // no PO on it yet, and the plain reading does not show one: look again the way Auto update does (shading washed out, loose words), then keep a number only if it is a PO in the app
   let po = !r.po_id ? rz.po || sinvPoFromText(text) : "";
   if (!r.po_id && !po) { try { const cands = new Set();
@@ -24131,7 +24146,7 @@ async function sinvRereadAsk(r, old, R, label) {
   if (!L.length) return { ok: false, t: "I read it again but could not pick out any lines." + (dueSay || " Nothing was changed.") };
   const amt = x => x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : Number(x.unit_price || 0) * Number(x.shipped ?? x.ordered ?? 1) * (1 - (Number(x.discount) || 0) / 100), sum = A => Math.round(A.reduce((a, x) => a + amt(x), 0) * 100) / 100;
   const li = A => A.length ? `<ul style="margin:4px 0 10px;padding-left:20px;text-align:left">${A.slice(0, 12).map(x => `<li>${esc(String(x.shipped ?? x.ordered ?? ""))} × ${esc([x.code, x.description].filter(Boolean).join(" · ").slice(0, 70))} · ${money(amt(x))}</li>`).join("")}${A.length > 12 ? `<li>…and ${A.length - 12} more</li>` : ""}</ul>` : `<p>(no lines)</p>`;
-  const k2 = await askChoice(hd + "Use the new reading?", `<b>New reading: ${L.length} ${L.length === 1 ? "line" : "lines"}, ${money(sum(L))}</b>${li(L)}<b>What it has now: ${old.length} ${old.length === 1 ? "line" : "lines"}, ${money(sum(old))}</b>${li(old)}${po ? `I also read <b>PO ${esc(po)}</b> on it. If that PO is in the app, I will match it. ` : ""}The invoice says ${money(before)} before tax. Lines typed in by hand are kept.`, [["yes", "Yes, use the new reading", true], ["", "No, keep what it has"]]);
+  const k2 = await askChoice(hd + "Use the new reading?", `<b>New reading: ${L.length} ${L.length === 1 ? "line" : "lines"}, ${money(sum(L))}</b>${li(L)}<b>What it has now: ${old.length} ${old.length === 1 ? "line" : "lines"}, ${money(sum(old))}</b>${li(old)}${po ? `I also read <b>PO ${esc(po)}</b> on it. If that PO is in the app, I will match it. ` : ""}The paper reads ${money(before)} before tax (our record has ${money(sinvBeforeOwn(r))}). Lines typed in by hand are kept.`, [["yes", "Yes, use the new reading", true], ["", "No, keep what it has"]]);
   if (k2 !== "yes") return { ok: true, t: "Nothing was changed." + dueSay };
   const { error } = await db.rpc("supplier_invoice_reread", { p_id: id, p_lines: L, p_extra: po ? { po_text: po } : {} }); if (error) return { ok: false, t: "Not saved: " + rpcErr(error) };
   return { ok: true, saved: true, t: `✓ Read again: ${L.length} lines, ${money(sum(L))} (it had ${old.length}).` + dueSay };
@@ -24156,6 +24171,7 @@ document.addEventListener("change", e => { const t = e.target;
   else if (t.matches?.("[data-stv-rrallt]")) { t.closest("table")?.querySelectorAll("[data-stv-rrt]").forEach(x => { if (x.closest("tr")?.offsetParent === null) return; x.checked = t.checked; const id = Number(x.dataset.stvRrt); t.checked ? STV_RR.sel.add(id) : STV_RR.sel.delete(id); }); }
   else return;
   document.querySelectorAll("[data-stv-rrgo]").forEach(b => { b.disabled = !STV_RR.sel.size || STV_RR.busy; b.textContent = `Read the ticked ones (${STV_RR.sel.size})`; }); });
+document.addEventListener("click", e => { const no = e.target.closest?.("[data-stv-rrno]"); if (!no) return; e.preventDefault(); e.stopPropagation(); alertMsg(no.dataset.stvRrno); }, true);
 document.addEventListener("click", e => { const one = e.target.closest?.("[data-stv-rr]"), all = e.target.closest?.("[data-stv-rrgo]"); if (!one && !all) return; e.preventDefault(); e.stopPropagation();
   if (one) return void stvRereadMany([Number(one.dataset.stvRr)]); stvRereadMany([...STV_RR.sel]); }, true);
 function stvFresh(id) { STV.all = null; STV.allFor = null; STV.src = null; STV_FLAGS.clear(); if (id != null) SINV_PG.delete(id); }
