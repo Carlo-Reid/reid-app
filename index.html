@@ -7745,6 +7745,7 @@ html body .stv-t .stv-rrb:disabled { opacity: .55; cursor: default; }
 .sinv-missbox.sinv-missys { border-left-color: #e08a2c; background: #fff8ef; } .sinv-missbox.sinv-missys b { color: #9a4a06; }
 .sinv-rmsq.sinv-missq { width: 128px; height: 104px; font-size: 14px; }
 .sinv-drop.sd-lit { outline: 3px solid #1f9d4a; outline-offset: 3px; }
+.sinv-chg-g .sinv-drop-slip { flex: 1 1 100%; width: 100%; margin: 8px 0 0; padding: 12px 14px; } .sinv-drop-slip b { font-size: 14px !important; } .sinv-drop-slip .sd-ico { font-size: 20px !important; }
 .sci-amts { margin: 6px 0 2px; font-size: 14.5px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
 /* Calls page for Kim (Carlo, Nov 12): where each call is, and who has paid */
 html body[data-page="calls"] #main article.calls.cl-clean .cl-tools > .cl-kmore { grid-column: 1 / -1; width: 100%; box-sizing: border-box; }
@@ -21973,6 +21974,12 @@ function sinvDetail(r, edit) {
 }
 // an invoice that's on the statement but was never loaded: drop its PDF (from the email) here; the app keeps the pages and reads the PO number
 // has = how many pages are already on file: then the box is for more pages that were found later (Carlo, Nov 24, 2026)
+function sinvSlipDropHtml(r) {
+  return `<section class="sinv-drop sinv-drop-slip" data-sinv-drop="${r.id}" data-sd-slip="1" ${Number(r.pages) > 0 ? `data-sd-more="${Number(r.pages)}"` : ""} tabindex="0"><div class="sd-ico" aria-hidden="true">⬇</div>
+    <b>Drop the packing slip of ${esc(r.number)} here</b>
+    <span>Drag the PDF attachment (not the email itself) onto this box, or <label class="link">pick the file<input type="file" accept="application/pdf,image/*" multiple hidden data-sinv-dropfile="${r.id}"></label>. Its pages go on this record with the invoice. A page already on file is not added twice.</span>
+    <div class="sd-msg" role="status"></div></section>`;
+}
 function sinvDropHtml(r, has) {
   return `<section class="sinv-drop" data-sinv-drop="${r.id}" ${has ? `data-sd-more="${has}"` : ""} tabindex="0"><div class="sd-ico" aria-hidden="true">⬇</div>
     <b>${has ? `Did you find more pages of ${esc(r.number)}, or a better copy? Drop them here` : `Drop ${esc(sinvShort(r.supplier) || "the supplier")}'s invoice ${esc(r.number)} here`}</b>
@@ -22108,8 +22115,8 @@ function stvPagesLoad(ids, redraw) {
   stvPagesLoad.busy = true; db.rpc("sinv_pages_check", { p_ids: need }).then(({ data, error }) => { stvPagesLoad.busy = false;
     need.forEach(id => { if (!SINV_PG.has(id)) SINV_PG.set(id, (!error && data?.[id]) || null); }); if (!error && data && Object.keys(data).length) redraw(); });
 }
-async function sinvAttachFiles(id, files) {
-  const box = document.querySelector(`[data-sinv-drop="${id}"]`), msg = box?.querySelector(".sd-msg"), say = t => { if (msg) msg.innerHTML = t; };
+async function sinvAttachFiles(id, files, box0) {
+  const box = box0 || document.querySelector(`[data-sinv-drop="${id}"]:not([data-sd-slip])`) || document.querySelector(`[data-sinv-drop="${id}"]`), slipL = !!box?.dataset.sdSlip, msg = box?.querySelector(".sd-msg"), say = t => { if (msg) msg.innerHTML = t; };
   const r = (SINV.data?.rows || []).find(x => x.id === id); if (!files.length || !box) return;
   const more = Number(box.dataset.sdMore) || 0;
   try {
@@ -22135,7 +22142,7 @@ async function sinvAttachFiles(id, files) {
     // a file with several invoices in it (a supplier's packet): only the pages with this invoice's number on them (and a page right after one, its next page)
     const flatN = String(r?.number || "").replace(/\W/g, "").toUpperCase(), onIt = PTX.map(t => !!flatN && t.replace(/\W/g, "").toUpperCase().includes(flatN));
     let keep = cv.map((_, i) => true);
-    if (cv.length > 2 && onIt.some(Boolean) && !onIt.every(Boolean)) {
+    if (!slipL && cv.length > 2 && onIt.some(Boolean) && !onIt.every(Boolean)) {
       // the number is often in a shaded box the plain reading misses (Carlo, Nov 24: all 4 pages of Boone C330314 were this invoice and only page 4 was kept).
       // So before a page is called another invoice: this invoice's P.O. on it, or the supplier's own Rules read this number (or its P.O.) in its box.
       const dg = x => String(x || "").replace(/\D/g, ""), nD = dg(flatN), poD = [r?.po_number, r?.po_text].map(dg).filter(x => x.length >= 6);
@@ -22166,12 +22173,12 @@ async function sinvAttachFiles(id, files) {
     const chosen = () => cv.map((_, i) => (all || keep[i]) && (twice || !dup[i]));
     let pages = pagesAll.filter((_, i) => chosen()[i]);
     const dupH = !have ? "" : `${nDup ? `<span class="st-look">${nDup === 1 ? "1 page of this file is" : nDup + " pages of this file are"} already on the invoice, so I leave ${nDup === 1 ? "it" : "them"} out: ${dup.map((d, i) => d ? `page ${i + 1} (the same as ${d})` : "").filter(Boolean).join(", ")}. <label><input type="checkbox" data-sd-twice> ${nDup === 1 ? "It is not the same page: add it" : "They are not the same pages: add them"} anyway</label></span>` : ""}${drop.length ? `<span class="st-look">${drop.length === 1 ? "1 page is" : drop.length + " pages are"} on file twice. I take the second copy off when you save.</span>` : ""}<span class="quiet">When you save, I put all the pages in their printed order.</span>`;
-    say(`<div class="sd-read">${hasNum ? `✓ It's invoice ${esc(r.number)}.` : `<span class="st-bad">⚠ I couldn't find the number ${esc(r?.number || "")} on it: make sure it's the right invoice.</span>`} ${leftOut ? `<span class="st-look">This file has ${cv.length} pages, but only page${pages.length === 1 ? "" : "s"} ${keep.map((k, i) => k ? i + 1 : null).filter(Boolean).join(", ")} ${pages.length === 1 ? "has" : "have"} ${esc(r.number)} on ${pages.length === 1 ? "it" : "them"}: I could not find it on the other ${leftOut}, so ${leftOut === 1 ? "it looks" : "they look"} like another invoice and won't be added. If ${leftOut === 1 ? "it is" : "they are"} this invoice's, tick the box. <label><input type="checkbox" data-sd-allpages> Add all ${cv.length} pages anyway</label></span>` : `${cv.length} ${cv.length === 1 ? "page" : "pages"}.`}
+    say(`<div class="sd-read">${slipL ? `✓ ${cv.length === 1 ? "1 page" : cv.length + " pages"} of the packing slip. They go on this record with the invoice.` : hasNum ? `✓ It's invoice ${esc(r.number)}.` : `<span class="st-bad">⚠ I couldn't find the number ${esc(r?.number || "")} on it: make sure it's the right invoice.</span>`} ${leftOut ? `<span class="st-look">This file has ${cv.length} pages, but only page${pages.length === 1 ? "" : "s"} ${keep.map((k, i) => k ? i + 1 : null).filter(Boolean).join(", ")} ${pages.length === 1 ? "has" : "have"} ${esc(r.number)} on ${pages.length === 1 ? "it" : "them"}: I could not find it on the other ${leftOut}, so ${leftOut === 1 ? "it looks" : "they look"} like another invoice and won't be added. If ${leftOut === 1 ? "it is" : "they are"} this invoice's, tick the box. <label><input type="checkbox" data-sd-allpages> Add all ${cv.length} pages anyway</label></span>` : `${cv.length} ${cv.length === 1 ? "page" : "pages"}.`}
       <label>PO number on it <input type="text" data-sd-po value="${esc(po)}" placeholder="PO number"></label>
-      <label>Subtotal <input type="number" step="0.01" data-sd-sub value="${sub ?? ""}"></label><label>HST <input type="number" step="0.01" data-sd-hst value="${hst ?? ""}"></label>
+      ${slipL ? "" : `<label>Subtotal <input type="number" step="0.01" data-sd-sub value="${sub ?? ""}"></label><label>HST <input type="number" step="0.01" data-sd-hst value="${hst ?? ""}"></label>`}
       ${dupH}
-      <button class="btn" type="button" data-sd-save>${more ? (pages.length ? "Add these pages to the invoice" : "Put the pages in order") : "Save the invoice"}</button>${more && !have ? `<span class="quiet">They go after the ${more} already on file.</span>` : ""}</div>`);
-    const repick = () => { pages = pagesAll.filter((_, i) => chosen()[i]); const sb = box.querySelector("[data-sd-save]"); if (sb && more) sb.textContent = pages.length ? "Add these pages to the invoice" : "Put the pages in order"; };
+      <button class="btn" type="button" data-sd-save>${slipL ? (pages.length ? "Add the packing slip to this record" : "Put the pages in order") : more ? (pages.length ? "Add these pages to the invoice" : "Put the pages in order") : "Save the invoice"}</button>${more && !have ? `<span class="quiet">They go after the ${more} already on file.</span>` : ""}</div>`);
+    const repick = () => { pages = pagesAll.filter((_, i) => chosen()[i]); const sb = box.querySelector("[data-sd-save]"); if (sb && (more || slipL)) sb.textContent = pages.length ? (slipL ? "Add the packing slip to this record" : "Add these pages to the invoice") : "Put the pages in order"; };
     box.querySelector("[data-sd-allpages]")?.addEventListener("change", e => { all = e.target.checked; repick(); });
     box.querySelector("[data-sd-twice]")?.addEventListener("change", e => { twice = e.target.checked; repick(); });
     box.querySelector("[data-sd-save]").addEventListener("click", async e => { e.target.disabled = true; say2("Saving…");
@@ -22193,6 +22200,7 @@ async function sinvAttachFiles(id, files) {
       SINV.det.delete(id); SINV_PG.delete(id); SINV.open = id;
       if (T && !pages.length) return void await openSupInv(`✓ Nothing new was added to ${r?.number || "the invoice"}.${tidy}`);
       if (T && !more) return void await openSupInv(`Invoice ${r?.number || ""} loaded.${tidy}`);
+      if (slipL) return void await openSupInv(`✓ The packing slip (${pages.length} ${pages.length === 1 ? "page" : "pages"}) was added to ${r?.number || "this record"}.${tidy}`);
       await openSupInv(more ? `✓ ${pages.length} ${pages.length === 1 ? "page was" : "pages were"} added to ${r?.number || "the invoice"}. ${tidy} Now press Read it again at the top, so I read the lines on the new ${pages.length === 1 ? "page" : "pages"} too.` : `Invoice ${r?.number || ""} loaded.`); });
     function say2(t) { const m2 = box.querySelector(".sd-read"); if (m2) m2.insertAdjacentHTML("beforeend", `<div>${t}</div>`); }
   } catch (e) { say(`<span class="st-bad">Couldn't load it: ${esc(e.message || String(e))}</span>`); }
@@ -22201,8 +22209,11 @@ document.addEventListener("dragover", e => { const b = e.target.closest?.("[data
 document.addEventListener("dragleave", e => { const b = e.target.closest?.("[data-sinv-drop]"); if (b && !b.contains(e.relatedTarget)) b.classList.remove("over"); });
 document.addEventListener("drop", e => { const b = e.target.closest?.("[data-sinv-drop]"); if (!b) return; e.preventDefault(); b.classList.remove("over");
   const files = [...(e.dataTransfer?.files || [])]; if (!files.length) { const m = b.querySelector(".sd-msg"); if (m) m.innerHTML = `<span class="st-bad">Nothing came through. Save the attachment from the email first, then drag the file here (dragging the email itself doesn't work).</span>`; return; }
-  sinvAttachFiles(Number(b.dataset.sinvDrop), files); });
-document.addEventListener("change", e => { const i = e.target.closest?.("[data-sinv-dropfile]"); if (i) sinvAttachFiles(Number(i.dataset.sinvDropfile), [...i.files]); });
+  sinvAttachFiles(Number(b.dataset.sinvDrop), files, b); });
+document.addEventListener("change", e => { const i = e.target.closest?.("[data-sinv-dropfile]"); if (i) sinvAttachFiles(Number(i.dataset.sinvDropfile), [...i.files], i.closest("[data-sinv-drop]")); });
+// the Packing Slip box's own loader (Carlo, Nov 26, 2026): its button opens the picker; the box under it takes a drop too
+document.addEventListener("click", e => { const b = e.target.closest?.("[data-sinv-slipload]"); if (!b) return; const box = document.querySelector(`[data-sinv-drop="${b.dataset.sinvSlipload}"][data-sd-slip]`); if (!box) return;
+  box.classList.add("sd-lit"); setTimeout(() => box.classList.remove("sd-lit"), 4000); box.scrollIntoView({ block: "nearest", behavior: "smooth" }); box.querySelector("input[type=file]")?.click(); });
 // the page under the payment window catches up with the new payments
 async function openSupInvQuiet() { if (document.body.dataset.page !== "supplier-invoices") return; const pp = await db.rpc("supplier_payments_all"); SINV.pays = pp.error ? [] : pp.data || []; const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; }
 // Make a payment to a supplier: how much, when, how (the ways of paying are learned: a new one is in the drop-down next time), a reference
@@ -23685,7 +23696,7 @@ function sinvChgHtml(r, edit, d, X) {
   return `<div class="sinv-chg">
     <div class="sinv-chg-g"><span class="sinv-chg-k">Supplier ${kind === "credit" ? "Credit" : "Invoice"}<br>Number <b>${esc(r.number || "")}</b></span><button class="sinv-rcbtn sinv-topb" type="button" data-sinv-view="inv" data-id="${r.id}" title="Open the supplier's invoice in a pop-up window"><span class="cb-t">View Supplier Invoice</span><span class="cb-c">Click Here</span></button>${b(`data-sinv-ed="${r.id}"`, "", kind === "credit" ? "Edit This Credit" : "Edit This Invoice", SINV.edInv === r.id ? "on" : "")}${Number(r.pages) > 0 ? b(`data-sinv-missload="${r.id}"`, "", "Load More Pages") : ""}${own ? b(`data-sinv-del="${r.id}" data-n="${esc(r.number || "")}"`, "", kind === "credit" ? "Delete The Credit" : "Delete The Invoice", "bad", true) : ""}${d ? sinvMissHtml(r, d, edit) : ""}${d ? sinvNeedsHtml(r, d, "sup") : ""}</div>
     ${r.po_id ? `<div class="sinv-chg-g"><span class="sinv-chg-k">Purchase Order<br>Number <b>${esc(r.po_number || "")}</b></span><button class="sinv-rcbtn sinv-topb" type="button" data-sinv-view="po" data-id="${r.id}" title="Open our purchase order in a pop-up window"><span class="cb-t">View Purchase Order</span><span class="cb-c">Click Here</span></button>${b(`data-sci-poopen="${r.po_id}"`, "", "Edit This P.O.")}${b(`data-sci-pofind="${r.id}"`, "", "Pick a New P.O.", SINV.poFind === r.id ? "on" : "")}${b(`data-sinv-podel="${r.id}" data-po="${r.po_id}" data-n="${esc(r.po_number || "")}"`, "", "Remove or Delete P.O.", "bad")}${d ? sinvNeedsHtml(r, d, "po") : ""}</div>` : d && (sinvNeedsHtml(r, d, "po") || mk) ? `<div class="sinv-chg-g"><span class="sinv-chg-k">Purchase Order<br>Number <b>None Yet</b></span>${b(`data-sci-pofind="${r.id}"`, "", "Pick a P.O.", SINV.poFind === r.id ? "on" : "")}${sinvNeedsHtml(r, d, "po")}${mk}</div>` : ""}
-    ${X && X.slip ? `<div class="sinv-chg-g sci-apps sci-sec"><span class="sinv-chg-k">Packing<br>Slip</span><button class="sinv-rcbtn sinv-topb" type="button" data-sinv-view="slip" data-id="${r.id}" title="Open the packing slip in a pop-up window"><span class="cb-t">View Packing Slip</span><span class="cb-c">Click Here</span></button>${X.slip}${d ? sinvNeedsHtml(r, d, "slip") : ""}</div>` : ""}
+    ${X && X.slip ? `<div class="sinv-chg-g sci-apps sci-sec"><span class="sinv-chg-k">Packing<br>Slip</span><button class="sinv-rcbtn sinv-topb" type="button" data-sinv-view="slip" data-id="${r.id}" title="Open the packing slip in a pop-up window"><span class="cb-t">View Packing Slip</span><span class="cb-c">Click Here</span></button>${edit ? b(`data-sinv-slipload="${r.id}"`, "", "Load The Packing Slip") : ""}${X.slip}${d ? sinvNeedsHtml(r, d, "slip") : ""}${edit ? sinvSlipDropHtml(r) : ""}</div>` : ""}
     ${X && X.orig ? `<div class="sinv-chg-g sci-apps sci-sec"><span class="sinv-chg-k">Original<br>Supplier Invoice</span>${X.orig}${sinvOrigLine(r, d)}</div>${sinvOrigFindHtml(r, d, edit)}` : ""}
     ${X && X.inv ? `<div class="sinv-chg-g sci-apps sci-sec"><span class="sinv-chg-k">Customer<br>Invoice</span>${X.inv}${d ? sinvNeedsHtml(r, d, "cinv") : ""}</div>` : ""}
     ${form}</div>`;
