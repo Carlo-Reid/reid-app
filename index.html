@@ -9089,6 +9089,8 @@ html body #main article.ie .ie-card[data-ie-card="lines"] .ie-table textarea.ie-
 #sr-box .sr-formsay { flex: 1 1 100%; font-size: 13.5px; color: #3d566f; }
 #sr-box .sr-pgs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 14px; color: #23415f; } #sr-box .sr-pgs .sr-b { min-width: 38px; } #sr-box .sr-pgs .sr-b.on { background: #dbe9f6; border: 2px solid #23415f; font-weight: 800; } #sr-box .sr-pgs span { font-size: 13px; color: #4a5a68; }
 #sr-box .sr-formed { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin: 0 0 10px; }
+#sr-box .sr-one { display: flex; gap: 8px; align-items: flex-start; max-width: 520px; font-size: 13.5px; line-height: 1.35; cursor: pointer; }
+#sr-box .sr-one input { width: auto; min-width: 0; margin-top: 3px; }
 #sr-box .sr-formed input { font: inherit; padding: 6px 8px; border: 1.5px solid #bcd0e3; border-radius: 8px; min-width: 0; width: 220px; max-width: 100%; }
 .cpy-btn { display: inline-grid; place-items: center; vertical-align: middle; width: 26px; height: 26px; margin: 0 0 0 6px; padding: 0; border: 1px solid #9fb6cc; border-radius: 5px; background: #fff; color: #23415f; font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 1px 2px rgba(35, 65, 95, .15); font-weight: 700; text-indent: 0; letter-spacing: 0; text-transform: none; }
 .cpy-btn:hover, .cpy-btn:focus-visible { background: #e6eff8; border-color: #23415f; } .cpy-btn.cpy-ok { background: #1f9d4a; border-color: #1f9d4a; color: #fff; } .cpy-btn.cpy-sure { width: auto; padding: 0 8px; background: #c0392b; border-color: #c0392b; color: #fff; }
@@ -22827,7 +22829,7 @@ async function dropInFill(x, text, C) {
   if (x.credit) { if (x.subtotal) x.subtotal = -Math.abs(x.subtotal); if (x.hst) x.hst = -Math.abs(x.hst); }
   // this supplier's own rules (Carlo, Nov 18, 2026): each rule's box on the first page is read by itself, and what it finds wins over the general reading
   { const sid = DROPIN.sup || x.sup || x.other; await srLoad(); const RR = sid ? srRulesOf(sid).filter(r => r.w) : [];
-    if (RR.length && C[0]) try { const z = (await srReadBest(C[0], RR)).vals, sg = x.credit ? -1 : 1; x.ruled = Object.keys(z);
+    if (RR.length && C[0]) try { const zb = await srReadBest(C[0], RR), z = zb.vals, sg = x.credit ? -1 : 1; x.ruled = Object.keys(z); x.form = zb.form; x.ruledSup = sid;
       if (z.number && !hit) x.number = z.number; if (z.date) x.date = z.date; if (z.po) x.po = await srPoFix(sid, z.po); if (z.due) x.due = z.due; if (z.ref) x.ref = z.ref;
       if (z.subtotal != null) x.subtotal = sg * Math.abs(z.subtotal); if (z.hst != null) x.hst = sg * Math.abs(z.hst); if (z.total != null) x.total = sg * Math.abs(z.total); } catch { } }
   x.lines = sinvDedupLines(sinvParseLines(text, x.credit, DROPIN.sup || x.sup || x.other), x.subtotal ?? (x.total != null ? Math.round(x.total / 1.13 * 100) / 100 : null));
@@ -22892,6 +22894,17 @@ async function dropInFiles(files) {
           if (g.amount != null && y.total == null && !y.slip) y.total = g.amount;   // handwritten: the amount from the statement
           if (g.guess) y.guess = g.guess;
           y.busy = null; dropInMatch(y); }
+        // a kind of paper marked "All the pages are one paper" in the supplier's Rules (Boone's Invoice Print Copy, Carlo, Nov 26, 2026): every page of the file is one invoice
+        { const mine = DROPIN.items.filter(z => z.file === x.file && z.f === x.f && !z.kind && !z.err && z.pages), lead = mine.find(z => srOnePaper(z.ruledSup, z.form));
+          if (lead && mine.length > 1) { const all = mine, first = all[0], tot = k => all.map(z => z[k]).filter(v => v != null && v !== "" && isFinite(v)).map(Number);
+            const a = first; a.pages = all.flatMap(z => z.pages); a.sharp = all.flatMap(z => z.sharp || []); a.lines = all.flatMap(z => z.lines || []); a.T = all.map(z => z.T || "").join("\n"); a.form = lead.form; a.ruledSup = lead.ruledSup; a.slip = false;
+            for (const k of ["number", "date", "po", "due", "ref"]) a[k] = [lead, ...all].map(z => z[k]).find(v => v != null && v !== "") ?? a[k];
+            const ls = Math.round(a.lines.reduce((t, l) => t + (Number(l.net_amount ?? l.amount) || 0), 0) * 100) / 100;
+            // the amounts: what one page prints for the whole invoice, or every page's amounts added up: whichever is closer to the lines added up
+            for (const k of ["subtotal", "hst", "total"]) { const v = tot(k); if (!v.length) continue; const last = v[v.length - 1], sum = Math.round(v.reduce((t, n) => t + n, 0) * 100) / 100, f = k === "subtotal" ? 1 : k === "total" ? 1.13 : .13;
+              a[k] = v.length > 1 && ls && Math.abs(sum - ls * f) < Math.abs(last - ls * f) ? sum : last; }
+            a.part = `${a.pages.length} pages of ${cv.length}, one ${lead.form} (your rule: all the pages are one paper)`;
+            all.slice(1).forEach(b => { const i = DROPIN.items.indexOf(b); if (i >= 0) DROPIN.items.splice(i, 1); b.gone = true; }); dropInMatch(a); } }
         // pages of one paper that the general reading split up, but this supplier's rules read the same number on each (Boone's 2-page packing slip): one paper again (Carlo, Nov 18, 2026)
         { const mine = DROPIN.items.filter(z => z.file === x.file && z.f === x.f && !z.kind && !z.err && z.pages && z.number && (z.ruled || []).includes("number")), pgNo = z => { const m = String(z.T || "").match(/\bPAGE\s*(?:NO\.?|#|:)?\s*(\d{1,2})\b/); return m ? +m[1] : /CONTINU/.test(String(z.T || "")) ? 50 : 99; };
           for (const a of mine) { if (a.gone) continue; const same = mine.filter(b => b !== a && !b.gone && b.number === a.number && !!b.slip === !!a.slip && (b.sup || b.other || 0) === (a.sup || a.other || 0)); if (!same.length) continue;
@@ -23439,6 +23452,9 @@ const SR_FORM0 = "Invoice";
 const srFormOf = r => String(r?.g || "").trim() || SR_FORM0;
 function srForms(rules) { const m = new Map(); for (const r of rules || []) { const g = srFormOf(r); if (!m.has(g)) m.set(g, []); m.get(g).push(r); } return [...m].map(([name, rules]) => ({ name, rules })); }
 const sinvKey = v => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+// A kind of paper whose pages are all one paper (Carlo, Nov 26, 2026, Boone's "Invoice Print Copy": "count all the pages as just one page so all the different page's info sum into one invoice every time"):
+// opts.onepaper.forms = the names of those kinds. A file whose first page fits such a kind is one invoice, every page's lines added together.
+const srOnePaper = (sup, form) => !!form && ((typeof SRULES !== "undefined" && SRULES.by?.[String(sup)]?.opts?.onepaper?.forms) || []).includes(form);
 async function srReadBest(c, rules) {
   const F = srForms((rules || []).filter(r => r.w)); let best = null;
   for (const f of F) { const z = await srRead(c, f.rules), n = Object.keys(z.vals).length, of = new Set(f.rules.map(r => r.f)).size, sc = of ? n / of : 0;
@@ -23558,7 +23574,7 @@ function srDraw() {
           : `<div class="sr-nopage">${SR.busy ? esc(SR.busy) : `No example is saved for <b>${esc(SR.form)}</b> yet.${can ? " Press the button below and pick one of their papers of this kind (a PDF or a picture)." : ""}`}</div>`)
         + (can ? `<div class="sr-pick"><button type="button" class="sr-b" data-sr-other>📄 ${n ? "Change the example" : "Load the example for this kind of paper"}</button>${SR.url ? `<button type="button" class="sr-b" data-sr-turn="90" title="Turn the page a quarter to the right">↻ Turn right</button><button type="button" class="sr-b" data-sr-turn="270" title="Turn the page a quarter to the left">↺ Turn left</button><button type="button" class="sr-b" data-sr-turn="180" title="Turn the page upside down">⇅ Upside down</button>` : ""}<input type="file" accept="application/pdf,image/*" hidden data-sr-file></div>` : ""); })()}</div>
     <div class="sr-right"><h3>The rules for: ${esc(SR.form)} (${FR.length})</h3>
-      ${can ? `<div class="sr-formed"><label class="sr-what">Name of this kind of paper <input type="text" maxlength="40" data-sr-fname value="${esc(SR.form)}"></label>${SR.forms.length > 1 ? `<button type="button" class="sr-b sr-del" data-sr-formdel>✕ Remove this kind of paper</button>` : ""}</div>` : ""}
+      ${can ? `<div class="sr-formed"><label class="sr-what">Name of this kind of paper <input type="text" maxlength="40" data-sr-fname value="${esc(SR.form)}"></label><label class="sr-one"><input type="checkbox" data-sr-one${(SR.opts?.onepaper?.forms || []).includes(SR.form) ? " checked" : ""}> <span><b>All the pages are one paper.</b> When a file's page fits this kind, every page of that file is one invoice: the lines of all the pages are added together.</span></label>${SR.forms.length > 1 ? `<button type="button" class="sr-b sr-del" data-sr-formdel>✕ Remove this kind of paper</button>` : ""}</div>` : ""}
       <div class="sr-acts"><button type="button" class="sr-sq" data-sr-try ${SR.canvas && FR.some(r => r.w) && !SR.busy ? "" : "disabled"}><span>🔎</span><b>${SR.busy && SR.canvas ? esc(SR.busy) : "Try the rules on this page"}</b></button>
         ${can ? `<button type="button" class="sr-sq sr-save" data-sr-save ${SR.dirty ? "" : "disabled"}><span>💾</span><b>Save the rules</b></button>` : ""}<button type="button" class="sr-sq" data-sr-x><span>✕</span><b>Close</b></button></div>
       ${FR.length ? `<ol class="sr-list">${FR.map(li).join("")}</ol>` : `<p class="sr-none">No rules for this kind of paper yet. Load its example first, then press Add a rule and draw the box on the example.</p>`}
@@ -23578,7 +23594,9 @@ function srDraw() {
   box.querySelector("[data-sr-formadd]")?.addEventListener("click", () => { let nm = "New kind of paper", k = 2; while (SR.forms.includes(nm)) nm = "New kind of paper " + k++; SR.forms.push(nm); srPg(nm); touch(); srFormGo(nm).then(() => { const i = document.querySelector("#sr-box [data-sr-fname]"); if (i) { i.focus(); i.select(); } }); });
   box.querySelector("[data-sr-fname]")?.addEventListener("change", e => { const nm = e.target.value.replace(/\s+/g, " ").trim().slice(0, 40), old = SR.form; if (!nm || nm === old) return void setTimeout(srDraw, 0);
     if (SR.forms.includes(nm)) { SR.msg = `<span class="sr-bad">Another kind of paper is already named ${esc(nm)}.</span>`; return void setTimeout(srDraw, 0); }
-    SR.rules.forEach(r => { if (srFormOf(r) === old) r.g = nm; }); SR.forms = SR.forms.map(f => f === old ? nm : f); if (SR.pages[old]) { SR.pages[nm] = SR.pages[old]; delete SR.pages[old]; } SR.form = nm; touch(); setTimeout(srDraw, 0); });
+    SR.rules.forEach(r => { if (srFormOf(r) === old) r.g = nm; }); SR.forms = SR.forms.map(f => f === old ? nm : f); if (SR.opts?.onepaper?.forms?.includes(old)) { SR.opts.onepaper.forms = SR.opts.onepaper.forms.map(f => f === old ? nm : f); SR.optsDirty = true; } if (SR.pages[old]) { SR.pages[nm] = SR.pages[old]; delete SR.pages[old]; } SR.form = nm; touch(); setTimeout(srDraw, 0); });
+  box.querySelector("[data-sr-one]")?.addEventListener("change", e => { SR.opts = SR.opts || {}; const L = new Set(SR.opts.onepaper?.forms || []); e.target.checked ? L.add(SR.form) : L.delete(SR.form);
+    if (L.size) SR.opts.onepaper = { forms: [...L] }; else delete SR.opts.onepaper; SR.optsDirty = true; touch(); const sv = box.querySelector("[data-sr-save]"); if (sv) sv.disabled = false; });
   box.querySelector("[data-sr-formdel]")?.addEventListener("click", async () => { const old = SR.form, n = FR.length;
     if (n && (await askChoice(`Remove ${old}?`, `<span class="ask-sq"></span>Its ${n} rule${n > 1 ? "s" : ""} will be removed. Nothing changes until you press Save the rules.`, [["go", "🗑|Yes, remove it|This kind of paper and its rules"], ["", "↩|No, keep it|Go back", true]])) !== "go") return;
     SR.rules = SR.rules.filter(r => srFormOf(r) !== old); SR.forms = SR.forms.filter(f => f !== old); delete SR.pages[old]; SR.form = ""; touch(); srFormGo(SR.forms[0]); });
