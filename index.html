@@ -23996,8 +23996,8 @@ function sinvOrigFindHtml(r, d, edit) {
   const row = i => `<div class="sci-row"><b>${esc(i.number || "")}</b> <span>${esc(fmtDate(i.date))}</span> <span>${i.po ? "P.O. " + esc(i.po) : ""}${i.why ? ` · <b>${esc(i.why)}</b>` : ""}</span> <span class="r">${money(Number(i.total))}</span> <button class="btn vtp-small" type="button" data-sinv-origset="${i.id}" data-for="${r.id}">＋ This is the original</button></div>`;
   return `<div class="sci-find sinv-origfind"><div class="cl-label">Which of the supplier's invoices does this credit take back?</div>
     ${(O.suggest || []).length ? `<div class="sci-sug"><span class="cl-label">Likely ones</span>${O.suggest.map(row).join("")}</div>` : ""}
-    <label>Find it <input type="search" data-sinv-origq="${r.id}" value="${esc(F?.q || "")}" placeholder="Their invoice number, a P.O., or an amount like 1654.32" autocomplete="off"></label>
-    ${F?.rows ? (F.rows.length ? F.rows.map(row).join("") : `<p class="quiet">Nothing found for “${esc(F.q)}”.</p>`) : ""}
+    <label>Find it <input type="search" data-sinv-origq="${r.id}" value="${esc(F?.q || "")}" placeholder="Search anything: their invoice number, a P.O., an amount, a customer, a job, a serial number…" autocomplete="off"></label>
+    ${F?.rows ? sinvOrigResults(r, F, row) : ""}
     <div class="sci-mkrow"><button class="sci-mk sci-mk-red" type="button" data-sinv-orignone="${r.id}">It Is Not In Our System</button>${O.link && O.link.how === "hand" || O.none ? `<button class="sci-mk" type="button" data-sinv-origauto="${r.id}">Let The App Find It</button>` : ""}</div></div>`;
 }
 async function sinvOrigLoad(id, q) {
@@ -24016,8 +24016,48 @@ document.addEventListener("click", async e => {
   if (error) { b.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
   const d = SINV.det.get(id), o = await sinvOrigLoad(id); if (d) d.orig = o || {}; SINV.origFind = null; SINV.origQ = null; stvFresh?.(); sinvOrigRedraw();
 });
+// the search is the master search (Carlo, Nov 26, 2026: "make that search a master search like the one on the customers page that can find anything"):
+// the credit's own look-up (their numbers, a P.O., an amount), plus Find anything by its number (find_number), the customers page's search of every file
+// (global_search) and customer names (customer_find). Supplier invoices of this supplier can be picked; everything else opens.
+function sinvOrigResults(r, F, row) {
+  const supN = String((SUPPLIERS || []).find(x => Number(x.id) === Number(r.supplier_id))?.name || (typeof sinvSupList === "function" ? sinvSupList().get(Number(r.supplier_id)) : "") || "").trim().toLowerCase();
+  const pick = [...(F.rows || [])], seen = new Set(pick.map(i => i.id).concat([r.id])), other = [], keys = new Set();
+  const add = h => { const k = h.kind + ":" + (h.id || h.label); if (keys.has(k)) return; keys.add(k); other.push(h); };
+  (F.num || []).forEach(h => { if (h.kind === "sinv" && h.id) {
+      if (seen.has(h.id)) return; const same = supN && String(h.why || "").toLowerCase().startsWith(supN);
+      if (same) { seen.add(h.id); pick.push({ id: h.id, number: String(h.label || "").replace(/^(Supplier invoice|Statement line)\s+/i, ""), date: h.date, total: h.amount, why: "Found by its number" }); return; } }
+    add({ kind: h.kind, id: h.id, customer_id: h.customer_id, label: h.label, why: [h.customer, h.why].filter(Boolean).join(" · "), date: h.date, amount: h.amount }); });
+  (F.gs || []).forEach(g => add({ kind: g.entity_type, id: g.entity_id, customer_id: g.customer_id, label: g.title, why: g.subtitle || "" }));
+  (F.cust || []).slice(0, 10).forEach(c => add({ kind: "customer", id: c.customer_id, customer_id: c.customer_id, label: c.display_name, why: [c.street, c.city].filter(Boolean).join(", ") }));
+  F.all = other;
+  const tag = k => (NUM_KIND[k] || [WHY?.[k] || k, "•"]);
+  const ot = other.map((h, k) => `<div class="sci-row sinv-orig-hit"><button class="link" type="button" data-sinv-orighit="${k}"><span class="num-k">${tag(h.kind)[1]} ${esc(tag(h.kind)[0])}</span> <b>${esc(h.label || "")}</b></button> <span>${esc(h.why || "")}${h.date ? " · " + esc(fmtDate(String(h.date).slice(0, 10))) : ""}</span> <span class="r">${h.amount != null ? money(Number(h.amount)) : ""}</span>${h.kind === "po" ? ` <button class="btn quiet-btn vtp-small" type="button" data-sinv-origpo="${esc(String(h.label || "").replace(/^PO\s+/i, "").split(/\s/)[0])}" data-for="${r.id}">Its supplier invoices</button>` : ""}</div>`).join("");
+  if (!pick.length && !other.length) return `<p class="quiet">Nothing found anywhere for “${esc(F.q)}”.</p>`;
+  return (pick.length ? `<div class="cl-label">Supplier invoices you can pick</div>${pick.map(row).join("")}` : `<p class="quiet">No supplier invoice of this supplier matches “${esc(F.q)}”.</p>`)
+    + (other.length ? `<div class="cl-label" style="margin-top:8px">Everything else in the system with “${esc(F.q)}” <span class="quiet">(click to open it)</span></div>${ot}` : "");
+}
+async function sinvOrigSearch(id, q) {
+  if (q.length < 2) return { id, q, rows: null };
+  const [a, n, g, c] = await Promise.all([sinvOrigLoad(id, q), q.replace(/[^A-Za-z0-9]/g, "").length >= 3 ? db.rpc("find_number", { p_q: q }) : Promise.resolve({ data: [] }),
+    db.rpc("global_search", { q, max_results: 25 }), /[A-Za-z]{2}/.test(q) ? db.rpc("customer_find", { p_q: custQ(q), p_limit: 10 }) : Promise.resolve({ data: null })]);
+  return { id, q, rows: (a || {}).rows || [], num: n.error ? [] : n.data || [], gs: g.error ? [] : g.data || [], cust: c.error ? [] : c.data?.rows || [] };
+}
 document.addEventListener("input", e => { const i = e.target.closest?.("[data-sinv-origq]"); if (!i) return; const id = Number(i.dataset.sinvOrigq), q = i.value.trim(); clearTimeout(SINV._origT);
-  SINV._origT = setTimeout(async () => { SINV.origQ = { id, q, rows: q.length < 2 ? null : ((await sinvOrigLoad(id, q)) || {}).rows || [] }; sinvOrigRedraw(id); }, 300); });
+  SINV._origT = setTimeout(async () => { const R = await sinvOrigSearch(id, q); if (i.isConnected && i.value.trim() !== q) return; SINV.origQ = R; sinvOrigRedraw(id); }, 300); });
+document.addEventListener("click", async e => {
+  const po = e.target.closest?.("[data-sinv-origpo]"); if (po) { e.preventDefault(); const id = Number(po.dataset.for), q = po.dataset.sinvOrigpo; SINV.origQ = await sinvOrigSearch(id, q); sinvOrigRedraw(id); return; }
+  const b = e.target.closest?.("[data-sinv-orighit]"); if (!b) return; e.preventDefault(); const h = (SINV.origQ?.all || [])[Number(b.dataset.sinvOrighit)]; if (!h) return;
+  const num = String(h.label || "").replace(/^\S+(\s+invoice|\s+line)?\s+/i, "");
+  switch (h.kind) {
+    case "invoice": case "payment": return h.kind === "invoice" && h.id ? openInvoice(h.id) : h.customer_id && openCustomerTab(h.customer_id);
+    case "estimate": return h.id && openEstimate(h.id);
+    case "po": POP.q = num; POP.range = "all"; return openPOs();
+    case "sinv": SINV.q = num; SINV.open = h.id; return openSupInv();
+    case "mail": { const w = window.open("", "_blank"), f = await db.rpc("supplier_mail_file", { p_id: h.id }); if (!f.data) { w?.close(); return alertMsg("Couldn't open the file."); }
+      const bin = atob(f.data.b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([u], { type: f.data.mime || "application/octet-stream" })); if (w) w.location = url; return; }
+    default: return h.customer_id ? openCustomerTab(h.customer_id) : null;
+  } });
 function sinvCustHtml(r, d, edit) {
   // a supplier's credit is tied to the supplier's own original invoice, not to one of our customer invoices, and it never goes in our stock (Carlo, Nov 25, 2026)
   if (sinvIsCredit(r)) { const O = sinvOrigTile(r, d, edit);
