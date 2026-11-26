@@ -34,7 +34,7 @@ BEGIN
       RAISE EXCEPTION 'Rule %: draw its box on the page', n; END IF;
     v := v || jsonb_build_array(jsonb_build_object('id', coalesce(nullif(e->>'id', ''), 'r' || n), 'f', f,
       'x', round((e->>'x')::numeric, 2), 'y', round((e->>'y')::numeric, 2), 'w', round((e->>'w')::numeric, 2), 'h', round((e->>'h')::numeric, 2),
-      'fmt', CASE WHEN e->>'fmt' = 'dmy' THEN 'dmy' ELSE 'mdy' END)
+      'fmt', CASE WHEN e->>'fmt' IN ('dmy', 'ymd') THEN e->>'fmt' ELSE 'mdy' END)
       -- g = which kind of the supplier's papers the rule is for (empty or 'Invoice' = their invoice; Boone also has 'Packing slip / Sales order')
       || CASE WHEN nullif(btrim(coalesce(e->>'g', '')), '') IS NULL OR btrim(e->>'g') = 'Invoice' THEN '{}'::jsonb ELSE jsonb_build_object('g', left(btrim(e->>'g'), 40)) END);
   END LOOP;
