@@ -32651,7 +32651,7 @@ function renderPbReview(msg) {
     ${auOn() ? "" : `<div class="pos-head"><h1>New costs to approve</h1><span><button class="btn quiet-btn" type="button" id="pbr-back">← Back to the price book</button></span></div>`}
     <p class="lead">Costs from supplier invoices that are different from the price book, and items that aren't in it yet. Approve to change the cost (or add the new item), or approve and set the price by your markup rule. ✕ keeps things as they are; a new item you don't approve never shows in the price book.</p>
     <section class="cl-tools">
-      ${open ? `<div class="sm-back" style="display:block"><button class="apb apb-grey apb-sm apb-sq" type="button" id="pbr-tiles-back"><span class="apb-ic" aria-hidden="true">⬅</span><span class="apb-tn">All lines</span></button></div>` : ""}
+      ${open ? `<div class="sm-back" style="display:block"><button class="apb apb-grey apb-sm apb-sq" type="button" id="pbr-tiles-back"><span class="apb-ic" aria-hidden="true">⬅</span><span class="apb-tn">All lines</span></button>${/price list/i.test(open.doc_ref || "") ? "" : `<button class="apb apb-gold apb-sm apb-sq" type="button" id="pbr-rescan" data-pbr-rescan="${open.id}" title="Read the supplier's paper of this line again from its scan"><span class="apb-ic" aria-hidden="true">🔄</span><span class="apb-tn">Re-scan the paper</span></button><span id="pbr-rescan-say" class="sm-rescan-no"></span>`}</div>` : ""}
       ${rows.length && !open ? `<label class="pbr-find">🔎 Search <input type="search" id="pbr-q" value="${esc(PB.updQ || "")}" placeholder="Item name, code, supplier or invoice number" autocomplete="off"></label>` : ""}
       <div class="ow-sortbar"><strong>${rows.length} waiting</strong><span id="pbr-shown"></span>${rows.length && ok && !open ? `<label class="pb-allpick"><input type="checkbox" id="pbr-all" ${pick.size === rows.length ? "checked" : ""}> Pick all</label>` : ""}${rows.length && !open ? `<button type="button" class="pbr-open pbr-copy" id="pbr-copy" title="Copy the item number of every line that is showing, one under the other, so you can paste them somewhere else">📋 Copy all item numbers</button>` : ""}
         <span class="staff-msg ok" role="status">${msg ? esc(msg) : ""}</span></div>
@@ -32673,6 +32673,20 @@ function renderPbReview(msg) {
   $("#pbr-back")?.addEventListener("click", () => { PB.review = false; loadPricebook(); });
   document.querySelectorAll("[data-pbr-tile]").forEach(b => b.addEventListener("click", () => { PB.updOpen = Number(b.dataset.pbrTile); renderPbReview(); $("#main").scrollTop = 0; }));
   $("#pbr-tiles-back")?.addEventListener("click", () => { PB.updOpen = null; renderPbReview(); });
+  // 🔄 Re-scan the paper on an opened Approvals line (Carlo, Nov 25): finds the line's paper; an emailed paper is read again on Supplier papers,
+  // a supplier invoice opens on its page and its Read It Again is pressed
+  $("#pbr-rescan")?.addEventListener("click", async e => { const b = e.currentTarget, say = t => { const x = $("#pbr-rescan-say"); if (x) x.textContent = t || ""; };
+    b.disabled = true; say("Finding the paper…");
+    const { data, error } = await db.rpc("pb_update_doc", { p_id: Number(b.dataset.pbrRescan) });
+    if (error || !data || data.none) { b.disabled = false; return say(error ? "I could not find the paper: " + error.message : "I do not have this line's paper, so there is nothing to scan."); }
+    if (data.mail) { AU.tab = "mail"; MAIL.open = String(data.mail); await openAutoUpdate("mail");
+      const on = (MAIL.data?.rows || []).some(r => String(r.id) === String(data.mail) && r.file && !MAIL.sentIds?.has(r.id));
+      if (on) return smReadAgain(data.mail);
+      MAIL.open = null; supMailShow(); return; }
+    if (data.invoice) { const q = await db.from("supplier_invoices").select("supplier_id").eq("id", data.invoice).maybeSingle();
+      SINV.sup = q.data?.supplier_id ?? SINV.sup; SINV.st = 0; SINV.pick = "all"; SINV.year = null; SINV.f = "all"; SINV.q = data.number || ""; SINV.open = Number(data.invoice); SINV.backTo = null; SINV.topFor = null; try { sinvSaveTab(); } catch {}
+      await openSupInv(); let n = 0; const go = () => { const r = document.querySelector("[data-sinv-reread]"); if (r) return r.click(); if (++n < 40) setTimeout(go, 250); }; go(); return; }
+    b.disabled = false; say("I do not have this line's paper, so there is nothing to scan."); });
   // the search bar at the top (Carlo, Nov 10): type any words; only the lines that have all of them stay. Pick all then picks only what is showing.
   const pbrShown = () => { const w = (PB.updQ || "").toLowerCase().split(/\s+/).filter(Boolean); let n = 0; const ids = [];
     document.querySelectorAll("[data-pbr-row]").forEach(tr => { const hit = w.every(x => tr.dataset.q.includes(x)); tr.hidden = !hit; if (hit) { n++; ids.push(Number(tr.dataset.pbrRow)); } });
@@ -34348,7 +34362,7 @@ const SMB_TRYING = `<svg class="smb-breath" viewBox="0 0 120 120" role="img" ari
   <rect x="40" y="74" width="40" height="15" rx="5" fill="#fff" stroke="#1b4d2b" stroke-width="4"/><path d="M50 74 v15 M60 74 v15 M70 74 v15 M40 81.5 h40" stroke="#1b4d2b" stroke-width="2.5"/>
   <path d="M100 30 c-5 8 -5 13 0 15 c5 -2 5 -7 0 -15z M16 40 c-4 7 -4 11 0 13 c4 -2 4 -6 0 -13z M108 56 c-3 5 -3 9 0 10 c3 -1 3 -5 0 -10z" fill="#4dabf7"/></svg>`;
 async function smReadAgain(id) {
-  const rows = (MAIL.data?.rows || []).filter(r => r.file && !MAIL.sentIds?.has(r.id)), row = rows.find(r => r.id === id); if (!row) return;
+  const rows = (MAIL.data?.rows || []).filter(r => r.file && !MAIL.sentIds?.has(r.id)), row = rows.find(r => String(r.id) === String(id)); if (!row) return; id = row.id;
   const order = rows.map(r => r.id), tr = document.querySelector(`[data-sm="${id}"]`), sup = tr?.querySelector(".sm-sup")?.value || null, again = row.status !== "new";
   document.querySelector(".smb-wrap")?.remove();
   const w = document.createElement("div"); w.className = "smb-wrap"; w.setAttribute("role", "dialog"); w.setAttribute("aria-label", "Reading a supplier paper");
