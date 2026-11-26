@@ -21753,21 +21753,22 @@ const sinvWords = t => new Set(String(t || "").toUpperCase().replace(/&DEG;|°/g
   .split(/[^A-Z0-9/.]+/).flatMap(w => (SINV_AB[w] || w).split(" ")).filter(w => (w.length > 1 && !["OF", "FOR", "OR", "THE", "AND", "WITH", "X", "C"].includes(w)) || /\d/.test(w)));
 function sinvSim(a, b) { const A = sinvWords(a), B = sinvWords(b); if (!A.size || !B.size) return 0; let n = 0; A.forEach(w => { if (B.has(w)) n++; }); return n / Math.min(A.size, B.size); }
 const sinvInvKey = (x, i) => "i:" + (x.code || x.description || i);
-function sinvPair(L, P, pairs) {
+function sinvPair(L, P, pairs, sid) {
+  const NM = rdOpt(sid, "lookpo").on ? (t => sinvSlNorm(t, sid)) : sinvNorm, LK = rdOpt(sid, "lookpo").on ? rdLookFn(sid) : (t => t), EN = rdOpt(sid, "ends"), IW = rdOpt(sid, "inwords");   // the supplier's Rules: how part numbers are compared
   const inv = L.map((x, i) => { const q = Number(x.shipped ?? x.ordered), up = x.unit_price != null ? Number(x.unit_price) : null, dsc = Number(x.discount) || 0;
     const each = up != null ? Math.round(up * (1 - dsc / 100) * 10000) / 10000 : null;
     const amt = x.net_amount != null && !isNaN(Number(x.net_amount)) ? Number(x.net_amount) : each != null && !isNaN(q) ? Math.round(each * q * 100) / 100 : null;
-    return { i, x, q: isNaN(q) ? null : q, each, amt, code: sinvNorm(x.code), comp: up == null && x.net_amount == null }; });
-  const po = P.map((y, j) => ({ j, y, q: Number(y.quantity), each: Number(y.unit_cost), amt: Number(y.line_total), code: sinvNorm(y.sku), model: sinvNorm(y.model), desc: sinvNorm(y.description), raw: " " + String(y.description || "").toUpperCase().replace(/<[^>]*>/g, " ") + " " }));
+    return { i, x, q: isNaN(q) ? null : q, each, amt, code: NM(x.code), comp: up == null && x.net_amount == null }; });
+  const po = P.map((y, j) => ({ j, y, q: Number(y.quantity), each: Number(y.unit_cost), amt: Number(y.line_total), code: NM(y.sku), model: NM(y.model), desc: NM(y.description), raw: " " + LK(String(y.description || "").toUpperCase().replace(/<[^>]*>/g, " ")) + " " }));
   const used = new Set(), pair = new Map(), hand = new Set();
   const take = (a, b) => { pair.set(a.i, b.j); used.add(b.j); };
   // paired by hand ("same part, labelled differently")
   (pairs || []).forEach(h => { const a = inv.find(a => !pair.has(a.i) && sinvInvKey(a.x, a.i) === h.inv_key), b = po.find(b => !used.has(b.j) && b.y.id === h.po_line_id); if (a && b) { take(a, b); hand.add(a.i); } });
-  const same = (x, y) => x && y && (x === y || (x.length > 4 && y.length > 4 && (x.endsWith(y) || y.endsWith(x))));
+  const same = (x, y) => x && y && (x === y || (EN.on && x.length >= EN.n && y.length >= EN.n && (x.endsWith(y) || y.endsWith(x))));
   // Kim, Nov 17, 2026 (Lennox 0575315525 / P.O. 110121428): Lennox's part codes are 5 long (Y3683, 26R87) and our P.O. has them only inside its words, and Lennox prints
   // some lines with no price (free with a program). So: a short code that has a letter and a number also counts when it stands alone in the P.O. line's words; lines with a
   // price are paired first; and a no-price line of a part that is also billed with a price on this paper is counted with that line (a.free, its quantity in xq).
-  const inWords = (a, b) => a.code.length >= 5 && /[A-Z]/.test(a.code) && /\d/.test(a.code) && new RegExp("(^|[^A-Z0-9])" + a.code + "([^A-Z0-9]|$)").test(b.raw);
+  const inWords = (a, b) => IW.on && a.code.length >= IW.n && /[A-Z]/.test(a.code) && /\d/.test(a.code) && new RegExp("(^|[^A-Z0-9])" + a.code + "([^A-Z0-9]|$)").test(b.raw);
   [...inv].sort((u, v) => (u.comp ? 1 : 0) - (v.comp ? 1 : 0)).forEach(a => { if (!a.code || pair.has(a.i)) return;
     const b = po.find(b => !used.has(b.j) && (same(a.code, b.code) || same(a.code, b.model) || (a.code.length >= 6 && b.desc.includes(a.code)) || inWords(a, b)));   // the PO's part code, its model number, or the code written in its description
     if (b) return take(a, b);
@@ -21785,18 +21786,18 @@ function sinvPair(L, P, pairs) {
 }
 function sinvCompare(r, L, P, what, edit) {
   if (r.doc_type === "invoice" && Number(r.total) > 0) L = L.map(x => !x.by_hand && Number(x.net_amount) < 0 ? { ...x, net_amount: -Number(x.net_amount) } : x);   // a plus invoice whose line amounts were read with a minus
-  const rows = sinvPair(L, P, (SINV.det.get(r.id) || {}).pairs), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol, split = Number(r.po_other_invoices) > 0,
+  const rows = sinvPair(L, P, (SINV.det.get(r.id) || {}).pairs, r.supplier_id), near = (x, y, tol) => x == null || y == null || Math.abs(x - y) <= tol, split = Number(r.po_other_invoices) > 0,
     partial = r.subtotal == null && /continued/i.test(r.read_notes || "") && !/end of order/i.test(r.read_notes || "") && !(Number(r.pages) >= 2) || sinvPgSysOn(r, SINV.det.get(r.id) || {});   // two or more pages on file: the CONTINUED page's other page is here (Carlo, Nov 18, 2026, slip C312797); a page the system made stands in for a missing one
   const issues = []; let ia = 0, pa = 0;
   // the P.O. is billed over more than one invoice: a P.O. line that is not on this invoice is looked for on the others, and shown with that invoice's own line
   const OTH = split ? ((SINV.oth && SINV.oth.get(r.id)) || []) : []; if (split && !(SINV.oth && SINV.oth.has(r.id))) sinvLoadOthers(r.id);
   OTH.forEach(O => { const free = rows.filter(x => x.b && !x.a && !x.o); if (!free.length || !(O.lines || []).length) return;
-    sinvPair(O.lines, free.map(x => x.b.y), null).forEach(pr => { if (!pr.a || !pr.b || pr.guess) return; const row = free.find(x => x.b.y === pr.b.y); if (row && !row.o) row.o = { a: pr.a, num: O.number, id: O.id }; }); });
+    sinvPair(O.lines, free.map(x => x.b.y), null, r.supplier_id).forEach(pr => { if (!pr.a || !pr.b || pr.guess) return; const row = free.find(x => x.b.y === pr.b.y); if (row && !row.o) row.o = { a: pr.a, num: O.number, id: O.id }; }); });
   const othUsed = [...new Set(rows.filter(x => x.o).map(x => x.o.num))];
   // Carlo, Nov 25, 2026 (P.O. 116308206: 100 ft of conduit on C437050 and 50 ft more on C437083, one P.O. line of 100): the same part billed again on another invoice of this P.O.
   // is added to this line, so the P.O. line is compared with, and matched to, what all the invoices billed
   const othFree = OTH.flatMap(O => (O.lines || []).filter(x => !rows.some(w => w.o && w.o.a.x === x)).map(x => ({ x, num: O.number }))), oxSeen = new Set();
-  const othMore = a => { const k = sinvSlNorm(a.x.code), no = { q: 0, amt: 0, nums: [] }; if (!k || r.doc_type !== "invoice" || sinvIsCredit(r) || oxSeen.has(k)) return no; const M = othFree.filter(e => sinvSlNorm(e.x.code) === k); if (!M.length) return no; oxSeen.add(k);
+  const othMore = a => { const k = sinvSlNorm(a.x.code, r.supplier_id), no = { q: 0, amt: 0, nums: [] }; if (!k || r.doc_type !== "invoice" || sinvIsCredit(r) || oxSeen.has(k)) return no; const M = othFree.filter(e => sinvSlNorm(e.x.code, r.supplier_id) === k); if (!M.length) return no; oxSeen.add(k);
     const qOf = e => Math.abs(Number(e.x.shipped ?? e.x.ordered) || 0), aOf = e => e.x.net_amount != null && !isNaN(Number(e.x.net_amount)) ? Math.abs(Number(e.x.net_amount)) : Math.abs((Number(e.x.unit_price) || 0) * (1 - (Number(e.x.discount) || 0) / 100) * qOf(e));
     return { q: M.reduce((t, e) => t + qOf(e), 0), amt: Math.round(M.reduce((t, e) => t + aOf(e), 0) * 100) / 100, nums: [...new Set(M.map(e => e.num))] }; };
   // Carlo, Nov 24, 2026 (C372518): one line whose amount was not printed (it was worked out from a list price and a discount the scan may have misread),
@@ -22215,8 +22216,8 @@ const DROPIN = { sup: null, name: "", items: [], known: null, kn: {} };
 // When the words have both, the invoice's own lines win: they carry the printed net amount. The part number and words come from the slip's line
 // with the same price and quantity when there is one (the slip prints them bigger).
 function sinvParseLines(text, credit, sid) {
-  const a = sinvParseLines0(text, credit); if (!a.length || a.every(x => x.net_amount != null) || !rdOpt(sid, "both").on) return a;
-  const b = sinvParseInv(text, credit); if (b.length < 2) return a;
+  const a = sinvParseLines0(text, credit, sid); if (!a.length || a.every(x => x.net_amount != null) || !rdOpt(sid, "both").on) return a;
+  const b = sinvParseInv(text, credit, sid); if (b.length < 2) return a;
   const used = new Set();
   return b.map(x => { const i = a.findIndex((y, k) => !used.has(k) && Math.abs(Math.abs(Number(y.unit_price)) - Math.abs(Number(x.unit_price))) < 0.0006 && Number(y.shipped) === Number(x.shipped)); if (i < 0) return x; used.add(i);
     return { ...x, code: a[i].code || x.code, description: String(a[i].description || x.description || "").replace(/\s*\(discount not read\)/, "") }; });
@@ -22225,7 +22226,8 @@ function sinvParseLines(text, credit, sid) {
 // "2) 0512M 1/2"X12' TYPE M HARD COP PIPE UN 6 38.900 | NET 233.40". The line number and the bars between the boxes come back as ) | ] or not at all,
 // and the unit can be misread (ON for UN), so any one to three letters count as the unit.
 // A scan can lose the quantity column ("uN 6.450 | NET 77.40"): then the quantity is worked out, net amount / (price less the discount), when that is a whole number.
-function sinvParseInv(text, credit) {
+function sinvParseInv(text, credit, sid) {
+  const PM = rdOpt(sid, "pnmin"), PD = rdOpt(sid, "digit").on, P2 = rdOpt(sid, "twice").on, KP = rdKeepRe(sid);   // the supplier's Rules: how part numbers are read
   const L = String(text || "").split(/\n/), out = [], seen = new Set(), n = t => Number(String(t).replace(/,/g, ""));
   const E = /^(.*?)\s+((?=[A-Z0-9]{0,2}[A-Z])[A-Z0-9]{1,3})\s+(\d{1,5})\s+([\d,]*\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)[\s|\[\]]+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
   const E2 = /^(.*?)\s+([A-Za-z]{1,3})\s+([\d,]*\.\d{3})(?!\d)[\s|\[\](){}]*(NET|\d{1,2}(?:\.\d+)?)[\s|\[\]]+([\d,]+\.\d{2})\s*(-)?[\s|\[\]]*$/i;
@@ -22243,14 +22245,14 @@ function sinvParseInv(text, credit) {
     const tk = e[1].trim().split(/\s+/); if (tk.length > 2 && /^[a-z]$/.test(tk[0]) && /^\d{1,3}$/.test(tk[1])) tk.shift();   // a stray letter in front of the line number ("a 8 oscc", Carlo, Nov 25, 2026, C405183)
     while (tk.length > 1 && /^[^A-Za-z0-9]*[iIl]?[|)\]}+%.:,;]*$/.test(tk[0])) tk.shift();   // a form bar read as | or I in front of the line number (Carlo, Nov 25, 2026, C381229 read again)
     const hadNo = /^[^A-Za-z0-9]*\d{1,3}[|)\]}+%.:,;]*$/.test(tk[0] || ""); const lineNo = hadNo ? Number(tk[0].replace(/\D/g, "")) : ""; while (tk.length > 1 && /^[^A-Za-z0-9]*(?:\d{1,3}|[iIl])?[|)\]}+%.:,;]*$/.test(tk[0])) tk.shift();
-    let code = (tk.shift() || "").replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "").replace(/[^A-Za-z0-9\-\/.]/g, "").toUpperCase();
-    { const c2 = (tk[0] || "").toUpperCase(); if (noQ && tk.length > 1 && c2.length === code.length && /^[A-Z0-9][A-Z0-9\-\/.]+$/.test(c2) && /\d/.test(c2) && [...c2].filter((ch, k) => ch !== code[k]).length <= 1) { code = c2; tk.shift(); } }   // the part number printed twice, the first one smudged
-    if (code.length < (hadNo ? 2 : 3) || (!/\d/.test(code) && !hadNo)) continue;   // a short part number (AB, 8C) counts when the line starts with its line number   // a part number with no digit in it (KITNIPOSB) counts when the line starts with its line number
+    let code = (tk.shift() || "").replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "").replace(KP, "").toUpperCase();
+    { const c2 = (tk[0] || "").toUpperCase(); if (P2 && noQ && tk.length > 1 && c2.length === code.length && /^[A-Z0-9][A-Z0-9\-\/.]+$/.test(c2) && /\d/.test(c2) && [...c2].filter((ch, k) => ch !== code[k]).length <= 1) { code = c2; tk.shift(); } }   // the part number printed twice, the first one smudged
+    if (code.length < (hadNo ? Math.max(1, PM.n - 1) : PM.n) || (PD && !/\d/.test(code) && !hadNo)) continue;   // a short part number (AB, 8C) counts when the line starts with its line number   // a part number with no digit in it (KITNIPOSB) counts when the line starts with its line number
     const neg = credit || !!e[7], row = { code, description: tk.join(" ").replace(/[|\[\]]/g, " ").replace(/\s+/g, " ").trim(), shipped: n(e[3]), backorder: null, unit_price: n(e[4]), discount: /^net$/i.test(e[5]) ? null : n(e[5]), net_amount: (neg ? -1 : 1) * n(e[6]) }, k = [row.code, row.shipped, row.unit_price, row.net_amount, lineNo].join("|");   // the same part billed on two lines of the paper is two lines
     if (!seen.has(k)) { seen.add(k); out.push(row); } }
   return out;
 }
-function sinvParseLines0(text, credit) {
+function sinvParseLines0(text, credit, sid) {
   const L = String(text || "").split(/\n/), out = [], n = t => Number(String(t).replace(/,/g, ""));
   const RX = /^\s*(\d{1,3})\s+([A-Z0-9][A-Z0-9\-\/.]{3,})\s+(\d+(?:\.\d+)?)\s+(?:(\d+(?:\.\d+)?)\s+)?(?:[A-Z]{1,3}\s+)?([\d,]+\.\d{2,4})\s+(?:(\d{1,2}(?:\.\d+)?)\s+)?([\d,]+\.\d{2})\s*(-)?\s*$/i;
   for (let i = 0; i < L.length; i++) {
@@ -22299,7 +22301,7 @@ function sinvParseLines0(text, credit) {
       if (!sk.has(k)) { sk.add(k); S.push(row); } }
     if (S.length > out.length) return S; }
   if (out.length) return out;
-  return sinvParseInv(text, credit);
+  return sinvParseInv(text, credit, sid);
 }
 // the PO number printed on a supplier's paper, from the words read off it (used by Read it again): Boone prints it under "Customer PO#", in the first box of the next line
 function sinvPoFromText(text) {
@@ -23058,11 +23060,11 @@ function sinvSysPagePaper(r, d) {
   // number, list price and discount, so the lines that are not on the invoice's pages on file go on it, priced like the supplier's invoice.
   let rd = null; if (two && (d.lines || []).some(x => x.code || x.unit_price != null)) { if (!SINV_INVW.has(r.id)) sinvSlWordsLoad(r.id); const IW = SINV_INVW.get(r.id);
     if (!IW) return `<section class="sinv-syspaper ssp-form" data-syspage="${r.id}"><div class="sinv-pgbar no-print"><b>Page ${M.no}: I am making it…</b></div></section>`;
-    const W = sinvSlNorm(IW.words), lo = Math.min(...IW.spans.map(z => z[0])), mx = Math.max(...(M.pc.miss || [M.no])), endOn = mx < (Number(M.pc.end) || 0);   // the missing pages come before the ones on file
-    const inSpan = n => endOn ? n >= lo : IW.spans.some(([a, b]) => n >= a && n <= b), byCode = x => { const c = sinvSlNorm(x.code); return c.length >= 4 && W.includes(c); };
+    const W = sinvSlNorm(IW.words, r.supplier_id), lo = Math.min(...IW.spans.map(z => z[0])), mx = Math.max(...(M.pc.miss || [M.no])), endOn = mx < (Number(M.pc.end) || 0);   // the missing pages come before the ones on file
+    const inSpan = n => endOn ? n >= lo : IW.spans.some(([a, b]) => n >= a && n <= b), byCode = x => { const c = sinvSlNorm(x.code, r.supplier_id); return c.length >= 4 && W.includes(c); };
     const on = x => { const n = parseInt(x.line, 10); return (n && IW.spans.length && inSpan(n)) || byCode(x); };
     rd = sinvDedupLines(d.lines, sinvBeforeOwn(r)).filter(x => !on(x)); }
-  const left = rd ? [] : sinvPair(sinvDedupLines(d.lines || [], sinvBeforeOwn(r)), d.po_lines || [], d.pairs).filter(x => x.b && !x.a).map(x => x.b.y);
+  const left = rd ? [] : sinvPair(sinvDedupLines(d.lines || [], sinvBeforeOwn(r)), d.po_lines || [], d.pairs, r.supplier_id).filter(x => x.b && !x.a).map(x => x.b.y);
   const pgs = (M.pc.miss || []).length ? M.pc.miss : [M.no], pgW = pgs.length > 1 ? pgs.slice(0, -1).join(", ") + " and " + pgs[pgs.length - 1] : String(pgs[0]);
   const lg = SINV.logos?.get(r.supplier_id), co = (typeof COMPANY !== "undefined" && COMPANY) || {}, us = (co.company_name || "Home Service Group Inc.").toUpperCase();
   const made = (String(r.read_notes || "").match(/Missing page made by the system in the app on ([A-Za-z]{3} \d{1,2}, \d{4})/) || [])[1] || "";
@@ -23105,7 +23107,7 @@ const sinvSlPgOffSet = (id, on) => { try { const L = sinvSlPgOffList().filter(x 
 const sinvSlPgMiss = (r, d) => { const pc = d && (d.pages || []).length ? SINV_PG.get(r.id) : null; if (!pc || pc.busy || !pc.two || !pc.slip) return null; const w = sinvMissWords(pc.slip); return w && w.n ? { pc: pc.slip, w, no: (pc.slip.miss || [])[0] || (Number(pc.slip.end) || Number(pc.slip.have) || 1) + 1 } : null; };
 const sinvSlPgOn = (r, d) => !!r && !sinvIsCredit(r) && !sinvSlPgOff(r.id) && !!sinvSlPgMiss(r, d);
 const sinvSlPgCan = (r, d) => !!r && !sinvIsCredit(r) && sinvSlPgOff(r.id) && !!sinvSlPgMiss(r, d);
-const sinvSlNorm = t => String(t || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1").replace(/S/g, "5").replace(/B/g, "8").replace(/Z/g, "2");
+const sinvSlNorm = (t, sid) => rdLookFn(sid !== undefined ? sid : (typeof SINV !== "undefined" ? SINV.sup : null))(String(t || "").toUpperCase().replace(/[^A-Z0-9]/g, ""));   // look-alike letters are the supplier's Rules (Carlo, Nov 25, 2026)
 function sinvSlWordsLoad(id) {
   if (SINV_SLW.has(id)) return; SINV_SLW.set(id, null);
   db.rpc("supplier_invoice_pages_info", { p_invoice: id }).then(({ data, error }) => { let cur = null, t = "", iw = "", sp = [];
@@ -23121,7 +23123,7 @@ function sinvSysSlipPgPaper(r, d) {
   const words = SINV_SLW.get(r.id); if (words == null) return `<section class="sinv-syspaper ssp-form ssp-slip" data-sysslippg="${r.id}"><div class="sinv-pgbar no-print"><b>The packing slip, page ${M.no}: I am making it…</b></div></section>`;
   const fromPo = !(d.lines || []).length && (d.po_lines || []).length > 0;
   const all = fromPo ? d.po_lines.map(y => ({ code: y.sku || "", description: y.description || "", ordered: y.quantity, shipped: y.quantity })) : sinvDedupLines(d.lines || [], sinvBeforeOwn(r));
-  const W = sinvSlNorm(words), on = x => { const c = sinvSlNorm(x.code); return c.length >= 4 && W.includes(c); };
+  const W = sinvSlNorm(words, r.supplier_id), on = x => { const c = sinvSlNorm(x.code, r.supplier_id); return c.length >= 4 && W.includes(c); };
   const found = all.filter(on).length, L = found ? all.filter(x => !on(x)) : all;   // none found on the pages on file = their words could not be used: every line is listed
   const lg = SINV.logos?.get(r.supplier_id), co = (typeof COMPANY !== "undefined" && COMPANY) || {}, us = (co.company_name || "Home Service Group Inc.").toUpperCase();
   const warn = `<div class="ssp-warn">THIS PACKING SLIP PAGE IS SYSTEM GENERATED. IT IS NOT THE SUPPLIER'S ORIGINAL.</div>`;
@@ -23258,17 +23260,37 @@ const RD_OPTS = [
             ["price", "The page has prices when it says any of", "unit price, price, prix, unit cost, amount, montant, extended, net amount, subtotal, sub-total, sous-total, $"]] },
   { k: "weight", t: "A line with a weight on it: its numbers are weights, never a cost", say: "On Auto update. Lennox prints the weight of each part (0.20 LB) where a price would be.",
     words: [["w", "Weight words", "lb, lbs, kg, kgs"]] },
-  { k: "lineno", t: "A line number is never a part number", say: "A code of digits only (001, 002) is the line's number on their paper: it is not matched to a part and no new part is made from it.",
+  { k: "keep", g: "pn", t: "Marks a part number can have besides letters and digits", say: "Every other mark a scan puts in a part number (©, |, [, ', a space) is taken out. Turn this rule off to keep letters and digits only.",
+    words: [["c", "Marks kept (type them, a space or comma between)", "- / ."]] },
+  { k: "pnmin", g: "pn", t: "The shortest part number", say: "Shorter is not a part number. A line that starts with its line number may have one less (AB, 8C on Boone's invoices). Auto update's packing slips need 4 at least.",
+    num: ["n", "Letters and digits, at least", 3, 1, 12] },
+  { k: "digit", g: "pn", t: "A part number has a digit in it", say: "A line that starts with its line number may still have a part number with no digit (KITNIPOSB). Turned off, a word with no digit can be a part number anywhere." },
+  { k: "twice", g: "pn", t: "A part number printed twice: the clean one is used", say: "On the invoice's lines. When the second one is just as long and only one letter is different, the first one was smudged, so the second one is kept." },
+  { k: "look", g: "pn", t: "Letters that look like digits count as the same when part numbers are compared", say: "Used when the app looks for a part on another page or on another invoice of the same P.O. A scan reads 0 as O, 1 as I or L, 5 as S, 8 as B, 2 as Z.",
+    words: [["pairs", "Pairs (the letter = the digit)", "O=0, I=1, L=1, S=5, B=8, Z=2"]] },
+  { k: "lookpo", g: "pn", off: true, t: "Use those look-alike letters when the invoice's lines are paired with our P.O.'s lines too", say: "Off as the usual: the P.O. pairing compares part numbers letter for letter. Turned on, OSPCLT on the paper pairs with 05PCLT on our P.O." },
+  { k: "ends", g: "pn", t: "Part numbers that end the same count as the same part", say: "When the invoice is paired with our P.O.: 1234-0798 on one side and 0798 on the other.",
+    num: ["n", "When both are at least this long", 5, 2, 20] },
+  { k: "inwords", g: "pn", t: "A part number found in the words of a P.O. line counts", say: "Lennox prints short codes (Y3683) that our P.O. has only inside its words. The code must have a letter and a digit.",
+    num: ["n", "When the code is at least this long", 5, 2, 20] },
+  { k: "lineno", g: "pn", t: "A line number is never a part number", say: "A code of digits only (001, 002) is the line's number on their paper: it is not matched to a part and no new part is made from it.",
     num: ["n", "Digits only, this many at most", 3, 1, 6] },
   { k: "slipdisc", t: "A packing slip with a list price and a discount: a line whose discount can not be read is left out", say: "Turned off, that line's list price is sent to Approvals as the cost (it is often too high)." },
   { k: "under", t: "A packing slip line priced under this amount gets what is left of the invoice's total", say: "On the open supplier invoice's compare. A best guess, shown as one, until the supplier's invoice is loaded.",
     num: ["n", "Under this many dollars", 1, 0.01, 1000] },
   { k: "both", t: "A paper that is both a packing slip and an invoice uses the invoice's lines", say: "When the papers are read (Drag and Drop, Read it again). The packing slip's part numbers and words are kept when the price and quantity match." },
 ];
-function rdOpt(sup, k) { const d = RD_OPTS.find(o => o.k === k) || {}, o = (sup != null && SRULES.by?.[String(sup)]?.opts?.[k]) || {}, z = { on: o.on !== false };
+function rdOpt(sup, k) { const d = RD_OPTS.find(o => o.k === k) || {}, o = (sup != null && typeof SRULES !== "undefined" && SRULES.by?.[String(sup)]?.opts?.[k]) || {}, z = { on: o.on != null ? o.on !== false : !d.off };
   for (const [wk, , dv] of d.words || []) z[wk] = o[wk] != null && String(o[wk]).trim() ? String(o[wk]) : dv;
   if (d.num) { const v = Number(o[d.num[0]]); z[d.num[0]] = isFinite(v) && v >= d.num[3] && v <= d.num[4] ? v : d.num[2]; }
   return z; }
+// the look-alike letters of the Rules ("O=0, I=1") as a function on upper-case words; turned off = nothing is changed
+function rdLookFn(sup) { const o = rdOpt(sup, "look"); if (!o.on) return t => t; const key = o.pairs, c = rdLookFn.c || (rdLookFn.c = new Map()); if (c.has(key)) return c.get(key);
+  const M = {}; String(key).split(",").forEach(p => { const m = p.trim().toUpperCase().match(/^([A-Z])\s*=\s*([0-9])$/); if (m) M[m[1]] = m[2]; });
+  const ks = Object.keys(M), re = ks.length ? new RegExp("[" + ks.join("") + "]", "g") : null, f = re ? (t => String(t).replace(re, ch => M[ch])) : (t => t); c.set(key, f); return f; }
+// the marks a part number keeps (Rules): everything else is taken out
+function rdKeepRe(sup) { const o = rdOpt(sup, "keep"), ch = o.on ? [...new Set(String(o.c).replace(/[A-Za-z0-9\s,]/g, ""))] : [];
+  return new RegExp("[^A-Za-z0-9" + ch.map(x => x.replace(/[\]\\^-]/g, "\\$&")).join("") + "]", "g"); }
 const rdChanged = (sup, k) => { const o = sup != null && SRULES.by?.[String(sup)]?.opts?.[k]; return !!(o && Object.keys(o).length); };
 // "a, b c, $" → one test: each word on its own (not inside a longer word); "$" = a dollar sign before a number
 function rdWordsRe(s) { const parts = String(s || "").split(",").map(x => x.trim()).filter(Boolean); if (!parts.length) return /(?!)/;
@@ -23397,13 +23419,18 @@ function srOptsHtml(can) {
   const O = SR.opts || {}, val = (k, f, dv) => O[k]?.[f] != null && String(O[k][f]).trim() !== "" ? O[k][f] : dv;
   return `<section class="sr-opts"><h3>How the app reads ${esc(srPos(SR.name))} papers</h3>
     <p class="sr-optsay">These rules are built into the app and are used on every paper of this supplier. Turn one off, or change its words or number, then press <b>Save the rules</b>. Words are kept apart with commas.</p>
-    ${RD_OPTS.map(d => { const on = O[d.k]?.on !== false, ch = O[d.k] && Object.keys(O[d.k]).length;
+    ${RD_OPTS.filter(d => d.g !== "pn").map(opt).join("")}
+  </section>
+  <section class="sr-opts sr-opts-pn"><h3>How the app reads part numbers</h3>
+    <p class="sr-optsay">How a part number is picked out of a line on ${esc(srPos(SR.name))} papers, and when two part numbers count as the same part. Change one, then press <b>Save the rules</b>.</p>
+    ${RD_OPTS.filter(d => d.g === "pn").map(opt).join("")}
+  </section>`;
+  function opt(d) { const on = O[d.k]?.on != null ? O[d.k].on !== false : !d.off, ch = O[d.k] && Object.keys(O[d.k]).length;
       return `<div class="sr-opt${on ? "" : " off"}"><label class="sr-opt-on"><input type="checkbox" data-sro-on="${d.k}" ${on ? "checked" : ""} ${can ? "" : "disabled"}><b>${esc(d.t)}</b></label>
         <p>${esc(d.say || "")}</p>
         ${(d.words || []).map(([wk, lab, dv]) => `<label class="sr-what">${esc(lab)}<textarea rows="${Math.min(5, Math.max(2, Math.ceil(String(val(d.k, wk, dv)).length / 50)))}" data-sro-w="${d.k}" data-sro-f="${wk}" ${can && on ? "" : "disabled"}>${esc(val(d.k, wk, dv))}</textarea></label>`).join("")}
         ${d.num ? `<label class="sr-what">${esc(d.num[1])} <input type="number" step="any" min="${d.num[3]}" max="${d.num[4]}" data-sro-n="${d.k}" data-sro-f="${d.num[0]}" value="${esc(String(val(d.k, d.num[0], d.num[2])))}" ${can && on ? "" : "disabled"}></label>` : ""}
-        ${ch && can ? `<button type="button" class="sr-b" data-sro-reset="${d.k}">↺ Back to the usual</button>` : ""}</div>`; }).join("")}
-  </section>`;
+        ${ch && can ? `<button type="button" class="sr-b" data-sro-reset="${d.k}">↺ Back to the usual</button>` : ""}</div>`; }
 }
 function srOptsWire(box) {
   const set = (k, f, v) => { SR.opts = SR.opts || {}; const o = SR.opts[k] = SR.opts[k] || {}; o[f] = v; SR.optsDirty = true; SR.dirty = true; const sv = box.querySelector("[data-sr-save]"); if (sv) sv.disabled = false; };
@@ -34314,7 +34341,8 @@ function parseBooneSlip(lines, sid) {
     const m = ln.match(/(\d[\d,]*\.\d{5})(?!\d)/); if (!m) continue;
     const tb = ln.slice(0, m.index).replace(/[|\[\](){}]/g, " ").trim().split(/\s+/).filter(Boolean), ta = ln.slice(m.index + m[0].length).replace(/[|\[\](){}]/g, " ").trim().split(/\s+/).filter(Boolean);
     let i = /^0\d\d$/.test(tb[0] || "") ? 1 : 0, code = tb[i] || ""; if (i === 0 && /^0\d\d[A-Z0-9]{6,}$/i.test(code)) code = code.slice(3);
-    if (!/^[A-Z0-9][A-Z0-9\-./]{3,}$/i.test(code) || !/\d/.test(code)) continue;
+    code = code.replace(rdKeepRe(sid), "");
+    if (!/^[A-Z0-9]/i.test(code) || code.length < Math.max(4, rdOpt(sid, "pnmin").n) || (rdOpt(sid, "digit").on && !/\d/.test(code))) continue;
     code = code.toUpperCase();
     const unit = Number(m[1].replace(/,/g, "")); if (!(unit > 0)) continue;
     const ints = tb.slice(i + 1).slice(-5).map(t => t.replace(/[.,;:]$/, "")).filter(t => /^\d{1,4}$/.test(t)).map(Number), qty = ints.length >= 3 ? ints[ints.length - 2] || ints[ints.length - 3] : ints.length ? ints[0] : 1;
