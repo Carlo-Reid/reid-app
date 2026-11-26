@@ -638,6 +638,39 @@ def sync_purchase_orders(cur, st, state, new_state):
                           (SELECT p.id FROM pricebook_items p WHERE p.st_id = l.sku ORDER BY p.active DESC, p.id LIMIT 1) FROM _s_pol l JOIN purchase_orders po ON po.st_id = l.po_st
                    WHERE true """ + keep + """
                    ORDER BY po.id, l.n""")
+    # lines that were kept (received, or fixed in the app) still get their part from ServiceTitan's line
+    cur.execute("""UPDATE purchase_order_lines x SET item_id = (SELECT p.id FROM pricebook_items p WHERE p.st_id = l.sku ORDER BY p.active DESC, p.id LIMIT 1)
+                   FROM _s_pol l JOIN purchase_orders po ON po.st_id = l.po_st
+                   WHERE x.purchase_order_id = po.id AND x.item_id IS NULL AND l.sku IS NOT NULL
+                     AND lower(btrim(x.description)) = lower(btrim(l.descr))
+                     AND EXISTS (SELECT 1 FROM pricebook_items p WHERE p.st_id = l.sku)""")
+    # one time: every ServiceTitan PO is asked for again so the lines already here get their part (item number)
+    if not (state.get("po-sku-link") or {}).get("since"):
+        cur.execute("DROP TABLE IF EXISTS _s_psl; CREATE TEMP TABLE _s_psl (po_st bigint, descr text, qty numeric, sku bigint) ON COMMIT DROP")
+        ok, got_n = True, 0
+        with cur.copy("COPY _s_psl FROM STDIN") as cp:
+            for y in range(2004, datetime.now(timezone.utc).year + 1):
+                try:
+                    got = pull_pages(st, "inventory/v2/tenant/{t}/purchase-orders",
+                                     {"createdOnOrAfter": f"{y}-01-01T00:00:00Z", "createdBefore": f"{y + 1}-01-01T00:00:00Z"})
+                except RuntimeError as e:
+                    log(f"  PO part numbers: ServiceTitan wouldn't list {y} ({str(e)[:160]}); will try again next time.")
+                    ok = False; break
+                for p in got:
+                    for it in p.get("items") or []:
+                        if it.get("skuId"):
+                            cp.write_row((int(p["id"]), (it.get("description") or it.get("skuName") or it.get("skuCode") or "Item").strip()[:2000],
+                                          round(float(it.get("quantity") or 0), 2), int(it["skuId"])))
+                            got_n += 1
+        if ok:
+            cur.execute("""UPDATE purchase_order_lines x SET item_id = (SELECT p.id FROM pricebook_items p WHERE p.st_id = s.sku ORDER BY p.active DESC, p.id LIMIT 1)
+                           FROM (SELECT DISTINCT ON (po_st, lower(btrim(descr)), qty) * FROM _s_psl ORDER BY po_st, lower(btrim(descr)), qty) s
+                           JOIN purchase_orders po ON po.st_id = s.po_st
+                           WHERE x.purchase_order_id = po.id AND x.item_id IS NULL
+                             AND lower(btrim(x.description)) = lower(btrim(s.descr))
+                             AND EXISTS (SELECT 1 FROM pricebook_items p WHERE p.st_id = s.sku)""")
+            log(f"  PO part numbers: {cur.rowcount} older ServiceTitan PO lines linked to their part ({got_n} lines read).")
+            new_state["po-sku-link"] = {"continue_from": None, "since": datetime.now(timezone.utc).isoformat()}
     return saved
 
 
