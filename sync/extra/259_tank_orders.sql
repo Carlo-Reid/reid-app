@@ -17,7 +17,7 @@ ALTER TABLE public.tank_orders ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.tank_orders FROM PUBLIC, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION public._tank_office() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $function$
-  SELECT public.current_staff_role() IN ('owner', 'admin', 'office', 'dispatcher', 'accounting') OR public.has_permission('po.create') $function$;
+  SELECT coalesce(public.current_staff_role() IN ('owner', 'admin', 'office', 'dispatcher', 'accounting'), false) OR coalesce(public.has_permission('po.create'), false) $function$;   -- never NULL: a NULL here let 'IF NOT _tank_office()' through (found Nov 26, 2026)
 
 -- what the bottom of the invoice shows: who pays, the tank P.O.s made, and the invoice lines a tank can be picked from
 CREATE OR REPLACE FUNCTION public.tank_order_for(p_invoice bigint) RETURNS jsonb
