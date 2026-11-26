@@ -22046,7 +22046,7 @@ function sinvPagesCalc(P) {
     for (let k = cur + 1; k < num; k++) miss.push(k); cur = num; prev = p;
   }
   const after = !!Q[Q.length - 1].cont;
-  if (about && miss.length > 2 * n + 3) return { unsure: true, have: n, miss: [] };   // far more pages missing than on file, worked out only from line numbers: a misread, so I say nothing
+  if ((about || !sz.length) && miss.length > 2 * n + 3) return { unsure: true, have: n, miss: [] };   // far more pages missing than on file, with no line numbers to back it up: a misread page number, so I say nothing (Carlo, Nov 26: C421931)   // far more pages missing than on file, worked out only from line numbers: a misread, so I say nothing
   if (!after && !miss.length && Q.every(p => p.no == null && p.line == null)) return { unsure: true, have: n, miss: [] };   // nothing could be read on the pages: I do not say "none missing"
   return { miss, about, after, have: n, total: after ? null : cur, end: cur };
 }
@@ -22067,11 +22067,13 @@ const SINV_PG = new Map();   // supplier invoice id -> the answer of sinvPagesCa
 async function sinvRulePageNo(sup, pic, kind) {
   try { await srLoad(); let RR = srRulesOf(sup).filter(z => z.w && z.f === "page"); const slipF = z => /slip|pick|packing|ticket|sales\s*order/i.test(srFormOf(z));
     if (kind) { const K = RR.filter(z => (kind === "slip") === slipF(z)); if (K.length) RR = K; else return null; }   // a pick ticket is read by the packing slip's box, never by the invoice's box
-    if (!RR.length || !pic) return null;
+    if (!RR.length || !pic) return null; const PF = new Set(RR.map(srFormOf));
     let c = pic; if (typeof pic === "string") { const im = await new Promise((ok, no) => { const e = new Image(); e.onload = () => ok(e); e.onerror = no; e.src = pic; });
       const k = Math.max(1, Math.min(2, 2400 / im.naturalWidth)); c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
       const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height); }
-    for (const f of srForms(RR)) { const v = (await srRead(c, f.rules)).vals.page; if (v != null) return v; }
+    // only the page box of the kind of paper this page really is: the kind whose other boxes read on it (Carlo, Nov 26: C421931, an Invoice Print Copy with no page number, read "36" from another kind's page box)
+    const b = await srReadBest(c, srRulesOf(sup).filter(z => z.w && (!kind || (kind === "slip") === slipF(z))));
+    if (b.n < 2 || b.sc < .5 || !PF.has(b.form)) return null; return b.vals.page ?? null;
   } catch (e) {} return null;
 }
 async function sinvPagesCheck(id, pages) {
