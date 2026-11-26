@@ -23332,6 +23332,19 @@ async function srShowPage(i) {
   SR.url = P.imgs[SR.pg] || ""; if (SR.url) { try { const c = await srCanvas(SR.url); if (!alive()) return; SR.canvas = c; } catch { } }
   SR.busy = ""; srDraw();
 }
+async function srTurn(deg) {   // turn the example page shown (it was scanned or loaded the wrong way); every page of the example is kept and saved again
+  const P = srPg(), form = SR.form, sup = SR.sup, i = SR.pg, n = srPgCount(P); if (!SR.url) return;
+  SR.busy = "Turning the page…"; srDraw();
+  try { for (let k = 0; k < n; k++) if (!P.imgs[k] && P.n > k) { const d = await db.rpc("supplier_rule_example_page", { p_supplier: sup, p_form: P.was || form, p_page: k + 1 }); if (d.data) P.imgs[k] = "data:image/jpeg;base64," + d.data; }
+    if (P.imgs.slice(0, n).some(u => !u)) throw new Error("I could not open every page of the example.");
+    const c = await srCanvas(P.imgs[i]), t = document.createElement("canvas"), side = deg % 180 !== 0;
+    t.width = side ? c.height : c.width; t.height = side ? c.width : c.height; const x = t.getContext("2d");
+    x.translate(t.width / 2, t.height / 2); x.rotate(deg * Math.PI / 180); x.drawImage(c, -c.width / 2, -c.height / 2);
+    P.imgs[i] = t.toDataURL("image/jpeg", 0.85); P.changed = true; SR.dirty = true; SR.busy = "";
+    SR.msg = `<span class="sr-ok">✔ Page ${i + 1} is turned. When it reads the right way up, press Save the rules.</span>`;
+    if (SR.sup === sup && SR.form === form) await srShowPage(i); }
+  catch (er) { SR.busy = ""; SR.msg = `<span class="sr-bad">${esc(er.message || String(er))}</span>`; srDraw(); }
+}
 async function srFormGo(name) {   // show another kind of paper: its own boxes, on its own example
   if (name === SR.form) return; SR.form = name; SR.msg = ""; await srShowPage(0);
 }
@@ -23387,7 +23400,7 @@ function srDraw() {
         + (SR.url ? `<div class="sr-page${SR.pick ? " drawing" : ""}" data-sr-page><img alt="The example page of this kind of paper" src="${SR.url}" draggable="false">${FR.map(zone).join("")}<div class="sr-rub" hidden></div></div>
           <p class="sr-from">${P.changed ? `<b class="sr-bad">This example is not saved yet. Press Save the rules.</b> ` : `<b class="sr-ok">✔ This is the saved example for ${esc(SR.form)}.</b> It is the same one every month. `}${P.from ? `It is ${esc(P.from)}.` : ""}</p>`
           : `<div class="sr-nopage">${SR.busy ? esc(SR.busy) : `No example is saved for <b>${esc(SR.form)}</b> yet.${can ? " Press the button below and pick one of their papers of this kind (a PDF or a picture)." : ""}`}</div>`)
-        + (can ? `<div class="sr-pick"><button type="button" class="sr-b" data-sr-other>📄 ${n ? "Change the example" : "Load the example for this kind of paper"}</button><input type="file" accept="application/pdf,image/*" hidden data-sr-file></div>` : ""); })()}</div>
+        + (can ? `<div class="sr-pick"><button type="button" class="sr-b" data-sr-other>📄 ${n ? "Change the example" : "Load the example for this kind of paper"}</button>${SR.url ? `<button type="button" class="sr-b" data-sr-turn="90" title="Turn the page a quarter to the right">↻ Turn right</button><button type="button" class="sr-b" data-sr-turn="270" title="Turn the page a quarter to the left">↺ Turn left</button><button type="button" class="sr-b" data-sr-turn="180" title="Turn the page upside down">⇅ Upside down</button>` : ""}<input type="file" accept="application/pdf,image/*" hidden data-sr-file></div>` : ""); })()}</div>
     <div class="sr-right"><h3>The rules for: ${esc(SR.form)} (${FR.length})</h3>
       ${can ? `<div class="sr-formed"><label class="sr-what">Name of this kind of paper <input type="text" maxlength="40" data-sr-fname value="${esc(SR.form)}"></label>${SR.forms.length > 1 ? `<button type="button" class="sr-b sr-del" data-sr-formdel>✕ Remove this kind of paper</button>` : ""}</div>` : ""}
       <div class="sr-acts"><button type="button" class="sr-sq" data-sr-try ${SR.canvas && FR.some(r => r.w) && !SR.busy ? "" : "disabled"}><span>🔎</span><b>${SR.busy && SR.canvas ? esc(SR.busy) : "Try the rules on this page"}</b></button>
@@ -23419,6 +23432,7 @@ function srDraw() {
     try { const z = await srFilePages(f), P = srPg(form); P.imgs = z.pages.map(c => c.toDataURL("image/jpeg", 0.82)); P.from = f.name; P.changed = true; SR.dirty = true; SR.busy = "";
       SR.msg = `<span class="sr-ok">✔ I opened ${z.pages.length} page${z.pages.length > 1 ? "s" : ""} of ${esc(f.name)}${z.more ? ` (its last ${z.more} page${z.more > 1 ? "s" : ""} are left out: 8 at most)` : ""}. Check the name of this kind of paper, then press Save the rules.</span>`; if (SR.form === form) await srShowPage(0); else srDraw(); }
     catch (er) { SR.busy = ""; SR.msg = `<span class="sr-bad">${esc(er.message || String(er))}</span>`; srDraw(); } });
+  box.querySelectorAll("[data-sr-turn]").forEach(b => b.addEventListener("click", () => { if (!SR.busy) srTurn(Number(b.dataset.srTurn)); }));
   box.querySelectorAll("[data-sr-pgno]").forEach(b => b.addEventListener("click", () => srShowPage(Number(b.dataset.srPgno))));
   box.querySelector("[data-sr-try]")?.addEventListener("click", async () => { SR.busy = "Reading…"; srDraw();
     try { await stLoadJs("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"); const z = await srRead(SR.canvas, FR.filter(r => r.w)); SR.tried = z.by; const n = Object.values(z.by).filter(t => t.v != null).length;
