@@ -588,6 +588,7 @@ def sync_purchase_orders(cur, st, state, new_state):
                      AND NOT EXISTS (SELECT 1 FROM suppliers x WHERE x.st_id = v.st_id)""")
     cur.execute("""INSERT INTO suppliers (name, active, st_id) SELECT v.name, v.active, v.st_id FROM _s_vend v
                    WHERE NOT EXISTS (SELECT 1 FROM suppliers x WHERE x.st_id = v.st_id)""")
+    _po_sku_link_once(cur, st, state, new_state)
     if not pos: return 0
     cur.execute("""INSERT INTO suppliers (name, active) SELECT 'Unknown supplier', false
                    WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE name = 'Unknown supplier')""")
@@ -644,7 +645,11 @@ def sync_purchase_orders(cur, st, state, new_state):
                    WHERE x.purchase_order_id = po.id AND x.item_id IS NULL AND l.sku IS NOT NULL
                      AND lower(btrim(x.description)) = lower(btrim(l.descr))
                      AND EXISTS (SELECT 1 FROM pricebook_items p WHERE p.st_id = l.sku)""")
-    # one time: every ServiceTitan PO is asked for again so the lines already here get their part (item number)
+    return saved
+
+
+def _po_sku_link_once(cur, st, state, new_state):
+    """One time: every ServiceTitan PO is asked for again so the lines already here get their part (item number)."""
     if not (state.get("po-sku-link") or {}).get("since"):
         cur.execute("DROP TABLE IF EXISTS _s_psl; CREATE TEMP TABLE _s_psl (po_st bigint, descr text, qty numeric, sku bigint) ON COMMIT DROP")
         ok, got_n = True, 0
@@ -671,7 +676,6 @@ def sync_purchase_orders(cur, st, state, new_state):
                              AND EXISTS (SELECT 1 FROM pricebook_items p WHERE p.st_id = s.sku)""")
             log(f"  PO part numbers: {cur.rowcount} older ServiceTitan PO lines linked to their part ({got_n} lines read).")
             new_state["po-sku-link"] = {"continue_from": None, "since": datetime.now(timezone.utc).isoformat()}
-    return saved
 
 
 def sync_new_pricebook(cur, st, state, new_state):
