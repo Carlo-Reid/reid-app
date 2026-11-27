@@ -22127,14 +22127,14 @@ function sinvLineSpan(t) {
   return { first: Math.min(...R), last: Math.max(...R) };
 }
 // what kind of paper is this page? "slip" (a packing slip, sales order or pick ticket), "inv" (the invoice), or null (can not tell)
-function sinvPageKind(t) { const s = String(t || ""); return /PACKING\s*SLIP|SALES\s*ORDER|PICK\s*TICKET|BON\s+DE\s+LIVRAISON/i.test(s) ? "slip" : /\bFA\s?CTURE\b|\bIN\s?VOICE\b/i.test(s) ? "inv" : null; }
+function sinvPageKind(t) { const s = String(t || ""); return /PACKING\s*SLIP|SALES\s*ORDER|PICK(?:ING)?\s*TICKET|BON\s+DE\s+LIVRAISON|LINES\s*NOT\s*PRINTED|LINES\s*TOTAL\s*#/i.test(s) ? "slip" : /\bFA\s?CTURE\b|\bIN\s?VOICE\b/i.test(s) ? "inv" : null; }
 // One record can hold two papers: the supplier's invoice and its packing slip (Carlo, Nov 24: C330314). Each is counted by itself.
 // M = the pages in their order on file, each with kind. The answer is the invoice's own, with slip = the packing slip's answer, two = true, all = every page on file.
 function sinvPagesCalc2(M) {
   const K = M.map(p => p.kind); for (let i = 0; i < K.length; i++) if (!K[i]) K[i] = K[i - 1] || null; for (let i = K.length - 2; i >= 0; i--) if (!K[i]) K[i] = K[i + 1];
   const I = M.filter((p, i) => K[i] === "inv"), S = M.filter((p, i) => K[i] === "slip");
-  if (!I.length || !S.length) return { ...(sinvPagesCalc(M) || {}), v: 4, all: M.length };
-  return { ...(sinvPagesCalc(I) || { unsure: true, have: I.length, miss: [] }), v: 4, all: M.length, two: true, slip: sinvPagesCalc(S) || { unsure: true, have: S.length, miss: [] } };
+  if (!I.length || !S.length) return { ...(sinvPagesCalc(M) || {}), v: 5, all: M.length };
+  return { ...(sinvPagesCalc(I) || { unsure: true, have: I.length, miss: [] }), v: 5, all: M.length, two: true, slip: sinvPagesCalc(S) || { unsure: true, have: S.length, miss: [] } };
 }
 // P = the pages on file, in order: { no (printed page number), line (first item line), last (last item line), cont (the page says CONTINUED) }.
 // Answer: { miss: [page numbers], about (worked out from the line numbers, not read), after (a page is missing after the last one), have, total (null when not known), end }
@@ -22186,8 +22186,8 @@ async function sinvPagesCheck(id, pages) {
   const redraw = () => { if (SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } };
   const say = t => { SINV_PG.set(id, { busy: t }); const el = document.querySelector(`[data-sn-pages="${id}"]`); if (el) el.textContent = t; else redraw(); };
   try {
-    if (cur === undefined) { const q = await db.rpc("sinv_pages_check", { p_ids: [id] }); if (q.error) return void SINV_PG.set(id, null); if (q.data?.[id] && (q.data[id].v === 4 || !SINV.data?.can_edit)) { SINV_PG.set(id, q.data[id]); return redraw(); } }
-    else if (cur && (cur.all ?? cur.have) === pages.length && (cur.v === 4 || !SINV.data?.can_edit)) return;
+    if (cur === undefined) { const q = await db.rpc("sinv_pages_check", { p_ids: [id] }); if (q.error) return void SINV_PG.set(id, null); if (q.data?.[id] && (q.data[id].v === 5 || !SINV.data?.can_edit)) { SINV_PG.set(id, q.data[id]); return redraw(); } }
+    else if (cur && (cur.all ?? cur.have) === pages.length && (cur.v === 5 || !SINV.data?.can_edit)) return;
     if (!SINV.data?.can_edit) return void SINV_PG.set(id, null);
     say("Counting the pages of the supplier's invoice…");
     const q = await db.rpc("supplier_invoice_pages_info", { p_invoice: id }); if (q.error || !Array.isArray(q.data) || !q.data.length) return void SINV_PG.set(id, null);
@@ -23327,10 +23327,13 @@ function sinvSysPagePaper(r, d) {
 // found on the slip's pages on file. Drawn each time, never saved, never read or counted. "Take the system's page off" is kept on that computer only.
 // A record whose every page on file reads as a packing slip (SALES ORDER / PACKING SLIP) and none as an invoice is a packing slip, even when its notes do not say so (Carlo, Nov 25, 2026, C397328)
 const SINV_ONLYSLIP = new Map();   // record id -> true / false, from the words of its pages
-const sinvIsSlipRec = r => !!r && (/packing[ -]slip/i.test(r.read_notes || "") || SINV_ONLYSLIP.get(r.id) === true);
+// a record marked as a packing slip that then had the supplier's invoice dropped on it holds both papers: it is not a packing slip any more (Carlo, Nov 26, 2026, Master 41282724-00)
+const SINV_HASINV = new Map();
+const sinvIsSlipRec = r => !!r && SINV_HASINV.get(r.id) !== true && (/packing[ -]slip/i.test(r.read_notes || "") || SINV_ONLYSLIP.get(r.id) === true);
 async function sinvOnlySlipLoad(id) { if (SINV_ONLYSLIP.has(id)) return SINV_ONLYSLIP.get(id);
   const q = await db.rpc("supplier_invoice_pages_info", { p_invoice: id }); if (q.error || !Array.isArray(q.data)) return null;
   const K = q.data.map(x => sinvPageKind(x.words || "")); let v = K.length > 0 && K.every(k => k === "slip");
+  SINV_HASINV.set(id, K.includes("inv"));
   if (v && sinvSlipNo(id)) v = false;   // a person pressed "Not a packing slip? Undo" on it: leave it
   SINV_ONLYSLIP.set(id, v);
   if (v) db.rpc("supplier_invoice_mark_slip", { p_id: id, p_on: true }).then(({ error }) => {   // save the mark by itself, so View Packing Slips and the statement know it too (Carlo, Nov 26, 2026: "yes make it automatic")
@@ -24279,8 +24282,8 @@ async function sinvLoadDet(id) {
   if (SINV.open === id && document.body.dataset.page === "supplier-invoices") { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; }
   for (const p of (data?.pages || [])) if (!SINV.img.has(p.id)) { const r = await db.rpc("supplier_doc_page", { p_id: p.id }); if (r.data) SINV.img.set(p.id, "data:image/jpeg;base64," + r.data);
     const fig = document.querySelector(`[data-sinv-img="${p.id}"]`); if (fig && r.data) fig.innerHTML = `<img alt="Page ${p.page_no}" src="${SINV.img.get(p.id)}">`; }
-  if (!error && R0 && (data?.pages || []).length && !/packing[ -]slip/i.test(R0.read_notes || "") && !SINV_ONLYSLIP.has(id)) sinvOnlySlipLoad(id).then(v => {   // is the only paper on file really the packing slip?
-    if (v === true && !SINV_PG.get(id)?.two && SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } }).catch(() => {});
+  if (!error && R0 && (data?.pages || []).length && (!/packing[ -]slip/i.test(R0.read_notes || "") || (data?.pages || []).length > 1) && !SINV_ONLYSLIP.has(id)) sinvOnlySlipLoad(id).then(v => {   // is the only paper on file really the packing slip?
+    if ((v === true || (SINV_HASINV.get(id) && /packing[ -]slip/i.test(R0.read_notes || ""))) && !SINV_PG.get(id)?.two && SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } }).catch(() => {});
   if (!error && R0 && !sinvIsCredit(R0) && R0.doc_type !== "charge" && R0.doc_type !== "return") Promise.resolve(sinvPagesCheck(id, data?.pages || [])).catch(() => {}).finally(() => { SINV_PGDONE.add(id);   // are pages missing? counted once, in the background
     if (SINV_PG.get(id) == null && SINV.open === id && document.body.dataset.page === "supplier-invoices" && !document.activeElement?.matches?.(".sinv-page input, .sinv-page textarea, .sinv-page select")) { const top = $("#main").scrollTop; renderSupInv(); $("#main").scrollTop = top; } });
   else SINV_PGDONE.add(id);
