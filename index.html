@@ -21266,6 +21266,7 @@ function sinvState(r) {
   else if (r.doc_type === "charge") [k, label] = ["charge", "Service charge"];
   else if (r.doc_type === "return") [k, label] = ["credit", "Return ticket"];
   else if (!r.po_text && !r.pages) [k, label] = ["nocopy", `The invoice from ${sinvShort(r.supplier) || "the supplier"} hasn't been loaded in our system, but it's on the statement`];
+  else if (sinvNoPo(r)) [k, label] = ["nopook", "No P.O. needed"];
   else if (!r.po_text && !r.po_id) [k, label] = ["nopo", "We did not create a PO for this"];
   else if (!r.po_id) [k, label] = ["notfound", `PO ${r.po_text} is printed on it, but it isn't in our system`];
   else if (r.doc_type === "credit") [k, label] = ["credit", "Credit"];
@@ -23226,6 +23227,7 @@ const sinvSlipMarkCan = (r, d) => !(/Marked as a packing slip in the app/i.test(
 // the real one but has a water mark letting us know it's not the original"). The mark is in read_notes (supplier_invoice_system_slip, 331). Its words must never say
 // "packing slip": the app and the database take those two words in read_notes to mean the paper IS a packing slip.
 const sinvSlipSys = r => !!r && /Shipping paper made by the system in the app/i.test(r.read_notes || "");
+const sinvNoPo = r => !!r && !r.po_id && /No P\.O\. needed: marked in the app/i.test(r.read_notes || "");   // a paper we never issue a P.O. for (Carlo, Nov 26, 2026)
 const sinvSlipReal = (r, d) => sinvIsSlipRec(r) || !!(d && d.slips && d.slips.length) || !!SINV_PG.get(r.id)?.two;   // the real one is on file
 const sinvSlipSysOn = (r, d) => sinvSlipSys(r) && !sinvSlipReal(r, d);   // the system's one shows only until the real one is found
 const sinvSlipCan = (r, d, edit) => !!edit && !!r.po_id && r.doc_type === "invoice" && !sinvIsCredit(r) && !!d && Array.isArray(d.slips) && !sinvSlipReal(r, d) && !sinvSlipSys(r);
@@ -23472,6 +23474,10 @@ document.addEventListener("click", async e => { const b = e.target.closest?.("[d
   b.disabled = true; const { error } = await db.rpc("supplier_invoice_mark_slip", { p_id: id, p_on: on }); if (error) { b.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
   sinvSlipNoSet(id, !on); if (!on) SINV_ONLYSLIP.set(id, false); else SINV_ONLYSLIP.delete(id);
   SINV.data = null; SINV.det.delete(id); await openSupInv(on ? "Moved to the packing slips." : "Taken off the packing slips."); }, true);
+document.addEventListener("click", async e => { const b = e.target.closest?.("[data-sinv-nopo]"); if (!b) return; e.preventDefault(); e.stopPropagation(); const id = Number(b.dataset.sinvNopo), on = b.dataset.on === "1";
+  if (on && (await askChoice("No P.O. needed for this one?", "Use this when we did not issue a P.O. on purpose. The page and the statement stop asking for one. You can undo it.", [["yes", "Yes, no P.O. is needed", true], ["", "No, go back"]])) !== "yes") return;
+  b.disabled = true; const { error } = await db.rpc("supplier_invoice_no_po", { p_id: id, p_on: on }); if (error) { b.disabled = false; return alertMsg("Not saved: " + rpcErr(error)); }
+  SINV.data = null; SINV.det.delete(id); if (typeof stvFresh === "function") stvFresh(id); await openSupInv(on ? "✓ Marked: no P.O. is needed for this one." : "The mark is off. This one needs a P.O. again."); }, true);
 function sinvPoFindHtml(r, edit) {
   return edit && SINV.poFind === r.id ? `<div class="sci-po"><label>${r.po_id ? "Change to another P.O." : "Match to PO"} <input id="sinv-po-${r.id}" placeholder="PO number, job number or customer" value="${esc(r.po_by_hand && !r.po_id ? r.po_number || "" : "")}" autocomplete="off"></label><button class="btn quiet-btn" type="button" data-sinv-setpo="${r.id}">Match</button><div class="sci-po-found" data-sci-pofound="${r.id}"></div></div>` : "";
 }
@@ -23805,7 +23811,7 @@ function sinvChgHtml(r, edit, d, X) {
   const mk = !r.po_id && d && kind !== "credit" && r.doc_type !== "return" && r.doc_type !== "charge" ? sinvMakePoHtml(r, d) : "";
   return `<div class="sinv-chg">
     <div class="sinv-chg-g"><span class="sinv-chg-k">Supplier ${kind === "credit" ? "Credit" : "Invoice"} Number <b>${esc(r.number || "")}</b></span>${b(`data-sinv-view="inv" data-id="${r.id}" title="Open the supplier's ${kind} in a pop-up window"`, "", kind === "credit" ? "View the Supplier's Credit" : "View the Supplier's Invoice", "view")}${b(`data-sinv-ed="${r.id}"`, "", kind === "credit" ? "Edit The Credit Date/Price" : "Edit The Invoice Date/Price", SINV.edInv === r.id ? "on" : "")}${sinvSlipMarkCan(r, d) ? `<button class="sci-mk sinv-markslip" type="button" data-sci-slip="${r.id}" data-on="1" title="Only if the reader missed it: this paper is a packing slip, not the supplier's invoice">Mark as packing slip</button>` : ""}${own ? b(`data-sinv-del="${r.id}" data-n="${esc(r.number || "")}"`, "", kind === "credit" ? "Delete The Credit" : "Delete The Invoice", "bad", true) : ""}${d ? sinvMissHtml(r, d, edit) : ""}${d ? sinvNeedsHtml(r, d, "sup") : ""}</div>
-    ${r.po_id ? `<div class="sinv-chg-g"><span class="sinv-chg-k">Purchase Order Number <b>${esc(r.po_number || "")}</b></span>${b(`data-sinv-view="po" data-id="${r.id}" title="Open our purchase order in a pop-up window"`, "", "View the Purchase Order", "view")}${b(`data-sci-poopen="${r.po_id}"`, "", "Edit The Purchase Order")}${b(`data-sci-pofind="${r.id}"`, "", "Pick a New P.O.", SINV.poFind === r.id ? "on" : "")}${b(`data-sinv-podel="${r.id}" data-po="${r.po_id}" data-n="${esc(r.po_number || "")}"`, "", "Delete The Purchase Order", "bad")}${d ? sinvNeedsHtml(r, d, "po") : ""}</div>` : d && r.doc_type !== "charge" ? `<div class="sinv-chg-g"><span class="sinv-chg-k">Purchase Order Number <b>None Yet</b></span>${b(`data-sci-pofind="${r.id}"`, "", "Pick a P.O.", SINV.poFind === r.id ? "on" : "")}${sinvNeedsHtml(r, d, "po") || (kind === "credit" ? `<ul class="sinv-chg-pg"><li class="sn-need"><span class="sn-m" aria-hidden="true">!</span><span>No P.O. is matched to this credit yet. Press <b>Pick a P.O.</b> to pick the one it is for.</span></li></ul>` : "")}${mk}</div>` : ""}
+    ${r.po_id ? `<div class="sinv-chg-g"><span class="sinv-chg-k">Purchase Order Number <b>${esc(r.po_number || "")}</b></span>${b(`data-sinv-view="po" data-id="${r.id}" title="Open our purchase order in a pop-up window"`, "", "View the Purchase Order", "view")}${b(`data-sci-poopen="${r.po_id}"`, "", "Edit The Purchase Order")}${b(`data-sci-pofind="${r.id}"`, "", "Pick a New P.O.", SINV.poFind === r.id ? "on" : "")}${b(`data-sinv-podel="${r.id}" data-po="${r.po_id}" data-n="${esc(r.po_number || "")}"`, "", "Delete The Purchase Order", "bad")}${d ? sinvNeedsHtml(r, d, "po") : ""}</div>` : d && r.doc_type !== "charge" ? sinvNoPo(r) ? `<div class="sinv-chg-g"><span class="sinv-chg-k">Purchase Order Number <b>No P.O. Needed</b></span>${b(`data-sinv-nopo="${r.id}" data-on="0"`, "", "Undo: a P.O. is needed")}<ul class="sinv-chg-pg"><li class="sn-ok"><span class="sn-m" aria-hidden="true">✔</span><span>Marked: we did not issue a P.O. for this one, and none is needed.</span></li></ul></div>` : `<div class="sinv-chg-g"><span class="sinv-chg-k">Purchase Order Number <b>None Yet</b></span>${b(`data-sci-pofind="${r.id}"`, "", "Pick a P.O.", SINV.poFind === r.id ? "on" : "")}${b(`data-sinv-nopo="${r.id}" data-on="1" title="We did not issue a P.O. for this one"`, "", "No P.O. Needed")}${sinvNeedsHtml(r, d, "po") || (kind === "credit" ? `<ul class="sinv-chg-pg"><li class="sn-need"><span class="sn-m" aria-hidden="true">!</span><span>No P.O. is matched to this credit yet. Press <b>Pick a P.O.</b> to pick the one it is for.</span></li></ul>` : "")}${mk}</div>` : ""}
     ${X && "slip" in X && kind !== "credit" && r.doc_type !== "charge" ? `<div class="sinv-chg-g sci-apps sci-sec"><span class="sinv-chg-k">Packing<br>Slip</span>${b(`data-sinv-view="slip" data-id="${r.id}" title="Open the packing slip in a pop-up window"`, "", "View the Packing Slip", "view")}${X.slip}${d ? sinvNeedsHtml(r, d, "slip") : ""}</div>` : ""}
     ${X && X.orig ? `<div class="sinv-chg-g sci-apps sci-sec"><span class="sinv-chg-k">Original<br>Supplier Invoice</span>${X.orig}${sinvOrigLine(r, d)}</div>${sinvOrigFindHtml(r, d, edit)}` : ""}
     ${X && X.inv ? `<div class="sinv-chg-g sci-apps sci-sec"><span class="sinv-chg-k">Customer<br>Invoice</span>${X.inv}${d ? sinvNeedsHtml(r, d, "cinv") : ""}</div>` : ""}
@@ -24008,7 +24014,8 @@ function sinvNeedsHtml(r, d, part) {
   const P = { sup: [], po: [], apps: [], slip: [], cinv: [] }; let cur = "po";
   const pg = sinvPagesLines(r, d), two = pg.two, inChg = !!SINV.data?.can_edit, st = sinvState(r), L = [], ok = t => (inChg ? P[cur] : L).push(`<li class="sn-ok"><span class="sn-m" aria-hidden="true">✔</span><span>${t}</span></li>`), need = t => (inChg ? P[cur] : L).push(`<li class="sn-need"><span class="sn-m" aria-hidden="true">!</span><span>${t}</span></li>`);
   if (inChg) { if (pg.html) P.sup.push(pg.html); if (pg.slip) P.slip.push(pg.slip); } else L.push(...[pg.html, pg.slip].filter(Boolean));
-  if (!r.po_id) need(r.po_text ? `P.O. <b>${esc(r.po_text)}</b> is printed on it, but that P.O. is not in our system.` : "Need to find the P.O.");
+  if (sinvNoPo(r)) ok("No P.O. is needed for this one.");
+  else if (!r.po_id) need(r.po_text ? `P.O. <b>${esc(r.po_text)}</b> is printed on it, but that P.O. is not in our system.` : "Need to find the P.O.");
   else if (st.po == null || !Number(r.po_lines)) need(`Found the P.O. <b>${esc(r.po_number || "")}</b>. But the P.O. has no amounts on it, so I can not compare.`);
   else if (Math.abs(st.diff) <= 1) ok(`Found the P.O. <b>${esc(r.po_number || "")}</b>. It matches.`);
   else need(`Found the P.O. <b>${esc(r.po_number || "")}</b>. But it is off by <b>${money(Math.abs(st.diff))}</b>. ${st.billed !== st.before ? "The invoices on this P.O. are" : "The invoice is"} ${money(st.billed)} before tax. The P.O. is ${money(st.po)}.`);
@@ -24042,7 +24049,7 @@ function sinvTopStatHtml(r) {
     const pc = SINV_PG.get(r.id), miss = pc && !pc.busy ? sinvMissWords(pc) : null;
     supI = !sinvNoInvCopy(r, d) ? ((miss && miss.n && !sinvPgSysOn(r, d)) ? "Waiting" : "Done") : sinvSys(r) ? "Done" : "Waiting";
     const s = r._s || sinvState(r);
-    po = !r.po_id ? "Waiting" : !inv ? "Done" : (s.po != null && Number(r.po_lines) && Math.abs(s.diff) <= 1) ? "Done" : "Waiting";
+    po = sinvNoPo(r) ? "Not needed" : !r.po_id ? "Waiting" : !inv ? "Done" : (s.po != null && Number(r.po_lines) && Math.abs(s.diff) <= 1) ? "Done" : "Waiting";
     orig = d.orig?.link ? "Done" : "Waiting";
     cust = cr ? ((d.memo || SINV.memos?.[r.id]) ? "Done" : "Waiting") : !inv ? "Not needed" : ((d.cinv?.linked || []).length || d.stock) ? "Done" : "Waiting";
     slip = !inv ? "Not needed" : (sinvSlipReal(r, d) || sinvSlipSys(r)) ? "Done" : "Waiting";
@@ -24283,6 +24290,7 @@ const stvPgSys = r => !!stvPgMiss(r) && sinvPgSysOn(r, SINV.det.get(r.id) || { p
 const stvFileCell = r => `<td class="stv-c">${stvPgSys(r) ? `<span class="st-ok" style="font-weight:800">System generated file</span><div class="quiet">On file, ${esc(stvPgMiss(r).sub)} made by the system</div>` : stvPgMiss(r) ? `<span class="st-look">On file, ${stvPgMiss(r).short}</span><div class="quiet">${esc(stvPgMiss(r).sub)}</div>` : r && Number(r.pages) > 0 ? `<span class="st-ok">On file</span>` : sinvSys(r) ? `<span class="st-ok" style="font-weight:800">System generated file</span><div class="quiet">Ask the supplier for the original</div>` : `<span class="st-no">Missing</span>`}</td>`;
 // the P.O. column of a statement: Match, Over by, Under by, or None (Carlo, Nov 12)
 function stvPoCell(r) {
+  if (sinvNoPo(r)) return `<td class="stv-po"><span class="st-ok">No P.O. needed</span></td>`;
   if (!r || !r.po_id) return `<td class="stv-po"><span class="st-no">None</span></td>`;
   const s = r._s || sinvState(r), num = `<div class="quiet">PO ${esc(r.po_number || "")}</div>`;
   if (r.doc_type !== "invoice") return `<td class="stv-po">${num}</td>`;   // a credit, return or charge is not compared with the P.O.
@@ -24309,7 +24317,8 @@ function stvDoneCell(r, f, inv, isCr, memo) {
   if (inv && !isCr && !f) return stvC("quiet", "…");   // the customer invoice and packing slip answers are still loading
   const s = r._s || sinvState(r), miss = [];
   if (!(Number(r.pages) > 0)) miss.push("the supplier's invoice"); else if (stvPgMiss(r) && !stvPgSys(r)) miss.push("pages of the supplier's invoice (" + stvPgMiss(r).sub + ")");
-  if (!r.po_id) miss.push("the P.O.");
+  if (sinvNoPo(r)) {}
+  else if (!r.po_id) miss.push("the P.O.");
   else if (r.doc_type === "invoice" && (s.po == null || !Number(r.po_lines) || Math.abs(s.diff) > 1)) miss.push("the P.O. does not match");
   if (isCr) { if (!memo) miss.push("the Credit Memo"); }
   else if (inv) { if (!(f.cinv?.length || f.stock)) miss.push("the customer invoice or stock"); if (!(f.is_slip || f.slip_here || f.slip || sinvSlipSys(r))) miss.push("the packing slip"); }   // one made by the system fills the gap (Carlo, Nov 25, 2026)
