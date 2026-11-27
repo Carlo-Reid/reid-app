@@ -9537,10 +9537,24 @@ function btnPic(spot, file) { const s = BTN.spots["spot:" + spot]; return (s && 
 function btnKeyOf(el) { const kk = el.closest("[data-btn-key]"); if (kk) { const k = kk.dataset.btnKey, c = BTN_KEYS.find(x => x[0] === k); return { key: "key:" + k, page: c ? c[2] : "*", name: c ? c[1] : k, el: kk }; }
   const sp = el.closest("[data-btn-spot]"); if (sp) { const s = BTN_SPOTS.find(x => x[0] === sp.dataset.btnSpot); return { key: "spot:" + sp.dataset.btnSpot, page: "*", name: s ? s[1] : sp.dataset.btnSpot, spot: sp.dataset.btnSpot, el: sp }; }
   const rk = el.closest("#main") ? "M" : el.closest("#search-page") ? "S" : "B", root = rk === "M" ? document.getElementById("main") : rk === "S" ? document.getElementById("search-page") : document.body;
-  const q = typeof ecoSelOf === "function" ? ecoSelOf(el, root) : null; if (!q) return null;
+  const q = btnSelOf(el, root); if (!q) return null;
   const page = rk === "B" ? "*" : ecoPageKey(); return { key: page + "|" + rk + " " + q, page, name: (page === "search" ? "Customers" : page === "*" ? "Every page" : (PAGE_NAMES?.[page] || page)) + ": " + btnWords(el).slice(0, 60), el }; }
-function btnHostOf(key) { try { const i = key.indexOf("|"), rk = key[i + 1], q = key.slice(i + 3), root = rk === "M" ? document.getElementById("main") : rk === "S" ? document.getElementById("search-page") : document.body;
-  return root ? root.querySelector(q) : null; } catch { return null; } }
+// a button's place (Carlo, Nov 27, 2026: the supplier invoice's buttons were not listed): first by its own data-… name (it stays found when the page's layout changes),
+// then by its path in the page (deeper than Eco Man spots allow), last by its words ("W <words>")
+function btnSelOf(el, root) { if (!root) return null; const tag = el.tagName.toLowerCase();
+  const A = [...el.attributes].filter(a => a.name.startsWith("data-") && !/^data-(btn-|id$|tip|title|sure|pg$|w$|on$|n$|i$)/.test(a.name) && a.value.length <= 60)
+    .slice(0, 2).map(a => /\d{3,}/.test(a.value) || !a.value ? `[${a.name}]` : `[${a.name}="${CSS.escape(a.value)}"]`);
+  if (A.length) { const q = tag + A.join(""); try { const L = [...root.querySelectorAll(q)], w = btnOwnWords(el); if (L.includes(el) && L.every(x => btnWords(x) === btnWords(el) || btnOwnWords(x) === w)) return q; } catch {} }
+  const parts = []; let n = el, viaId = false;
+  while (n && n !== root) { if (parts.length >= 30) { n = null; break; } const p = n.parentElement; if (!p) { n = null; break; }
+    if (n.id && !/\d/.test(n.id)) { parts.unshift("#" + CSS.escape(n.id)); viaId = true; break; }
+    const cls = [...n.classList].filter(c => !(typeof ECO_SPOT_SKIP !== "undefined" && ECO_SPOT_SKIP.test(c)) && !/\d{3,}/.test(c) && !/^btn-(holding|picon|has-cap)$/.test(c)).slice(0, 2).map(c => "." + CSS.escape(c)).join(""), same = [...p.children].filter(c => c.tagName === n.tagName);
+    parts.unshift(n.tagName.toLowerCase() + cls + (same.length > 1 ? `:nth-of-type(${same.indexOf(n) + 1})` : "")); n = p; }
+  if (n !== null || viaId) { const q = (viaId ? "" : ":scope > ") + parts.join(" > "); try { if (q.length <= 760 && root.querySelector(q) === el) return q; } catch {} }
+  const w = btnWords(el).slice(0, 80); return w ? "W " + w : null; }
+function btnHostsOf(key) { try { const i = key.indexOf("|"), rk = key[i + 1], q = key.slice(i + 3), root = rk === "M" ? document.getElementById("main") : rk === "S" ? document.getElementById("search-page") : document.body;
+  if (!root) return []; if (q.startsWith("W ")) { const w = q.slice(2); return [...root.querySelectorAll(BTN_SEL)].filter(b => btnWords(b).slice(0, 80) === w); }
+  return [...root.querySelectorAll(q)]; } catch { return []; } }
 const btnOwnWords = el => { const c = el.cloneNode(true); c.querySelectorAll("[data-btn-keep]").forEach(x => x.remove()); return c.textContent.replace(/\s+/g, " ").trim(); };
 const btnWords = el => (el.dataset.btnOrigWords ?? btnOwnWords(el) ?? "").replace(/\s+/g, " ").trim();
 // the words on a button: the longest piece of words in it is changed, other pieces of words are emptied; a picture button gets a line under it
@@ -9568,7 +9582,7 @@ function btnApply() { const pg = typeof ecoPageKey === "function" ? ecoPageKey()
     if (!(v.text || v.pic)) return;
     const src = v.pic && btnSrc(v.pic), put = b => { if (src) btnPicSet(b, src, v.text); else { if (b.dataset.btnPicst) btnTextOff(b); if (v.text) btnTextSet(b, v.text); } };
     if (k.startsWith("key:")) { document.querySelectorAll(`[data-btn-key="${CSS.escape(k.slice(4))}"]`).forEach(put); return; }
-    if (!(k.startsWith("*|") || k.startsWith(pg + "|"))) return; const b = btnHostOf(k); if (b) put(b); });
+    if (!(k.startsWith("*|") || k.startsWith(pg + "|"))) return; btnHostsOf(k).forEach(put); });
   document.querySelectorAll("[data-btn-orig]").forEach(b => { const k = btnKeyOf(b)?.key, v = k && BTN.spots[k]; if (!v || !(v.text || (v.pic && !k.startsWith("spot:")))) btnTextOff(b); }); }
 (function btnWatch() { let busy = false, t = 0;
   let st = 0; const scan = () => { if (st) return; st = setTimeout(() => { st = 0; try { btnSeenScan(); } catch {} }, 4000); };
@@ -9642,21 +9656,21 @@ async function btnSetBox(load) { const box = document.getElementById("btn-set");
     <p class="btn-set-p">These are the app's button pictures. To change a button anywhere in the app: <b>double click it and hold the second click</b>. A box asks if you want to change it. You can also change the words on any button there.</p>
     ${BTN.msg ? `<div class="staff-msg ${BTN.err ? "err" : "ok"}" role="status">${esc(BTN.msg)}</div>` : ""}
     <div class="btn-set-load"><label class="btn primary btn-set-up">＋ Load button pictures<input type="file" accept="image/*" multiple hidden data-bs="file"></label><span>A square picture works best. It is made 300 pixels wide at most.</span></div>
-    <h2 class="btn-set-h">All the button pictures (${all.length})</h2>
-    <div class="btn-set-grid">${all.map(x => { const u = used(x.ref); return `<div class="btn-set-c${P ? " pick" : ""}" ${P ? `data-bs-pick="${esc(x.ref)}" role="button" tabindex="0"` : ""}>
-      <img src="${esc(x.src)}" alt=""><b>${esc(x.name)}</b><small>${u.length ? "Used on: " + esc(u.join(" · ")) : "Not used on a button yet"}</small>
-      ${!P ? (x.own ? `<span class="btn-set-own"><button type="button" class="btn-set-x" data-bs-ren="${x.id}">✎ Rename</button><button type="button" class="btn-set-x bad" data-bs-del="${x.id}">🗑 Delete</button></span>` : `<small class="btn-set-in">Built into the app</small>`) : ""}</div>`; }).join("")}</div>
-    <h2 class="btn-set-h">Where each picture button is</h2>
-    <div class="btn-set-spots">${BTN_SPOTS.map(([k, n, f]) => { const s = BTN.spots["spot:" + k] || {}, ref = s.pic || "b:" + f; return `<div class="btn-set-spot"><img src="${esc(btnSrc(ref) || "logos/" + f + ".png")}" alt=""><span><b>${esc(n)}</b><small>${esc(btnPicName(ref))}${s.pic ? " (changed)" : ""}${s.text ? ` · words: “${esc(s.text)}”` : ""}</small></span><button type="button" class="btn" data-bs-chg="${k}">Change</button></div>`; }).join("")}</div>
     <h2 class="btn-set-h">The buttons on each page</h2>
     <p class="btn-set-p">Every button you have seen on a page while signed in as an owner is listed here, page by page (kept on this computer). A page you have not opened yet is not listed: open it once and it shows here. Press <b>Picture</b> or <b>Words</b> to change a button.</p>
     ${(() => { const G = {}; BTN_KEYS.forEach(([k, n, pg]) => (G[pg] = G[pg] || []).push({ k: "key:" + k, w: n.replace(/^.*: /, "") + " (status box)" }));
       Object.entries(BTN_SEEN).forEach(([k, v]) => (G[v.p] = G[v.p] || []).push({ k, w: v.w }));
       const pn = pg => pg === "search" ? "Customers" : pg === "*" ? "Every page" : (PAGE_NAMES?.[pg] || pg);
       return Object.keys(G).sort((a, b) => pn(a).localeCompare(pn(b))).map(pg => { const L = G[pg].sort((a, b) => a.w.localeCompare(b.w));
-        return `<details class="btn-set-pg"${BTN.pgOpen === pg ? " open" : ""} data-bs-pg="${esc(pg)}"><summary><b>${esc(pn(pg))}</b> <small>${L.length} button${L.length === 1 ? "" : "s"}</small></summary>
+        return `<details class="btn-set-pg"${(BTN.pgOpen === undefined ? pg === "supplier-invoices" : BTN.pgOpen === pg) ? " open" : ""} data-bs-pg="${esc(pg)}"><summary><b>${esc(pn(pg))}</b> <small>${L.length} button${L.length === 1 ? "" : "s"}</small></summary>
           <div class="btn-set-spots">${L.map(x => { const v = BTN.spots[x.k] || {}; return `<div class="btn-set-spot">${v.pic && btnSrc(v.pic) ? `<img src="${esc(btnSrc(v.pic))}" alt="">` : ""}<span><b>${esc(v.text || x.w)}</b><small>${v.pic ? "New picture: " + esc(btnPicName(v.pic)) : ""}${v.text ? `${v.pic ? " · " : ""}the app's words: “${esc(x.w)}”` : ""}</small></span>
             <button type="button" class="btn" data-bs-pp="${esc(x.k)}" data-pg="${esc(pg)}" data-w="${esc(x.w)}">Picture</button><button type="button" class="btn" data-bs-pw="${esc(x.k)}" data-pg="${esc(pg)}" data-w="${esc(x.w)}">Words</button></div>`; }).join("")}</div></details>`; }).join(""); })()}
+    <h2 class="btn-set-h">All the button pictures (${all.length})</h2>
+    <div class="btn-set-grid">${all.map(x => { const u = used(x.ref); return `<div class="btn-set-c${P ? " pick" : ""}" ${P ? `data-bs-pick="${esc(x.ref)}" role="button" tabindex="0"` : ""}>
+      <img src="${esc(x.src)}" alt=""><b>${esc(x.name)}</b><small>${u.length ? "Used on: " + esc(u.join(" · ")) : "Not used on a button yet"}</small>
+      ${!P ? (x.own ? `<span class="btn-set-own"><button type="button" class="btn-set-x" data-bs-ren="${x.id}">✎ Rename</button><button type="button" class="btn-set-x bad" data-bs-del="${x.id}">🗑 Delete</button></span>` : `<small class="btn-set-in">Built into the app</small>`) : ""}</div>`; }).join("")}</div>
+    <h2 class="btn-set-h">Where each picture button is</h2>
+    <div class="btn-set-spots">${BTN_SPOTS.map(([k, n, f]) => { const s = BTN.spots["spot:" + k] || {}, ref = s.pic || "b:" + f; return `<div class="btn-set-spot"><img src="${esc(btnSrc(ref) || "logos/" + f + ".png")}" alt=""><span><b>${esc(n)}</b><small>${esc(btnPicName(ref))}${s.pic ? " (changed)" : ""}${s.text ? ` · words: “${esc(s.text)}”` : ""}</small></span><button type="button" class="btn" data-bs-chg="${k}">Change</button></div>`; }).join("")}</div>
     <h2 class="btn-set-h">Other buttons with a new picture (${others.length})</h2>
     ${others.length ? `<div class="btn-set-spots">${others.map(([k, v]) => `<div class="btn-set-spot"><img src="${esc(btnSrc(v.pic) || "")}" alt=""><span><b>${esc(v.name || k)}</b><small>${esc(btnPicName(v.pic))}</small></span><button type="button" class="btn" data-bs-chgo="${esc(k)}">Change</button><button type="button" class="btn" data-bs-unp="${esc(k)}">Put the usual button back</button></div>`).join("")}</div>` : `<p class="btn-set-p">None yet. Double click any button and hold the second click to give it a new picture.</p>`}
     <h2 class="btn-set-h">Buttons with their words changed (${words.length})</h2>
