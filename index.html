@@ -6492,6 +6492,7 @@ body[data-page="supplier-invoices"] #main { position: relative; }
 .sinv-tabs .sinv-ow { font-size: 11.5px; font-weight: 800; color: #1f5fa8; margin-top: -4px; } .sinv-tabs .sinv-ow.quiet { color: #8795a1; font-weight: 600; }
 .sinv-tabs button[aria-pressed="true"] .sinv-ow { color: #fff; } .sinv-tabs button { gap: 6px !important; } .sinv-tabs .sinv-ic { height: 46px; } .sinv-tabs .sinv-ini { width: 46px; height: 46px; } .sinv-tabs .sinv-lg { max-height: 46px; }
 .sinv-cust { margin: 0 0 12px; padding: 10px 14px; border: 1px solid #c9d6e6; border-radius: 12px; background: #f7fbff; } .sinv-cust h3 { margin: 0 0 6px; font-size: 15px; }
+.sci-row .sinv-orig-po { font-weight: 700; color: #1f5596; text-decoration: underline; }
 .sci-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 5px 0; border-top: 1px solid #e3eaf3; } .sci-row .r { margin-left: auto; } .sci-sug, .sci-find { margin-top: 8px; }
 .sci-find input { padding: 6px 9px; border: 1px solid #9fb3cc; border-radius: 7px; font: inherit; min-width: 280px; margin-left: 6px; }
 /* SU 2: the suppliers as square app-style tiles: the logo (or first letter) big, the name under it, the count in a badge */
@@ -23409,7 +23410,7 @@ async function sinvViewSplit(id, pages) {   // a record that holds both papers: 
 }
 document.addEventListener("click", async e => {
   const b = e.target.closest?.("[data-sinv-view]"); if (!b) return; e.preventDefault();
-  const id = Number(b.dataset.id), k = b.dataset.sinvView, r = (SINV.data?.rows || []).find(x => x.id === id); if (!r) return;
+  const id = Number(b.dataset.id), k = b.dataset.sinvView, r = (k === "po" && b.dataset.po ? { id, po_id: Number(b.dataset.po), po_number: b.dataset.pon || "", number: b.dataset.n || "" } : null) || (SINV.data?.rows || []).find(x => x.id === id); if (!r) return;   // a likely original's own P.O. (Carlo, Nov 26, 2026)
   let d = SINV.det.get(id); const num = r.number || "no number"; let isSlip = sinvIsSlipRec(r);
   const prt = `<button class="btn" type="button" data-sv-print>Print</button>`, none = t => `<p class="sv-none">${t}</p>`;
   if (k === "po") {
@@ -24091,13 +24092,19 @@ function sinvOrigLine(r, d) {
 }
 function sinvOrigFindHtml(r, d, edit) {
   if (!edit || SINV.origFind !== r.id) return ""; const O = (d && d.orig) || {}, F = SINV.origQ && SINV.origQ.id === r.id ? SINV.origQ : null;
-  const row = i => `<div class="sci-row"><b>${esc(i.number || "")}</b> <span>${esc(fmtDate(i.date))}</span> <span>${i.po ? "P.O. " + esc(i.po) : ""}${i.why ? ` · <b>${esc(i.why)}</b>` : ""}</span> <span class="r">${money(Number(i.total))}</span> <button class="btn vtp-small" type="button" data-sinv-origset="${i.id}" data-for="${r.id}">＋ This is the original</button></div>`;
+  const row = i => `<div class="sci-row"><b>${esc(i.number || "")}</b> <span>${esc(fmtDate(i.date))}</span> <span>${i.po_id ? `<button class="link sinv-orig-po" type="button" data-sinv-view="po" data-id="${i.id}" data-po="${i.po_id}" data-pon="${esc(i.po || "")}" data-n="${esc(i.number || "")}" title="Open P.O. ${esc(i.po || "")} in a pop-up window">P.O. ${esc(i.po || "")}</button>` : i.po ? "P.O. " + esc(i.po) : `<span class="quiet">No P.O.</span>`}${i.why ? ` · <b>${esc(i.why)}</b>` : ""}</span> <span class="r">${money(Number(i.total))}</span> ${Number(i.pages) ? `<button class="btn vtp-small" type="button" data-sinv-origpaper="${i.id}" data-n="${esc(i.number || "")}" title="See the supplier's paperwork for ${esc(i.number || "")}">📄 View the paperwork</button>` : `<span class="quiet">No paperwork on file</span>`} <button class="btn vtp-small" type="button" data-sinv-origset="${i.id}" data-for="${r.id}">＋ This is the original</button></div>`;
   return `<div class="sci-find sinv-origfind"><div class="cl-label">Which of the supplier's invoices does this credit take back?</div>
     ${(O.suggest || []).length ? `<div class="sci-sug"><span class="cl-label">Likely ones</span>${O.suggest.map(row).join("")}</div>` : ""}
     <label>Find it <input type="search" data-sinv-origq="${r.id}" value="${esc(F?.q || "")}" placeholder="Search anything: their invoice number, a P.O., an amount, a customer, a job, a serial number…" autocomplete="off"></label>
     ${F?.rows ? sinvOrigResults(r, F, row) : ""}
     <div class="sci-mkrow"><button class="sci-mk sci-mk-red" type="button" data-sinv-orignone="${r.id}">It Is Not In Our System</button>${O.link && O.link.how === "hand" || O.none ? `<button class="sci-mk" type="button" data-sinv-origauto="${r.id}">Let The App Find It</button>` : ""}</div></div>`;
 }
+// a likely original's paperwork, in a pop-up window (Carlo, Nov 26, 2026: "attach to original paper work so I can click and view it")
+document.addEventListener("click", async e => { const b = e.target.closest?.("[data-sinv-origpaper]"); if (!b) return; e.preventDefault(); e.stopPropagation();
+  const id = Number(b.dataset.sinvOrigpaper), title = "Supplier Invoice " + (b.dataset.n || ""), v = attPop(title, `<span class="quiet">Loading the paperwork…</span>`), box = v.querySelector(".att-body");
+  const g = await db.rpc("supplier_invoice_get", { p_id: id }); if (!v.isConnected) return;
+  const P = g.data?.pages || []; if (g.error || !P.length) { box.innerHTML = `<p class="sv-none">${esc(g.error ? rpcErr(g.error) : "There is no scanned copy of this invoice on file.")}</p>`; return; }
+  sinvViewPages(box, P); }, true);
 async function sinvOrigLoad(id, q) {
   const { data, error } = await db.rpc("sinv_credit_original", q ? { p_id: id, p_q: q } : { p_id: id }); return error ? null : data || {};
 }

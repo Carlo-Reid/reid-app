@@ -40,14 +40,14 @@ BEGIN
   END IF;
   IF v_id IS NOT NULL THEN
     SELECT jsonb_build_object('id', i.id, 'number', i.supplier_invoice_number, 'date', i.invoice_date, 'subtotal', i.subtotal, 'total', i.total,
-             'po', (SELECT po_number FROM purchase_orders WHERE id = i.purchase_order_id), 'how', how) INTO lk FROM supplier_invoices i WHERE i.id = v_id;
+             'po', (SELECT po_number FROM purchase_orders WHERE id = i.purchase_order_id), 'po_id', i.purchase_order_id, 'pages', (SELECT count(*) FROM supplier_doc_pages g WHERE g.supplier_invoice_id = i.id), 'how', how) INTO lk FROM supplier_invoices i WHERE i.id = v_id;
   END IF;
   q := nullif(btrim(coalesce(p_q, '')), '');
   IF q ~ '^\$?-?[0-9,]*\.[0-9]{1,2}$' THEN amt := abs(replace(replace(replace(q, '$', ''), ',', ''), '-', '')::numeric); END IF;
   RETURN jsonb_build_object('link', lk, 'none', (h.credit_id IS NOT NULL AND h.invoice_id IS NULL), 'printed', c.original_order,
     'suggest', (SELECT coalesce(jsonb_agg(x ORDER BY (x->>'k')::int, x->>'date' DESC), '[]'::jsonb) FROM (
        SELECT jsonb_build_object('id', i.id, 'number', i.supplier_invoice_number, 'date', i.invoice_date, 'subtotal', i.subtotal, 'total', i.total,
-                'po', (SELECT po_number FROM purchase_orders WHERE id = i.purchase_order_id),
+                'po', (SELECT po_number FROM purchase_orders WHERE id = i.purchase_order_id), 'po_id', i.purchase_order_id, 'pages', (SELECT count(*) FROM supplier_doc_pages g WHERE g.supplier_invoice_id = i.id),
                 'k', CASE WHEN v_po IS NOT NULL AND i.purchase_order_id = v_po THEN 0 WHEN abs(i.total + c.total) <= 1 THEN 1 ELSE 2 END,
                 'why', concat_ws(' · ', CASE WHEN v_po IS NOT NULL AND (i.purchase_order_id = v_po OR btrim(i.po_text) = v_num) THEN 'same P.O.' END,
                                         CASE WHEN abs(i.total + c.total) <= 1 THEN 'same amount' END)) AS x
@@ -59,7 +59,7 @@ BEGIN
        LIMIT 8) s),
     'rows', CASE WHEN q IS NULL THEN NULL ELSE (SELECT coalesce(jsonb_agg(x), '[]'::jsonb) FROM (
        SELECT jsonb_build_object('id', i.id, 'number', i.supplier_invoice_number, 'date', i.invoice_date, 'subtotal', i.subtotal, 'total', i.total,
-                'po', (SELECT po_number FROM purchase_orders WHERE id = i.purchase_order_id)) AS x
+                'po', (SELECT po_number FROM purchase_orders WHERE id = i.purchase_order_id), 'po_id', i.purchase_order_id, 'pages', (SELECT count(*) FROM supplier_doc_pages g WHERE g.supplier_invoice_id = i.id)) AS x
        FROM supplier_invoices i
        WHERE i.supplier_id = c.supplier_id AND i.id <> c.id AND i.total > 0 AND coalesce(i.doc_type, 'invoice') NOT IN ('credit', 'return')
          AND (CASE WHEN amt IS NOT NULL THEN abs(i.total - amt) <= 0.01 OR abs(coalesce(i.subtotal, 0) - amt) <= 0.01
