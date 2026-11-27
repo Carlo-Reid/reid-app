@@ -1,6 +1,7 @@
 -- Buttons an owner makes himself (Carlo, Nov 27, 2026: "make a way for me to create a button inside the program on the buttons page").
 -- company_settings.custom_btns = [ { id, text, pic ("b:<file>" | "u:<id>" | null), act ("page" | "url" | "tel" | "mail"), val,
---   page (the app's page key, or null while it is not put on a page yet), sel ("M <path>" | "S <path>"), at ("after" | "in") } ].
+--   page (the app's page key, or null while it is not put on a page yet), sel ("M <path>" | "S <path>"), at ("after" | "in"),
+--   shape ("round" | "square" | "circle"), size ("s" | "m" | "l" | "xl"), color ("#rrggbb" or null = the usual soft look) } ].
 -- btn_lib() also answers them as 'custom'. Everyone signed in reads them; only an owner makes, changes or deletes one. Safe to run again.
 ALTER TABLE public.company_settings ADD COLUMN IF NOT EXISTS custom_btns jsonb NOT NULL DEFAULT '[]'::jsonb;
 
@@ -26,7 +27,10 @@ BEGIN
   IF p->>'act' = 'url' AND p->>'val' !~* '^https?://' THEN RAISE EXCEPTION 'A web address starts with https://'; END IF;
   IF length(p::text) > 3000 THEN RAISE EXCEPTION 'That is too long'; END IF;
   v := jsonb_build_object('id', p->>'id', 'text', left(nullif(trim(p->>'text'), ''), 80), 'pic', nullif(p->>'pic', ''), 'act', p->>'act',
-         'val', left(trim(p->>'val'), 500), 'page', nullif(p->>'page', ''), 'sel', left(nullif(p->>'sel', ''), 800), 'at', CASE WHEN p->>'at' = 'in' THEN 'in' ELSE 'after' END);
+         'val', left(trim(p->>'val'), 500), 'page', nullif(p->>'page', ''), 'sel', left(nullif(p->>'sel', ''), 800), 'at', CASE WHEN p->>'at' = 'in' THEN 'in' ELSE 'after' END,
+         'shape', CASE WHEN p->>'shape' IN ('square', 'circle') THEN p->>'shape' ELSE 'round' END,
+         'size', CASE WHEN p->>'size' IN ('s', 'l', 'xl') THEN p->>'size' ELSE 'm' END,
+         'color', CASE WHEN p->>'color' ~ '^#[0-9a-fA-F]{6}$' THEN lower(p->>'color') ELSE NULL END);
   SELECT s.id, coalesce(s.custom_btns, '[]'::jsonb) INTO v_id, v_l FROM company_settings s ORDER BY s.id LIMIT 1;
   IF v_id IS NULL THEN RAISE EXCEPTION 'No company settings row'; END IF;
   IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_l) e WHERE e->>'id' = v->>'id') AND jsonb_array_length(v_l) >= 200 THEN
