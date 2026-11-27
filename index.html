@@ -21921,6 +21921,7 @@ function sinvCompare(r, L, P, what, edit) {
   const othFree = OTH.flatMap(O => (O.lines || []).filter(x => !rows.some(w => w.o && w.o.a.x === x)).map(x => ({ x, num: O.number }))), oxSeen = new Set();
   const othMore = a => { const k = sinvSlNorm(a.x.code, r.supplier_id), no = { q: 0, amt: 0, nums: [] }; if (!k || r.doc_type !== "invoice" || sinvIsCredit(r) || oxSeen.has(k)) return no; const M = othFree.filter(e => sinvSlNorm(e.x.code, r.supplier_id) === k); if (!M.length) return no; oxSeen.add(k);
     const qOf = e => Math.abs(Number(e.x.shipped ?? e.x.ordered) || 0), aOf = e => e.x.net_amount != null && !isNaN(Number(e.x.net_amount)) ? Math.abs(Number(e.x.net_amount)) : Math.abs((Number(e.x.unit_price) || 0) * (1 - (Number(e.x.discount) || 0) / 100) * qOf(e));
+    M.splice(0, M.length, ...M.filter(e => aOf(e) > 0)); if (!M.length) return no;   // a line with no price on another invoice is not billed there (Carlo, Nov 26, 2026, 0575315525: 0575389275 lists the order again with no prices)
     return { q: M.reduce((t, e) => t + qOf(e), 0), amt: Math.round(M.reduce((t, e) => t + aOf(e), 0) * 100) / 100, nums: [...new Set(M.map(e => e.num))] }; };
   // Carlo, Nov 24, 2026 (C372518): one line whose amount was not printed (it was worked out from a list price and a discount the scan may have misread),
   // while every other line has its printed amount: that line gets what is left of the paper's own total, so the compare shows the real price
@@ -21963,11 +21964,11 @@ function sinvCompare(r, L, P, what, edit) {
     else if (b && !a) { why = split || partial ? `Not on this ${what} (${split ? "maybe on the other one" : sinvPgSysOn(r, SINV.det.get(r.id) || {}) ? "it is on the page the system made" : "maybe on the missing page"})` : `Not on this ${what}`; if (!split && !partial) issues.push(`${b.y.sku || b.y.description}: on the PO but not billed on this ${what}${b.amt ? ` (${money(b.amt)})` : ""}`); }
     // the PO keeps prices to the cent, Boone to a tenth of a cent: a few cents apart over a line isn't a mistake
     const ox = a && b && a.q != null ? othMore(a) : { q: 0, amt: 0, nums: [] }, aq0 = a && a.q != null ? Math.abs(a.q) + (a.xq || 0) : null;
-    const aq = aq0 != null ? aq0 + ox.q : null, qOk = !a || !b || a.q == null || aq === b.q, eOk = !a || !b || near(a.each, b.each, Math.max(0.0101, b.each * 0.006)),
+    const aq = aq0 != null ? aq0 + ox.q : null, eachA = a && a.xq && aq && a.amt != null ? Math.round((Math.abs(a.amt) + ox.amt) / aq * 10000) / 10000 : a?.each, qOk = !a || !b || a.q == null || aq === b.q, eOk = !a || !b || near(eachA, b.each, Math.max(0.0101, b.each * 0.006)),
       mOk = !a || !b || near((Math.abs(a.amt ?? 0) + ox.amt) || null, b.amt, Math.max(0.03, Math.abs(b.q || 1) * 0.0101, (b.amt || 0) * 0.006));
     if (a && b) { const w = [];
       if (!qOk) w.push(ox.q ? `qty ${aq} on the invoices (${aq0} here + ${ox.q} on ${ox.nums.join(", ")}) vs ${b.q} on the PO` : `qty ${aq} vs ${b.q}`);
-      if (!eOk) w.push(`${money(a.each)} each vs ${money(b.each)} (${a.each > b.each ? "+" : "−"}${money(Math.abs(a.each - b.each))})`);
+      if (!eOk) w.push(`${money(eachA)} each${a.xq ? " (with the free ones)" : ""} vs ${money(b.each)} (${eachA > b.each ? "+" : "−"}${money(Math.abs(eachA - b.each))})`);
       if (!mOk && (qOk && eOk)) w.push(`amount ${money(a.amt)} vs ${money(b.amt)}`);
       if (w.length) { why = w.join(" · "); issues.push(`${a.x.code || b.y.sku}: ${why}`); } }
     // on the paper with no price (free with a program, or part of a kit) while our P.O. has a price for it: not a mistake for sure, so it is yellow, with a button to make the P.O. price $0
@@ -21987,7 +21988,7 @@ function sinvCompare(r, L, P, what, edit) {
     let fix = null;
     if (noPrice && !ign && canFix && b.y.id) { fix = { c: { id: b.y.id, unit_cost: 0 }, t: "Make the P.O. price $0" }; (SINV.zero = SINV.zero || new Map()).set(key, fix.c); }
     else if (why && !soft && !ign && canFix) {
-      if (a && b && b.y.id) { const c = { id: b.y.id }; if (aq != null && aq !== b.q) c.quantity = aq; if (a.each != null && Math.abs(a.each - b.each) > 0.0001) c.unit_cost = a.each;
+      if (a && b && b.y.id) { const c = { id: b.y.id }; if (aq != null && aq !== b.q) c.quantity = aq; if (eachA != null && Math.abs(eachA - b.each) > 0.0001) c.unit_cost = eachA;
         if (c.quantity == null && c.unit_cost == null && a.amt != null && b.q) c.unit_cost = Math.round(Math.abs(a.amt) / b.q * 10000) / 10000; fix = { c, t: "Match the supplier price" }; }
       else if (a && !b && !a.comp) fix = { c: { description: [a.x.code, a.x.description].filter(Boolean).join(" ").trim() || "Line from invoice " + r.number, quantity: a.q != null ? Math.abs(a.q) : 1, unit_cost: a.each ?? (a.amt != null ? Math.abs(a.amt) : 0) }, t: "Add it to the PO" };
       else if (b && !a && b.y.id) fix = { c: { id: b.y.id, delete: true }, t: "Take it off the PO" };
